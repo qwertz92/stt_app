@@ -8123,7 +8123,7 @@ AGENTS.md entry.
 
 **Range.** `5a3bed0..bab0935`: the two wave-17 fixes and their record. Three
 Sonnet breakers -- reach, concurrency, facts -- each on its own export of
-`bab0935`, against 14 written claims (W6.1-W6.3, W7.1-W7.5, D.1-D.3,
+`bab0935`, against 11 written claims (W6.1-W6.3, W7.1-W7.5, D.1-D.3,
 `SP/wave18/CLAIMS.md`), told nothing of what was changed or why. The reach
 lens drove W6 and W7 through the public entry points against the real
 `LastRecordingStore` and `TranscriptHistoryStore` on a temp directory, at
@@ -8133,9 +8133,10 @@ untouched at `bab0935`, relabels it canceled at `5a3bed0`), W6.3 as claimed,
 the W7.1/W7.2 matrix on the correctly keyed road 11 of 11 -- known id with
 `keep_after_success` both ways, "" marks nothing, an aborting job keeps the
 cancel's mark and still reaches history, a refused history write marks nothing
--- and the five wave-17 tests plus four pre-existing `test_controller.py`
-tests outcome-identical at both revisions. W7.4 it verified by reading only.
-Its finding: F1, a `load()` that raises at registration.
+-- and the five wave-17 tests passing at `bab0935` -- they do not exist at
+`5a3bed0` -- plus four pre-existing `test_controller.py` tests
+outcome-identical at both revisions. W7.4 it verified by reading only. Its
+finding: F1, a `load()` that raises at registration.
 `_register_transcription_job(..., source_recording_id=None)` -- what
 `stop_recording` passed for every persisted recording -- resolved the id
 through `_current_last_recording_id()`, which answers "" for any exception
@@ -8180,10 +8181,12 @@ wording defect, not a counting one: the five files are `test_controller.py`,
 `test_controller_queue.py` and `test_main_signals.py` -- four controller files
 and the tray-signal file, the set every wave since 14 ran as "the named files"
 -- and `--collect-only` over exactly those answers 578 at `bab0935`, the
-number the section gives; the two files the lens added
-(`test_controller_hotkey_collision.py`, `test_controller_import_lease.py`) and
-the one it lacked account for the difference. The section's phrase named the
-set wrongly, and the lens was right that no artifact named it.
+number the section gives; the three files the lens added
+(`test_controller_audio_devices.py`, 22 tests,
+`test_controller_hotkey_collision.py`, 5, `test_controller_import_lease.py`,
+2) and the one it lacked (`test_main_signals.py`, 31) account for the
+difference: 576 - 29 + 31 = 578. The section's phrase named the set wrongly,
+and the lens was right that no artifact named it.
 
 **Judged, with the reason.** F1 is P3 in frequency and a data-loss shape in
 kind: it needs `last_recording.json` unreadable for the instant between its
@@ -8277,3 +8280,145 @@ The breakers' report files were refused by the harness again, so their reports
 exist as their final messages, saved by the lead under
 `SP/wave18/lead/reports/`; a facts lens that finds no report there is reading
 a later day.
+
+### Wave 19 (2026-09-18) - the eighteenth wave, on the wave-18 fix
+
+**Range.** `bab0935..5506fcc`: the wave-18 fix and its record. Three Sonnet
+breakers -- reach, tests, facts -- each on its own export of `5506fcc`,
+against 8 written claims (W8.1-W8.5, D.1-D.3, `SP/wave19/CLAIMS.md`), told
+nothing of what was changed or why. The reach lens drove W8 through the public
+entry points against the real `LastRecordingStore` and
+`TranscriptHistoryStore` on a temp directory, one probe file run against
+exports of `5506fcc` and `bab0935` (`SP/wave19/reach/out/`, 18 fact files).
+Its confirmation first: a `load()` refused exactly once, right after the write
+-- the mechanism `39c9655` names -- no longer lets an older job A, demoted
+behind a silence-gated recording B, delete B's audio at its completion or
+relabel B failed at its failure; at `bab0935` the same probe does both
+(`facts_load_fails_once_*`). Its finding, A: a store whose `save_recording`
+writes the file but hands back a state without a `recording_id`, or with
+`created_at` alone, leaves the job with "" on the stop road, batch and
+streaming alike, so the job marks nothing -- the audio stays on disk with
+`save_last_wav` off, the state reads "captured" for good, the history entry
+names no recording, and the recovery prompt at the next start offers a
+dictation already in history -- where the `bab0935` road re-read the slot and
+found the real id. Its inconclusive probe: three recordings queued with the
+middle one canceled before it ran, identical at both revisions, its own
+transcriber counter suspected. Not run, reasoned from the unchanged `except
+Exception` arms: a `save_recording` raising always, a `load()` raising always
+or answering None, marks that raise, a history write that raises. The facts
+lens (D.1-D.3) reproduced every number of the Wave 18 section and the three
+AGENTS.md edits from a file, read every quoted identifier against the shipped
+code and every commit's signature, and regenerated both docs of `5506fcc` byte
+for byte from a sandboxed copy of `docs_wave18.py` against an export of
+`39c9655`, with a negative control diverging at the substituted word. Its
+three findings are in that section's own accounting, all baked into the script
+that wrote it: "14 written claims" where the parenthesis lists 11; "the two
+files the lens added ... account for the difference" naming two of three
+files, an arithmetic that gives 600 and not 578; and "the five wave-17 tests
+... outcome-identical at both revisions" for tests that do not exist at
+`5a3bed0`. The tests lens (W8.5) diffed the test surface of the range and
+mutated the line each of the five adjusted or new tests is named for, running
+that test alone: every one fails on its mutant, the three new tests fail at
+`bab0935` with the new `conftest.py` transplanted
+(`SP/wave19/tests/out/three_new_tests_on_bab0935_with_new_conftest.txt`), and
+the five named files collect 172 + 308 + 5 + 65 + 31 = 581 and pass. Its three
+findings are gaps, not wrong tests, each shown by a mutant that survives
+(`SP/wave19/tests/out/`): F1, the real store's `mark_canceled` with its id
+guard dropped survives the five named files and
+`tests/test_last_recording_store.py` alike, because no test calls
+`mark_canceled` on the real store -- the property the store's
+conditional-transition test asks of `mark_failed`, `mark_transcribing` and
+`mark_completed` was never asked of the fourth mark, and no fake-store test
+can ask it, the observation the wave-18 concurrency lens left; F2,
+`_mark_job_recording_canceled` passing `None` survives
+`test_cancel_current_action_marks_inflight_transcription_as_canceled`, which
+asserts the cancel's text and not its id (five sibling tests in the file catch
+it); F3, `_mark_last_recording_transcribing` passing `None` survives
+`test_stream_finalize_keeps_settings_snapshot_for_queued_result`, which
+asserts the settings snapshot and not the id (another test in the file catches
+it). It refuted four hypotheses of its own -- the new tests passing vacuously
+at `bab0935`, `_StoreWithIds` changing behaviour, the 581 moving, w18-m2
+caught by one test only -- and read what the three wave-18 mutants pin: m1 the
+stop road's test alone, m2 the slot road's test and, unscoped, the completion
+test of `test_controller.py`, m3 the older row's test and both cancel tests.
+
+**The reproduction.** The reach probe writes its facts to a directory named by
+an environment variable and asserts nothing about its export, so the same file
+ran from the repository with `-c pyproject.toml --rootdir=.`
+(`SP/wave19/lead/out/reach_facts/*_real.json`): identical to the export's
+files up to ids, stamps and paths, on all four bad-id roads and both
+load-refused roads. The three docs errors reproduced from the files:
+`SP/wave18/CLAIMS.md` carries 11 claim ids; the seven `test_controller*.py`
+files at `bab0935` collect 172 + 22 + 5 + 305 + 5 + 2 + 65 = 576 and the five
+named files 172 + 305 + 5 + 65 + 31 = 578, so the difference is
+`test_controller_audio_devices.py` (22), `test_controller_hotkey_collision.py`
+(5) and `test_controller_import_lease.py` (2) out and `test_main_signals.py`
+(31) in; and the five wave-17 test functions
+(`test_a_silence_gated_recording_names_the_recording_its_persist_wrote` from
+`e4351fa`, the four background-road tests from `69f5151`) are absent from
+`5a3bed0:tests/test_controller_coverage.py` -- the wave-18 reach lens ran them
+at `bab0935` only (`existing_wave17_tests_bab0935.txt`, 10 items, among them a
+wave-16 test its `-k` swept up) and the four pre-existing `test_controller.py`
+tests at both revisions.
+
+**Corrections to the Wave 18 section.** Made in place, in that section's Range
+and Reproduction paragraphs: "14 written claims" reads 11; the file-set
+sentence names the three files the lens added and the one it lacked, with the
+arithmetic 576 - 29 + 31 = 578; and the wave-17 tests are recorded as passing
+at `bab0935` and absent at `5a3bed0`, with only the four pre-existing tests
+outcome-identical at both. `SP/wave18/lead/docs_wave18.py` keeps the wrong
+text; the section is the record, and this paragraph says what moved in it.
+
+**Judged, with the reason.** Finding A is P4: the real store's
+`save_recording` builds its state with `uuid4().hex` and returns that state
+(`last_recording_store.py`), so no production road hands the stop road a state
+without an id, and the probe's store is one that violates the contract its
+base class keeps. Under that store the behaviour is the safe side of the
+wave-18 decision: the job that cannot name its recording marks nothing, where
+the road that recovered the id at `bab0935` was the re-read of the slot -- the
+wave-18 defect, which named another recording once the slot had moved. A
+`created_at` fallback in `_persist_last_recording_audio`, the asymmetry the
+lens noted against `_current_last_recording_id`, would key the marks by a
+stamp the uuid on disk never equals and change nothing; not added. Recorded
+with it, pre-existing and outside the range: the time fallback of
+`main._last_recording_already_transcribed` accepts `0 <= history_ts -
+audio_mtime <= 180`, the history stamp is truncated to seconds and the file's
+mtime is not, so an entry written in the same wall-clock second as the audio
+is refused (`SP/wave19/lead/out/time_fallback_probe.txt`: delta -0.148 s, not
+accepted) -- reached only when the id match fails, which the real store's id
+prevents; P4. The three docs errors are P4, corrected above. F1 is P4 on the
+user's scale and the class the loop has been closing since wave 13, one layer
+down: a guard in the real store that nothing pinned. The store's
+conditional-transition test drives the stale id through `mark_canceled` as
+through the other three marks and then cancels under the current id (red on
+the guard-dropped store at `True is False`). F2 and F3 are P4 test-design gaps
+caught by siblings; the two tests assert the id their mark carried
+(`canceled_ids == ["rec-1"]`, `transcribing_ids == ["rec-1"]`; red on their
+mutants at `[None] == ['rec-1']`). Minutes each, fixed on the spot. No
+production code moved in this wave, so no fix re-enters the loop: the wave is
+the round the loop ends on if the next reading of its findings holds --
+nothing in code, no P1 or P2 open.
+
+**The commits and the mutation round.** `bb699bb` pins the three marks, tests
+only, signed. Three mutants (`SP/wave19/lead/mutate_wave19_before.txt`,
+`mutate_wave19.txt`): the store's cancel guard dropped, the cancel mark
+unkeyed, the transcribing mark unkeyed -- 3 of 3 survived the tests as they
+were, the reproduction of F1-F3 on the real tree, and 3 of 3 detected after
+the edits. The wave-18 harness re-run at `bb699bb`: 3 of 3
+(`mutate_wave18_head19.txt`). The five named files after the edits: 581
+passed; `tests/test_last_recording_store.py`: 8 passed. The full suite on
+`bb699bb`, 18 September: 2884 passed, 1 skipped in 177.48s (0:02:57).
+
+**What remains unverified.** The reach lens's own list -- a store raising from
+every `save_recording` or `load()`, marks that raise, a history write that
+raises -- reasoned from the unchanged exception arms and not run in this wave;
+its three-recording probe; a real refused read of the state file, still. The
+tests lens's own list: the internals of
+`test_controller_background_insert_failure.py` and `test_controller_queue.py`,
+which hold no reference to the last-recording store; and a real rejection by
+the store under a controller test, which the fake still never gives -- the
+real-store tests of `test_controller.py`, the store's own file and the reach
+probes are what cover that. The breakers' report files were refused by the
+harness again, so their reports exist as their final messages, saved by the
+lead under `SP/wave19/lead/reports/`; a facts lens that finds no report there
+is reading a later day.
