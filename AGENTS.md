@@ -4991,8 +4991,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   quit during the AssemblyAI poll) and `release_check_frozen_bundle.py` (scan
   worker, one model per local runtime through the benchmark worker, the GUI
   for 40 s). Shared plumbing is `scripts/_release_check_common.py`. Contract:
-  one `OK`/`FAIL`/`SKIP` line per check, exit 0/1/2 where 2 means "this machine
-  cannot run it" and must never read as a failure of the code; a throwaway
+  one `OK`/`FAIL`/`SKIP` line per check, exit 0/1/2 where 2 means "nothing was
+  measured" (this machine cannot run it, or every check was skipped -- a run
+  with no provider key used to print PASSED with exit 0) and must never read
+  as a failure of the code; an exception no check caught and Ctrl+C are
+  recorded as a failed check by `run_main`, so the `SUMMARY` line and the
+  report exist for a crashed run too (a scan worker that left half a JSON file
+  ended the bundle check with a traceback and no verdict); a child that may
+  have children of its own runs through `run_child`, which kills the process
+  tree on a timeout -- plain `subprocess.run(timeout=3)` returned after 20.1 s
+  for a grandchild sleeping 20 s, because the final pipe read waits for every
+  inheritor, and left that grandchild alive; check names are made ASCII like
+  the details, since they carry the clip's file name; a throwaway
   `APPDATA` set before the first `stt_app` import with `HF_HUB_OFFLINE=1`; no
   path of the machine they were written on; API keys read by
   `KeyringSecretStore` only and never printed or written to a report; the

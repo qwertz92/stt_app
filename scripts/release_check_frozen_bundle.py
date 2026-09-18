@@ -167,15 +167,13 @@ def run_benchmark_pass(
     options_path.write_text(json.dumps(options), encoding="utf-8")
     started = time.perf_counter()
     try:
-        completed = subprocess.run(
+        # `run_child`, not `subprocess.run`: the worker starts a Node child
+        # for the Cohere and Granite models, and a timeout that ends only the
+        # worker leaves that child running with the model loaded.
+        completed = common.run_child(
             [str(exe), "--local-benchmark-worker", "--options", str(options_path)],
             env=common.child_environment(sandbox),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=BENCHMARK_TIMEOUT_S,
-            check=False,
+            timeout_s=BENCHMARK_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
         checks.failed(
@@ -227,24 +225,25 @@ def scan_pass(checks: common.Checks, exe: Path, sandbox: Path) -> list[str]:
     scan_out = sandbox / "scan.json"
     started = time.perf_counter()
     try:
-        completed = subprocess.run(
+        completed = common.run_child(
             [str(exe), "--local-model-scan-worker", "--output", str(scan_out)],
             env=common.child_environment(sandbox),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=SCAN_TIMEOUT_S,
-            check=False,
+            timeout_s=SCAN_TIMEOUT_S,
         )
     except subprocess.TimeoutExpired as exc:
         checks.failed("frozen.scan.worker_exits_cleanly", f"no exit: {exc}")
         checks.skipped("frozen.scan.lists_the_cached_models", "the worker did not exit")
         return []
     cached: list[str] = []
+    # A worker that crashed or was killed while writing leaves half a file,
+    # and that is a finding about the bundle, not a reason to end the run.
+    unreadable = ""
     if scan_out.exists():
-        payload = json.loads(scan_out.read_text(encoding="utf-8"))
-        cached = list(payload.get("cached_models") or [])
+        try:
+            payload = json.loads(scan_out.read_text(encoding="utf-8"))
+            cached = [str(name) for name in payload.get("cached_models") or []]
+        except (OSError, ValueError, AttributeError, TypeError) as exc:
+            unreadable = f" unreadable_output={type(exc).__name__}: {exc}"[:200]
     seconds = round(time.perf_counter() - started, 2)
     checks.verdict(
         "frozen.scan.worker_exits_cleanly",
@@ -255,7 +254,7 @@ def scan_pass(checks: common.Checks, exe: Path, sandbox: Path) -> list[str]:
     checks.verdict(
         "frozen.scan.lists_the_cached_models",
         bool(cached),
-        f"{len(cached)} cached: {cached}",
+        f"{len(cached)} cached: {cached}{unreadable}",
     )
     checks.details["scan"] = {
         "exit": completed.returncode,
@@ -274,22 +273,22 @@ def gui_pass(checks: common.Checks, exe: Path, sandbox: Path) -> None:
     )
     gui = subprocess.Popen([str(exe)], env=common.child_environment(sandbox))
     log_path = settings_dir / "logs" / "dictation.log"
-    deadline = time.monotonic() + GUI_SECONDS
-    while time.monotonic() < deadline:
-        time.sleep(1.0)
-        if gui.poll() is not None:
-            break
-    exit_code = gui.poll()
     log_text = ""
-    if log_path.exists():
-        log_text = log_path.read_text(encoding="utf-8", errors="replace")
-    if exit_code is None:
-        subprocess.run(
-            ["taskkill", "/PID", str(gui.pid), "/T", "/F"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+    # In a `finally`: the started app has a tray icon and tries to take global
+    # hotkeys, so an interrupt or an error during the wait must not leave it
+    # running after the script is gone.
+    try:
+        deadline = time.monotonic() + GUI_SECONDS
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            if gui.poll() is not None:
+                break
+        exit_code = gui.poll()
+        if log_path.exists():
+            log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        if gui.poll() is None:
+            common.kill_process_tree(gui.pid)
     lines = log_text.splitlines()
     errors = [line for line in lines if "[ERROR]" in line]
     # A second instance cannot take global hotkeys the running app holds, so
@@ -389,7 +388,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     sandbox = common.make_sandbox("stt_release_frozen_")
-    checks = common.Checks("frozen bundle")
+    checks = common.Checks("frozen bundle", report_path=args.report)
     checks.details["exe"] = str(args.exe)
     checks.details["clip"] = str(args.clip)
     checks.details["sandbox"] = str(sandbox)
@@ -444,7 +443,7 @@ def main() -> int:
         except Exception as exc:
             checks.crashed("frozen.gui.pass_crashed", exc)
 
-    return checks.finish(args.report)
+    return checks.finish()
 
 
 if __name__ == "__main__":

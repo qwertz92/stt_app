@@ -109,7 +109,14 @@ logging.getLogger("stt_app").setLevel(logging.INFO)
 
 
 def parse_clip(raw: str, default_language: str) -> tuple[Path, str]:
-    """Split `PATH` or `PATH:LANG`, leaving Windows drive letters alone."""
+    """Split `PATH` or `PATH:LANG`, leaving Windows drive letters alone.
+
+    Stripped first: a trailing blank after the language (`clip.wav:de `, easy
+    to produce when the argument is quoted) failed the language pattern, so
+    the language was silently folded into the path and the run ended in "no
+    such clip: clip.wav:de " instead of transcribing in German.
+    """
+    raw = raw.strip()
     head, separator, tail = raw.rpartition(":")
     if separator and len(head) > 1 and LANGUAGE_TOKEN.match(tail):
         return Path(head).expanduser(), tail.lower()
@@ -345,7 +352,7 @@ def main() -> int:
         if not path.is_file():
             raise common.MissingPrerequisite(f"no such clip: {path}")
 
-    checks = common.Checks("real provider calls")
+    checks = common.Checks("real provider calls", report_path=args.report)
     checks.details["sandbox"] = str(SANDBOX)
     checks.details["clips"] = [f"{path} ({language})" for path, language in clips]
     sys.stdout.write(f"sandbox: {SANDBOX}\n")
@@ -399,7 +406,7 @@ def main() -> int:
         if "stt_app" in line
         and ("WARNING" in line or "ERROR" in line or "timing" in line)
     ][:60]
-    return checks.finish(args.report)
+    return checks.finish()
 
 
 if __name__ == "__main__":

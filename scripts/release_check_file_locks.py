@@ -113,7 +113,13 @@ class ExclusiveLock:
                 str(path), GENERIC_READ, 0, None, OPEN_EXISTING, 0, None
             )
             if handle == INVALID_HANDLE_VALUE or handle is None:
-                raise OSError(ctypes.get_last_error(), f"cannot lock {path}")
+                error = ctypes.get_last_error()
+                # Python does not call `__exit__` when `__enter__` raises, so
+                # the handles taken so far are given back here -- otherwise a
+                # second path that cannot be locked leaves the first one
+                # locked for the rest of the process.
+                self.__exit__()
+                raise OSError(error, f"cannot lock {path}")
             self._handles.append(handle)
         return self
 
@@ -357,7 +363,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    checks = common.Checks("store behaviour under real file locks")
+    checks = common.Checks(
+        "store behaviour under real file locks", report_path=args.report
+    )
     checks.details["sandbox"] = str(SANDBOX)
     sys.stdout.write(f"sandbox: {SANDBOX}\n")
     for part in (history_part, settings_part, last_recording_part):
@@ -368,7 +376,7 @@ def main() -> int:
     checks.details["log_lines"] = [
         common.ascii_safe(line) for line in LOG_LINES if "unreadable" in line.lower()
     ][:20]
-    return checks.finish(args.report)
+    return checks.finish()
 
 
 if __name__ == "__main__":

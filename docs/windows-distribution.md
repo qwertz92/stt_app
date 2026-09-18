@@ -131,9 +131,13 @@ Output:
 The test suite drives fakes of the clipboard, of file locks, of the provider
 SDKs and of the packaged executable. Four scripts run the same code against
 the real thing. Each prints one `OK` / `FAIL` / `SKIP` line per check and a
-`SUMMARY` line, exits 0 (all ran and passed), 1 (a check failed) or 2 (this
-machine cannot run it), works in a throwaway `APPDATA` so the real
-`%APPDATA%\stt_app` is unreachable, and writes its evidence to `--report`.
+`SUMMARY` line, and exits 0 (at least one check ran and none failed), 1 (a
+check failed, or the script itself crashed or was interrupted -- recorded as a
+failed check, so the `SUMMARY` line and the report still exist) or 2 (nothing
+was measured: this machine cannot run it, or every check was skipped, for
+example because no provider key is stored). Each works in a throwaway
+`APPDATA` so the real `%APPDATA%\stt_app` is unreachable, and writes its
+evidence to `--report`.
 
 | Script | What it proves on the real machine | Needs | Time |
 | ------ | ---------------------------------- | ----- | ---- |

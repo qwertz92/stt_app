@@ -736,7 +736,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    checks = common.Checks("clipboard and paste on the real desktop")
+    checks = common.Checks(
+        "clipboard and paste on the real desktop", report_path=args.report
+    )
     checks.details["sandbox"] = str(SANDBOX)
     sys.stdout.write(f"sandbox: {SANDBOX}\n")
     parts: dict[str, object] = {}
@@ -804,7 +806,7 @@ def main() -> int:
             for line in LOG_LINES
             if "paste_transaction" in line or "clipboard_" in line
         ]
-    return checks.finish(args.report)
+    return checks.finish()
 
 
 if __name__ == "__main__":

@@ -16,10 +16,14 @@ those read the environment at import time.
 
 Exit codes, shared by all four scripts:
 
-* 0 -- every check that ran is OK (skipped checks do not fail a run),
-* 1 -- at least one check failed,
-* 2 -- the machine cannot run the check at all (wrong operating system, a
-  missing package, a file that is not there), or the command line was wrong.
+* 0 -- at least one check ran and every check that ran is OK (skipped checks
+  do not fail a run),
+* 1 -- at least one check failed, or the script itself crashed or was
+  interrupted (both are recorded as a failed check, so the `SUMMARY` line and
+  the report are still written),
+* 2 -- nothing was measured: the machine cannot run the check at all (wrong
+  operating system, a missing package, a file that is not there), the command
+  line was wrong, or every single check was skipped.
 """
 
 from __future__ import annotations
@@ -27,9 +31,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 import tempfile
-from collections.abc import Callable
+import traceback
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -151,17 +157,29 @@ class Checks:
     failure, or a release run reports a problem the code does not have.
     """
 
-    def __init__(self, title: str) -> None:
+    # The run's `Checks`, so `run_main` can still close a run whose script
+    # raised: the object is created inside each script's `main`, which is the
+    # frame an exception has already left by the time `run_main` sees it.
+    current: Checks | None = None
+
+    def __init__(self, title: str, report_path: Path | None = None) -> None:
         self.title = title
+        self.report_path = report_path
         self.items: list[dict[str, object]] = []
         self.details: dict[str, object] = {}
         self.started_at = datetime.now(UTC).isoformat(timespec="seconds")
+        Checks.current = self
 
     def record(self, name: str, ok: bool | None, detail: object = "") -> bool:
+        # The name as well as the detail: a check is named after the clip or
+        # the model it measured, and a clip called after an emoji raised
+        # `UnicodeEncodeError` inside the write below on a redirected cp1252
+        # stream, which ended the run in the middle.
+        label = ascii_safe(name)
         text = ascii_safe(detail)
         tag = "SKIP" if ok is None else ("OK  " if ok else "FAIL")
-        self.items.append({"name": name, "ok": ok, "detail": text})
-        sys.stdout.write(f"{tag} {name}: {text}\n")
+        self.items.append({"name": label, "ok": ok, "detail": text})
+        sys.stdout.write(f"{tag} {label}: {text}\n")
         sys.stdout.flush()
         return ok is True
 
@@ -186,14 +204,22 @@ class Checks:
         skipped = sum(1 for item in self.items if item["ok"] is None)
         return ok, failed, skipped
 
-    def finish(self, report_path: Path | None = None) -> int:
+    def finish(self) -> int:
         ok, failed, skipped = self.counts()
-        verdict = "FAILED" if failed else "PASSED"
+        # A run in which every check was skipped measured nothing, and
+        # "PASSED" with exit code 0 read exactly like a real pass -- no key
+        # stored and `--no-streaming` was enough to get one.
+        if failed:
+            verdict, code = "FAILED", EXIT_FAILED
+        elif ok:
+            verdict, code = "PASSED", EXIT_OK
+        else:
+            verdict, code = "NOTHING MEASURED", EXIT_PREREQUISITE
         sys.stdout.write(
             f"SUMMARY {self.title}: {len(self.items)} checks, {ok} OK, "
             f"{failed} FAIL, {skipped} SKIP -- {verdict}\n"
         )
-        if report_path is not None:
+        if self.report_path is not None:
             payload = {
                 "title": self.title,
                 "started_at": self.started_at,
@@ -202,10 +228,10 @@ class Checks:
                 "checks": self.items,
                 "details": self.details,
             }
-            write_json_report(report_path, payload)
-            sys.stdout.write(f"report written to {report_path}\n")
+            write_json_report(self.report_path, payload)
+            sys.stdout.write(f"report written to {ascii_safe(self.report_path)}\n")
         sys.stdout.flush()
-        return EXIT_FAILED if failed else EXIT_OK
+        return code
 
 
 def write_json_report(path: Path, payload: dict[str, object]) -> None:
@@ -220,11 +246,91 @@ def write_json_report(path: Path, payload: dict[str, object]) -> None:
     path.write_text(text + "\n", encoding="ascii", newline="\n")
 
 
+def kill_process_tree(pid: int) -> None:
+    """End `pid` and everything it started.
+
+    `Popen.kill()` is `TerminateProcess` on the one process: the frozen app's
+    benchmark worker starts a Node child for the Cohere and Granite models, and
+    killing only the worker leaves that child running with the model loaded.
+    `taskkill /T` walks the tree, which only works while the parent is still
+    there -- so this runs *before* anything else ends the parent.
+    """
+    subprocess.run(
+        ["taskkill", "/PID", str(pid), "/T", "/F"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def run_child(
+    command: Sequence[str],
+    *,
+    env: dict[str, str],
+    timeout_s: float,
+) -> subprocess.CompletedProcess[str]:
+    """`subprocess.run` for a child that may have children of its own.
+
+    Same result object and the same `TimeoutExpired`, but a child that outlives
+    its budget -- or an interrupt landing while it runs -- takes its whole
+    process tree with it instead of its first process only.
+    """
+    process = subprocess.Popen(
+        list(command),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_s)
+    except BaseException:
+        kill_process_tree(process.pid)
+        process.kill()
+        # Bounded: a descendant that survived the tree kill still holds the
+        # inherited pipe, and an unbounded read would wait for it to exit --
+        # measured with plain `subprocess.run(timeout=3)`, which sat there for
+        # the grandchild's whole remaining life.
+        try:
+            process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        raise
+    return subprocess.CompletedProcess(
+        list(command), process.returncode, stdout, stderr
+    )
+
+
 def run_main(entry: Callable[[], int]) -> None:
-    """Call `entry` and exit, turning a missing prerequisite into code 2."""
+    """Call `entry` and exit with one of the three documented codes.
+
+    A missing prerequisite is code 2. Anything else that escapes `entry` -- an
+    exception no check caught, or Ctrl+C -- is recorded as a failed check and
+    the run is closed the normal way, so the `SUMMARY` line and the report
+    exist for a crashed run too. Without this a worker that wrote half a JSON
+    file ended the frozen-bundle check with a traceback and no verdict.
+    """
     try:
         code = entry()
     except MissingPrerequisite as exc:
         sys.stdout.write(f"PREREQUISITE {ascii_safe(exc)}\n")
         raise SystemExit(EXIT_PREREQUISITE) from None
+    except (Exception, KeyboardInterrupt) as exc:
+        traceback.print_exc()
+        checks = Checks.current
+        if checks is None:
+            sys.stdout.write(
+                f"FAIL the script stopped before its first check: "
+                f"{ascii_safe(type(exc).__name__)}: {ascii_safe(exc)}\n"
+            )
+            raise SystemExit(EXIT_FAILED) from None
+        name = (
+            "the run was interrupted"
+            if isinstance(exc, KeyboardInterrupt)
+            else "the script raised outside a check"
+        )
+        checks.crashed(name, exc)
+        raise SystemExit(checks.finish()) from None
     raise SystemExit(code)
