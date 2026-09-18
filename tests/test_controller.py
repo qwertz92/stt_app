@@ -2359,6 +2359,55 @@ _LOCAL_RUNTIME_FIELDS = [
     ("cohere-transcribe-03-2026", {"silence_gate_enabled": False}, False),
     ("parakeet-tdt-0.6b-v3", {"streaming_full_final_transcript": True}, False),
     ("parakeet-tdt-0.6b-v3", {"silence_gate_enabled": False}, False),
+    # The device a benchmark measured as fastest decides which device `auto`
+    # starts with, so for the two runtimes that read a device it is part of
+    # what the runtime was built from.
+    (
+        "cohere-transcribe-03-2026",
+        {"onnx_auto_preferred_devices": {"cohere-transcribe-03-2026": "cpu"}},
+        True,
+    ),
+    (
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+        {
+            "onnx_auto_preferred_devices": {
+                "nemotron-3.5-asr-streaming-0.6b-int4": "cpu"
+            }
+        },
+        True,
+    ),
+    # A result for a model that is not the selected one changes nothing about
+    # the loaded runtime -- and one benchmark run measures several models, so
+    # this is the common case rather than an exotic one.
+    (
+        "cohere-transcribe-03-2026",
+        {"onnx_auto_preferred_devices": {"granite-speech-4.1-2b": "cpu"}},
+        False,
+    ),
+    # Measured as fastest, and already the device this chain starts with:
+    # the order is unchanged, so tearing the model down would buy nothing.
+    (
+        "cohere-transcribe-03-2026",
+        {"onnx_auto_preferred_devices": {"cohere-transcribe-03-2026": "webgpu"}},
+        False,
+    ),
+    (
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+        {
+            "onnx_auto_preferred_devices": {
+                "nemotron-3.5-asr-streaming-0.6b-int4": "dml"
+            }
+        },
+        False,
+    ),
+    # The runtimes that take no device at all never see it, whatever a
+    # hand-edited file holds for them.
+    ("small", {"onnx_auto_preferred_devices": {"small": "cpu"}}, False),
+    (
+        "parakeet-tdt-0.6b-v3",
+        {"onnx_auto_preferred_devices": {"parakeet-tdt-0.6b-v3": "cpu"}},
+        False,
+    ),
 ]
 
 
@@ -3876,4 +3925,87 @@ def test_w16_a_retry_after_a_refused_save_spares_the_recording_the_store_holds(
         ]
     finally:
         controller.shutdown()
+    _ = app
+
+
+_COHERE = "cohere-transcribe-03-2026"
+_GRANITE = "granite-speech-4.1-2b"
+_NEMOTRON_MODEL = "nemotron-3.5-asr-streaming-0.6b-int4"
+
+
+@pytest.mark.parametrize(
+    ("model_size", "policy", "measured", "reloads"),
+    [
+        # A pinned device is the user's own decision, so a benchmark result
+        # arriving for that model must not close the runtime it pinned.
+        (_COHERE, "cpu", {_COHERE: "dml"}, False),
+        (_COHERE, "gpu", {_COHERE: "cpu"}, False),
+        (_COHERE, "webgpu", {_COHERE: "cpu"}, False),
+        (_NEMOTRON_MODEL, "cpu", {_NEMOTRON_MODEL: "dml"}, False),
+        (_NEMOTRON_MODEL, "dml", {_NEMOTRON_MODEL: "cpu"}, False),
+        # Under `auto` the same result really does change the order the model
+        # loads in, so it has to.
+        (_COHERE, "auto", {_COHERE: "cpu"}, True),
+        (_NEMOTRON_MODEL, "auto", {_NEMOTRON_MODEL: "cpu"}, True),
+    ],
+    ids=lambda value: value if isinstance(value, str) else str(value),
+)
+def test_a_measured_device_reloads_only_under_the_auto_policy(
+    model_size, policy, measured, reloads
+):
+    """The identity holds what the constructor receives, and a pinned policy
+    makes `preferred_onnx_device` answer "" -- so the two never disagree about
+    whether the loaded runtime is still the right one."""
+    settings = replace(
+        _RUNTIME_BASE_SETTINGS, model_size=model_size, local_onnx_device=policy
+    )
+    saved = replace(settings, onnx_auto_preferred_devices=measured)
+    assert saved != settings
+
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
+
+    _assert_reload_outcome(
+        controller, reloads, preloads=preloads, closed=closed, cached=cached
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_the_measured_map_growing_only_reloads_when_the_selected_model_moves():
+    """The map is written one benchmark run at a time, so the realistic input
+    is not "empty, then one entry" -- the table above covers that -- but a map
+    that already holds a device for the selected model and gains one for
+    another. Reading the whole map rather than the selected model's entry would
+    reload a multi-gigabyte runtime on every run that measures anything."""
+    settings = replace(
+        _RUNTIME_BASE_SETTINGS,
+        model_size=_COHERE,
+        onnx_auto_preferred_devices={_COHERE: "cpu"},
+    )
+
+    # Another model's result lands in the same map.
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
+    controller._settings_store._settings = replace(
+        settings, onnx_auto_preferred_devices={_COHERE: "cpu", _GRANITE: "dml"}
+    )
+    controller.on_settings_changed()
+
+    assert closed == []
+    assert preloads == []
+    controller.shutdown()
+
+    # The selected model's own entry changing is the one case that must.
+    controller, _app, preloads, closed, cached = _controller_with_loaded_model(
+        settings
+    )
+    controller._settings_store._settings = replace(
+        settings, onnx_auto_preferred_devices={_COHERE: "dml", _GRANITE: "dml"}
+    )
+    controller.on_settings_changed()
+
+    assert closed == [cached]
+    assert preloads == [True]
+    controller.shutdown()
     _ = app

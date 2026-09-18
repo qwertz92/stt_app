@@ -13,7 +13,7 @@ from ..config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     nemotron_provider_order,
 )
-from ..settings_store import AppSettings
+from ..settings_store import AppSettings, preferred_onnx_device
 from .assemblyai_provider import AssemblyAITranscriber
 from .azure_provider import AzureLlmSpeechTranscriber
 from .base import ITranscriber
@@ -55,7 +55,8 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             # The ONNX Device setting has to reach this engine too; the picker
             # offers it for Nemotron, and without this the choice was inert.
             provider_order=nemotron_provider_order(
-                getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE)
+                getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE),
+                preferred_onnx_device(settings),
             ),
         )
     if settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
@@ -68,6 +69,10 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             device=getattr(
                 settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE
             ),
+            # Which device `auto` starts with, from the last benchmark that
+            # measured this model on more than one. Empty for every pinned
+            # policy, so the two settings cannot contradict each other.
+            preferred_device=preferred_onnx_device(settings),
         )
     return LocalFasterWhisperTranscriber(
         model_size=settings.model_size,

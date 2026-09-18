@@ -21,11 +21,13 @@ from ..config import (
     DOC_MODELS_PATH,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
+    LOCAL_WEBGPU_AUTO_DEVICE_ORDER,
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
+    effective_preferred_device,
     language_modes_for_selection,
 )
 from ..model_download_coordinator import run_coordinated_download
@@ -709,6 +711,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         model_size: str,
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         device: str = "auto",
+        preferred_device: str = "",
         dtype: str = "",
         offline_mode: bool = False,
         model_dir: str = "",
@@ -730,6 +733,14 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         # Needs self.model_size, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self.device = device
+        # The device a benchmark measured as fastest for this model. Normalized
+        # here rather than trusted, so it is empty for every pinned policy (an
+        # explicit choice outranks a measurement), for a device this chain
+        # cannot reach, and for one that already leads it -- and then nothing
+        # downstream has to ask again whether it means anything.
+        self.preferred_device = effective_preferred_device(
+            device, preferred_device, LOCAL_WEBGPU_AUTO_DEVICE_ORDER
+        )
         self.dtype = str(dtype or LOCAL_ONNX_MODEL_PRECISION.get(model_size) or "q4")
         self.offline_mode = offline_mode
         self.model_dir = (model_dir or "").strip()
@@ -773,6 +784,14 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             return f"ONNX runtime active on {label}."
         if self.device == "cpu":
             return "ONNX runtime active on CPU (selected device policy)."
+        if self.preferred_device == "cpu":
+            # The runtime never tried a GPU: CPU led the chain because a
+            # benchmark measured it as the fastest device for this model. The
+            # fallback sentence below would be a plain falsehood here.
+            return (
+                "ONNX runtime active on CPU (the fastest device for this model "
+                "in your benchmark)."
+            )
         return (
             "ONNX runtime active on CPU. WebGPU/DirectML GPU fallback was not "
             "available or did not load."
@@ -854,6 +873,12 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             # gets its own retry.
             self._cpu_fallback_restarts = 0
         if self._runtime_device not in _ACCELERATED_DEVICES:
+            if self.preferred_device == "cpu":
+                # Not a fallback and not a warning: the benchmark said this is
+                # the fastest device this model has here, so there is nothing
+                # to tell the user beyond the status line.
+                self.runtime_warning = ""
+                return
             if self.device == "cpu":
                 self.runtime_warning = (
                     "The CPU device policy is selected. This model may be much "
@@ -1014,7 +1039,15 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         runner = self._runner_file()
         _ensure_js_runtime_available(node_path, runner)
         policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
-        self._emit_progress(f"Starting ONNX runtime for {self.model_size}: {policy}.")
+        measured = ""
+        if self.preferred_device:
+            label = _RUNTIME_DEVICE_LABELS.get(
+                self.preferred_device, self.preferred_device
+            )
+            measured = f", {label} first (fastest in your benchmark)"
+        self._emit_progress(
+            f"Starting ONNX runtime for {self.model_size}: {policy}{measured}."
+        )
         command = [
             node_path,
             str(runner),
@@ -1028,6 +1061,12 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             "--dtype",
             self.dtype,
         ]
+        if self.preferred_device:
+            # Only when it says something: with nothing measured the command
+            # line stays byte-identical to the one every earlier build sent,
+            # and an older runner that never learnt `--prefer` is never handed
+            # an argument it would ignore silently.
+            command += ["--prefer", self.preferred_device]
         try:
             process = subprocess.Popen(
                 command,

@@ -49,6 +49,10 @@ function parseArgs(argv) {
     modelPath: "",
     device: "auto",
     dtype: "q4",
+    // The device a benchmark measured as fastest for this model. Optional: an
+    // older Python caller sends no --prefer and the default keeps the normal
+    // auto order.
+    prefer: "",
   };
   for (let index = 0; index < argv.length; index += 1) {
     const value = argv[index];
@@ -73,6 +77,11 @@ function parseArgs(argv) {
     }
     if (value === "--dtype") {
       args.dtype = argv[index + 1] || "q4";
+      index += 1;
+      continue;
+    }
+    if (value === "--prefer") {
+      args.prefer = argv[index + 1] || "";
       index += 1;
     }
   }
@@ -382,7 +391,11 @@ async function hasWebGpuAdapter() {
   }
 }
 
-function resolveDevice(requestedDevice) {
+export function resolveDevice(
+  requestedDevice,
+  preferredDevice = "",
+  platform = process.platform,
+) {
   const requested = String(requestedDevice || "auto").toLowerCase();
   if (requested === "wasm") {
     throw new Error(
@@ -391,7 +404,7 @@ function resolveDevice(requestedDevice) {
   }
 
   const gpuDevices = ["webgpu"];
-  if (process.platform === "win32") {
+  if (platform === "win32") {
     gpuDevices.push("dml");
   }
 
@@ -412,7 +425,17 @@ function resolveDevice(requestedDevice) {
   const devices = [];
   devices.push(...gpuDevices);
   devices.push("cpu");
-  return devices;
+
+  // Only "auto" consults the measurement: a pinned policy above is the user's
+  // own decision and returns before this. An unknown or absent preference is
+  // ignored rather than rejected -- it reaches here from a settings file, and
+  // refusing it would make a stale entry fail every load instead of costing
+  // nothing.
+  const preferred = String(preferredDevice || "").toLowerCase();
+  if (!devices.includes(preferred)) {
+    return devices;
+  }
+  return [preferred, ...devices.filter((device) => device !== preferred)];
 }
 
 function graniteDtype(dtype) {
@@ -537,7 +560,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
 
 async function loadRuntime(options) {
   const webgpuAvailable = await hasWebGpuAdapter();
-  const candidateDevices = resolveDevice(options.device);
+  const candidateDevices = resolveDevice(options.device, options.prefer);
   const errors = [];
   for (let index = 0; index < candidateDevices.length; index += 1) {
     const device = candidateDevices[index];

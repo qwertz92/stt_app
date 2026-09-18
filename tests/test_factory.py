@@ -9,6 +9,7 @@ from stt_app.config import (
     LOCAL_ONNX_MODEL_SIZES,
     VALID_ENGINES,
     language_modes_for_selection,
+    nemotron_provider_order,
 )
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
@@ -231,3 +232,90 @@ def test_device_policy_reaches_nemotron_as_a_provider_order():
     for device, providers in expected.items():
         transcriber = create_transcriber(replace(base, local_onnx_device=device))
         assert transcriber.provider_order == providers, device
+
+
+def test_a_measured_device_reaches_the_node_runtime_as_a_preference():
+    """`auto` has to start with the device the last benchmark measured as
+    fastest for this model; without this the setting reached nothing and the
+    runner kept its own WebGPU-first order."""
+    base = AppSettings(engine="local", model_size="granite-speech-4.1-2b")
+
+    measured = create_transcriber(
+        replace(
+            base,
+            onnx_auto_preferred_devices={"granite-speech-4.1-2b": "cpu"},
+        )
+    )
+    assert measured.preferred_device == "cpu"
+
+    # Nothing measured, and a measurement for another model, both leave the
+    # normal chain alone.
+    assert create_transcriber(base).preferred_device == ""
+    other_model = create_transcriber(
+        replace(
+            base,
+            onnx_auto_preferred_devices={"cohere-transcribe-03-2026": "cpu"},
+        )
+    )
+    assert other_model.preferred_device == ""
+
+
+def test_a_pinned_device_ignores_the_measurement_on_both_runtimes():
+    """An explicit choice always wins; only `auto` consults the benchmark."""
+    node_base = AppSettings(
+        engine="local",
+        model_size="granite-speech-4.1-2b",
+        onnx_auto_preferred_devices={"granite-speech-4.1-2b": "cpu"},
+    )
+    nemotron_base = AppSettings(
+        engine="local",
+        model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+        onnx_auto_preferred_devices={
+            "nemotron-3.5-asr-streaming-0.6b-int4": "cpu"
+        },
+    )
+
+    for device in ("gpu", "webgpu", "dml", "cpu"):
+        node = create_transcriber(replace(node_base, local_onnx_device=device))
+        assert node.preferred_device == "", device
+        nemotron = create_transcriber(
+            replace(nemotron_base, local_onnx_device=device)
+        )
+        assert nemotron.provider_order == nemotron_provider_order(device), device
+
+
+def test_a_measured_device_reorders_nemotrons_provider_order():
+    """ORT GenAI has DirectML and CPU only, so the one thing a measurement can
+    say here is that CPU beat DirectML on this machine."""
+    base = AppSettings(
+        engine="local", model_size="nemotron-3.5-asr-streaming-0.6b-int4"
+    )
+
+    measured = create_transcriber(
+        replace(
+            base,
+            onnx_auto_preferred_devices={
+                "nemotron-3.5-asr-streaming-0.6b-int4": "cpu"
+            },
+        )
+    )
+
+    assert measured.provider_order == ("cpu", "dml")
+    assert create_transcriber(base).provider_order == ("dml", "cpu")
+
+
+def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
+    """faster-whisper and onnx-asr take no device argument at all, so a stored
+    entry for them (only a hand-edited file can produce one) must not appear as
+    a constructor argument."""
+    for model_size in ("small", "parakeet-tdt-0.6b-v3"):
+        settings = AppSettings(
+            engine="local",
+            model_size=model_size,
+            onnx_auto_preferred_devices={model_size: "cpu"},
+        )
+
+        transcriber = create_transcriber(settings)
+
+        assert not hasattr(transcriber, "preferred_device"), model_size
+        assert not hasattr(transcriber, "provider_order"), model_size

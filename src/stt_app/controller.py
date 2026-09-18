@@ -89,7 +89,7 @@ from .model_download_progress import (
     format_model_download_progress,
 )
 from .overlay_ui import OverlayUI
-from .settings_store import AppSettings, SettingsStore
+from .settings_store import AppSettings, SettingsStore, preferred_onnx_device
 from .streaming_text import (
     StreamingTextState,
     normalize_stream_text,
@@ -346,6 +346,11 @@ class _TranscriberIdentity(NamedTuple):
     keep_onnx_model_loaded: bool = False
     streaming_full_final_transcript: bool = False
     local_onnx_device: str = ""
+    # The device a benchmark measured as fastest for the selected model, which
+    # is the device `auto` then starts with. Its own slot rather than folded
+    # into `local_onnx_device`, because for the Node runtime the two reach the
+    # constructor as two separate arguments.
+    onnx_preferred_device: str = ""
     custom_vocabulary: str = ""
     silence_gate_enabled: bool = False
     silence_gate_threshold: float = 0.0
@@ -4970,7 +4975,8 @@ class DictationController(QtCore.QObject):
                     # prevent.
                     local_onnx_device=",".join(
                         nemotron_provider_order(
-                            getattr(settings, "local_onnx_device", "")
+                            getattr(settings, "local_onnx_device", ""),
+                            preferred_onnx_device(settings),
                         )
                     ),
                 )
@@ -4978,6 +4984,7 @@ class DictationController(QtCore.QObject):
                 return _TranscriberIdentity(
                     **common,
                     local_onnx_device=getattr(settings, "local_onnx_device", ""),
+                    onnx_preferred_device=preferred_onnx_device(settings),
                     # Not a constructor argument, but it decides whether
                     # `_get_or_create_transcriber` caches this runtime at all.
                     keep_onnx_model_loaded=bool(

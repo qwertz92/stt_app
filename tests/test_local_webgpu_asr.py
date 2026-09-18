@@ -1621,3 +1621,240 @@ def test_the_stdout_reader_finishes_even_when_nobody_drains_it():
     )
     assert len(snapshot) == 128, f"the bound was not kept: {len(snapshot)}"
     assert snapshot[0] == lines[-128], f"more than the oldest was dropped: {snapshot[0]!r}"
+
+
+def _started_command(monkeypatch, tmp_path, **kwargs) -> list[str]:
+    """The Node command line one `preload_model()` produces, with no real child."""
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, process: None,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, state, deadline: {"ok": True, "device": "cpu"},
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node, runner: None
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **_kwargs: commands.append(list(command)) or _FakeProcess(),
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        node_path="node",
+        runner_path=runner,
+        **kwargs,
+    )
+    try:
+        transcriber.preload_model()
+    finally:
+        transcriber.close()
+    assert commands
+    return commands[0]
+
+
+def test_a_measured_device_is_passed_to_the_runner_as_prefer(monkeypatch, tmp_path):
+    command = _started_command(monkeypatch, tmp_path, preferred_device="cpu")
+
+    assert command[command.index("--prefer") + 1] == "cpu"
+    # After --dtype, so everything the runner's argument parser saw before it
+    # still arrives in exactly the order it always has.
+    assert command.index("--prefer") == command.index("--dtype") + 2
+
+
+def test_without_a_measurement_the_runner_command_is_unchanged(monkeypatch, tmp_path):
+    """The user's running app starts Node children from this working tree, so a
+    caller with nothing measured must produce exactly today's command line."""
+    plain = _started_command(monkeypatch, tmp_path)
+    pinned = _started_command(monkeypatch, tmp_path, device="cpu")
+
+    assert "--prefer" not in plain
+    assert "--prefer" not in pinned
+
+
+@pytest.mark.parametrize(
+    ("device", "preferred", "expected"),
+    [
+        ("auto", "cpu", "cpu"),
+        ("auto", " DML ", "dml"),
+        # Already the first device `auto` tries: nothing to reorder.
+        ("auto", "webgpu", ""),
+        ("auto", "cuda", ""),
+        ("auto", "", ""),
+        ("auto", None, ""),
+        # A pinned policy is the user's own decision and outranks a benchmark.
+        ("cpu", "dml", ""),
+        ("gpu", "cpu", ""),
+        ("dml", "cpu", ""),
+        ("webgpu", "cpu", ""),
+    ],
+)
+def test_the_transcriber_keeps_only_a_preference_that_changes_something(
+    device, preferred, expected
+):
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        device=device,
+        preferred_device=preferred,
+    )
+
+    assert transcriber.preferred_device == expected
+
+
+def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(
+    monkeypatch, tmp_path
+):
+    """The old text says the GPU "was not available or did not load". With CPU
+    measured as the fastest device for this model the runtime never tried a GPU
+    at all, so that sentence would be false and its red warning misleading."""
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, process: None,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, state, deadline: {
+            "ok": True,
+            "device": "cpu",
+            "gpuAvailable": False,
+            "fallbackErrors": [],
+        },
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node, runner: None
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **_kwargs: _FakeProcess(),
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        node_path="node",
+        runner_path=runner,
+        preferred_device="cpu",
+    )
+    progress: list[str] = []
+    transcriber.set_progress_callback(progress.append)
+
+    try:
+        transcriber.preload_model()
+    finally:
+        transcriber.close()
+
+    assert "benchmark" in transcriber.runtime_status_text()
+    assert "did not load" not in transcriber.runtime_status_text()
+    assert transcriber.runtime_warning == ""
+    assert any("CPU first (fastest in your benchmark)" in line for line in progress)
+    # And the child is not torn down and restarted after every transcription:
+    # a CPU run that was chosen rather than fallen back to reports no fallback
+    # details at all, which is what the restart rule already keys on.
+    assert transcriber._should_restart_after_cpu_fallback() is False
+
+
+def test_a_real_cpu_fallback_is_still_reported_as_one():
+    """The measured-CPU wording must not swallow the case it was carved out of:
+    `auto` with nothing measured that ends on CPU is still a failed GPU load."""
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="granite-speech-4.1-2b")
+    transcriber._set_runtime_status("cpu", False, ["webgpu: no adapter"])
+
+    assert "did not load" in transcriber.runtime_status_text()
+    assert transcriber.runtime_warning
+    assert transcriber._should_restart_after_cpu_fallback() is True
+
+
+def test_a_gpu_measured_as_fastest_keeps_the_normal_status_text():
+    """Only the CPU arm changes; a DirectML run says what it always said."""
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b", preferred_device="dml"
+    )
+    transcriber._set_runtime_status("dml", True, [])
+
+    assert transcriber.runtime_status_text() == "ONNX runtime active on DirectML GPU."
+    assert transcriber.runtime_warning == ""
+
+
+def test_node_resolve_device_puts_a_measured_device_first():
+    """The Python side only sends `--prefer`; the runner owns the real device
+    list, so the reorder has to be proven in Node rather than modelled here."""
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed.")
+    runner = (
+        Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
+    )
+    script = """
+      import { pathToFileURL } from 'node:url';
+      const runtime = await import(pathToFileURL(process.argv[1]).href);
+      const call = (device, prefer, platform) =>
+        runtime.resolveDevice(device, prefer, platform);
+      const result = {
+        win32Auto: call('auto', '', 'win32'),
+        win32AutoCpu: call('auto', 'cpu', 'win32'),
+        win32AutoDml: call('auto', 'dml', 'win32'),
+        win32AutoUpper: call('auto', 'CPU', 'win32'),
+        win32AutoWebgpu: call('auto', 'webgpu', 'win32'),
+        win32AutoUnknown: call('auto', 'cuda', 'win32'),
+        win32AutoMissing: runtime.resolveDevice('auto', undefined, 'win32'),
+        win32AutoNoArgs: runtime.resolveDevice('auto'),
+        linuxAuto: call('auto', '', 'linux'),
+        linuxAutoCpu: call('auto', 'cpu', 'linux'),
+        linuxAutoDml: call('auto', 'dml', 'linux'),
+        win32Gpu: call('gpu', 'cpu', 'win32'),
+        win32Cpu: call('cpu', 'dml', 'win32'),
+        win32Dml: call('dml', 'cpu', 'win32'),
+        win32Webgpu: call('webgpu', 'cpu', 'win32'),
+      };
+      console.log(JSON.stringify(result));
+    """
+    completed = subprocess.run(
+        [node, "--input-type=module", "-e", script, str(runner)],
+        check=True,
+        capture_output=True,
+        text=True,
+        # A bound against a hang, not a speed claim -- see the WAV parser probe.
+        timeout=60,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["win32Auto"] == ["webgpu", "dml", "cpu"]
+    assert result["win32AutoCpu"] == ["cpu", "webgpu", "dml"]
+    assert result["win32AutoDml"] == ["dml", "webgpu", "cpu"]
+    assert result["win32AutoUpper"] == ["cpu", "webgpu", "dml"]
+    # Already first, unknown, absent: all leave the chain exactly as it was.
+    assert result["win32AutoWebgpu"] == ["webgpu", "dml", "cpu"]
+    assert result["win32AutoUnknown"] == ["webgpu", "dml", "cpu"]
+    assert result["win32AutoMissing"] == ["webgpu", "dml", "cpu"]
+    # An old Python caller passes one argument, and the user's running app
+    # starts children from this same working tree, so that call must keep
+    # answering what it always did. That call reads the real platform, and
+    # DirectML exists on Windows only.
+    assert result["win32AutoNoArgs"] == (
+        ["webgpu", "dml", "cpu"] if sys.platform == "win32" else ["webgpu", "cpu"]
+    )
+    # DirectML is Windows-only, so a preference for it says nothing elsewhere.
+    assert result["linuxAuto"] == ["webgpu", "cpu"]
+    assert result["linuxAutoCpu"] == ["cpu", "webgpu"]
+    assert result["linuxAutoDml"] == ["webgpu", "cpu"]
+    # Every pinned policy ignores the preference.
+    assert result["win32Gpu"] == ["webgpu", "dml"]
+    assert result["win32Cpu"] == ["cpu"]
+    assert result["win32Dml"] == ["dml"]
+    assert result["win32Webgpu"] == ["webgpu"]
