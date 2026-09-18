@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
+    DEVICE_AWARE_LOCAL_MODELS,
     LANGUAGE_MODE_LABELS,
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
@@ -29,6 +30,7 @@ from .config import (
     VALID_MODES,
     VALID_PASTE_MODES,
     language_modes_for_selection,
+    onnx_auto_device_order,
     supports_streaming,
 )
 from .settings_dialog_helpers import (
@@ -39,23 +41,20 @@ from .settings_dialog_helpers import (
     _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
+    BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     LOCAL_MODEL_LABELS,
     _WheelPassthroughComboBox,
     local_model_label,
     local_model_precision_label,
     local_model_short_label,
     model_choices_for_engine,
+    onnx_device_label,
+    onnx_device_order_text,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
 
 # Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
 # benchmark can be selected for daily dictation with the same wording.
-# The onnx-asr models (Parakeet/Canary) are CPU-only and ignore the policy, so
-# the picker must not claim to control them.
-_DEVICE_AWARE_LOCAL_MODELS = tuple(
-    name for name in LOCAL_ONNX_MODEL_SIZES if name not in LOCAL_ONNX_ASR_MODEL_SIZES
-)
-
 _LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
     ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
     ("GPU only (WebGPU -> DirectML)", "gpu"),
@@ -702,6 +701,29 @@ class _GeneralTabMixin:
     def _on_local_onnx_device_changed(self, _index: int) -> None:
         self._update_local_onnx_device_row()
 
+    def _set_local_onnx_device_note(self, text: str) -> None:
+        # Two reserved lines are not much room at the dialog's minimum width,
+        # so the whole sentence goes into the tooltip as well -- the same
+        # answer every other changing note in this dialog uses.
+        self.local_onnx_device_note_label.setText(text)
+        self.local_onnx_device_note_label.setToolTip(text)
+
+    def _measured_onnx_device(self, model_name: str) -> str:
+        """The device the last benchmark measured as fastest for this model.
+
+        Read from the populated baseline rather than from the store: it is what
+        the widgets describe, it is updated by the benchmark path in the same
+        breath as the file, and `_update_local_onnx_device_row` also runs once
+        during construction, before that attribute exists.
+        """
+        measured = getattr(self, "_populated_settings", None)
+        stored = getattr(measured, "onnx_auto_preferred_devices", None) or {}
+        device = str(stored.get(model_name, "") or "")
+        # A device this model's runtime cannot reach changes nothing, so the
+        # note must not announce it: ORT GenAI has no WebGPU provider, and a
+        # stored "webgpu" for Nemotron can only come from a hand-edited file.
+        return device if device in onnx_auto_device_order(model_name) else ""
+
     def _update_local_onnx_device_row(self) -> None:
         """Enable the device picker only where it has an effect.
 
@@ -716,44 +738,76 @@ class _GeneralTabMixin:
             if hasattr(self, "model_combo")
             else ""
         )
-        applies = engine == "local" and model_name in _DEVICE_AWARE_LOCAL_MODELS
+        applies = engine == "local" and model_name in DEVICE_AWARE_LOCAL_MODELS
         self.local_onnx_device_combo.setEnabled(applies)
 
         if not applies:
             if model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
-                self.local_onnx_device_note_label.setText(
-                    "This model runs on CPU through onnx-asr and ignores this "
-                    "setting. It is already the fastest local option here."
+                # Not "the fastest local option": `tiny` is quicker, and the
+                # claim was never true for Canary at all.
+                self._set_local_onnx_device_note(
+                    "This model always runs on the CPU through onnx-asr and "
+                    "ignores this setting."
                 )
                 return
-            self.local_onnx_device_note_label.setText(
-                "Only applies to the local ONNX models (Cohere, Granite, "
-                "Nemotron). faster-whisper uses its own device setting."
+            # Names what decides instead. "faster-whisper uses its own device
+            # setting" pointed at a setting this app does not have.
+            self._set_local_onnx_device_note(
+                "Only applies to Cohere, Granite and Nemotron. Whisper models "
+                "pick their device themselves (CUDA if present, otherwise CPU)."
             )
             return
 
         device = str(self.local_onnx_device_combo.currentData() or "auto")
-        if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-            self.local_onnx_device_note_label.setText(
-                "This model runs on ONNX Runtime GenAI, which has DirectML and "
-                "CPU only: every GPU choice here means DirectML."
-            )
-            return
         if device == "auto":
-            self.local_onnx_device_note_label.setText(
-                "Tries WebGPU, then DirectML, then CPU. Pin a device only when "
-                "a benchmark shows it is faster on your hardware."
-            )
+            self._set_local_onnx_device_note(self._auto_device_note(model_name))
             return
         if device == "cpu":
-            self.local_onnx_device_note_label.setText(
+            self._set_local_onnx_device_note(
                 "Forces CPU and never tries the GPU. Faster for models whose "
                 "encoder the GPU cannot run; slower for the rest."
             )
             return
-        self.local_onnx_device_note_label.setText(
+        if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            self._set_local_onnx_device_note(
+                "This model runs on ONNX Runtime GenAI, which has DirectML and "
+                "CPU only: every GPU choice here means DirectML."
+            )
+            return
+        self._set_local_onnx_device_note(
             "Forces this device and fails instead of falling back to CPU, so a "
             "model the GPU cannot run will error rather than transcribe slowly."
+        )
+
+    def _auto_device_note(self, model_name: str) -> str:
+        """What `auto` will do for this model, and how to change it."""
+        order = onnx_auto_device_order(model_name)
+        measured = self._measured_onnx_device(model_name)
+        if measured and measured != order[0]:
+            return (
+                f"Auto starts with {onnx_device_label(measured)}: the fastest "
+                "device for this model in your last benchmark. Run it again to "
+                "update, or pick a device to override."
+            )
+        if measured:
+            # Not "confirmed as the fastest": the first device also stands when
+            # another one was quicker by less than `MEASURED_DEVICE_MIN_GAIN`.
+            return (
+                f"Tries {onnx_device_order_text(order)}. Your last benchmark "
+                f"measured nothing clearly faster than {onnx_device_label(measured)} "
+                "for this model."
+            )
+        if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            return (
+                "This model has DirectML and CPU only (every GPU choice means "
+                f"DirectML). Run a benchmark with "
+                f'"{BENCHMARK_GPU_CPU_COMPARISON_LABEL}" and Auto will start '
+                "with the faster one."
+            )
+        return (
+            f"Tries {onnx_device_order_text(order)}. Run a benchmark with "
+            f'"{BENCHMARK_GPU_CPU_COMPARISON_LABEL}" and Auto will start with '
+            "the device that was fastest."
         )
 
     def _update_local_model_runtime_warning(self) -> None:
@@ -771,9 +825,12 @@ class _GeneralTabMixin:
         note_style = "color: #666666; font-size: 11px;"
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
+            # The order Auto tries is no longer fixed -- a benchmark can put
+            # CPU first -- and the ONNX Device row below owns it either way, so
+            # restating it here could only ever contradict it.
             self.local_model_runtime_warning_label.setText(
-                "Batch mode only. Auto tries WebGPU, then DirectML, then "
-                "falls back to CPU (active device shown in the overlay)."
+                "Batch mode only. Runs on the device chosen under ONNX Device "
+                "(the active one is shown in the overlay)."
             )
             return
         if engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
@@ -784,16 +841,18 @@ class _GeneralTabMixin:
                     "auto-detect and would otherwise translate into English."
                 )
             else:
+                # Not "the fastest local model here": `tiny` measured 0.033
+                # against Parakeet's 0.043 in the same run.
                 self.local_model_runtime_warning_label.setText(
-                    "Batch mode only, CPU. Multilingual with no language "
-                    "selection needed, and the fastest local model here."
+                    "Batch mode only, CPU. Multilingual, no language selection "
+                    "needed; the recommended default."
                 )
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
-                "Streams with a fixed 560 ms ONNX chunk. Auto tries DirectML, "
-                "then falls back to CPU."
+                "Streams with a fixed 560 ms ONNX chunk. Runs on the device "
+                "chosen under ONNX Device."
             )
             return
         self.local_model_runtime_warning_label.setStyleSheet(note_style)

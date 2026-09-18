@@ -458,7 +458,7 @@ def test_local_distil_model_limits_language_to_auto_and_english():
     _ = app
 
 
-def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
+def test_local_webgpu_model_is_batch_only_and_points_at_the_device_row():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(
@@ -489,9 +489,12 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
         dialog.language_note_label.text()
     )
     assert "ONNX/WebGPU" in dialog.engine_indicator.text()
-    assert "DirectML" in dialog.local_model_runtime_warning_label.text()
-    assert "falls back to CPU" in dialog.local_model_runtime_warning_label.text()
     assert "Batch mode only" in dialog.local_model_runtime_warning_label.text()
+    # The order Auto tries is the ONNX Device row's to state, and a benchmark
+    # can change it -- so this note names that row instead of restating a chain
+    # that would then be wrong here.
+    assert "ONNX Device" in dialog.local_model_runtime_warning_label.text()
+    assert "DirectML" not in dialog.local_model_runtime_warning_label.text()
     assert dialog.keep_onnx_model_loaded_checkbox.isChecked() is False
     _ = app
 
@@ -574,7 +577,9 @@ def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
     assert dialog.local_model_runtime_warning_label.isHidden() is False
     warning_text = dialog.local_model_runtime_warning_label.text()
     assert "Batch mode only" in warning_text
-    assert "DirectML" in warning_text
+    # The device order lives one row down, under ONNX Device, because a
+    # benchmark can reorder it and two statements of it would disagree.
+    assert "ONNX Device" in warning_text
     assert "Granite 4.1" not in warning_text
     assert "raw ONNX" not in warning_text
     assert len(warning_text) < 180
@@ -582,7 +587,7 @@ def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
     _ = app
 
 
-def test_nemotron_model_enables_true_streaming_and_directml_fallback_note():
+def test_nemotron_model_enables_true_streaming_and_points_at_the_device_row():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(
@@ -608,8 +613,11 @@ def test_nemotron_model_enables_true_streaming_and_directml_fallback_note():
     assert _combo_offers(dialog.language_combo, "el") is False
     assert "automatic language detection" in dialog.language_note_label.text()
     assert "560 ms streaming" in dialog.engine_indicator.text()
-    assert "DirectML" in dialog.local_model_runtime_warning_label.text()
     assert "fixed 560 ms" in dialog.local_model_runtime_warning_label.text()
+    # "Auto tries DirectML, then falls back to CPU" is no longer true once a
+    # benchmark has measured CPU as faster; the ONNX Device row says it, once.
+    assert "ONNX Device" in dialog.local_model_runtime_warning_label.text()
+    assert "DirectML" in dialog.local_onnx_device_note_label.text()
     _ = app
 
 

@@ -765,6 +765,15 @@ class _PersistenceMixin:
             local_onnx_device=normalize_local_onnx_device(
                 self.local_onnx_device_combo.currentData()
             ),
+            # Carried, not stamped, for the same reason as `schema_version`
+            # above: no widget reads this map back, so a constructed default
+            # `{}` would differ from the baseline, count as an edit, and erase
+            # the last benchmark's measurement on every single Save -- including
+            # the write the benchmark itself had just made while this dialog
+            # was open.
+            onnx_auto_preferred_devices=(
+                self._populated_settings.onnx_auto_preferred_devices
+            ),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
                 self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE

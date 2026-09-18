@@ -20,7 +20,9 @@ from .config import (
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
+    MEASURED_DEVICE_MIN_GAIN,
     nemotron_provider_order,
+    onnx_auto_device_order,
 )
 from .csv_safety import export_safe_text, spreadsheet_safe_mapping
 from .persistence import atomic_write_bytes
@@ -564,6 +566,61 @@ def benchmark_device_targets(
         if resolved not in targets:
             targets.append(resolved)
     return targets or [fallback_device]
+
+
+def measured_fastest_devices(cases: list[BenchmarkCase]) -> dict[str, str]:
+    """Per device-aware model, the device this run measured as fastest.
+
+    Pure, and deliberately conservative: the answer is written into
+    `settings.json` and decides which device `auto` loads that model on, so a
+    model this run cannot compare yields nothing at all rather than a guess.
+
+    A case counts only when it finished (an error case stores the *requested*
+    target, not a resolved device, and measured nothing), has runs, produced a
+    usable real-time factor, and resolved onto a device that model's own `auto`
+    chain can actually reach. Fewer than two such devices is not a comparison.
+
+    The winner is the fastest device only when it beat the chain's incumbent --
+    the first of its default order that was measured -- by at least
+    `MEASURED_DEVICE_MIN_GAIN`; otherwise the incumbent stands, because
+    reordering costs a full model reload and run-to-run noise is a few percent.
+    """
+    by_model: dict[str, dict[str, float]] = {}
+    for case in cases:
+        model = getattr(case, "model", "")
+        reachable = onnx_auto_device_order(model)
+        if not reachable or case.error is not None or not case.runs:
+            continue
+        device = str(getattr(case, "device", "") or "").strip().lower()
+        if device not in reachable:
+            continue
+        rtf = _safe_float(case.avg_rtf)
+        if not math.isfinite(rtf) or rtf <= 0:
+            continue
+        measured = by_model.setdefault(model, {})
+        # The lowest of several runs of one device: a GPU busy on the first
+        # pass or a cold cache says what happened, not what the device can do.
+        measured[device] = min(measured.get(device, math.inf), rtf)
+
+    fastest: dict[str, str] = {}
+    for model, measured in by_model.items():
+        if len(measured) < 2:
+            continue
+        incumbent = next(
+            (
+                device
+                for device in onnx_auto_device_order(model)
+                if device in measured
+            ),
+            "",
+        )
+        if not incumbent:
+            continue
+        winner = min(measured, key=lambda device: measured[device])
+        if measured[winner] > measured[incumbent] * (1.0 - MEASURED_DEVICE_MIN_GAIN):
+            winner = incumbent
+        fastest[model] = winner
+    return fastest
 
 
 @dataclass(frozen=True)

@@ -249,6 +249,31 @@ _CONCURRENT_MODE_UI_CHOICES: tuple[tuple[str, str], ...] = (
 _CONCURRENT_MODE_IMMEDIATE_UI_VALUE = "insert_immediate"
 
 
+# The Run Benchmark window's device choice that measures a model on a GPU and
+# on the CPU, i.e. the one a user has to pick for `auto` to learn anything.
+# Named once because the General tab's note tells them to pick it by name, and
+# a second copy of that string would drift the moment the combo is reworded.
+BENCHMARK_GPU_CPU_COMPARISON_LABEL = "GPU + CPU comparison"
+
+# How the device values read in a sentence. The transcriber has its own,
+# longer labels for a *running* runtime ("DirectML GPU"); these are the names
+# the pickers use.
+ONNX_DEVICE_LABELS: dict[str, str] = {
+    "webgpu": "WebGPU",
+    "dml": "DirectML",
+    "cpu": "CPU",
+}
+
+
+def onnx_device_label(device: str) -> str:
+    return ONNX_DEVICE_LABELS.get(device, device)
+
+
+def onnx_device_order_text(order: tuple[str, ...]) -> str:
+    """"WebGPU, then DirectML, then CPU" -- one rendering of a device chain."""
+    return ", then ".join(onnx_device_label(device) for device in order)
+
+
 _PASTE_MODE_LABELS: dict[str, str] = {
     "auto": "Auto (SendInput -> WM_PASTE)",
     "wm_paste": "WM_PASTE only",

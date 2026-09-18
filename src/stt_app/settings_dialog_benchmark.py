@@ -6,6 +6,7 @@ import math
 import re
 import threading
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 
@@ -31,11 +32,13 @@ from .local_benchmark import (
     _format_number,
     _format_seconds,
     format_benchmark_summary,
+    measured_fastest_devices,
     normalize_webgpu_benchmark_devices,
     planned_benchmark_cases,
 )
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
+    BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     ElidingLabel,
     _benchmark_status_text,
     _emit_background_signal,
@@ -43,7 +46,9 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
     compact_table_row_height,
     configure_button_row,
+    onnx_device_label,
 )
+from .settings_store import auto_first_onnx_device
 from .ui_feedback import restore_vertical_scrollbar
 
 logger = logging.getLogger(__name__)
@@ -1323,7 +1328,7 @@ class _BenchmarkMixin:
             ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
             ("GPU only (WebGPU -> DirectML)", "gpu"),
             ("CPU only", "cpu"),
-            ("GPU + CPU comparison", "gpu,cpu"),
+            (BENCHMARK_GPU_CPU_COMPARISON_LABEL, "gpu,cpu"),
             ("DirectML only", "dml"),
             ("WebGPU only", "webgpu"),
             ("All explicit targets", "all"),
@@ -1344,7 +1349,9 @@ class _BenchmarkMixin:
         webgpu_device_note = QtWidgets.QLabel(
             "Applies to Cohere, Granite and Nemotron. Whisper models pick their "
             "device themselves (CUDA if present, otherwise CPU); Parakeet and "
-            "Canary always run on the CPU."
+            "Canary always run on the CPU. A run that measures a model on more "
+            "than one device also decides which one Auto starts with in "
+            "Settings > General."
         )
         webgpu_device_note.setWordWrap(True)
         self._style_note_label(webgpu_device_note)
@@ -2303,6 +2310,20 @@ class _BenchmarkMixin:
             self.benchmark_results_panel.set_status_text(text)
             self._refresh_benchmark_history_list()
 
+        # After the history write, and only for a run that ran to the end: a
+        # cancel stopped somewhere the user chose and a failure somewhere
+        # unknown, so neither is a comparison the app may act on by itself.
+        # Skipped while shutting down, like every other write this dialog
+        # makes from a queued signal -- `shutdown()` delivers those from
+        # `aboutToQuit`, with nothing left to run what they start.
+        measured_devices_note = ""
+        if (
+            success
+            and status in {"completed", "completed_with_errors"}
+            and not self._shutdown_started
+        ):
+            measured_devices_note = self._apply_measured_onnx_devices(cases)
+
         if history_error:
             self._set_benchmark_status(
                 f"Benchmark finished, but history could not be saved: {history_error}",
@@ -2330,8 +2351,19 @@ class _BenchmarkMixin:
                 )
         elif any(case.error for case in cases):
             self._set_benchmark_status(
-                "Benchmark completed with errors and was saved to history. "
-                "See the summary for details.",
+                " ".join(
+                    part
+                    for part in (
+                        "Benchmark completed with errors and was saved to "
+                        "history. See the summary for details.",
+                        # A run that failed on one model can still have
+                        # compared another on two devices, and that write has
+                        # already happened -- so it has to be reported on this
+                        # line as much as on the clean one.
+                        measured_devices_note,
+                    )
+                    if part
+                ),
                 "#b26a00",
             )
         elif not cases:
@@ -2345,11 +2377,86 @@ class _BenchmarkMixin:
             )
         else:
             self._set_benchmark_status(
-                "Benchmark finished and saved to history.",
+                " ".join(
+                    part
+                    for part in (
+                        "Benchmark finished and saved to history.",
+                        measured_devices_note,
+                    )
+                    if part
+                ),
                 "#1b5e20",
             )
         self._expand_benchmark_results_area()
         self._update_benchmark_actions()
+
+    def _apply_measured_onnx_devices(self, cases: list[BenchmarkCase]) -> str:
+        """Store the device each measured model ran fastest on, and say so.
+
+        The write goes to the store rather than to this dialog's widgets: the
+        field has none, and the controller reloads from the file. Order as in
+        `_persist_history_limit_now` -- the file first, the signal after it, so
+        nothing can act on a device order that never reached disk.
+
+        Returns a sentence for the run's status line, empty when the run
+        changed nothing.
+        """
+        updates = measured_fastest_devices(cases)
+        if not updates:
+            return ""
+        stored = self._settings_store.load()
+        current = dict(getattr(stored, "onnx_auto_preferred_devices", {}) or {})
+        merged = {**current, **updates}
+        if merged == current:
+            # Re-running a benchmark to confirm a result is normal, and an
+            # unchanged map must not rewrite the file or make the controller
+            # close and reload a multi-gigabyte model for nothing.
+            return ""
+        try:
+            self._settings_store.save(
+                replace(stored, onnx_auto_preferred_devices=merged)
+            )
+        except Exception as exc:
+            logger.warning("Failed to store the measured ONNX device order: %s", exc)
+            return f"The measured device order could not be saved: {exc}"
+        # Both snapshots, or the next Save reads the write as an edit of its
+        # own and undoes it -- the shape `_dialog_edits_over_stored` exists for.
+        self._loaded_settings = replace(
+            self._loaded_settings, onnx_auto_preferred_devices=merged
+        )
+        self._populated_settings = replace(
+            self._populated_settings, onnx_auto_preferred_devices=merged
+        )
+        self._update_local_onnx_device_row()
+        # Emitted for every write, also one that reorders nothing: the
+        # controller's own setters (overlay opacity, pin, language) save their
+        # whole snapshot, so a controller that never reloaded would write the
+        # map back as it was before this run.
+        self.settings_changed.emit()
+
+        # A stored device that already leads the model's chain reorders
+        # nothing, so "now starts with" is said only where the first device
+        # really moved -- on this machine the usual outcome is WebGPU measured
+        # and WebGPU kept.
+        before = {model: auto_first_onnx_device(model, current) for model in updates}
+        after = {model: auto_first_onnx_device(model, merged) for model in updates}
+        moved = [model for model in updates if before[model] != after[model]]
+        parts: list[str] = []
+        selected = str(self.model_combo.currentData() or "")
+        if selected in updates and current.get(selected) != updates[selected]:
+            label = onnx_device_label(after[selected])
+            if selected in moved:
+                parts.append(f"Auto now starts with {label} for {selected}.")
+            else:
+                parts.append(
+                    f"Auto keeps {label} first for {selected}: nothing measured "
+                    "was clearly faster."
+                )
+        others = [model for model in moved if model != selected]
+        if others:
+            scope = "other model(s)" if parts else "model(s)"
+            parts.append(f"Auto device order updated for {len(others)} {scope}.")
+        return " ".join(parts)
 
     def _refresh_benchmark_history_list(
         self,
