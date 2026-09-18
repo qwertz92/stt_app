@@ -568,28 +568,26 @@ def benchmark_device_targets(
     return targets or [fallback_device]
 
 
-def measured_fastest_devices(cases: list[BenchmarkCase]) -> dict[str, str]:
-    """Per device-aware model, the device this run measured as fastest.
+def _device_measurements(
+    cases: list[BenchmarkCase],
+) -> tuple[dict[str, dict[str, float]], dict[str, int]]:
+    """Per device-aware model: its best mean RTF per device, and its case count.
 
-    Pure, and deliberately conservative: the answer is written into
-    `settings.json` and decides which device `auto` loads that model on, so a
-    model this run cannot compare yields nothing at all rather than a guess.
-
-    A case counts only when it finished (an error case stores the *requested*
-    target, not a resolved device, and measured nothing), has runs, produced a
-    usable real-time factor, and resolved onto a device that model's own `auto`
-    chain can actually reach. Fewer than two such devices is not a comparison.
-
-    The winner is the fastest device only when it beat the chain's incumbent --
-    the first of its default order that was measured -- by at least
-    `MEASURED_DEVICE_MIN_GAIN`; otherwise the incumbent stands, because
-    reordering costs a full model reload and run-to-run noise is a few percent.
+    A case counts as a measurement only when it finished (an error case stores
+    the *requested* target, not a resolved device, and measured nothing), has
+    runs, produced a usable real-time factor, and resolved onto a device that
+    model's own `auto` chain can actually reach. The count includes the cases
+    that did not, because it says how many targets the run *tried*.
     """
-    by_model: dict[str, dict[str, float]] = {}
+    measured_by_model: dict[str, dict[str, float]] = {}
+    attempts: dict[str, int] = {}
     for case in cases:
         model = getattr(case, "model", "")
         reachable = onnx_auto_device_order(model)
-        if not reachable or case.error is not None or not case.runs:
+        if not reachable:
+            continue
+        attempts[model] = attempts.get(model, 0) + 1
+        if case.error is not None or not case.runs:
             continue
         device = str(getattr(case, "device", "") or "").strip().lower()
         if device not in reachable:
@@ -597,22 +595,51 @@ def measured_fastest_devices(cases: list[BenchmarkCase]) -> dict[str, str]:
         rtf = _safe_float(case.avg_rtf)
         if not math.isfinite(rtf) or rtf <= 0:
             continue
-        measured = by_model.setdefault(model, {})
-        # The lowest of several runs of one device: a GPU busy on the first
+        measured = measured_by_model.setdefault(model, {})
+        # The lowest of several cases on one device: a GPU busy on the first
         # pass or a cold cache says what happened, not what the device can do.
         measured[device] = min(measured.get(device, math.inf), rtf)
+    return measured_by_model, attempts
 
+
+def measured_fastest_devices(
+    cases: list[BenchmarkCase],
+    current: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Per device-aware model, the device this run measured as fastest.
+
+    Pure, and deliberately conservative: the answer is written into
+    `settings.json` and decides which device `auto` loads that model on, so a
+    model this run cannot compare yields nothing at all rather than a guess.
+    Fewer than two measured devices (`_device_measurements`) is no comparison.
+
+    The winner is the fastest device only when it beat the incumbent by at
+    least `MEASURED_DEVICE_MIN_GAIN`; otherwise the incumbent stands, because
+    reordering costs a full model reload and run-to-run noise is a few percent.
+    The incumbent is the device `auto` starts with *today*: the one ``current``
+    stores for the model when this run measured it, else the first device of
+    the default order that was measured. Judged against the default alone, a
+    second run that found the stored device ahead by less than the band moved
+    `auto` back to the device its own numbers called slower, and the run after
+    it could move it forth again.
+    """
+    measured_by_model, _attempts = _device_measurements(cases)
     fastest: dict[str, str] = {}
-    for model, measured in by_model.items():
+    for model, measured in measured_by_model.items():
         if len(measured) < 2:
             continue
-        incumbent = next(
-            (
-                device
-                for device in onnx_auto_device_order(model)
-                if device in measured
-            ),
-            "",
+        stored = str((current or {}).get(model, "") or "").strip().lower()
+        incumbent = (
+            stored
+            if stored in measured
+            else next(
+                (
+                    device
+                    for device in onnx_auto_device_order(model)
+                    if device in measured
+                ),
+                "",
+            )
         )
         if not incumbent:
             continue
@@ -621,6 +648,30 @@ def measured_fastest_devices(cases: list[BenchmarkCase]) -> dict[str, str]:
             winner = incumbent
         fastest[model] = winner
     return fastest
+
+
+def uncomparable_device_models(
+    cases: list[BenchmarkCase],
+) -> dict[str, tuple[str, ...]]:
+    """Models this run tried on several targets and measured on fewer than two.
+
+    The value is what *was* measured, in the model's own chain order, and empty
+    when nothing was. This is the machine whose GPU targets all fail: the run
+    the note under the picker asks for ends with one error case and one CPU
+    case, `measured_fastest_devices` rightly stores nothing, and without this
+    the user is never told why nothing changed. A model with a single case is
+    left out -- nobody asked for a comparison there.
+    """
+    measured_by_model, attempts = _device_measurements(cases)
+    uncomparable: dict[str, tuple[str, ...]] = {}
+    for model, count in attempts.items():
+        measured = measured_by_model.get(model, {})
+        if count < 2 or len(measured) >= 2:
+            continue
+        uncomparable[model] = tuple(
+            device for device in onnx_auto_device_order(model) if device in measured
+        )
+    return uncomparable
 
 
 @dataclass(frozen=True)

@@ -11,6 +11,7 @@ from stt_app.local_benchmark import (
     BenchmarkCase,
     BenchmarkRun,
     measured_fastest_devices,
+    uncomparable_device_models,
 )
 
 _COHERE = "cohere-transcribe-03-2026"
@@ -55,9 +56,10 @@ def test_the_clearly_faster_device_wins():
 
 
 def test_a_difference_inside_the_noise_keeps_the_default_first_device():
-    """Run-to-run noise on one machine measured about 2%, so a 5% gap says
-    nothing about which device is quicker -- and acting on it would cost a
-    multi-gigabyte model reload for a result the next run reverses."""
+    """The runs of one case differ by a median of 4% on the development
+    machine, so a 5% gap says nothing about which device is quicker -- and
+    acting on it would cost a multi-gigabyte model reload for a result the next
+    run reverses."""
     cases = [_case(_COHERE, "webgpu", 0.100), _case(_COHERE, "cpu", 0.095)]
 
     assert measured_fastest_devices(cases) == {_COHERE: "webgpu"}
@@ -215,3 +217,63 @@ def test_a_device_name_is_read_the_way_every_other_device_value_is():
     cases = [_case(_COHERE, " CPU ", 0.10), _case(_COHERE, "webgpu", 0.30)]
 
     assert measured_fastest_devices(cases) == {_COHERE: "cpu"}
+
+
+def test_the_device_auto_starts_with_today_is_what_the_next_run_has_to_beat():
+    """Run 1 moved `auto` to DirectML because it was 15% quicker. Run 2 measures
+    it 5% quicker: still ahead, but inside the band. Judged against the default
+    first device, that run moved `auto` back to WebGPU -- towards the device its
+    own numbers called slower -- and cost a model reload for it. The threshold
+    exists to keep what `auto` does today unless something is clearly faster,
+    and what it does today is the stored device."""
+    cases = [_case(_COHERE, "webgpu", 1.00), _case(_COHERE, "dml", 0.95)]
+
+    assert measured_fastest_devices(cases) == {_COHERE: "webgpu"}
+    assert measured_fastest_devices(cases, {_COHERE: "dml"}) == {_COHERE: "dml"}
+
+    # It protects the stored device from noise, not from a clearly faster one.
+    clearly = [_case(_COHERE, "webgpu", 0.80), _case(_COHERE, "dml", 1.00)]
+    assert measured_fastest_devices(clearly, {_COHERE: "dml"}) == {_COHERE: "webgpu"}
+
+    # A stored device this run never measured has nothing to defend with, and
+    # one nothing recognises is no incumbent at all.
+    without = [_case(_COHERE, "webgpu", 1.00), _case(_COHERE, "cpu", 0.95)]
+    assert measured_fastest_devices(without, {_COHERE: "dml"}) == {_COHERE: "webgpu"}
+    assert measured_fastest_devices(without, {_COHERE: "cuda"}) == {_COHERE: "webgpu"}
+    assert measured_fastest_devices(without, {_GRANITE: "cpu"}) == {_COHERE: "webgpu"}
+
+
+def test_a_comparison_that_measured_one_device_is_reported_as_such():
+    """On a machine whose GPU targets all fail, "GPU + CPU comparison" ends with
+    one error case and one CPU case. That is no comparison, so nothing is
+    stored -- and the user who was told to run exactly this has to learn why
+    nothing changed."""
+    gpu_failed = [
+        _case(_COHERE, "gpu", error="No GPU device could load the model"),
+        _case(_COHERE, "cpu", 0.10),
+    ]
+    assert measured_fastest_devices(gpu_failed) == {}
+    assert uncomparable_device_models(gpu_failed) == {_COHERE: ("cpu",)}
+
+    # Two targets that resolved onto one device are one device as well.
+    same_device = [_case(_COHERE, "webgpu", 0.10), _case(_COHERE, "webgpu", 0.11)]
+    assert uncomparable_device_models(same_device) == {_COHERE: ("webgpu",)}
+
+    nothing_worked = [
+        _case(_COHERE, "gpu", error="failed"),
+        _case(_COHERE, "cpu", error="failed"),
+    ]
+    assert uncomparable_device_models(nothing_worked) == {_COHERE: ()}
+
+
+def test_a_run_that_never_asked_for_a_comparison_is_not_reported():
+    """One target per model is the ordinary `auto` run; saying "only WebGPU
+    could be measured" about it would answer a question nobody asked. A model
+    that was compared, and one whose runtime takes no device, are not
+    "uncomparable" either."""
+    assert uncomparable_device_models([_case(_COHERE, "webgpu", 0.10)]) == {}
+    assert uncomparable_device_models([]) == {}
+    compared = [_case(_COHERE, "webgpu", 0.30), _case(_COHERE, "cpu", 0.10)]
+    assert uncomparable_device_models(compared) == {}
+    no_device = [_case("small", "cpu", 0.30), _case("small", "auto", 0.10)]
+    assert uncomparable_device_models(no_device) == {}

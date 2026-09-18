@@ -35,6 +35,7 @@ from .local_benchmark import (
     measured_fastest_devices,
     normalize_webgpu_benchmark_devices,
     planned_benchmark_cases,
+    uncomparable_device_models,
 )
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
@@ -2401,17 +2402,24 @@ class _BenchmarkMixin:
         Returns a sentence for the run's status line, empty when the run
         changed nothing.
         """
-        updates = measured_fastest_devices(cases)
-        if not updates:
-            return ""
+        selected = str(self.model_combo.currentData() or "")
+        unchanged_note = self._uncomparable_device_note(cases, selected)
+        # Asked without the stored map first: which models a run can compare
+        # does not depend on it, and a run that compared nothing must not even
+        # read the settings file.
+        if not measured_fastest_devices(cases):
+            return unchanged_note
         stored = self._settings_store.load()
         current = dict(getattr(stored, "onnx_auto_preferred_devices", {}) or {})
+        # With the stored map, because the device `auto` starts with today is
+        # what this run has to beat -- see `measured_fastest_devices`.
+        updates = measured_fastest_devices(cases, current)
         merged = {**current, **updates}
         if merged == current:
             # Re-running a benchmark to confirm a result is normal, and an
             # unchanged map must not rewrite the file or make the controller
             # close and reload a multi-gigabyte model for nothing.
-            return ""
+            return unchanged_note
         try:
             self._settings_store.save(
                 replace(stored, onnx_auto_preferred_devices=merged)
@@ -2442,7 +2450,6 @@ class _BenchmarkMixin:
         after = {model: auto_first_onnx_device(model, merged) for model in updates}
         moved = [model for model in updates if before[model] != after[model]]
         parts: list[str] = []
-        selected = str(self.model_combo.currentData() or "")
         if selected in updates and current.get(selected) != updates[selected]:
             label = onnx_device_label(after[selected])
             if selected in moved:
@@ -2456,7 +2463,31 @@ class _BenchmarkMixin:
         if others:
             scope = "other model(s)" if parts else "model(s)"
             parts.append(f"Auto device order updated for {len(others)} {scope}.")
+        if unchanged_note:
+            parts.append(unchanged_note)
         return " ".join(parts)
+
+    @staticmethod
+    def _uncomparable_device_note(cases: list[BenchmarkCase], selected: str) -> str:
+        """Why a comparison of the selected model changed nothing, or "".
+
+        The note under ONNX Device tells the user to run a comparison. On a
+        machine whose GPU targets all fail, that run measures one device, which
+        rightly stores nothing -- and said nothing either. Only for the selected
+        model: the line is about the run, not a report on every model in it.
+        """
+        measured = uncomparable_device_models(cases).get(selected)
+        if measured is None:
+            return ""
+        if not measured:
+            return (
+                f"Auto's device order for {selected} is unchanged: no device "
+                "could be measured."
+            )
+        return (
+            f"Auto's device order for {selected} is unchanged: only "
+            f"{onnx_device_label(measured[0])} could be measured."
+        )
 
     def _refresh_benchmark_history_list(
         self,

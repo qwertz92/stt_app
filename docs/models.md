@@ -267,7 +267,7 @@ dictation:
 
 | Choice | Meaning |
 |--------|---------|
-| `Auto` | WebGPU, then DirectML, then CPU (the default); starts with the device your last benchmark measured as fastest, if there is one |
+| `Auto` | WebGPU, then DirectML, then CPU (the default); starts with the device a benchmark of yours measured as fastest for that model, if there is one |
 | `GPU only` | WebGPU then DirectML; fails rather than falling back to CPU |
 | `WebGPU only` / `DirectML only` | Pin one backend |
 | `CPU only` | Never try the GPU |
@@ -279,8 +279,8 @@ of them is selected.
 
 **Letting a benchmark decide what `Auto` starts with.** Which device is
 faster depends on the machine. A working GPU path usually wins by a wide margin
-(on the development machine WebGPU measured 1.6x to 4.6x faster than the CPU
-for the three Cohere/Granite models), while on a machine whose GPU cannot run a
+(in the development machine's 2026-08-25 run WebGPU measured 1.6x to 4.6x
+faster than the CPU for the three Cohere/Granite models), while on a machine whose GPU cannot run a
 model the CPU is the quicker road and every GPU attempt is wasted load time.
 To let the app find out, open Settings -> Benchmark -> **Run Benchmark...**,
 choose **GPU + CPU comparison** (or **All explicit targets**) under ONNX
@@ -294,9 +294,11 @@ The rule is deliberately conservative:
 - Only a run that ran to its end counts, not a canceled or a failed one.
 - A model must have been measured successfully on at least two devices in that
   one run; a single device is not a comparison.
-- The normal first device stays first unless another one was at least 10%
-  faster (mean real-time factor of the case). Differences of a few percent
-  between two runs are noise, and a reorder costs a model reload.
+- The device `Auto` starts with today stays first unless another one was at
+  least 10% faster (mean real-time factor of the case). Differences of a few
+  percent between two runs are noise, and a reorder costs a model reload.
+- On a machine whose GPU targets all fail, the comparison measures one device
+  only. Nothing is stored then, and the run's status line says so.
 - A pinned device (`CPU only`, `WebGPU only`, ...) always outranks the
   measurement.
 - Run the benchmark again after a driver or hardware change; the newest run

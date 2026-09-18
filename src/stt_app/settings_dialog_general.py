@@ -709,7 +709,7 @@ class _GeneralTabMixin:
         self.local_onnx_device_note_label.setToolTip(text)
 
     def _measured_onnx_device(self, model_name: str) -> str:
-        """The device the last benchmark measured as fastest for this model.
+        """The device a benchmark measured as fastest for this model, if any.
 
         Read from the populated baseline rather than from the store: it is what
         the widgets describe, it is updated by the benchmark path in the same
@@ -784,16 +784,19 @@ class _GeneralTabMixin:
         order = onnx_auto_device_order(model_name)
         measured = self._measured_onnx_device(model_name)
         if measured and measured != order[0]:
+            # "your benchmark", never "your last benchmark": the map is merged
+            # across runs, so this entry can be older than the last run, which
+            # may have measured other models only.
             return (
                 f"Auto starts with {onnx_device_label(measured)}: the fastest "
-                "device for this model in your last benchmark. Run it again to "
+                "device for this model in your benchmark. Run it again to "
                 "update, or pick a device to override."
             )
         if measured:
             # Not "confirmed as the fastest": the first device also stands when
             # another one was quicker by less than `MEASURED_DEVICE_MIN_GAIN`.
             return (
-                f"Tries {onnx_device_order_text(order)}. Your last benchmark "
+                f"Tries {onnx_device_order_text(order)}. Your benchmark "
                 f"measured nothing clearly faster than {onnx_device_label(measured)} "
                 "for this model."
             )

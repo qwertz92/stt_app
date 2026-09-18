@@ -768,7 +768,7 @@ class _PersistenceMixin:
             # Carried, not stamped, for the same reason as `schema_version`
             # above: no widget reads this map back, so a constructed default
             # `{}` would differ from the baseline, count as an edit, and erase
-            # the last benchmark's measurement on every single Save -- including
+            # every stored measurement on every single Save -- including
             # the write the benchmark itself had just made while this dialog
             # was open.
             onnx_auto_preferred_devices=(

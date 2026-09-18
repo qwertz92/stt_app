@@ -286,6 +286,66 @@ def test_the_selected_model_and_the_others_are_reported_together(tmp_path):
     _ = app
 
 
+def test_a_second_run_inside_the_noise_band_keeps_the_stored_device(tmp_path):
+    """Run 1 moved `auto` to DirectML (15% quicker). Run 2 measures it 5%
+    quicker -- still ahead, inside the band. The stored device is what `auto`
+    starts with today, so it is what that run has to beat: nothing is written,
+    nothing reloads, and the status line does not announce a move back to the
+    device the run's own numbers called slower."""
+    store = _real_store(tmp_path, AppSettings(model_size=_COHERE, engine="local"))
+    dialog, app = _dialog(store)
+    emitted: list[int] = []
+    dialog.settings_changed.connect(lambda: emitted.append(1))
+
+    first = dialog._apply_measured_onnx_devices(
+        [_case(_COHERE, "webgpu", 1.00), _case(_COHERE, "dml", 0.85)]
+    )
+    assert "Auto now starts with DirectML" in first
+    assert emitted == [1]
+
+    second = dialog._apply_measured_onnx_devices(
+        [_case(_COHERE, "webgpu", 1.00), _case(_COHERE, "dml", 0.95)]
+    )
+
+    assert store.load().onnx_auto_preferred_devices == {_COHERE: "dml"}
+    assert second == ""
+    assert emitted == [1]
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_comparison_that_measured_one_device_says_why_nothing_changed(tmp_path):
+    """The machine with no usable GPU: the run the note asks for ends with one
+    failed GPU case and one CPU case. Nothing is stored, rightly -- and the
+    status line has to say so, or the note's promise silently does nothing."""
+    store = _real_store(tmp_path, AppSettings(model_size=_COHERE, engine="local"))
+    dialog, app = _dialog(store)
+    emitted: list[int] = []
+    dialog.settings_changed.connect(lambda: emitted.append(1))
+    failed = _case(_COHERE, "gpu", 0.0)
+    failed.error = "No GPU device could load the model"
+
+    sentence = dialog._apply_measured_onnx_devices(
+        [failed, _case(_COHERE, "cpu", 0.10)]
+    )
+
+    assert store.load().onnx_auto_preferred_devices == {}
+    assert emitted == []
+    assert "unchanged" in sentence
+    assert "only CPU could be measured" in sentence
+    assert _COHERE in sentence
+
+    # Another model's failed comparison is not this line's business.
+    other = _case(_GRANITE, "gpu", 0.0)
+    other.error = "No GPU device could load the model"
+    assert (
+        dialog._apply_measured_onnx_devices([other, _case(_GRANITE, "cpu", 0.10)])
+        == ""
+    )
+    dialog.deleteLater()
+    _ = app
+
+
 def test_a_refused_write_is_reported_and_never_claimed_as_applied(tmp_path):
     store = _real_store(tmp_path, AppSettings(model_size=_COHERE, engine="local"))
     dialog, app = _dialog(store)
@@ -443,6 +503,9 @@ def test_the_note_says_which_device_auto_will_start_with(tmp_path):
     measured = _note_for(dialog, _COHERE, {_COHERE: "cpu"}, "auto")
     assert "Auto starts with CPU" in measured
     assert "benchmark" in measured
+    # The map is merged across runs, so an entry can be older than the last
+    # run -- which may have measured other models only.
+    assert "last benchmark" not in measured
 
     # Measured *and* already the first device: the order is the normal one, so
     # the note must not claim anything was reordered.
@@ -451,6 +514,7 @@ def test_the_note_says_which_device_auto_will_start_with(tmp_path):
     confirmed = _note_for(dialog, _COHERE, {_COHERE: "webgpu"}, "auto")
     assert "starts with" not in confirmed
     assert "confirmed" not in confirmed
+    assert "last benchmark" not in confirmed
     assert "nothing clearly faster than WebGPU" in confirmed
 
     unmeasured = _note_for(dialog, _COHERE, {}, "auto")
