@@ -92,9 +92,9 @@ PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
 CANARY_MODEL_SIZE = "canary-1b-v2"
 
 # What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
-# it is the fastest local model by a wide margin (measured on a Ryzen 5 7600X,
-# CPU only: RTF 0.042 against 0.152 for `small` on the same 24.3 s recording
-# and the same device, from this machine's own benchmark history), needs
+# it is 3.6x faster (measured on a Ryzen 5 7600X, CPU only: mean RTF 0.043
+# against 0.154 for `small` on the same 24.3 s recording and the same device,
+# from this machine's own benchmark history; the means of two runs each), needs
 # neither a GPU nor Node.js, detects its language itself across the 25
 # European locales its model card lists, and is a 670 MB download
 # against `small`'s 486 MB. Someone trying the app without opening Settings
