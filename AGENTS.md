@@ -5378,3 +5378,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   identical audio cross-retire, as every pair did before wave 16. It needs
   two refused store writes in one session and byte-identical recordings;
   recorded.
+- **Four Settings tabs scroll sideways at the dialog's minimum width.**
+  The minimum is pinned from `self.tabs.minimumSizeHint()`, and a
+  `QScrollArea` answers a fixed 58x58 whatever it holds, so the pin sees
+  the one page that is not a scroll area (Benchmark, 585 px) and none of
+  the others. Measured at 9 pt on 2026-09-18: at the 611 px minimum the
+  viewport is 585 px while General, Hotkeys && Display and Audio &&
+  Recording need 621 px and Local 709 px, so those four show a horizontal
+  scrollbar (36 and 124 px of travel); Remote 578, History 560 and Import
+  Audio 532 fit. Older than the tab split: the tree at `6bfa47b` shows the
+  same bar on General, Audio and Local. Only reached by dragging the
+  dialog narrower than about 735 px; the 860 px default is unaffected and
+  nothing is unreachable. Closing it means raising the minimum width to
+  the widest scroll page plus the 26 px of chrome (about 735 px, more at a
+  larger text size, still capped by the screen) and re-deriving the
+  640 px budget the pin's test bounds the need with -- a change to a
+  function that was wrong three times, so recorded (P3, about an hour
+  with its tests) rather than slipped in.
