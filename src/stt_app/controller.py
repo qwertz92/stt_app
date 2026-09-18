@@ -161,11 +161,12 @@ class _TranscriptionJob:
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
-    # False for a job transcribing bytes the managed store never received (a
-    # retry whose retained identity is unknown): its terminal marks leave the
-    # store alone, because the slot holds someone else's recording and the
-    # unconditional write an empty id otherwise means would relabel or
-    # delete it.
+    # False for a job with no recording id -- bytes the managed store never
+    # received (a retry whose retained identity is unknown, a road whose
+    # persist was refused) or a slot it could not name: its terminal marks
+    # leave the store alone, because the slot may hold someone else's
+    # recording and the unconditional write an empty id otherwise means
+    # would relabel or delete it.
     marks_last_recording: bool = True
     source_audio_path: str = ""
     future: object | None = None
@@ -2213,15 +2214,24 @@ class DictationController(QtCore.QObject):
                 return
             persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
-            # The job's recording is the one this persist wrote. Registered
-            # from the store's slot, a job whose write was refused -- a full
-            # disk, a locked file -- carried the previous recording's id:
-            # the finalize marked that recording transcribing, and its
-            # retry's success completed, with `save_last_wav` off deleted,
-            # a recording the user never asked about (the wave-16
-            # concurrency lens, on the real store). "" says the store never
-            # received these bytes, and such a job marks nothing.
-            source_recording_id = None if persisted else ""
+            # The job's recording is the one this persist wrote, under the
+            # id the write handed back. Registered from the store's slot, a
+            # job whose write was refused -- a full disk, a locked file --
+            # carried the previous recording's id: the finalize marked that
+            # recording transcribing, and its retry's success completed,
+            # with `save_last_wav` off deleted, a recording the user never
+            # asked about (the wave-16 concurrency lens, on the real store).
+            # "" says the store never received these bytes, and such a job
+            # marks nothing. And the slot is not re-read for the id: a read
+            # refused between the write and the registration -- a scanner
+            # holding the freshly written state file -- answered "" while
+            # the job kept marking, unkeyed, whatever the slot held when it
+            # ended; demoted behind a newer recording, its completion
+            # deleted that recording's audio and state (the wave-18 reach
+            # lens, on the real store).
+            source_recording_id = (
+                self._last_persisted_recording_id if persisted else ""
+            )
 
             if self._streaming_recording:
                 self._focus_poll_timer.stop()
@@ -2978,11 +2988,11 @@ class DictationController(QtCore.QObject):
         newer one silence-gated, so nothing retargeted the active token --
         used to mark that newer recording completed, which with
         `keep_after_success` off deletes the audio the gate had just
-        promised to keep. An empty id means unknown
-        (`_current_last_recording_id` answers "" for no state) and keeps the
-        unconditional write: the store could never match "". A job that
-        transcribes bytes the store never received marks nothing
-        (`marks_last_recording`); no job at all is the unconditional write.
+        promised to keep. A job with no id -- bytes the store never
+        received, or a slot it could not name -- marks nothing
+        (`marks_last_recording`, derived from the id at registration since
+        wave 18; an empty id used to keep the unconditional write); no job
+        at all is the unconditional write.
         """
         if job is not None and not job.marks_last_recording:
             return
@@ -3152,19 +3162,20 @@ class DictationController(QtCore.QObject):
         can later be inserted into the window that was focused for this
         recording, even after a newer recording reused the shared target state.
 
-        The job's recording is the store's slot (`source_recording_id` None):
-        the recording roads persist their audio the statement before they
-        submit, so the slot is theirs -- and they pass "" when that write
-        did not happen, because the slot is then the previous recording's.
-        A retry names the recording whose bytes it resubmits instead. ""
-        either way means the store never received these bytes, and such a
-        job marks nothing.
+        Every road names the job's recording: the recording roads pass the
+        id their persist handed back, "" when that write did not happen
+        (the slot is then the previous recording's), and a retry the id of
+        the recording whose bytes it resubmits. `None` resolves the store's
+        slot -- no production road passes it since wave 18 -- and a slot
+        that cannot be named, a read that raised or a state without an id,
+        resolves to "". A job with "" marks nothing on any road: the mark
+        an empty id would key is unconditional, and it relabelled or
+        deleted whatever the slot held when the job ended (the wave-18
+        reach lens, on the real store).
         """
-        marks_last_recording = True
         if source_recording_id is None:
             source_recording_id = self._current_last_recording_id()
-        else:
-            marks_last_recording = bool(source_recording_id)
+        marks_last_recording = bool(source_recording_id)
         job = _TranscriptionJob(
             token=request_token,
             engine=settings.engine,

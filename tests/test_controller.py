@@ -473,6 +473,7 @@ def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
     controller._executor = DeferredExecutor()
     controller._active_session_mode = "streaming"
     controller._active_stream_settings = stream_settings
+    last_recording_store.save_recording(b"wav", keep_after_success=False)
 
     controller._submit_stream_finalize()
     request_token = controller._active_request_token
@@ -2977,27 +2978,31 @@ def test_a_coalesced_insert_failure_offers_no_single_entry_to_edit(
 
 
 def test_the_completion_mark_carries_the_job_recording_id_or_none():
-    """An empty id means "unknown" and must not be handed to the store as a
-    compare-and-set value the store can never match; a job transcribing
-    bytes the store never received marks nothing at all."""
+    """A job's mark carries its own recording id; a job with none marks
+    nothing -- bytes the store never received, or a slot it could not name
+    -- and only the no-job write is unconditional. An empty id used to keep
+    the unconditional write, which relabelled or deleted whatever the slot
+    held when the job ended (the wave-18 reach lens)."""
     store = FakeLastRecordingStore()
     controller, _app = make_controller(last_recording_store=store)
     try:
         settings = controller._settings
-        known = controller._register_transcription_job(1, settings, "batch")
-        known.source_recording_id = "rec-a"
+        known = controller._register_transcription_job(
+            1, settings, "batch", source_recording_id="rec-a"
+        )
         unknown = controller._register_transcription_job(2, settings, "batch")
-        unknown.source_recording_id = ""
-        retained = controller._register_transcription_job(3, settings, "batch")
-        retained.source_recording_id = ""
-        retained.marks_last_recording = False
+        retained = controller._register_transcription_job(
+            3, settings, "batch", source_recording_id=""
+        )
+        assert unknown.marks_last_recording is False
+        assert retained.marks_last_recording is False
 
         controller._mark_last_recording_completed(known)
         controller._mark_last_recording_completed(unknown)
         controller._mark_last_recording_completed(None)
         controller._mark_last_recording_completed(retained)
 
-        assert store.completed_ids == ["rec-a", None, None]
+        assert store.completed_ids == ["rec-a", None]
     finally:
         controller.shutdown()
 
@@ -3006,8 +3011,9 @@ def test_a_foreground_failure_marks_the_jobs_own_recording_failed():
     store = FakeLastRecordingStore()
     controller, _app = make_controller(last_recording_store=store)
     try:
-        job = controller._register_transcription_job(9, controller._settings, "batch")
-        job.source_recording_id = "rec-a"
+        controller._register_transcription_job(
+            9, controller._settings, "batch", source_recording_id="rec-a"
+        )
         controller._active_request_token = 9
 
         controller._on_transcription_failed("model exploded", request_token=9)

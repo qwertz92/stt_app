@@ -2104,6 +2104,7 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     )
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     controller._active_request_token = 7
+    last_recording_store.save_recording(b"wav", keep_after_success=False)
     controller._register_transcription_job(7, settings, "batch")
     controller._preload_future = _RunningFuture()
     last_recording_store._available = True
@@ -2154,6 +2155,7 @@ def test_the_queue_rows_x_marks_the_foreground_recording_canceled():
     )
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     controller._active_request_token = 7
+    last_recording_store.save_recording(b"wav", keep_after_success=False)
     controller._register_transcription_job(7, settings, "batch")
     last_recording_store._available = True
 
@@ -2162,22 +2164,21 @@ def test_the_queue_rows_x_marks_the_foreground_recording_canceled():
     assert controller._jobs[7].aborting is True
     assert controller._active_request_token is None
     assert last_recording_store.canceled == ["Transcription canceled by user."]
-    assert last_recording_store.canceled_ids == [None]
+    assert last_recording_store.canceled_ids == ["rec-1"]
     controller.shutdown()
     _ = app
 
 
 class _StoreWithIds(FakeLastRecordingStore):
-    """Answers `load()` with the id of the recording it holds now."""
+    """Holds the id the test set: a save keeps it, so the test moves the slot
+    by assigning `recording_id` and a stop road's job carries that id."""
 
     def __init__(self, recording_id: str):
         super().__init__()
         self.recording_id = recording_id
 
-    def load(self):
-        if not self.recording_id:
-            return None
-        return SimpleNamespace(recording_id=self.recording_id)
+    def _assign_recording_id(self) -> None:
+        return
 
 
 @pytest.mark.parametrize(
@@ -2605,6 +2606,67 @@ def test_a_background_success_whose_history_write_failed_keeps_its_audio():
 
     controller._on_transcription_ready("A done", request_token=3)
 
+    assert store.completed_ids == []
+    assert store.failed_ids == []
+    controller.shutdown()
+    _ = app
+
+
+class _StoreWhoseSlotCannotBeRead(_StoreThatAssignsIds):
+    """Hands back an id for the recording it saves and refuses every read of
+    the slot, as a scanner holding the freshly written state file does."""
+
+    def load(self):
+        raise OSError("state file locked")
+
+
+def test_a_recordings_job_is_named_by_the_id_its_persist_handed_back(monkeypatch):
+    """The stop road registers its job under the id `save_recording` handed
+    back, not under a second read of the slot. Registered from the slot, a
+    read refused in between answered "" while the job kept marking, unkeyed,
+    whatever the slot held when it ended: demoted behind a newer recording,
+    its completion deleted that recording's audio and state and its failure
+    relabelled it (the wave-18 reach lens, on the real store)."""
+    store = _StoreWhoseSlotCannotBeRead("rec-previous")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        last_recording_store=store,
+    )
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    controller.start_recording()
+    controller.stop_recording()
+
+    job = controller._jobs[controller._active_request_token]
+    assert job.source_recording_id == "saved-1"
+    assert job.marks_last_recording is True
+    assert store.transcribing_ids == ["saved-1"]
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("slot", ["unreadable", "empty"])
+def test_a_job_registered_from_a_slot_it_cannot_name_marks_nothing(slot):
+    """A job registered from the store's slot marks only a recording it can
+    name. A read that raised, or a slot holding nothing, resolved to "" while
+    the job kept marking, and "" keys no write: its end marked whatever the
+    slot held by then, unkeyed (the wave-18 reach lens)."""
+    store = (
+        _StoreWhoseSlotCannotBeRead("") if slot == "unreadable" else _StoreWithIds("")
+    )
+    controller, app = _make_controller(last_recording_store=store)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+
+    job = controller._register_transcription_job(3, settings, "batch")
+
+    assert job.source_recording_id == ""
+    assert job.marks_last_recording is False
+    controller._mark_last_recording_completed(job)
+    controller._mark_last_recording_failed(job, "boom")
     assert store.completed_ids == []
     assert store.failed_ids == []
     controller.shutdown()

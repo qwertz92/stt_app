@@ -15,6 +15,7 @@ import tempfile
 import threading
 from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -392,8 +393,15 @@ class FakeCaptureFails(FakeCapture):
 
 
 class FakeLastRecordingStore:
+    """The store's surface the controller uses, recording every mark with the
+    id it was keyed by. A save hands back a state carrying a fresh id and
+    `load()` answers the slot, as the real store does: the recording roads
+    register their job under the id the persist handed back, and a save that
+    answered nothing made every such job mark nothing."""
+
     def __init__(self, path: str = "/tmp/last_recording.wav"):
         self.path = Path(path)
+        self.recording_id = ""
         self.saved: list[tuple[bytes, bool]] = []
         self.transcribing: list[tuple[str, str, str]] = []
         self.transcribing_ids: list[str | None] = []
@@ -405,10 +413,19 @@ class FakeLastRecordingStore:
         self.completed_ids: list[str | None] = []
         self._available = False
 
+    def _assign_recording_id(self) -> None:
+        self.recording_id = f"rec-{len(self.saved)}"
+
     def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
         self.saved.append((bytes(wav_bytes), bool(keep_after_success)))
         self._available = bool(wav_bytes)
-        return
+        self._assign_recording_id()
+        return SimpleNamespace(recording_id=self.recording_id)
+
+    def load(self):
+        if not self.recording_id:
+            return None
+        return SimpleNamespace(recording_id=self.recording_id)
 
     def mark_transcribing(
         self, *, engine: str, model: str, mode: str, expected_recording_id=None
