@@ -565,13 +565,16 @@ def _skip_pixel_exact_tests_on_the_offscreen_platform(request):
     """Turn the known offscreen metric drift into a skip, not a false failure.
 
     AGENTS.md already says an offscreen run's layout failures are artifacts, but
-    saying so did not stop it: both CI workflows set `QT_QPA_PLATFORM=offscreen`
-    and the release gate ran the whole suite before the build step, so v0.8.0
-    was tagged and never published. `quality.yml` no longer sets it (verified:
-    the only mention there is a comment saying why), while
-    `windows-release.yml` still does -- deliberately, since a headless build
-    runner has no real platform plugin. This fixture is what makes that safe:
-    the metric-dependent assertions skip there instead of failing the gate.
+    saying so did not stop it: both CI workflows once set
+    `QT_QPA_PLATFORM=offscreen`, and v0.8.0 was tagged and never published.
+    Neither workflow sets it any more (`quality.yml` since 2026-08-23,
+    `windows-release.yml` since 2026-09-18, when seven unmarked layout tests
+    failed its dry run for v0.9.0), so no CI gate depends on this fixture.
+    What it still serves is a run on a machine without a desktop -- a cloud
+    container, a headless agent -- where the metric-dependent assertions skip
+    instead of reporting failures that say nothing about the code. A new test
+    that compares widget geometry needs one of the two markers; the quick check
+    is `QT_QPA_PLATFORM=offscreen pytest` on that one file.
     """
     markers = ("pixel_exact", "platform_dependent")
     if all(request.node.get_closest_marker(name) is None for name in markers):

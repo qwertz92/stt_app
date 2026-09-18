@@ -683,6 +683,7 @@ def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
     dialog.hide()
 
 
+@pytest.mark.pixel_exact
 def test_a_long_bottom_status_is_elided_and_widens_nothing(
     dialog: SettingsDialog,
 ) -> None:

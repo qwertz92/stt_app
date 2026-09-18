@@ -1477,6 +1477,7 @@ def test_settings_dialog_uses_roomier_default_size_when_screen_allows(monkeypatc
     _ = app
 
 
+@pytest.mark.pixel_exact
 def test_settings_dialog_size_stays_stable_when_switching_tabs(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(

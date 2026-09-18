@@ -6,10 +6,10 @@ on:
     branches:
       - main
       - "review/**"
-    # Tags too. The release workflow runs its own gate under the offscreen
-    # Qt platform, where the pixel-exact layout assertions skip themselves,
-    # so without this a `git tag && git push --tags` reached production
-    # with those assertions never executed anywhere in CI.
+    # Tags too, so a tagged commit has this gate's own result beside the
+    # release workflow's. Since 2026-09-18 that workflow runs the same test
+    # command on the real desktop; before, it ran under the offscreen Qt
+    # platform, where the pixel-exact layout assertions skip themselves.
     tags:
       - "v*"
   pull_request:

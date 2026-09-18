@@ -241,6 +241,7 @@ def _settle_table(app: QtWidgets.QApplication, table: QtWidgets.QTableWidget) ->
         previous = state
 
 
+@pytest.mark.pixel_exact
 def test_clicking_the_results_header_moves_nothing():
     dialog, app = _dialog()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
@@ -678,6 +679,7 @@ def test_a_created_stamp_the_local_clock_cannot_place_is_shown_as_is():
     assert _benchmark_created_label(stamp) == stamp
 
 
+@pytest.mark.pixel_exact
 def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
     """The explicit 520 px minimum predates the third History action button.
 
@@ -728,6 +730,7 @@ def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
     _ = app
 
 
+@pytest.mark.pixel_exact
 def test_a_dialog_opened_on_the_benchmark_tab_is_pinned_by_the_show():
     """A tab made current while the dialog is hidden pins nothing usable:
     the page reports its full width only once painted. The show has to

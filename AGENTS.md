@@ -4918,13 +4918,36 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Note: the project uses a uv-managed Windows `.venv`; `pytest.exe` may be available even when `python -m pytest` or `python -m pip` is not.
 - Always bound a run with a hard wall-clock limit (`timeout <secs> ...`), and
   never start a second suite while one is running: Qt suites open real windows
-  on one desktop. Use `-o faulthandler_timeout=<secs>` to get thread tracebacks
-  if a single test hangs.
+  on one desktop. `pyproject.toml` sets `faulthandler_timeout = 600`, so a test
+  still running after ten minutes gets every thread's traceback written to the
+  log (it is not killed); pass `-o faulthandler_timeout=<secs>` for a shorter
+  one.
 - Do **not** substitute `QT_QPA_PLATFORM=offscreen` for the commands above. It
   shifts widget metrics by 1-4 px and makes the two pixel-exact layout tests
   (`test_overlay_record_button_indicator_stays_centered_in_both_states`,
   `test_bottom_status_does_not_move_the_save_and_close_buttons`) fail. Failures
   from an offscreen run are artifacts, not repository problems.
+- **The release workflow's test step is the same command as `quality.yml`'s,
+  on the runner's real desktop** (since 2026-09-18). From 2026-08-23 it ran
+  under `QT_QPA_PLATFORM=offscreen`, where tests marked `pixel_exact` or
+  `platform_dependent` skip themselves, and a gate that runs for a release
+  only rots where nobody looks: seven layout tests added after that date
+  carried no marker, and the dry run for v0.9.0 failed on them (run
+  35378290905: 7 failed, 2855 passed, 23 skipped) while `quality.yml` was
+  green on the same commit (2884 passed, 1 skipped). v0.8.0 is the same story
+  one release earlier, read from its log: under offscreen two tests failed,
+  the suite then printed nothing past 96% and GitHub cancelled the job after
+  six hours (run 30862693087) -- the tag exists, the release does not, and the
+  log cannot say which test hung, which is what the `faulthandler_timeout`
+  above is for. The two markers still serve a run on a machine without a
+  desktop (a cloud container, a headless agent): a new test that compares
+  widget geometry needs one, and `QT_QPA_PLATFORM=offscreen pytest <file>` is
+  the three-second check. No CI gate depends on them. **Before a release tag,
+  start the workflow by hand** (`gh workflow run windows-release.yml`, which
+  builds and uploads an artifact and publishes nothing): it is the only run
+  that exercises the bundle and installer steps. Such a run is what caught the
+  seven unmarked tests before v0.9.0 was tagged; v0.8.0 had none and its tag
+  is still without a release.
 - Two autouse fixtures in `tests/conftest.py` make desktop side effects
   impossible: `_forbid_handing_paths_to_the_desktop_shell` blocks
   `QProcess.startDetached` and `QDesktopServices.openUrl`, and

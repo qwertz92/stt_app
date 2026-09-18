@@ -1709,7 +1709,17 @@ def test_no_overlay_button_clips_its_caption_at_a_larger_system_font(point_scale
         app.setFont(original_font)
 
 
-@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5, 2.0])
+@pytest.mark.parametrize(
+    "point_scale",
+    [
+        # At the shipped font the buttons must keep their shipped size to the
+        # pixel, which the offscreen platform's wider glyphs cannot satisfy.
+        pytest.param(1.0, marks=pytest.mark.pixel_exact),
+        1.25,
+        1.5,
+        2.0,
+    ],
+)
 def test_the_queue_buttons_do_not_clip_at_a_larger_system_font(point_scale):
     """The queue panel's buttons are pixel constants too, and were missed.
 

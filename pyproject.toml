@@ -90,6 +90,11 @@ ignore = [
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-q"
+# A test still running after this many seconds gets every thread's traceback
+# written to the log; it is not killed. The v0.8.0 release run printed nothing
+# for six hours before GitHub cancelled it, and its log cannot say which test
+# hung. The slowest test of the suite takes seconds, so ten minutes is a hang.
+faulthandler_timeout = 600
 
 [dependency-groups]
 dev = [

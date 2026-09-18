@@ -792,6 +792,7 @@ def test_a_benchmark_failure_does_not_widen_the_settings_dialog():
     dialog.hide()
 
 
+@pytest.mark.pixel_exact
 def test_the_benchmark_status_re_elides_when_the_dialog_is_resized():
     """A width-dependent shortening that is computed once is wrong at every
     other width."""

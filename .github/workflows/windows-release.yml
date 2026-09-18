@@ -63,31 +63,29 @@ jobs:
 
       - name: Run release quality gates
         shell: pwsh
-        # offscreen is set here on purpose, and the pixel-exact layout tests
-        # skip themselves under it (see tests/conftest.py). Those tests
-        # compare widget geometry to the pixel, and offscreen reports metrics
-        # 1-4 px off, so under offscreen they fail for reasons that have
-        # nothing to do with the code. That is what stopped v0.8.0 from ever
-        # being published: the tag exists, the release does not, because this
-        # gate runs before the build step and failed on an artifact.
-        #
-        # A release gate has to be deterministic, so it runs in the one Qt
-        # environment that is guaranteed to exist on any runner. The skipped
-        # tests are not unverified: scripts/create_release.py runs the whole
-        # suite on a real platform plugin before the tag is ever created, and
-        # quality.yml runs it without offscreen on every push and PR.
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: uv run --no-sync ruff check .
 
       - name: Run the release test suite
         shell: pwsh
-        # offscreen for the same reason as the gate above.
+        # The same command on the same runner image as quality.yml's test
+        # step, and deliberately without QT_QPA_PLATFORM. From 2026-08-23 to
+        # 2026-09-18 this step ran under Qt's `offscreen` platform, where the
+        # tests marked pixel_exact / platform_dependent skip themselves (see
+        # tests/conftest.py). A gate that differs from the everyday one rots
+        # where nobody looks, because this workflow runs for a release only:
+        # seven layout tests added after that date carried no marker, and the
+        # dry run for v0.9.0 failed on them (run 35378290905: 7 failed, 2855
+        # passed, 23 skipped) while quality.yml was green on the same commit
+        # (2884 passed, 1 skipped). v0.8.0 is the same story one release
+        # earlier: under offscreen two tests failed, the suite then printed
+        # nothing past 96% and GitHub cancelled the job after six hours (run
+        # 30862693087), so the tag exists and the release does not. One gate
+        # definition cannot drift from itself, and windows-latest has a real
+        # desktop, which quality.yml proves on every push.
+        #
         # No -q: pyproject already sets addopts = "-q", and a second
         # one is -qq, which suppresses the final "N passed" line, so the
         # release log could not show how many tests the gate actually ran.
-        env:
-          QT_QPA_PLATFORM: offscreen
         run: uv run --no-sync pytest
 
       - name: Audit locked production JavaScript dependencies
