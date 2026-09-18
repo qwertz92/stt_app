@@ -278,6 +278,13 @@ LOCAL_ONNX_MODEL_SIZES = (
     LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
 )
 
+# The local models whose runtime takes an execution device. The onnx-asr models
+# (Parakeet/Canary) are CPU-only and ignore the policy, so the Settings picker
+# must not claim to control them and a measured preference for one would be
+# meaningless. One definition, because the picker, the stored preference map and
+# the benchmark all have to answer this question the same way.
+DEVICE_AWARE_LOCAL_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES
+
 # Models whose upstream repo has no ModelScope counterpart (verified against the
 # ModelScope API on 2026-08-18). On a network that blocks Hugging Face wholesale
 # -- a proxy denying the whole "Generative AI and ML Applications" category is
@@ -316,6 +323,24 @@ GRANITE_4_1_REPO_MAP: dict[str, str] = {
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
 
+# Devices a finished benchmark case can report as its resolved runtime device,
+# and therefore the only values a measured preference may hold.
+ONNX_MEASURABLE_DEVICES = ("webgpu", "dml", "cpu")
+
+# What `auto` means for the Cohere/Granite Node runtime on Windows. The runner
+# computes its own list per platform; this is the Python side's description of
+# it, used to decide whether a measured device says anything new.
+LOCAL_WEBGPU_AUTO_DEVICE_ORDER = ("webgpu", "dml", "cpu")
+
+# A measured device replaces the default first device only when it was at least
+# this much faster. In the six benchmark runs recorded on the development
+# machine up to 2026-09-18, the runs of one case differed by a median of 4%
+# (31 cases; up to 36% where the first run carried the warm-up), so a gap of a
+# few percent says nothing about which device is actually quicker, while a
+# reorder costs a model reload. 10% is a design value above that noise, not a
+# measured optimum.
+MEASURED_DEVICE_MIN_GAIN = 0.10
+
 # Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU but no WebGPU
 # provider, so every GPU-flavoured policy maps onto DirectML for it. Shared by
 # the factory and the benchmark so the two cannot disagree about what a policy
@@ -329,10 +354,75 @@ NEMOTRON_DEVICE_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
 }
 
 
-def nemotron_provider_order(device_policy: str) -> tuple[str, ...]:
-    """Provider order for a device policy, defaulting to the auto behaviour."""
-    return NEMOTRON_DEVICE_PROVIDER_ORDER.get(
+def onnx_auto_device_order(model_size: str) -> tuple[str, ...]:
+    """What the `auto` policy tries for ``model_size``, before any preference.
+
+    Empty for a model whose runtime takes no device at all. The two
+    device-aware runtimes have different chains -- ORT GenAI has no WebGPU
+    provider -- and the factory, the benchmark's winner rule and the note under
+    the picker all have to read the same one.
+    """
+    if model_size in LOCAL_NEMOTRON_MODEL_SIZES:
+        return NEMOTRON_DEVICE_PROVIDER_ORDER[DEFAULT_LOCAL_ONNX_DEVICE]
+    if model_size in DEVICE_AWARE_LOCAL_MODELS:
+        return LOCAL_WEBGPU_AUTO_DEVICE_ORDER
+    return ()
+
+
+def order_with_preferred_device(
+    default_order: tuple[str, ...] | list[str],
+    preferred: str | None,
+) -> tuple[str, ...]:
+    """``default_order`` with ``preferred`` moved to the front.
+
+    Unchanged when the preference is empty or names a device this order does
+    not contain. Every other device keeps its relative place, so the fallback
+    chain after the preferred one is still the normal one.
+    """
+    order = tuple(default_order)
+    device = str(preferred or "").strip().lower()
+    if device not in order:
+        return order
+    return (device, *(item for item in order if item != device))
+
+
+def effective_preferred_device(
+    policy: str,
+    preferred: str | None,
+    default_order: tuple[str, ...] | list[str],
+) -> str:
+    """The device ``auto`` should try first, or ``""`` when it changes nothing.
+
+    Empty for a pinned policy (an explicit choice always wins over a
+    measurement), for a device this order cannot reach, and for one that
+    already leads the order -- there is then nothing to reorder and nothing to
+    tell the user, so the command line and the note stay as they were.
+    """
+    if str(policy or "").strip().lower() != DEFAULT_LOCAL_ONNX_DEVICE:
+        return ""
+    order = tuple(default_order)
+    device = str(preferred or "").strip().lower()
+    if device not in order or order[0] == device:
+        return ""
+    return device
+
+
+def nemotron_provider_order(
+    device_policy: str,
+    preferred_device: str = "",
+) -> tuple[str, ...]:
+    """Provider order for a device policy, defaulting to the auto behaviour.
+
+    ``preferred_device`` is a device a benchmark measured as fastest for this
+    model; it only ever reorders the `auto` chain, because
+    ``effective_preferred_device`` answers "" for every pinned policy.
+    """
+    order = NEMOTRON_DEVICE_PROVIDER_ORDER.get(
         str(device_policy or "").strip().lower(), ("dml", "cpu")
+    )
+    return order_with_preferred_device(
+        order,
+        effective_preferred_device(device_policy, preferred_device, order),
     )
 
 LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {

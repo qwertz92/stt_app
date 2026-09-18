@@ -1340,3 +1340,153 @@ def test_history_max_items_refuses_what_int_would_have_truncated(label, stored, 
     settings = AppSettings.from_dict({"history_max_items": stored})
 
     assert settings.history_max_items == expected, label
+
+
+_A_WEBGPU_MODEL = "cohere-transcribe-03-2026"
+_NEMOTRON = "nemotron-3.5-asr-streaming-0.6b-int4"
+
+
+@pytest.mark.parametrize(
+    ("label", "stored", "expected"),
+    [
+        ("a measured device for a device-aware model", {_A_WEBGPU_MODEL: "cpu"}, {_A_WEBGPU_MODEL: "cpu"}),
+        ("Nemotron is device-aware too", {_NEMOTRON: "dml"}, {_NEMOTRON: "dml"}),
+        ("case and padding are normalized", {_A_WEBGPU_MODEL: " CPU "}, {_A_WEBGPU_MODEL: "cpu"}),
+        ("a CPU-only model has no device to prefer", {"parakeet-tdt-0.6b-v3": "cpu"}, {}),
+        ("faster-whisper is not in the picker", {"small": "cpu"}, {}),
+        ("an unknown model name", {"made-up": "cpu"}, {}),
+        ("a device no case can report", {_A_WEBGPU_MODEL: "cuda"}, {}),
+        ("an empty device", {_A_WEBGPU_MODEL: ""}, {}),
+        ("a boolean is not a device", {_A_WEBGPU_MODEL: True}, {}),
+        ("a number is not a device", {_A_WEBGPU_MODEL: 1}, {}),
+        ("a list is not a device", {_A_WEBGPU_MODEL: ["cpu"]}, {}),
+        ("a nested dict is not a device", {_A_WEBGPU_MODEL: {"device": "cpu"}}, {}),
+        ("null is not a device", {_A_WEBGPU_MODEL: None}, {}),
+        ("a null key", {None: "cpu"}, {}),
+        ("a non-string key", {7: "cpu"}, {}),
+        ("the map itself is a list", ["cpu"], {}),
+        ("the map itself is a string", "cpu", {}),
+        ("the map itself is null", None, {}),
+        ("the map itself is a number", 3, {}),
+        ("the map itself is a boolean", True, {}),
+        (
+            "one good entry survives beside garbage",
+            {_A_WEBGPU_MODEL: "dml", "small": "cpu", 7: "cpu"},
+            {_A_WEBGPU_MODEL: "dml"},
+        ),
+    ],
+)
+def test_the_measured_device_map_keeps_only_what_it_can_act_on(label, stored, expected):
+    """It is read from a JSON file a user can edit and a newer build can have
+    written, and it decides which device a model loads on -- so anything that
+    is not a device-aware model name mapped to a device a benchmark case can
+    report is dropped rather than carried."""
+    from stt_app.settings_store import normalize_onnx_auto_preferred_devices
+
+    assert normalize_onnx_auto_preferred_devices(stored) == expected, label
+
+
+def test_the_measured_device_map_is_a_new_sorted_object_every_time():
+    """`dataclasses.replace` shares the reference between snapshots, so the
+    normalizer must never hand back the caller's own dict: mutating it in place
+    would change every snapshot that still holds it, including the baseline the
+    settings dialog diffs against."""
+    from stt_app.settings_store import normalize_onnx_auto_preferred_devices
+
+    source = {_NEMOTRON: "cpu", _A_WEBGPU_MODEL: "dml"}
+    normalized = normalize_onnx_auto_preferred_devices(source)
+
+    assert normalized is not source
+    assert list(normalized) == sorted(normalized), "keys are not sorted"
+    normalized[_A_WEBGPU_MODEL] = "cpu"
+    assert source[_A_WEBGPU_MODEL] == "dml"
+
+
+def test_the_measured_device_map_round_trips_and_defaults_to_empty(tmp_path):
+    from dataclasses import replace
+
+    store = SettingsStore(tmp_path / "settings.json")
+    assert store.load().onnx_auto_preferred_devices == {}
+
+    store.save(
+        replace(
+            store.load(),
+            onnx_auto_preferred_devices={_A_WEBGPU_MODEL: "cpu"},
+        )
+    )
+    assert store.load().onnx_auto_preferred_devices == {_A_WEBGPU_MODEL: "cpu"}
+    assert json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))[
+        "onnx_auto_preferred_devices"
+    ] == {_A_WEBGPU_MODEL: "cpu"}
+
+
+def test_a_settings_file_without_the_measured_device_map_still_loads(tmp_path):
+    """No schema bump: an absent key is simply "nothing measured yet"."""
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps({"hotkey": "Ctrl+Alt+D"}), encoding="utf-8")
+
+    settings = SettingsStore(path).load()
+
+    assert settings.onnx_auto_preferred_devices == {}
+    assert settings.hotkey == "Ctrl+Alt+D"
+
+
+def test_a_damaged_measured_device_map_does_not_fail_the_load(tmp_path):
+    """The whole file is read for it, so one hand-edited value must cost that
+    value and never every other setting in the file."""
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"hotkey": "Ctrl+Alt+D", "onnx_auto_preferred_devices": "cpu"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(path).load()
+
+    assert settings.onnx_auto_preferred_devices == {}
+    assert settings.hotkey == "Ctrl+Alt+D"
+
+
+@pytest.mark.parametrize(
+    ("label", "model", "policy", "stored", "expected"),
+    [
+        ("the Node runtime takes the measured device", _A_WEBGPU_MODEL, "auto", {_A_WEBGPU_MODEL: "cpu"}, "cpu"),
+        ("Nemotron takes it too", _NEMOTRON, "auto", {_NEMOTRON: "cpu"}, "cpu"),
+        ("nothing measured", _A_WEBGPU_MODEL, "auto", {}, ""),
+        ("measured for another model", _A_WEBGPU_MODEL, "auto", {_NEMOTRON: "cpu"}, ""),
+        ("already the first device of the chain", _A_WEBGPU_MODEL, "auto", {_A_WEBGPU_MODEL: "webgpu"}, ""),
+        ("Nemotron cannot reach WebGPU at all", _NEMOTRON, "auto", {_NEMOTRON: "webgpu"}, ""),
+        ("Nemotron's chain already starts with DirectML", _NEMOTRON, "auto", {_NEMOTRON: "dml"}, ""),
+        ("a pinned device wins", _A_WEBGPU_MODEL, "cpu", {_A_WEBGPU_MODEL: "dml"}, ""),
+        ("a pinned GPU wins", _A_WEBGPU_MODEL, "gpu", {_A_WEBGPU_MODEL: "cpu"}, ""),
+        ("a CPU-only model has no device", "parakeet-tdt-0.6b-v3", "auto", {"parakeet-tdt-0.6b-v3": "cpu"}, ""),
+        ("faster-whisper has no device", "small", "auto", {"small": "cpu"}, ""),
+    ],
+)
+def test_the_preferred_device_answers_for_the_selected_model(
+    label, model, policy, stored, expected
+):
+    """One reader for "what does `auto` start with right now", so the factory,
+    the controller's identity and the note under the picker cannot disagree."""
+    from stt_app.settings_store import preferred_onnx_device
+
+    settings = AppSettings(
+        engine="local",
+        model_size=model,
+        local_onnx_device=policy,
+        onnx_auto_preferred_devices=stored,
+    )
+
+    assert preferred_onnx_device(settings) == expected, label
+
+
+def test_the_preferred_device_survives_settings_without_the_field():
+    """The factory reaches it with `SimpleNamespace` settings in tests and with
+    an older snapshot in a running app."""
+    from types import SimpleNamespace
+
+    from stt_app.settings_store import preferred_onnx_device
+
+    assert preferred_onnx_device(
+        SimpleNamespace(engine="local", model_size=_A_WEBGPU_MODEL)
+    ) == ""
+    assert preferred_onnx_device(SimpleNamespace()) == ""

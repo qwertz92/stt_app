@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -61,11 +61,13 @@ from .config import (
     DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE,
     DEFAULT_VAD_ENABLED,
     DEFAULT_VAD_ENERGY_THRESHOLD,
+    DEVICE_AWARE_LOCAL_MODELS,
     ELEVENLABS_MODELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LOCAL_WEBGPU_DEVICE_POLICIES,
+    ONNX_MEASURABLE_DEVICES,
     OPENAI_MODELS,
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
@@ -86,6 +88,9 @@ from .config import (
     VALID_OVERLAY_CORNERS,
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
+    effective_preferred_device,
+    onnx_auto_device_order,
+    order_with_preferred_device,
 )
 from .hotkey import parse_hotkey
 from .persistence import (
@@ -145,6 +150,7 @@ DEFAULTS = {
     "offline_mode": DEFAULT_OFFLINE_MODE,
     "keep_onnx_model_loaded": DEFAULT_KEEP_ONNX_MODEL_LOADED,
     "local_onnx_device": DEFAULT_LOCAL_ONNX_DEVICE,
+    "onnx_auto_preferred_devices": {},
     "start_beep_enabled": DEFAULT_START_BEEP_ENABLED,
     "start_beep_tone": DEFAULT_START_BEEP_TONE,
     "completion_beep_enabled": DEFAULT_COMPLETION_BEEP_ENABLED,
@@ -245,6 +251,12 @@ class AppSettings:
     offline_mode: bool = DEFAULT_OFFLINE_MODE
     keep_onnx_model_loaded: bool = DEFAULT_KEEP_ONNX_MODEL_LOADED
     local_onnx_device: str = DEFAULT_LOCAL_ONNX_DEVICE
+    # Model name -> the device a finished benchmark measured as fastest for it,
+    # which is the device the `auto` policy then starts with. Never mutated in
+    # place: `dataclasses.replace` copies the reference, so every snapshot that
+    # still holds this object -- the dialog's populated baseline among them --
+    # would see the change. Build a new dict and `replace` instead.
+    onnx_auto_preferred_devices: dict[str, str] = field(default_factory=dict)
     start_beep_enabled: bool = DEFAULT_START_BEEP_ENABLED
     start_beep_tone: str = DEFAULT_START_BEEP_TONE
     completion_beep_enabled: bool = DEFAULT_COMPLETION_BEEP_ENABLED
@@ -608,6 +620,9 @@ class AppSettings:
             local_onnx_device=normalize_local_onnx_device(
                 merged.get("local_onnx_device")
             ),
+            onnx_auto_preferred_devices=normalize_onnx_auto_preferred_devices(
+                merged.get("onnx_auto_preferred_devices")
+            ),
             start_beep_enabled=parse_json_bool(
                 merged.get("start_beep_enabled"),
                 default=DEFAULT_START_BEEP_ENABLED,
@@ -862,6 +877,78 @@ def normalize_local_onnx_device(value: Any) -> str:
     if device in LOCAL_WEBGPU_DEVICE_POLICIES:
         return device
     return DEFAULT_LOCAL_ONNX_DEVICE
+
+
+def normalize_onnx_auto_preferred_devices(value: Any) -> dict[str, str]:
+    """Normalize the per-model device a benchmark measured as fastest.
+
+    The map comes out of a JSON file a user can edit and a newer build can have
+    written, and it decides which device a model is loaded on -- so an entry is
+    kept only when its key names a model whose runtime reads a device at all
+    and its value is a device a benchmark case can actually report. Everything
+    else is dropped rather than carried: there is no schema bump behind this
+    field, so a value from any build has to be judged on what it says.
+
+    Returns a new dict with sorted keys, and never raises. The result is stored
+    on ``AppSettings`` and shared by ``dataclasses.replace`` across snapshots,
+    which is why callers must build a new dict rather than mutate this one.
+    """
+    if not isinstance(value, dict):
+        return {}
+    cleaned: dict[str, str] = {}
+    for model, device in value.items():
+        if not isinstance(model, str) or model not in DEVICE_AWARE_LOCAL_MODELS:
+            continue
+        # `isinstance` rather than `str(device)`: a bool, a number or a nested
+        # object is damage, and rendering it into a string could only ever
+        # produce a device name by accident.
+        if not isinstance(device, str):
+            continue
+        normalized = device.strip().lower()
+        if normalized in ONNX_MEASURABLE_DEVICES:
+            cleaned[model] = normalized
+    return {model: cleaned[model] for model in sorted(cleaned)}
+
+
+def preferred_onnx_device(settings: Any) -> str:
+    """The device ``auto`` should start with for the *selected* model, or "".
+
+    One reader, so the factory, the controller's runtime identity and the note
+    under the picker cannot disagree about the order a dictation will run in.
+    It decides on ``model_size`` and the policy alone and never looks at the
+    engine, because ``create_transcriber`` also falls back to the local path
+    for an unknown engine -- matching ``_create_local_transcriber`` exactly.
+
+    ``getattr`` with defaults the way the factory does it: callers pass
+    ``SimpleNamespace`` settings, and a snapshot from before this field
+    existed has to answer "nothing measured" rather than raise.
+    """
+    model_size = str(getattr(settings, "model_size", "") or "")
+    default_order = onnx_auto_device_order(model_size)
+    if not default_order:
+        return ""
+    stored = normalize_onnx_auto_preferred_devices(
+        getattr(settings, "onnx_auto_preferred_devices", None)
+    )
+    return effective_preferred_device(
+        getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE),
+        stored.get(model_size, ""),
+        default_order,
+    )
+
+
+def auto_first_onnx_device(model_size: str, preferred_devices: Any) -> str:
+    """The device ``auto`` tries first for ``model_size`` under a stored map.
+
+    "" for a model whose runtime takes no device. Asked with the map from
+    before and after a benchmark wrote to it, it says whether that run really
+    moved anything: a measured device that already leads the chain does not.
+    """
+    order = onnx_auto_device_order(model_size)
+    if not order:
+        return ""
+    stored = normalize_onnx_auto_preferred_devices(preferred_devices)
+    return order_with_preferred_device(order, stored.get(model_size, ""))[0]
 
 
 def _normalize_hotkey(value: str, *, default: str) -> str:
