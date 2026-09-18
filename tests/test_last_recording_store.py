@@ -68,11 +68,32 @@ def test_conditional_transition_does_not_modify_a_newer_recording(tmp_path):
     assert (
         store.mark_completed(expected_recording_id=snapshot.recording_id) is False
     )
+    assert (
+        store.mark_canceled(
+            "stale cancel",
+            expected_recording_id=snapshot.recording_id,
+        )
+        is False
+    )
     current = store.load()
     assert current is not None
     assert current.recording_id == second.recording_id
     assert current.status == "captured"
+    assert current.error == ""
     assert store.audio_path.read_bytes() == b"RIFF-second"
+
+    # The current id is the one every mark accepts.
+    assert (
+        store.mark_canceled(
+            "canceled by its own job",
+            expected_recording_id=second.recording_id,
+        )
+        is True
+    )
+    current = store.load()
+    assert current is not None
+    assert current.status == "canceled"
+    assert current.error == "canceled by its own job"
 
 
 def test_clear_failure_preserves_state_for_a_later_retry(tmp_path):

@@ -2115,6 +2115,7 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     assert controller._jobs[7].aborting is True
     assert controller._active_request_token is None
     assert last_recording_store.canceled == ["Transcription canceled by user."]
+    assert last_recording_store.canceled_ids == ["rec-1"]
     assert controller._preload_cancel_requested is False
     controller.shutdown()
     _ = app

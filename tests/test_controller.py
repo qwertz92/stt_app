@@ -485,6 +485,7 @@ def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
     entries = history_store.load()
     assert entries[0].model == "base"
     assert last_recording_store.transcribing == [("local", "base", "streaming")]
+    assert last_recording_store.transcribing_ids == ["rec-1"]
 
     controller.shutdown()
     _ = app
