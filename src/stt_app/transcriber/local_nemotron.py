@@ -24,6 +24,7 @@ from ..config import (
     language_modes_for_selection,
 )
 from ..model_download_coordinator import run_coordinated_download
+from ._pcm_audio import resample_linear
 from .base import (
     AudioInput,
     ITranscriber,
@@ -568,20 +569,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         if channels > 1:
             samples = samples[: len(samples) - (len(samples) % channels)]
             samples = samples.reshape(-1, channels).mean(axis=1)
-        if sample_rate != self._sample_rate and len(samples) > 1:
-            target_length = max(
-                1,
-                round(len(samples) * self._sample_rate / sample_rate),
-            )
-            source_positions = np.arange(len(samples), dtype=np.float64)
-            target_positions = np.linspace(
-                0,
-                len(samples) - 1,
-                target_length,
-                dtype=np.float64,
-            )
-            samples = np.interp(target_positions, source_positions, samples)
-        return np.asarray(samples, dtype=np.float32)
+        return resample_linear(samples, sample_rate, self._sample_rate)
 
     @staticmethod
     def _decode_pcm(raw: bytes, sample_width: int) -> np.ndarray:

@@ -27,6 +27,7 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     LOCAL_ONNX_ASR_MODEL_SIZES,
+    LOCAL_ONNX_MODEL_PRECISION,
     PARAKEET_MODEL_SIZE,
     language_modes_for_selection,
 )
@@ -126,6 +127,51 @@ class _CancelWatchdog:
             if canceled:
                 self._handle.abort()
                 return
+
+
+def resolve_or_download_onnx_model(
+    model_size: str,
+    model_dir: str,
+    *,
+    offline_mode: bool,
+    cancel_check: Callable[[], bool] | None,
+) -> Path:
+    """Path of a complete local snapshot, downloading it first if it is absent.
+
+    Shared by every transcriber that loads one of the layouts in
+    `local_webgpu_asr` from its own load path. Each import stays inside the
+    function, and from the same module as before, so the existing monkeypatch
+    targets keep working.
+    """
+    from .local_webgpu_asr import resolve_cached_webgpu_model_path
+
+    cached = resolve_cached_webgpu_model_path(model_size, model_dir)
+    if cached is not None:
+        return cached
+    if offline_mode:
+        raise TranscriptionError(
+            f"Local model '{model_size}' is not cached locally. "
+            f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
+        )
+    from ..model_download_coordinator import run_coordinated_download
+    from .local_faster_whisper import download_model_snapshot
+
+    # Through the single slot, like every other download in the process.
+    with canceled_download_is_a_cancel():
+        run_coordinated_download(
+            model_size,
+            model_dir,
+            lambda: download_model_snapshot(model_size, model_dir),
+            cancel_check=cancel_check,
+        )
+    cached = resolve_cached_webgpu_model_path(model_size, model_dir)
+    if cached is None:
+        raise TranscriptionError(
+            f"Downloaded '{model_size}' but no complete "
+            f"{LOCAL_ONNX_MODEL_PRECISION.get(model_size, 'ONNX')} snapshot "
+            f"was found. See {DOC_MODELS_PATH}."
+        )
+    return cached
 
 
 def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
@@ -250,37 +296,15 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
     # -- model lifecycle --------------------------------------------------
 
     def _resolve_model_path(self) -> Path:
-        from .local_webgpu_asr import resolve_cached_webgpu_model_path
-
-        cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
-        if cached is not None:
-            return cached
-        if self.offline_mode:
-            raise TranscriptionError(
-                f"Local model '{self.model_size}' is not cached locally. "
-                f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
-            )
-        from ..model_download_coordinator import run_coordinated_download
-        from .local_faster_whisper import download_model_snapshot
-
-        # Through the single slot, like every other download in the process.
-        with canceled_download_is_a_cancel():
-            run_coordinated_download(
-                self.model_size,
-                self.model_dir,
-                lambda: download_model_snapshot(self.model_size, self.model_dir),
-                # `_is_cancel_requested`, not the raw attribute: a check that
-                # raises must never fail the work, and the coordinator re-raises
-                # whatever escapes it.
-                cancel_check=self._is_cancel_requested,
-            )
-        cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
-        if cached is None:
-            raise TranscriptionError(
-                f"Downloaded '{self.model_size}' but no complete int8 snapshot "
-                f"was found. See {DOC_MODELS_PATH}."
-            )
-        return cached
+        return resolve_or_download_onnx_model(
+            self.model_size,
+            self.model_dir,
+            offline_mode=self.offline_mode,
+            # `_is_cancel_requested`, not the raw attribute: a check that
+            # raises must never fail the work, and the coordinator re-raises
+            # whatever escapes it.
+            cancel_check=self._is_cancel_requested,
+        )
 
     def _load_model(self) -> object:
         try:
