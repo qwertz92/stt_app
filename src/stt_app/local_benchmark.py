@@ -15,6 +15,7 @@ from typing import Any
 from .benchmark_environment import BenchmarkEnvironment, text_or_empty
 from .config import (
     CANARY_MODEL_SIZE,
+    LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
@@ -381,6 +382,7 @@ def _run_onnx_case(
     progress_callback: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
+    from .transcriber.local_granite_ctc import LocalGraniteCtcTranscriber
     from .transcriber.local_nemotron import LocalNemotronTranscriber
     from .transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
     from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
@@ -399,11 +401,13 @@ def _run_onnx_case(
             "the sample before benchmarking it; with the wrong one this model "
             "translates instead of transcribing."
         )
-    # Parakeet ignores the language and only offers "auto".
+    # Parakeet ignores the language and only offers "auto"; the Granite CTC
+    # graph is English-only and offers "auto" for the same reason.
     default_language = (
         "auto"
         if model_name in LOCAL_NEMOTRON_MODEL_SIZES
         or model_name in LOCAL_ONNX_ASR_MODEL_SIZES
+        or model_name in LOCAL_GRANITE_CTC_MODEL_SIZES
         else "de"
     )
     language_mode = language or default_language
@@ -425,6 +429,14 @@ def _run_onnx_case(
         # CPU-only runtime: the device policy does not apply, and Parakeet
         # normalizes any language to its single supported mode itself.
         transcriber = LocalOnnxAsrTranscriber(
+            model_size=model_name,
+            language_mode=language_mode,
+            model_dir=model_dir,
+        )
+    elif model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
+        # Also CPU-only, and English-only: it normalizes any language to its
+        # single supported mode itself, exactly as Parakeet does.
+        transcriber = LocalGraniteCtcTranscriber(
             model_size=model_name,
             language_mode=language_mode,
             model_dir=model_dir,
@@ -702,7 +714,8 @@ def planned_benchmark_cases(
         runtime = LOCAL_MODEL_RUNTIME.get(model_name, "")
         display_compute_type = (
             f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
-            if runtime in {"onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
+            if runtime
+            in {"onnx-webgpu", "onnxruntime-genai", "onnx-asr", "granite-ctc"}
             else compute_type
         )
         planned.extend(
@@ -792,7 +805,7 @@ def run_benchmark_cases(
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                 )
-            elif runtime in {"onnxruntime-genai", "onnx-asr"}:
+            elif runtime in {"onnxruntime-genai", "onnx-asr", "granite-ctc"}:
                 case = _run_onnx_case(
                     audio_path=path,
                     model_name=model_name,

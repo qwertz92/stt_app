@@ -141,6 +141,35 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
     _ = app
 
 
+def test_the_german_refusal_names_the_english_only_models_that_were_selected(
+    tmp_path,
+):
+    """There is more than one English-only model, and the sentence named a
+    fixed one -- so a run refused because of the Granite CTC graph told the
+    user to deselect distil-large-v3.5, which they may not even have
+    installed."""
+    dialog, app = _dialog(
+        tmp_path, ["small", "granite-speech-5.0-470m-turboctc"]
+    )
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    dialog._set_benchmark_audio_path(str(audio_path))
+    dialog.benchmark_language_combo.setCurrentIndex(
+        dialog.benchmark_language_combo.findData("de")
+    )
+
+    dialog._run_local_benchmark()
+
+    status = dialog.benchmark_status_label.text()
+    assert dialog._active_benchmark_thread is None
+    assert "granite-speech-5.0-470m-turboctc" in status
+    # The multilingual model in the same selection is not the problem, and
+    # neither is an English-only model nobody selected.
+    assert "small" not in status
+    assert "distil" not in status.lower()
+    _ = app
+
+
 def test_a_selection_of_one_model_is_announced_in_the_singular(tmp_path):
     dialog, app = _dialog(tmp_path, ["small"])
 

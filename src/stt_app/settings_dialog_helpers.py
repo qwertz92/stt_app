@@ -354,6 +354,10 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
+    "granite-speech-5.0-470m-turboctc": (
+        "IBM Granite Speech 5.0 470M",
+        "CPU, English, no punctuation",
+    ),
 }
 
 # Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md). They

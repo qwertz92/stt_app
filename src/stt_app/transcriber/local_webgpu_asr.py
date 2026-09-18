@@ -19,6 +19,7 @@ from ..config import (
     CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    GRANITE_CTC_MODEL_SIZE,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_AUTO_DEVICE_ORDER,
@@ -237,6 +238,35 @@ _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     required_files=_NEMOTRON_INT4_REQUIRED_FILES,
 )
 
+# Granite Speech 5.0 TurboCTC. Its repository ships all three precisions of one
+# single-file graph -- `onnx/model.onnx` (1.76 GiB), `onnx/model_fp16.onnx` and
+# `onnx/model_int8.onnx` -- so the file is named exactly rather than matched
+# with `onnx/*.onnx`, which would fetch 3.2 GiB for a 552 MB model.
+_GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
+    name="granite_ctc_int8",
+    precision="int8",
+    allow_patterns=(
+        ".gitattributes",
+        "README.md",
+        "config.json",
+        "generation_config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "tokenizer.json",
+        "tokenizer_config.json",
+        "onnx/model_int8.onnx",
+    ),
+    required_files=(
+        "config.json",
+        # Read at load time and compared against the extractor's hard-coded
+        # parameters, so a re-export with other ones fails instead of
+        # transcribing garbage.
+        "preprocessor_config.json",
+        "tokenizer.json",
+        "onnx/model_int8.onnx",
+    ),
+)
+
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
     "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
@@ -244,6 +274,7 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
     CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
+    GRANITE_CTC_MODEL_SIZE: _GRANITE_CTC_INT8_LAYOUT,
 }
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     model_name: layout.required_files for model_name, layout in _MODEL_LAYOUTS.items()

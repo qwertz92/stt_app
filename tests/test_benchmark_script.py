@@ -295,6 +295,9 @@ def test_nemotron_is_measurable_on_a_pinned_device():
     ]
     assert targets("faster-whisper", ["webgpu", "cpu"], "auto") == ["auto"]
     assert targets("onnx-asr", ["webgpu", "cpu"], "auto") == ["auto"]
+    # The Granite CTC graph is CPU-only as well, so "All explicit targets"
+    # must not measure the identical configuration once per requested device.
+    assert targets("granite-ctc", ["webgpu", "dml", "cpu"], "auto") == ["auto"]
 
 
 def test_run_benchmark_cases_does_not_route_unknown_model_to_faster_whisper(
@@ -362,6 +365,66 @@ def test_nemotron_benchmark_defaults_to_auto_and_can_force_dml(monkeypatch, tmp_
     assert instances[0].kwargs["use_runtime_vad"] is True
     assert case.runs[0].detected_language == "auto"
     assert case.runtime_details == "Fallback attempts: webgpu: unsupported"
+
+
+def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
+    monkeypatch, tmp_path
+):
+    """One case, on the CPU, whatever device the run asked for.
+
+    The model is English-only and CPU-only, so the benchmark must neither ask
+    it for a language it cannot honour nor measure the identical
+    configuration once per device target.
+    """
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    instances = []
+
+    class FakeGraniteCtcTranscriber:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.runtime_device = "cpu"
+            self.runtime_details_text = ""
+            instances.append(self)
+
+        def preload_model(self):
+            pass
+
+        def transcribe_batch(self, _audio_path):
+            return "hello world"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_granite_ctc.LocalGraniteCtcTranscriber",
+        FakeGraniteCtcTranscriber,
+    )
+    monkeypatch.setattr(local_benchmark, "_audio_duration_seconds", lambda _path: 1.0)
+
+    planned = local_benchmark.planned_benchmark_cases(
+        ["granite-speech-5.0-470m-turboctc"], "all", "auto", "int8"
+    )
+    assert [(case.device_target, case.display_compute_type) for case in planned] == [
+        ("auto", "onnx-int8")
+    ]
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio_path,
+        model_names=["granite-speech-5.0-470m-turboctc"],
+        runs=1,
+        warmup=False,
+        webgpu_devices="all",
+    )
+
+    assert len(instances) == 1
+    assert instances[0].kwargs["language_mode"] == "auto"
+    # CPU-only: the device policy is not a constructor argument at all.
+    assert "device" not in instances[0].kwargs
+    assert [case.error for case in cases] == [None]
+    assert [case.device for case in cases] == ["cpu"]
+    assert [case.compute_type for case in cases] == ["onnx-int8"]
+    assert cases[0].runs[0].transcript == "hello world"
 
 
 def test_benchmark_summary_includes_runtime_fallback_details():

@@ -572,6 +572,14 @@ def test_the_notes_for_models_without_a_device_say_what_decides_instead(tmp_path
     assert "fastest" not in parakeet
     assert "onnx-asr" in parakeet
 
+    # A different CPU-only runtime, so it must not be named after onnx-asr --
+    # and it must not fall through to the Whisper note either, which points
+    # at CUDA and at three models this one is not.
+    granite_ctc = _note_for(dialog, "granite-speech-5.0-470m-turboctc", {}, "auto")
+    assert "always runs on the CPU through ONNX Runtime" in granite_ctc
+    assert "onnx-asr" not in granite_ctc
+    assert "CUDA" not in granite_ctc
+
     whisper = _note_for(dialog, "small", {}, "auto")
     assert "its own device setting" not in whisper
     assert "CUDA" in whisper

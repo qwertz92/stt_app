@@ -1,6 +1,7 @@
 * text=auto eol=lf
 
 *.wav binary
+*.npz binary
 *.png binary
 *.jpg binary
 *.jpeg binary

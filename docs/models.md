@@ -4,7 +4,7 @@ Everything about model choices, downloading, and configuring models for offline 
 
 ## Available models
 
-The app has four local runtime families:
+The app has five local runtime families:
 
 - **GPU-accelerated ONNX models** — Cohere Transcribe and IBM Granite Speech, run
   on the GPU through WebGPU via a Node.js helper. These are the highest-accuracy
@@ -17,6 +17,10 @@ The app has four local runtime families:
   transcribed the benchmark recording correctly: RTF 0.043 on a Ryzen 5 7600X,
   second only to Whisper `tiny` (0.033), which is the weakest of the models
   that did. Batch mode only.
+- **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
+  that runs on the CPU provider the app already ships, with numpy features and
+  the `tokenizers` package; no Node.js and no GPU. English only, batch only,
+  and its output is lower case without punctuation.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -50,6 +54,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
+| `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Smallest local model that is not a Whisper size; writes lower case without punctuation, batch mode only |
 
 ### Which model should I use?
 
@@ -76,6 +81,7 @@ hardware.
 | Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, maximum speed | `distil-large-v3.5` |
+| English only, smallest non-Whisper download, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` (CPU) |
 | Smaller GPU model / Granite 4.0 fallback | `granite-4.0-1b-speech` |
 | Testing / very limited resources | `tiny` |
 
@@ -357,7 +363,7 @@ for you. See
 
 If a Hugging Face download fails for any reason, the app and the download script
 **automatically retry against the [ModelScope](https://modelscope.cn) mirror**
-(Alibaba's model hub) -- for every model except the three listed below, which
+(Alibaba's model hub) -- for every model except the four listed below, which
 are not mirrored there and have Hugging Face as their only source. ModelScope mirrors the same repository IDs
 (`onnx-community/…`, `Systran/…`, etc.) and serves the large LFS weights from its
 own CDN instead of redirecting back to Hugging Face, so it usually works even
@@ -377,6 +383,7 @@ ML Applications" category rule (see
   | `distil-large-v3.5` | `distil-whisper/distil-large-v3.5-ct2` |
   | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` |
   | `canary-1b-v2` | `istupakov/canary-1b-v2-onnx` |
+  | `granite-speech-5.0-470m-turboctc` | `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (checked 2026-09-19) |
 
   On a network that blocks Hugging Face wholesale these models cannot be
   fetched at all, and the app says so instead of blaming the connection. The
@@ -496,13 +503,41 @@ git clone https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX
 git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
 git clone https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4
+git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-onnx
 ```
 
 The two `istupakov` repositories are the onnx-asr models, and
 `parakeet-tdt-0.6b-v3` is the app's
-default. They matter most here: together with `distil-large-v3.5` they are the
-three models with no ModelScope mirror, so on a network that blocks Hugging
+default. They matter most here: together with `distil-large-v3.5` and
+`granite-speech-5.0-470m-turboctc` they are the
+four models with no ModelScope mirror, so on a network that blocks Hugging
 Face a clone from a machine that can reach it is the only route.
+
+A plain clone fetches every weight file a repository holds, which is far more
+than the app runs: the two `istupakov` repositories also ship fp32 graphs
+(2.4 GB and 3.3 GB), and
+`qwertz92/granite-speech-5.0-470m-turboctc-onnx` ships all three precisions of
+one graph — `onnx/model.onnx` (1.89 GB), `onnx/model_fp16.onnx` (947 MB) and
+`onnx/model_int8.onnx` (551 MB), of which the app uses only the int8 one.
+`scripts/download_model.py` fetches the required tier and nothing else, so
+prefer it where it can reach Hugging Face. To keep a clone to the same files,
+skip the weights and pull back only what is needed:
+
+```bash
+GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-onnx
+cd granite-speech-5.0-470m-turboctc-onnx
+git lfs pull --include "onnx/model_int8.onnx"
+```
+
+In PowerShell the first line is `$env:GIT_LFS_SKIP_SMUDGE = "1"` followed by
+the `git clone` on its own line. The pointer files of the graphs you did not
+pull stay behind as ~130-byte placeholders; the app never opens them.
+
+A cloned ONNX repository needs no import step (`scripts/import_model.py` is for
+the CTranslate2 models only): move the cloned folder, keeping its name, into
+the folder **Model Dir** points at. The app looks for these models in
+`<Model Dir>\<repository name>`, for example
+`D:\stt-models\granite-speech-5.0-470m-turboctc-onnx`.
 
 </details>
 

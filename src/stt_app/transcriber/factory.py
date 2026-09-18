@@ -8,6 +8,7 @@ from ..config import (
     DEFAULT_FUNASR_MODEL,
     DEFAULT_LOCAL_ONNX_DEVICE,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
@@ -30,14 +31,25 @@ from .openai_provider import OpenAITranscriber
 def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
     """Select the local transcriber for the configured ``model_size``.
 
-    Single source of truth for the Nemotron → WebGpu → faster-whisper
-    selection, shared by the explicit ``local`` engine path and the
-    unknown-engine fallback so the two cannot drift.
+    Single source of truth for the onnx-asr → Granite CTC → Nemotron →
+    WebGpu → faster-whisper selection, shared by the explicit ``local``
+    engine path and the unknown-engine fallback so the two cannot drift.
     """
     if settings.model_size in LOCAL_ONNX_ASR_MODEL_SIZES:
         from .local_onnx_asr import LocalOnnxAsrTranscriber
 
         return LocalOnnxAsrTranscriber(
+            model_size=settings.model_size,
+            language_mode=settings.language_mode,
+            offline_mode=settings.offline_mode,
+            model_dir=settings.model_dir,
+        )
+    if settings.model_size in LOCAL_GRANITE_CTC_MODEL_SIZES:
+        # This graph's CTC head has no prompt or biasing input, so
+        # custom_vocabulary does not apply here either.
+        from .local_granite_ctc import LocalGraniteCtcTranscriber
+
+        return LocalGraniteCtcTranscriber(
             model_size=settings.model_size,
             language_mode=settings.language_mode,
             offline_mode=settings.offline_mode,

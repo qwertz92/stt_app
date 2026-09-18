@@ -305,10 +305,14 @@ def test_a_measured_device_reorders_nemotrons_provider_order():
 
 
 def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
-    """faster-whisper and onnx-asr take no device argument at all, so a stored
-    entry for them (only a hand-edited file can produce one) must not appear as
-    a constructor argument."""
-    for model_size in ("small", "parakeet-tdt-0.6b-v3"):
+    """faster-whisper, onnx-asr and the Granite CTC graph take no device
+    argument at all, so a stored entry for them (only a hand-edited file can
+    produce one) must not appear as a constructor argument."""
+    for model_size in (
+        "small",
+        "parakeet-tdt-0.6b-v3",
+        "granite-speech-5.0-470m-turboctc",
+    ):
         settings = AppSettings(
             engine="local",
             model_size=model_size,

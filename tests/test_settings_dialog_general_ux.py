@@ -245,6 +245,41 @@ def test_dynamic_notes_fit_their_reserved_area(
     assert dialog.language_note_label.text().strip()
 
 
+def test_every_local_model_note_fits_the_two_lines_reserved_for_it(
+    dialog: SettingsDialog,
+) -> None:
+    """The engine loop above only ever sees the default local model.
+
+    Both notes sit above the rest of the form and are reserved at two lines,
+    so a model whose text wraps to three is clipped -- and the reservation is
+    per label, not per model, so one long sentence cannot simply grow it.
+    """
+    from stt_app.config import VALID_MODEL_SIZES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    app.processEvents()
+
+    for model in VALID_MODEL_SIZES:
+        model_index = dialog.model_combo.findData(model)
+        if model_index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(model_index)
+        app.processEvents()
+        for label in (
+            dialog.local_model_runtime_warning_label,
+            dialog.language_note_label,
+        ):
+            required_height = label.fontMetrics().boundingRect(
+                QtCore.QRect(0, 0, label.width(), 1000),
+                QtCore.Qt.TextWordWrap,
+                label.text(),
+            ).height()
+            assert required_height <= label.height(), (model, label.text())
+
+
 def test_owned_delayed_callback_is_cancelled_with_its_dialog() -> None:
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     owner = QtWidgets.QDialog()

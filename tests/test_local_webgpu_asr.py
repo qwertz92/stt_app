@@ -19,6 +19,7 @@ import pytest
 
 from stt_app.config import (
     GRANITE_4_1_REPO_MAP,
+    GRANITE_CTC_MODEL_SIZE,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
@@ -357,6 +358,63 @@ def test_every_required_file_is_covered_by_the_download_allow_patterns(model_nam
         assert any(
             fnmatchcase(relative, pattern) for pattern in layout.allow_patterns
         ), f"{model_name}: '{relative}' is required but no allow-pattern fetches it"
+
+
+# Every file of the Granite Speech 5.0 TurboCTC repository, as the Hugging
+# Face API listed it on 2026-09-19 (revision e6e3b4d). It carries all three
+# precisions of the same single-file graph, so the allow-patterns decide
+# whether the download is 552 MB or 3.4 GB.
+_GRANITE_CTC_REPOSITORY_FILES = (
+    ".gitattributes",
+    "README.md",
+    "config.json",
+    "conversion/benchmark_granite_speech5_onnx.py",
+    "conversion/convert_granite_speech5_onnx_precision.py",
+    "conversion/export_granite_speech5_onnx.py",
+    "conversion/validate_granite_speech5_onnx.py",
+    "generation_config.json",
+    "onnx/model.onnx",
+    "onnx/model_fp16.onnx",
+    "onnx/model_int8.onnx",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "reports/benchmark_fp16_cpu.json",
+    "reports/benchmark_fp16_dml.json",
+    "reports/benchmark_fp32_12t.json",
+    "reports/benchmark_fp32_dml.json",
+    "reports/benchmark_int8_12t.json",
+    "reports/benchmark_int8_dml.json",
+    "reports/model.export.json",
+    "reports/model_fp16.conversion.json",
+    "reports/model_int8.conversion.json",
+    "reports/validation.json",
+    "reports/validation_fp16.json",
+    "reports/validation_int8.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+)
+
+
+def test_granite_ctc_fetches_the_int8_graph_and_neither_of_the_other_two():
+    """`onnx/*.onnx` would have matched all three graphs.
+
+    The fp32 graph alone is 1.89 GB against the 552 MB the app actually
+    downloads, and nothing would have reported the waste -- the model loads
+    either way.
+    """
+    layout = local_webgpu_asr._MODEL_LAYOUTS[GRANITE_CTC_MODEL_SIZE]
+    fetched = {
+        relative
+        for relative in _GRANITE_CTC_REPOSITORY_FILES
+        if any(fnmatchcase(relative, pattern) for pattern in layout.allow_patterns)
+    }
+
+    assert "onnx/model_int8.onnx" in fetched
+    assert "onnx/model.onnx" not in fetched
+    assert "onnx/model_fp16.onnx" not in fetched
+    # The conversion scripts and the parity reports are not part of the model.
+    assert not {name for name in fetched if name.startswith(("conversion/", "reports/"))}
+    assert set(layout.required_files) <= fetched
 
 
 def test_explicit_cpu_policy_does_not_report_failed_gpu_fallback():

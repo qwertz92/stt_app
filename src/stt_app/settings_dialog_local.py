@@ -12,10 +12,9 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .config import (
     DOC_MODELS_PATH,
     LOCAL_ENGLISH_ONLY_MODELS,
-    LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
-    LOCAL_WEBGPU_MODEL_SIZES,
     VALID_MODEL_SIZES,
+    supports_streaming,
 )
 from .dialog_style import make_label_selectable
 from .local_model_download import (
@@ -607,18 +606,17 @@ class _LocalModelsMixin:
                     )
                 if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                     status = f"{status}, English only"
-                if model_name in LOCAL_WEBGPU_MODEL_SIZES:
-                    runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
-                        model_name,
-                        "ONNX/WebGPU",
+                # One rule for every ONNX runtime, read from the two shared
+                # tables. A branch per runtime family left the onnx-asr rows
+                # without "batch only", so they read like models that stream.
+                runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(model_name)
+                if runtime:
+                    modes = (
+                        "batch and true streaming"
+                        if supports_streaming("local", model_name)
+                        else "batch only"
                     )
-                    status = f"{status}, {runtime}, batch only"
-                elif model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-                    runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
-                        model_name,
-                        "ORT GenAI INT4",
-                    )
-                    status = f"{status}, {runtime}, batch and true streaming"
+                    status = f"{status}, {runtime}, {modes}"
                 item = QtWidgets.QListWidgetItem(
                     f"{self._model_label(model_name)} - {status}"
                 )

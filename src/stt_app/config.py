@@ -274,19 +274,33 @@ LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
 # further up, next to `DEFAULT_MODEL_SIZE`, which names one of them.
 LOCAL_ONNX_ASR_MODEL_SIZES = (PARAKEET_MODEL_SIZE, CANARY_MODEL_SIZE)
 
+# IBM Granite Speech 5.0 470M TurboCTC, a community INT8 ONNX export of IBM's
+# CTC encoder. It runs on the `onnxruntime` CPU provider the app already ships,
+# with numpy for the log-mel features and `tokenizers` (a faster-whisper
+# dependency) for the byte-level BPE decode -- no Node.js, no onnx-asr, no new
+# dependency. English only, batch only, and it writes lower-case text without
+# punctuation, which is what the model was trained to produce.
+GRANITE_CTC_MODEL_SIZE = "granite-speech-5.0-470m-turboctc"
+LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
+
 LOCAL_ONNX_MODEL_SIZES = (
-    LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
+    LOCAL_WEBGPU_MODEL_SIZES
+    + LOCAL_NEMOTRON_MODEL_SIZES
+    + LOCAL_ONNX_ASR_MODEL_SIZES
+    + LOCAL_GRANITE_CTC_MODEL_SIZES
 )
 
 # The local models whose runtime takes an execution device. The onnx-asr models
-# (Parakeet/Canary) are CPU-only and ignore the policy, so the Settings picker
-# must not claim to control them and a measured preference for one would be
-# meaningless. One definition, because the picker, the stored preference map and
-# the benchmark all have to answer this question the same way.
+# (Parakeet/Canary) and Granite Speech 5.0 TurboCTC are CPU-only and ignore the
+# policy, so the Settings picker must not claim to control them and a measured
+# preference for one would be meaningless. One definition, because the picker,
+# the stored preference map and the benchmark all have to answer this question
+# the same way.
 DEVICE_AWARE_LOCAL_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES
 
-# Models whose upstream repo has no ModelScope counterpart (verified against the
-# ModelScope API on 2026-08-18). On a network that blocks Hugging Face wholesale
+# Models whose upstream repo has no ModelScope counterpart (the first three
+# verified against the ModelScope API on 2026-08-18, Granite Speech 5.0
+# TurboCTC on 2026-09-19). On a network that blocks Hugging Face wholesale
 # -- a proxy denying the whole "Generative AI and ML Applications" category is
 # the common case -- these cannot be fetched at all. Naming them up front beats
 # a download that ends in "check your internet connection", which is exactly the
@@ -296,6 +310,7 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
         "distil-large-v3.5",
         PARAKEET_MODEL_SIZE,
         CANARY_MODEL_SIZE,
+        GRANITE_CTC_MODEL_SIZE,
     }
 )
 
@@ -306,6 +321,7 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     NEMOTRON_MODEL_SIZE: "int4",
     PARAKEET_MODEL_SIZE: "int8",
     CANARY_MODEL_SIZE: "int8",
+    GRANITE_CTC_MODEL_SIZE: "int8",
 }
 
 LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
@@ -315,6 +331,7 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
     PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
     CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
+    GRANITE_CTC_MODEL_SIZE: "ONNX Runtime INT8 CTC, CPU",
 }
 
 GRANITE_4_1_REPO_MAP: dict[str, str] = {
@@ -454,6 +471,7 @@ MODEL_REPO_MAP: dict[str, str] = {
     ),
     PARAKEET_MODEL_SIZE: "istupakov/parakeet-tdt-0.6b-v3-onnx",
     CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
+    GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
     **GRANITE_4_1_REPO_MAP,
 }
 
@@ -462,6 +480,7 @@ LOCAL_MODEL_RUNTIME: dict[str, str] = {
     **dict.fromkeys(LOCAL_WEBGPU_MODEL_SIZES, "onnx-webgpu"),
     **dict.fromkeys(LOCAL_NEMOTRON_MODEL_SIZES, "onnxruntime-genai"),
     **dict.fromkeys(LOCAL_ONNX_ASR_MODEL_SIZES, "onnx-asr"),
+    **dict.fromkeys(LOCAL_GRANITE_CTC_MODEL_SIZES, "granite-ctc"),
 }
 
 # Approximate model sizes for UI progress estimation.
@@ -487,6 +506,10 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
     PARAKEET_MODEL_SIZE: 670,
     CANARY_MODEL_SIZE: 1_029,
+    # Measured against the repository with this model's allow-patterns applied:
+    # 552,442,697 bytes, of which `onnx/model_int8.onnx` is 551,294,349. The
+    # fp32 and fp16 graphs beside it (1.76 GiB and 0.88 GiB) are never fetched.
+    GRANITE_CTC_MODEL_SIZE: 552,
 }
 
 LANGUAGE_MODE_LABELS: dict[str, str] = {
@@ -1112,8 +1135,12 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "azure": AZURE_LANGUAGE_MODES,
     "funasr": FUNASR_LANGUAGE_MODES,
 }
-LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
-LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
+LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
+LOCAL_BATCH_ONLY_MODELS = (
+    LOCAL_WEBGPU_MODEL_SIZES
+    + LOCAL_ONNX_ASR_MODEL_SIZES
+    + LOCAL_GRANITE_CTC_MODEL_SIZES
+)
 # Models that must never expose Auto. Cohere needs an explicit language; Canary
 # would otherwise translate to English instead of transcribing.
 LOCAL_EXPLICIT_LANGUAGE_MODELS = (*LOCAL_WEBGPU_MODEL_SIZES, CANARY_MODEL_SIZE)

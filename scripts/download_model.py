@@ -57,6 +57,7 @@ from stt_app.config import (
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
     FASTER_WHISPER_MODEL_SIZES,
+    LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
@@ -265,6 +266,15 @@ def main() -> None:
     if args.list:
         print("Available models:")
         for name, repo_id in MODELS.items():
+            # Read from the one English-only set rather than from the model
+            # id: the ONNX branch called every one of its models
+            # multilingual, and the substring test below it recognised
+            # exactly the models with "distil" in the name.
+            languages = (
+                "English only"
+                if name in LOCAL_ENGLISH_ONLY_MODELS
+                else "multilingual"
+            )
             if name in LOCAL_ONNX_MODEL_SIZES:
                 precision = LOCAL_ONNX_MODEL_PRECISION.get(name, "q4")
                 mode = (
@@ -272,11 +282,9 @@ def main() -> None:
                     if name in LOCAL_NEMOTRON_MODEL_SIZES
                     else "batch only"
                 )
-                note = f" (multilingual, {precision} ONNX, {mode})"
-            elif "distil" in name:
-                note = " (English only)"
+                note = f" ({languages}, {precision} ONNX, {mode})"
             else:
-                note = " (multilingual)"
+                note = f" ({languages})"
             print(f"  {name:20s} -> {repo_id}{note}")
         return
 

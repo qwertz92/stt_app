@@ -1972,12 +1972,19 @@ class _BenchmarkMixin:
             return
 
         language_value = str(self.benchmark_language_combo.currentData() or "auto")
-        if language_value == "de" and any(
-            model_name in LOCAL_ENGLISH_ONLY_MODELS for model_name in model_names
-        ):
+        english_only = [
+            model_name
+            for model_name in model_names
+            if model_name in LOCAL_ENGLISH_ONLY_MODELS
+        ]
+        if language_value == "de" and english_only:
+            # Named from the selection: with more than one English-only model
+            # a fixed name sent the user after a model they had not selected.
+            blocking = ", ".join(english_only)
+            plural = "s" if len(english_only) > 1 else ""
             self._set_benchmark_status(
-                "German cannot be benchmarked with the selected English-only model. "
-                "Use Auto or English, or deselect distil-large-v3.5.",
+                f"German cannot be benchmarked with the selected English-only "
+                f"model{plural}. Use Auto or English, or deselect {blocking}.",
                 "#b71c1c",
             )
             return

@@ -39,6 +39,7 @@ from .config import (
     FALLBACK_HOTKEYS,
     HOTKEY_RECLAIM_INTERVAL_MS,
     INSERT_TARGET_CURRENT_WINDOW,
+    LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
@@ -4944,12 +4945,14 @@ class DictationController(QtCore.QObject):
             # `create_transcriber` falls back to the local path for an unknown
             # engine, so an unknown one must produce the local identity too.
             #
-            # "local" is four different runtimes and they read different
+            # "local" is five different runtimes and they read different
             # settings, so the per-engine scoping above has to continue one
-            # level down: listing all ten fields made Parakeet reload its
-            # 670 MB model when the user typed a custom-vocabulary term that
-            # onnx-asr never receives. The branches below mirror
-            # `_create_local_transcriber` exactly -- keep them in step.
+            # level down: listing every local field unconditionally made
+            # Parakeet reload its 670 MB model when the user typed a
+            # custom-vocabulary term that onnx-asr never receives. The
+            # branches below mirror `_create_local_transcriber` exactly --
+            # keep them in step. (The count is deliberately not written out
+            # here: it was "ten" for two fields longer than it was true.)
             model_size = settings.model_size
             common = {
                 "engine": engine,
@@ -4957,9 +4960,13 @@ class DictationController(QtCore.QObject):
                 "offline_mode": bool(getattr(settings, "offline_mode", False)),
                 "model_dir": getattr(settings, "model_dir", ""),
             }
-            if model_size in LOCAL_ONNX_ASR_MODEL_SIZES:
-                # onnx-asr takes nothing else, and is CPU-only, so the device
-                # policy never reaches it either.
+            if (
+                model_size in LOCAL_ONNX_ASR_MODEL_SIZES
+                or model_size in LOCAL_GRANITE_CTC_MODEL_SIZES
+            ):
+                # onnx-asr and the Granite CTC graph take nothing else, and
+                # both are CPU-only, so the device policy never reaches them
+                # either.
                 return _TranscriberIdentity(**common)
             if model_size in LOCAL_NEMOTRON_MODEL_SIZES:
                 return _TranscriberIdentity(

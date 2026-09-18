@@ -212,3 +212,26 @@ def test_the_manual_download_step_does_not_send_onnx_models_to_the_wrong_guide(
     module._print_ssl_help("small")
     whisper = capsys.readouterr().err.split("4. MANUAL BROWSER DOWNLOAD:")[1]
     assert "for how to arrange the files" in whisper
+
+
+def test_the_model_list_reads_the_english_only_set(capsys, monkeypatch):
+    """The list called every ONNX model multilingual and recognised an
+    English-only one by the substring "distil" -- so the Granite CTC graph,
+    which is English-only *and* ONNX, was advertised as multilingual."""
+    from stt_app.config import LOCAL_ENGLISH_ONLY_MODELS
+
+    module = _load_download_model()
+    monkeypatch.setattr(sys, "argv", ["download_model.py", "--list"])
+
+    module.main()
+
+    lines = {
+        line.split("->")[0].strip(): line
+        for line in capsys.readouterr().out.splitlines()
+        if "->" in line
+    }
+    assert set(LOCAL_ENGLISH_ONLY_MODELS) <= set(lines), lines
+    for name, line in lines.items():
+        english_only = "(English only" in line or ", English only" in line
+        assert english_only is (name in LOCAL_ENGLISH_ONLY_MODELS), line
+    assert "int8 ONNX, batch only" in lines["granite-speech-5.0-470m-turboctc"]

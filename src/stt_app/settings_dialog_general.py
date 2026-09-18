@@ -16,6 +16,7 @@ from .config import (
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
+    LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
@@ -592,8 +593,11 @@ class _GeneralTabMixin:
             )
 
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
+            # Named from the selection: there is more than one English-only
+            # model, and the hard-coded name answered a Granite CTC selection
+            # with a sentence about distil-large-v3.5.
             return (
-                "distil-large-v3.5 is an English-only model "
+                f"{local_model_short_label(model)} is an English-only model "
                 "(only Auto and English are available)."
             )
 
@@ -750,6 +754,14 @@ class _GeneralTabMixin:
                     "ignores this setting."
                 )
                 return
+            if model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
+                # Also CPU-only, but a different runtime: naming onnx-asr here
+                # would point at a package this model never loads.
+                self._set_local_onnx_device_note(
+                    "This model always runs on the CPU through ONNX Runtime "
+                    "and ignores this setting."
+                )
+                return
             # Names what decides instead. "faster-whisper uses its own device
             # setting" pointed at a setting this app does not have.
             self._set_local_onnx_device_note(
@@ -850,6 +862,16 @@ class _GeneralTabMixin:
                     "Batch mode only, CPU. Multilingual, no language selection "
                     "needed; the recommended default."
                 )
+            return
+        if engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setStyleSheet(note_style)
+            # The casing and the missing punctuation are what the CTC head
+            # writes, not a setting -- say so here rather than let it look
+            # like a defect after the first dictation.
+            self.local_model_runtime_warning_label.setText(
+                "Batch mode only, CPU. English only; writes lowercase text "
+                "without punctuation."
+            )
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)

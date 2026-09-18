@@ -454,7 +454,44 @@ def test_local_distil_model_limits_language_to_auto_and_english():
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
     assert _combo_offers(dialog.language_combo, "de") is False
     assert _combo_item_enabled(dialog.language_combo, "en") is True
-    assert "English-only model" in dialog.language_note_label.text()
+    # The faster-whisper sizes are listed under their own id, so the name from
+    # the picker is the same string this sentence always carried.
+    assert (
+        dialog.language_note_label.text()
+        == "distil-large-v3.5 is an English-only model "
+        "(only Auto and English are available)."
+    )
+    _ = app
+
+
+def test_the_english_only_note_names_the_selected_model():
+    """There are two English-only local models now, and the note hard-coded
+    the name of the first one -- so selecting the other was answered with a
+    sentence about a model the user had not chosen."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            mode="batch",
+            model_size="granite-speech-5.0-470m-turboctc",
+            language_mode="de",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    note = dialog.language_note_label.text()
+    assert _combo_data(dialog.language_combo) == ["auto", "en"]
+    assert "English-only model" in note
+    assert "IBM Granite Speech 5.0 470M" in note
+    assert "distil" not in note.lower()
+    # The name as the combo shows it, not the settings id and not the whole
+    # entry with its size and runtime parenthetical.
+    assert "granite-speech-5.0-470m-turboctc" not in note
+    assert "552" not in note
     _ = app
 
 
@@ -3268,6 +3305,48 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
     assert dialog.local_models_list.isEnabled() is True
     assert dialog.refresh_local_models_button.isEnabled() is True
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    _ = app
+
+
+def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
+    """The inventory row is the only place the Local tab says what a model
+    is, and a row that names neither the runtime nor "batch only" reads like
+    a model that streams."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._refresh_local_models_list(["granite-speech-5.0-470m-turboctc"])
+
+    rows = {
+        str(
+            dialog.local_models_list.item(index).data(QtCore.Qt.UserRole) or ""
+        ): dialog.local_models_list.item(index).text()
+        for index in range(dialog.local_models_list.count())
+    }
+
+    assert rows["granite-speech-5.0-470m-turboctc"].endswith(
+        " - Downloaded, English only, ONNX Runtime INT8 CTC, CPU, batch only"
+    )
+    # One rule for every ONNX runtime: the two onnx-asr rows used to end at
+    # "Not downloaded", as if they could stream like the Whisper sizes.
+    assert rows["parakeet-tdt-0.6b-v3"].endswith(
+        " - Not downloaded, onnx-asr INT8 TDT, CPU, batch only"
+    )
+    assert rows["canary-1b-v2"].endswith(
+        " - Not downloaded, onnx-asr INT8 AED, CPU, batch only"
+    )
+    assert rows["cohere-transcribe-03-2026"].endswith(
+        " - Not downloaded, ONNX/WebGPU q4, batch only"
+    )
+    assert rows["nemotron-3.5-asr-streaming-0.6b-int4"].endswith(
+        " - Not downloaded, ORT GenAI INT4, 560 ms streaming, "
+        "batch and true streaming"
+    )
+    # The faster-whisper sizes stream and carry no runtime label.
+    assert rows["small"].endswith(" - Not downloaded")
     _ = app
 
 

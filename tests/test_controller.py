@@ -2313,7 +2313,7 @@ def test_a_save_that_changes_the_runtime_drops_the_loaded_model(change):
     _ = app
 
 
-# Which settings each *local* runtime is actually built from. "local" is four
+# Which settings each *local* runtime is actually built from. "local" is five
 # different transcriber classes, so scoping the identity by engine alone still
 # reloaded a 670 MB Parakeet model when a faster-whisper-only field changed.
 _LOCAL_RUNTIME_FIELDS = [
@@ -2359,6 +2359,21 @@ _LOCAL_RUNTIME_FIELDS = [
     ("cohere-transcribe-03-2026", {"silence_gate_enabled": False}, False),
     ("parakeet-tdt-0.6b-v3", {"streaming_full_final_transcript": True}, False),
     ("parakeet-tdt-0.6b-v3", {"silence_gate_enabled": False}, False),
+    # The Granite CTC graph takes the same four constructor arguments as
+    # onnx-asr and reads nothing else.
+    ("granite-speech-5.0-470m-turboctc", {"offline_mode": True}, True),
+    ("granite-speech-5.0-470m-turboctc", {"model_dir": "D:/models"}, True),
+    ("granite-speech-5.0-470m-turboctc", {"custom_vocabulary": "Kubernetes"}, False),
+    ("granite-speech-5.0-470m-turboctc", {"vad_enabled": True}, False),
+    ("granite-speech-5.0-470m-turboctc", {"silence_gate_threshold": 0.02}, False),
+    ("granite-speech-5.0-470m-turboctc", {"silence_gate_enabled": False}, False),
+    ("granite-speech-5.0-470m-turboctc", {"local_onnx_device": "cpu"}, False),
+    ("granite-speech-5.0-470m-turboctc", {"keep_onnx_model_loaded": False}, False),
+    (
+        "granite-speech-5.0-470m-turboctc",
+        {"streaming_full_final_transcript": True},
+        False,
+    ),
     # The device a benchmark measured as fastest decides which device `auto`
     # starts with, so for the two runtimes that read a device it is part of
     # what the runtime was built from.
@@ -2408,6 +2423,15 @@ _LOCAL_RUNTIME_FIELDS = [
         {"onnx_auto_preferred_devices": {"parakeet-tdt-0.6b-v3": "cpu"}},
         False,
     ),
+    (
+        "granite-speech-5.0-470m-turboctc",
+        {
+            "onnx_auto_preferred_devices": {
+                "granite-speech-5.0-470m-turboctc": "cpu"
+            }
+        },
+        False,
+    ),
 ]
 
 
@@ -2421,7 +2445,7 @@ _LOCAL_RUNTIME_FIELDS = [
 def test_a_local_identity_reads_only_what_its_own_runtime_takes(
     model_size, change, reloads
 ):
-    """`_create_local_transcriber` picks one of four classes, each with its own
+    """`_create_local_transcriber` picks one of five classes, each with its own
     constructor arguments. The identity has to follow that split, or a setting
     one runtime never receives still costs the others a full reload."""
     settings = replace(_RUNTIME_BASE_SETTINGS, model_size=model_size)

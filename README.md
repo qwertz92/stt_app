@@ -76,12 +76,15 @@ Right-click the **system tray icon** → **Settings**.
 
 ## Model recommendations
 
-There are four local families. **GPU-accelerated ONNX models** (Cohere, IBM
+There are five local families. **GPU-accelerated ONNX models** (Cohere, IBM
 Granite) are the most accurate — they run on the GPU via WebGPU, need Node.js,
 and are batch-only. **onnx-asr models** (Parakeet, Canary) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
 model here that transcribed the benchmark recording correctly (only Whisper
 `tiny` is quicker, and it is the weakest of the models that did).
+**Granite Speech 5.0 470M TurboCTC** runs on ONNX Runtime on the CPU with no
+Node.js either; it is the smallest non-Whisper download, English only, and
+writes lower case without punctuation.
 **Nemotron 3.5** is the only local true-streaming
 model. **Whisper models** (CTranslate2) need no extra setup, run on the CPU, and
 also support streaming.
@@ -96,6 +99,7 @@ also support streaming.
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
+| English only, smallest non-Whisper download, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
 | Quick testing / low resources | `tiny` | CTranslate2 | ~78 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
