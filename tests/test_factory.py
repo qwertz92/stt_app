@@ -235,9 +235,9 @@ def test_device_policy_reaches_nemotron_as_a_provider_order():
 
 
 def test_a_measured_device_reaches_the_node_runtime_as_a_preference():
-    """`auto` has to start with the device the last benchmark measured as
-    fastest for this model; without this the setting reached nothing and the
-    runner kept its own WebGPU-first order."""
+    """`auto` has to start with the device a benchmark measured as fastest
+    for this model; without this the setting reached nothing and the runner
+    kept its own WebGPU-first order."""
     base = AppSettings(engine="local", model_size="granite-speech-4.1-2b")
 
     measured = create_transcriber(

@@ -69,9 +69,9 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             device=getattr(
                 settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE
             ),
-            # Which device `auto` starts with, from the last benchmark that
-            # measured this model on more than one. Empty for every pinned
-            # policy, so the two settings cannot contradict each other.
+            # Which device `auto` starts with, from a benchmark that measured
+            # this model on more than one. Empty for every pinned policy, so
+            # the two settings cannot contradict each other.
             preferred_device=preferred_onnx_device(settings),
         )
     return LocalFasterWhisperTranscriber(

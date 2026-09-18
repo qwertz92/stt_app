@@ -280,8 +280,9 @@ of them is selected.
 **Letting a benchmark decide what `Auto` starts with.** Which device is
 faster depends on the machine. A working GPU path usually wins by a wide margin
 (in the development machine's 2026-08-25 run WebGPU measured 1.6x to 4.6x
-faster than the CPU for the three Cohere/Granite models), while on a machine whose GPU cannot run a
-model the CPU is the quicker road and every GPU attempt is wasted load time.
+faster than the CPU for the three Cohere/Granite models), while on a machine
+whose GPU cannot run a model the CPU is the quicker road and every GPU attempt
+is wasted load time.
 To let the app find out, open Settings -> Benchmark -> **Run Benchmark...**,
 choose **GPU + CPU comparison** (or **All explicit targets**) under ONNX
 Device, and run it. When the run finishes, the app stores, per model, the
