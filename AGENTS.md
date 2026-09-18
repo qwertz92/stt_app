@@ -3022,8 +3022,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **`onnxruntime-node` is no longer a direct dependency**: it was only ever
   needed by the raw Granite 4.1 Plus/NAR graph sessions, which were retired on
   2026-08-26. The pipeline models run on the copy Transformers.js pins itself
-  (exactly 1.24.3 across 4.0-4.2), so `npm ls onnxruntime-node` must show one
-  nested entry and nothing at the top level. **Do not add it back.** Declaring
+  (exactly 1.24.3 across 4.0-4.2, exactly 1.30.0 in 4.3.0), so
+  `npm ls onnxruntime-node` must show one nested entry and nothing at the top
+  level. **Do not add it back.** Declaring
   a newer version alongside makes npm install two different native ORT runtimes
   into one Node process (observed API-version mismatch warnings), and nothing
   in the app would use the newer copy. A 2026-07-21 benchmark found Transformers.js
@@ -3032,13 +3033,38 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   2026-08-11 against Transformers.js 4.2.0: the nested pin is still exactly
   1.24.3. `onnxruntime-node`'s
   `postinstall` being blocked by npm 12's install-script policy is harmless —
-  the package ships its native binaries bundled and reports cpu/dml/webgpu.
-- **`sharp` is pinned forward through `overrides`**: `@huggingface/transformers`
-  declares `sharp: ^0.34.5`, which npm cannot resolve past on its own, so the
-  tree inherited GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591,
-  high). `package.json`'s `overrides` therefore forces `sharp: ^0.35.0`. Keep
-  that entry until Transformers.js widens its own range; sharp 0.35 requires
-  Node >= 20.9, which this project already exceeds.
+  the package ships its native binaries bundled and reports cpu/dml/webgpu
+  (re-checked for 1.30.0 on 2026-09-18: `bin/napi-v6/win32/x64` holds
+  `onnxruntime.dll`, `DirectML.dll`, `dxil.dll`, `dxcompiler.dll` and the
+  binding, and `listSupportedBackends()` answers all three as bundled).
+- **Transformers.js is 4.3.0 and `package.json` carries no `overrides`**
+  (2026-09-18). 4.2.0 declared `sharp: ^0.34.5` and pinned an
+  `onnxruntime-node` whose `adm-zip` range stopped at the vulnerable 0.6.0, so
+  the tree needed two `overrides` (`sharp: ^0.35.0` against GHSA-f88m-g3jw-g9cj,
+  `adm-zip: ^0.6.0`) and the audit job still went red again when the advisory
+  database moved past them (sharp < 0.35.4, GHSA-rgj7-g3m4-5g8c; adm-zip
+  0.5.9-0.6.0, GHSA-vwc7-r8mq-g2x9). 4.3.0, published 2026-09-16, declares
+  `sharp: ^0.35.4` and `onnxruntime-node: 1.30.0` (`adm-zip: ^0.6.0`, locked at
+  the patched 0.6.1) itself, so both overrides are gone and
+  `npm audit --omit=dev --package-lock-only` reports nothing. An existing lock
+  entry that still satisfies the new range is kept by
+  `npm install --package-lock-only`, which is how `adm-zip` stayed at 0.6.0
+  after the bump: `npm audit fix --package-lock-only` moves it. The jump from
+  ONNX Runtime 1.24.3 to 1.30.0 was measured before it was taken, through the
+  app's own `LocalOnnxWebGpuTranscriber` with `runner_path` pointing at a copy
+  of the runner beside a throwaway 4.3.0 install: all three models
+  (`cohere-transcribe-03-2026`, `granite-speech-4.1-2b`,
+  `granite-4.0-1b-speech`) on `webgpu` and on `cpu`, a German and an English
+  clip each -- twelve transcripts byte-identical to 4.2.0's, the requested
+  device reached in every case with no fallback, and the warm real-time
+  factors within run-to-run noise in both directions (one warm run per case,
+  with another Cohere instance sharing the GPU, so no speed claim either way).
+  The owner's standing preference is the newest release with the fewest known
+  vulnerabilities as long as it runs; pin below the newest only with a
+  measured reason written here. The repository's own `node_modules` is not
+  touched by a lockfile change: a source-tree app that is running keeps the
+  native binaries of its Node child loaded, so `npm ci` has to wait until the
+  app is closed.
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)**: a third local ONNX
   path in `transcriber/local_onnx_asr.py`, separate from the Cohere/Granite Node
   runtime and from Nemotron's ORT GenAI path. It is **pure Python and needs no

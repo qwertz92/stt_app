@@ -7,10 +7,6 @@
     "verify:webgpu-runtime": "node --input-type=module -e \"await import('@huggingface/transformers')\""
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0"
-  },
-  "overrides": {
-    "adm-zip": "^0.6.0",
-    "sharp": "^0.35.0"
+    "@huggingface/transformers": "^4.3.0"
   }
 }
