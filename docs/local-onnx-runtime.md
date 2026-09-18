@@ -64,7 +64,7 @@ architecture.
 
 | Target | Meaning | Recommendation |
 | --- | --- | --- |
-| `auto` | Try WebGPU, then DirectML on Windows, then CPU | Default for normal use |
+| `auto` | Try WebGPU, then DirectML on Windows, then CPU. For daily dictation the app starts with the device its last in-app benchmark measured as fastest for that model, if there is one (see [models.md](models.md)) | Default for normal use |
 | `gpu` | Try GPU targets only, currently WebGPU then DirectML | Diagnostic benchmark target |
 | `webgpu` | Force Transformers.js WebGPU | Works for Cohere, Granite 4.0, and Granite 4.1 2B on the Intel test machine |
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |

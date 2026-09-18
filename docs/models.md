@@ -267,7 +267,7 @@ dictation:
 
 | Choice | Meaning |
 |--------|---------|
-| `Auto` | WebGPU, then DirectML, then CPU (the default) |
+| `Auto` | WebGPU, then DirectML, then CPU (the default); starts with the device your last benchmark measured as fastest, if there is one |
 | `GPU only` | WebGPU then DirectML; fails rather than falling back to CPU |
 | `WebGPU only` / `DirectML only` | Pin one backend |
 | `CPU only` | Never try the GPU |
@@ -276,6 +276,36 @@ Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU
 only, so every GPU choice means DirectML for it. Parakeet and Canary run through
 `onnx-asr` on CPU and ignore the setting entirely; the row is disabled while one
 of them is selected.
+
+**Letting a benchmark decide what `Auto` starts with.** Which device is
+faster depends on the machine. A working GPU path usually wins by a wide margin
+(on the development machine WebGPU measured 1.6x to 4.6x faster than the CPU
+for the three Cohere/Granite models), while on a machine whose GPU cannot run a
+model the CPU is the quicker road and every GPU attempt is wasted load time.
+To let the app find out, open Settings -> Benchmark -> **Run Benchmark...**,
+choose **GPU + CPU comparison** (or **All explicit targets**) under ONNX
+Device, and run it. When the run finishes, the app stores, per model, the
+device it measured as fastest, and `Auto` tries that device first from then on;
+the rest of the chain stays in place as the fallback. The note under
+**ONNX Device** on the General tab says which device `Auto` starts with.
+
+The rule is deliberately conservative:
+
+- Only a run that ran to its end counts, not a canceled or a failed one.
+- A model must have been measured successfully on at least two devices in that
+  one run; a single device is not a comparison.
+- The normal first device stays first unless another one was at least 10%
+  faster (mean real-time factor of the case). Differences of a few percent
+  between two runs are noise, and a reorder costs a model reload.
+- A pinned device (`CPU only`, `WebGPU only`, ...) always outranks the
+  measurement.
+- Run the benchmark again after a driver or hardware change; the newest run
+  replaces the stored answer for the models it measured. To go back to the
+  default order without a new run, close the app and remove the
+  `onnx_auto_preferred_devices` entry from `%APPDATA%\stt_app\settings.json`.
+
+The command-line benchmark (`scripts/benchmark_local.py`) measures the same
+cases but never writes this setting.
 
 Nemotron currently ships with the reproducibly installable CPU ORT GenAI
 runtime. Its DirectML path is already attempted by the app, but cannot be part

@@ -548,6 +548,14 @@ canceled run. **Export** is optional: it writes the loaded history entry to CSV,
 XLSX, or Markdown for sharing or further analysis; it is not required to keep
 the result in the app.
 
+A finished run that measured a Cohere, Granite or Nemotron model on more than
+one device (**GPU + CPU comparison** or **All explicit targets**) also decides
+which device `Auto` starts with for that model in Settings -> General ->
+**ONNX Device**; the run's status line says when that changed something. The
+rule and how to undo it are described under "Letting a benchmark decide what
+`Auto` starts with" in [models.md](models.md). The command-line benchmark never
+writes that setting.
+
 The **Run Benchmark** window lists every case the current selection will measure
 before anything starts: one row per model, device target, and compute type,
 numbered in the order they run. Each row changes to *Running...* and then to its
