@@ -412,6 +412,28 @@ def test_audio_that_cannot_be_held_in_memory_is_a_transcription_error(
     assert fake.features == []
 
 
+def test_a_cancel_raised_while_reading_the_audio_stays_a_cancel(
+    tmp_path, monkeypatch
+):
+    """The decode step renames what it cannot name, and a cancel has a name:
+    `TranscriptionCanceled` derives from `Exception`, not from
+    `TranscriptionError`, and the controller discards a canceled recording
+    where it keeps a failed one for Retry."""
+    from stt_app.transcriber import local_granite_ctc
+
+    transcriber, fake = _transcriber(tmp_path, monkeypatch)
+
+    def _canceled(*_args, **_kwargs):
+        raise TranscriptionCanceled()
+
+    monkeypatch.setattr(local_granite_ctc, "resample_linear", _canceled)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes(_speech_pcm(0.5)))
+
+    assert fake.features == []
+
+
 def test_a_stereo_wav_is_downmixed_to_mono(tmp_path, monkeypatch):
     transcriber, fake = _transcriber(tmp_path, monkeypatch)
     mono = _speech_pcm(1.0)

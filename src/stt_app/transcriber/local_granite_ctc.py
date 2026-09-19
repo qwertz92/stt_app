@@ -424,7 +424,10 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
         self._raise_if_canceled()
         try:
             waveform = self._waveform_from(audio_source)
-        except TranscriptionError:
+        except (TranscriptionError, TranscriptionCanceled):
+            # Both already say what happened. A cancel is an `Exception` and
+            # not a `TranscriptionError`, so it needs naming here: renamed to
+            # an error, a canceled recording would be kept for Retry.
             raise
         except Exception as exc:
             # Decoding and resampling sit in front of the graph call's own
