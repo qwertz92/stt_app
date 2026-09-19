@@ -8849,3 +8849,49 @@ migration), green after it.
   only "every documented code is offered" found it.
 - *Still not verified live.* No Azure resource was available; the casing of the
   model name follows every example on Microsoft's page and nothing else.
+
+### Review round 2: the round-1 fixes and MAI-Transcribe-2 (2026-09-19)
+
+One read-only reviewer with fresh context over `ab427e1..777f557`, given the
+claims and none of the reasoning. **No P1 and no P2**, so the loop ends here
+after two rounds. Two P4 findings, both reproduced by the lead before anything
+changed:
+
+- *The English-only guard refused a language made of blanks.* `--language " "`
+  is truthy, so `language or "auto"` kept it and the guard named "the language
+  '  '". Reproducing it showed the larger half: the same blank passed Canary's
+  `not language` check, behind which the runtime maps an unknown code onto a
+  trained one -- the translation that check exists to prevent. The runner now
+  reads the language once at entry (stripped, empty is `None`). CLI only; the
+  window sends Auto, German or English.
+- *A quotation the cited page does not contain.* `docs/provider-costs.md`
+  quoted Microsoft on MAI-Transcribe-1.5 as "leading the accuracy-speed Pareto
+  frontier". The announcement's markup has no "Pareto"; it says "a leader in
+  terms of accuracy x speed on the Artificial Analysis leaderboard" and "across
+  43 languages" (the row said 42-43). The sentence is older than this round,
+  but the round had added "both statements are the vendor's" beside it.
+
+**Not refuted by the reviewer's probes:** resampling value-identical to
+`ab427e1` for seven rates from 8 to 96 kHz, and 7999 refused where 8000
+passes; the three blocking bugs the
+blockwise-STFT test exists for move a feature by 1.48-1.76 when injected, so
+the 1e-6 tolerance still fails for each; row tooltips equal to the row text by
+construction (one variable, one writer); the texts of `992c342` against
+`config.py`; the refusal message fits its reserved two lines (40 px of 42 at
+9 pt) with bit-identical geometry before and after; the codes sent to Azure an
+exact set match with Microsoft's table for both models; the schema-24 matrix
+(schema as a string, negative, missing, 24, 999, a whitespace endpoint), the
+rewrite at load and a later deliberate choice of 1.5 surviving the next start;
+regions, limits, the price and rank quotations, both announcement dates and
+the deprecation date, each verbatim.
+
+**Negative control.** Every fix of the two rounds was written against a test
+seen red first, with two exceptions that have no test: the Run Benchmark
+device *note* (a label held in a local variable; the tooltip beside it is
+tested) and the corrected quotation (documentation).
+
+**Lessons.**
+- *A sentence that vouches for its neighbour inherits the neighbour's errors.*
+  "Both statements are the vendor's" was true of one of them.
+- *Fix garbage input where the value enters.* The reviewer's suggested fix was
+  the guard; the entry point closed the guard and Canary's check together.

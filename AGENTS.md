@@ -4383,7 +4383,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   as well, whose German token only produces nonsense. What is still true
   for every other ONNX model: `detected_language` holds the requested
   mode, not a detection -- Parakeet asked for `de` records `de` while
-  detecting on its own.
+  detecting on its own. **And the runner reads the language once: blank is
+  none.** The CLI's `--language " "` is a truthy string, so every
+  `language or default` kept it: the English-only guard refused its model
+  for "the language '  '", and Canary's `not language` check let it
+  through to a runtime that maps an unknown code onto a trained one -- the
+  translation that check exists to prevent. `run_benchmark_cases` strips
+  the value at entry and turns an empty one into `None`, so both guards and
+  every runner see one value (found by the review of the guard itself;
+  the window only ever sends Auto, German or English).
 - **Model size estimates are measured, not copied**: `MODEL_ESTIMATED_SIZE_MB`
   drives the download percentage, so a wrong number is directly visible.
   `distil-large-v3.5` was listed at 756 MB against a real 1513 MB `model.bin`,
