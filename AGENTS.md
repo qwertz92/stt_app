@@ -3243,12 +3243,35 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     passes its own `RunOptions` -- and checks before the load, between passes
     and mid-run. Measured on the real model: a cancel 0.4 s into the 563 s
     recording returned after 0.46 s and the next transcription was correct.
+    **The load itself is not interruptible**: building the tokenizer and the
+    `InferenceSession` is one blocking call each, so a cancel that arrives
+    during it surfaces when it ends (the review measured 1.4 s with the real
+    model, once per session, and the session stays loaded for the next run).
+    The same holds for onnx-asr.
   - **Shared rather than copied**: `resolve_or_download_onnx_model` (module
     level in `local_onnx_asr`, imports still inside the function so the
     existing monkeypatch targets resolve), `_read_wav_float32` -- which now
     refuses a header rate of 0, since `wave` validates the channel count and
     the sample width and not the rate, and this runtime's resampler divided by
     it -- and `_pcm_audio.resample_linear`, moved out of Nemotron.
+  - **The resampler refuses a source rate below 8 kHz**
+    (`MIN_SOURCE_SAMPLE_RATE_HZ`, found by the review of this runtime,
+    2026-09-19). The header's rate decides how many samples the
+    interpolation makes -- `16000 / rate` times the file's -- so a WAV
+    declaring 1 Hz around ordinary PCM turned 3,244 bytes into 25.6 million
+    samples, 1,600 s of "audio" and ten graph passes (measured through
+    `_waveform_from`; 64 KB works out to 512 million samples, 2 GB as
+    float32), on the single transcription worker. Nemotron has called the
+    same function since it was added, so the check sits in the function
+    and not in a reader: a third caller cannot forget it. 8 kHz is
+    telephony's rate, the lowest speech is recorded at and the lowest
+    onnx-asr accepts too (`WrongSampleRateError` below it, tried against
+    the installed package), so no file a recorder writes is refused and
+    the factor is at most two. The two readers' own `<= 0` guards stay:
+    they are header validity checks with tests of their own, and onnx-asr
+    never reaches the resampler. `transcribe_batch` also wraps the decode
+    step, which sits in front of the graph call's `try`: a recording too
+    long to hold was a raw `MemoryError`.
   - **It is not device-aware**: absent from `DEVICE_AWARE_LOCAL_MODELS`, so
     the ONNX Device row is disabled with a note of its own,
     `benchmark_device_targets` yields the one `auto` case, a stored
@@ -3257,6 +3280,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **The Local tab's row suffix is one rule now**
     (`LOCAL_ONNX_MODEL_RUNTIME_LABELS` plus `supports_streaming`): a branch
     per runtime family had left the two onnx-asr rows without "batch only".
+    **Every row carries its whole text as a tooltip**: the list elides a
+    row wider than its viewport, and at the dialog's 860 px default the
+    viewport is 788 px against 810 px for this model's row and 809 px for
+    Nemotron's (measured 2026-09-19), so the end of the row -- the part
+    that says what the model can do -- was cut off with nowhere to read it.
+  - **A sentence names a model the way the screen does**
+    (`local_model_short_label`), never by its settings id: the benchmark's
+    German refusal said "deselect granite-speech-5.0-470m-turboctc" above a
+    list whose row reads "IBM Granite Speech 5.0 470M (...)", and the test
+    written with it asserted the id -- a passing test that pinned the
+    defect.
   - **It is the fastest local model on English, and its text is the price.**
     The app's own benchmark runner, one process, CPU, the branch's 29.4 s
     clip, three runs after a warm-up (2026-09-19): mean RTF 0.0135, against
@@ -4303,6 +4337,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   turn comes, so with several models selected the whole run finished before the
   single failure was visible. `_run_local_benchmark` now rejects the
   combination up front, mirroring the existing German/English-only guard.
+  **That German/English-only guard has a runner half too** (2026-09-19):
+  the window refuses German with an English-only model before the run, but
+  the CLI and every other caller of `run_benchmark_cases` went straight to
+  the model. The Granite CTC graph takes no language input, fell back to
+  Auto with a log line, decoded English -- and the stored run said `de`,
+  because the ONNX runner records the language that was *asked for*
+  (measured by the review through the real model). An English-only model
+  asked for anything but Auto or English is an error case now, for distil
+  as well, whose German token only produces nonsense. What is still true
+  for every other ONNX model: `detected_language` holds the requested
+  mode, not a detection -- Parakeet asked for `de` records `de` while
+  detecting on its own.
 - **Model size estimates are measured, not copied**: `MODEL_ESTIMATED_SIZE_MB`
   drives the download percentage, so a wrong number is directly visible.
   `distil-large-v3.5` was listed at 756 MB against a real 1513 MB `model.bin`,
@@ -5331,7 +5377,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `node` 10 s and the first run after the fix (34026331715) killed it at
   the bound, on a VM where the same probe had passed twice before and takes
   0.05 s here. A subprocess timeout in a test is a bound against a hang,
-  not a speed claim; it is a minute now.
+  not a speed claim; it is a minute now. **A thirteenth depended on the
+  runner's CPU** (2026-09-19, run 35407923973, red on `ab427e1` while its
+  parent was green on another runner): a Granite CTC test asserted *bit*
+  equality between the blockwise and the single-pass feature extraction.
+  The mel projection is a BLAS product, OpenBLAS picks its kernels for the
+  CPU it finds, and which kernel sums a row depends on the block's shape.
+  Reproduced here by setting `OPENBLAS_CORETYPE`: Zen, Haswell and Core2
+  differ by one float32 step (1.19e-7), SkylakeX, Sandybridge, Nehalem and
+  this machine's default by nothing. GitHub's `windows-latest` fleet is
+  mixed, so the test was a coin toss per run. It compares within 1e-6 now
+  -- a real blocking bug (restarted offsets, a block shifted by one frame,
+  a dropped last block) moves a feature by more than 1.4. Rule: results
+  that went through BLAS are compared with a tolerance derived from a
+  measurement, never with `array_equal`; bit equality is for copies.
 
 ## Known limitations
 
@@ -5440,7 +5499,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   back into the band the model hears. The app's own recordings are 16 kHz, so
   only an imported file or a benchmark sample reaches it; a proper resampler
   means a low-pass filter before the decimation, which neither runtime has.
-  Recorded.
+  It also holds float64 position arrays for the input and the output:
+  measured on 2026-09-19, ten minutes of 48 kHz audio cost 614 MB beyond
+  the 115 MB input (269 MB for 8 kHz), i.e. about 3.7 GB per hour of a
+  48 kHz import. Recorded.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - **Clipboard restore is not lossless.** Every HGLOBAL format is captured
   and put back (F12 of the 2026-09-12 review); what still is not: the

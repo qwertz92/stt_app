@@ -8749,3 +8749,76 @@ on English, with text that has no capitals, no punctuation and no apostrophes
   fixture produced by the port itself would have pinned the port's mistakes.
 - *"Listed on <date>" is a claim.* A test fixture that names files has to come
   from the listing, not from what such a repository usually contains.
+
+### Review round on the Granite Speech 5.0 runtime (2026-09-19)
+
+Two read-only reviewers with fresh context over `293eb8b..ab427e1`, one on
+numbers, boundaries and a second actor (real model, no Qt), one on reach, UI
+texts, docs, the download plan and the frozen-bundle check. Every finding was
+reproduced by the lead before anything changed; the reviewers' own labels were
+re-triaged by what a user notices.
+
+**Not refuted, with the real model:** one load under a preload/transcribe race
+and a `close()` from another thread mid-run; 20/20 clips by path, WAV bytes and
+raw PCM; the 563 s recording (1356 of 1356 words, cuts at near-silent frames);
+`_read_wav_float32`; `resample_linear` bit-equal to the pre-refactor Nemotron
+code over 216 combinations; the speed figures, the 552,442,697-byte / nine-file
+download plan and the frozen check (8 OK, 0 FAIL, 3 SKIP).
+
+**Fixed.**
+- *The WAV header's sample rate was an amount of work nobody bounded.* A WAV
+  declaring 1 Hz around ordinary PCM turned 3,244 bytes into 25.6 million
+  samples (1,600 s, ten graph passes) -- the reviewer called it P1; re-triaged
+  to P3, because it takes a damaged or hostile file the user imports
+  themselves and costs time and memory, not data. Nemotron has had the same
+  road since it was added, so `resample_linear` itself refuses a source rate
+  below 8 kHz now. Removing the two readers' `<= 0` guards in favour of that
+  one rule was tried and reverted within the hour: an onnx-asr test pins the
+  reader's guard, rightly -- that runtime never reaches the resampler, and
+  leaning on the library's own validation would have made the app's behaviour
+  a property of someone else's release.
+- *The benchmark recorded a German run that never happened.* The ONNX runner
+  stores the language that was asked for; the Granite CTC graph takes none and
+  fell back to Auto. The window refuses German with an English-only model up
+  front, so only the CLI reached it; the runner refuses it per model now, as
+  it already did for Canary without a language.
+- *A sentence named a model by an id that is nowhere on screen*, and the test
+  written with the feature asserted that id. It names the on-screen label now.
+- The download script's `--help` still said "Three models are not mirrored"
+  (four); a test ties that text to `MODELS_WITHOUT_MODELSCOPE_MIRROR`. Two
+  hint texts listed every model that ignores a setting except the new one.
+  The Local tab elides its two longest rows at the default width (810 and
+  809 px against a 788 px viewport); every row carries its text as a tooltip.
+
+**The red CI run was the lead's own test.** Run 35407923973 failed on
+`ab427e1` (1 failed, 3113 passed): the blockwise-STFT test asserted bit
+equality of two results that both go through a BLAS product. OpenBLAS picks
+its kernels for the CPU it runs on; set by hand (`OPENBLAS_CORETYPE`), Zen,
+Haswell and Core2 give a one-step difference (1.19e-7) and SkylakeX,
+Sandybridge, Nehalem and the development machine's default none. The parent
+commit had been green on another runner. The test compares within 1e-6 now; a
+real blocking bug moves a feature by more than 1.4.
+
+**Recorded, not changed:** a cancel during the 1.4-1.7 s model load surfaces
+when the load ends (one blocking call; the same for onnx-asr);
+`extract_features` answers an empty array below 162 samples where the original
+extractor raises (no visible difference: `transcribe_batch` returns "" for it
+either way); `split_into_passes` has three argument combinations its one call
+site never passes; the resampler's float64 position arrays cost about 3.7 GB
+per hour of a 48 kHz import (measured at ten minutes: 614 MB).
+
+**Lessons.**
+- *Bit equality is for copies.* Anything that went through BLAS is compared
+  with a tolerance, and the tolerance comes from a measurement next to the
+  magnitude of the bug the test exists for.
+- *A value read from a file header is an amount of work.* Bound it where it
+  turns into one, not in each reader.
+- *A reviewer's severity label is a claim too.* Reproduce, then re-triage by
+  what the user notices -- in both directions.
+- *The test written with the feature shares the feature's blind spot.* It
+  asserted the settings id because the code printed the settings id.
+- *A wording change has a test somewhere else.* Every file this round touched
+  was green on its own; the full suite had one failure (1 failed, 3136 passed),
+  in a dialog test that pinned the device tooltip's old "Cohere, Granite and
+  Nemotron". The count was read before anything was committed, which is the
+  only reason it cost a rerun and not a red `main`.
