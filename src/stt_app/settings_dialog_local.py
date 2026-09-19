@@ -617,9 +617,12 @@ class _LocalModelsMixin:
                         else "batch only"
                     )
                     status = f"{status}, {runtime}, {modes}"
-                item = QtWidgets.QListWidgetItem(
-                    f"{self._model_label(model_name)} - {status}"
-                )
+                row_text = f"{self._model_label(model_name)} - {status}"
+                item = QtWidgets.QListWidgetItem(row_text)
+                # The list elides a row wider than its viewport, and the end
+                # of the row is the part that says what the model can do: at
+                # the dialog's default width the two longest rows lose it.
+                item.setToolTip(row_text)
                 item.setData(QtCore.Qt.UserRole, model_name)
                 item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
                 self._apply_compact_list_item_size(self.local_models_list, item)

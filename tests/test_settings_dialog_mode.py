@@ -3350,6 +3350,27 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
     _ = app
 
 
+def test_every_local_row_carries_its_whole_text_as_a_tooltip():
+    """The list elides a row that is wider than its viewport, and two are at
+    the dialog's default width: measured on 2026-09-19 at 860 px, the Granite
+    Speech 5.0 row needs 810 px and the Nemotron row 809 of the 788 px the
+    viewport has, so the end of the row -- the part that says what the model
+    can do -- was cut off with nowhere to read it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._refresh_local_models_list(["small"])
+
+    assert dialog.local_models_list.count() > 0
+    for index in range(dialog.local_models_list.count()):
+        item = dialog.local_models_list.item(index)
+        assert item.toolTip() == item.text()
+    _ = app
+
+
 def test_local_model_refresh_preserves_current_selection_and_scroll():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
