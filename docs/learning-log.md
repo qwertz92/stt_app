@@ -8822,3 +8822,30 @@ per hour of a 48 kHz import (measured at ten minutes: 614 MB).
   in a dialog test that pinned the device tooltip's old "Cohere, Granite and
   Nemotron". The count was read before anything was committed, which is the
   only reason it cost a rerun and not a red `main`.
+
+### MAI-Transcribe-2 for the Azure engine (2026-09-19)
+
+The owner asked whether Microsoft's MAI models should replace the Azure engine.
+They are the same thing: "Azure LLM Speech" is the service, MAI-Transcribe the
+model behind it, and Microsoft offers no MAI API outside Azure. What the app
+lacked was the current model. `mai-transcribe-2` (announced 2026-09-03, 60
+languages, "$0.10 per hour as a limited-time offer until the end of the year"
+against $0.36 for 1.5) is the default now; `mai-transcribe-1`, deprecated by
+Microsoft on 2026-08-20, stays selectable with a label that says so. Settings
+schema 24 moves a file without an Azure endpoint to the new default once.
+
+Test-first: eight tests red before the source change (two language tables, the
+API names, the labels, the Filipino code, the default, the request body, the
+migration), green after it.
+
+**Lessons.**
+- *A provider's model roster is a dated fact.* Sixteen days after the
+  announcement the app's default was one generation behind and its oldest
+  model had been deprecated for a month. A test can pin the lists to the
+  documented table; nothing in the suite can know that a newer model exists,
+  so the roster is read again before a release.
+- *Compare a copied table in both directions.* The 1.5 list had been missing
+  `zh` since it was written; "every offered code is documented" passed, and
+  only "every documented code is offered" found it.
+- *Still not verified live.* No Azure resource was available; the casing of the
+  model name follows every example on Microsoft's page and nothing else.

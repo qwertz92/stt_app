@@ -21,7 +21,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min | $0.258/hour, $0.312/hour |
 | Deepgram | Streaming | `nova-3` | Mono: $0.0077/min, Multi: $0.0092/min | $0.462/hour, $0.552/hour |
 | ElevenLabs | Batch | `scribe_v2` | Scribe v2: $0.22/hour | $0.22/hour |
-| Azure LLM Speech | Batch | `mai-transcribe-1.5`, `mai-transcribe-1` | Fast transcription: $0.36/hour | $0.36/hour |
+| Azure LLM Speech | Batch | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" (2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.00009/second | $0.324/hour |
 
 Notes:
@@ -64,7 +64,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 | Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo) | Useful baseline; values come from Groq model table |
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |
 | ElevenLabs | `scribe_v2` | ElevenLabs positions Scribe v2 as its most accurate STT model and shows a vendor-run realtime comparison where Scribe v2 Realtime outperforms Gemini Flash 2.5, GPT-4o Mini, and Deepgram Nova 3 | Useful directional signal, but still vendor-run and not a published WER table |
-| Azure LLM Speech | `mai-transcribe-1.5`, `mai-transcribe-1` | Microsoft reports MAI-Transcribe-1.5 at **2.4% WER** on Artificial Analysis (ranked #3 there, behind Alibaba Fun-Realtime-ASR and ElevenLabs Scribe v2) and **best-in-class FLEURS** accuracy across 42-43 languages, "leading the accuracy-speed Pareto frontier" | Top-tier accuracy with strong multilingual coverage. Note: it is *not* currently the #1 entry on the Hugging Face Open ASR Leaderboard (which is led by open models such as Granite Speech / Canary-Qwen / Cohere Transcribe). Parameter count is **not disclosed** by Microsoft |
+| Azure LLM Speech | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | Microsoft's announcement of MAI-Transcribe-2 (2026-09-03) says it "ranks second on the Artificial Analysis Word-Error-Rate leaderboard" (an English benchmark). For MAI-Transcribe-1.5 Microsoft reported **2.4% WER** on Artificial Analysis when it announced that model (2026-06-02; ranked #3 then, behind Alibaba Fun-Realtime-ASR and ElevenLabs Scribe v2) and **best-in-class FLEURS** accuracy across 42-43 languages, "leading the accuracy-speed Pareto frontier" | Top-tier accuracy with strong multilingual coverage. Both statements are the vendor's, about a third-party leaderboard whose order moves; this app has not measured either model (no Azure resource was available). Note: it is *not* currently the #1 entry on the Hugging Face Open ASR Leaderboard (which is led by open models such as Granite Speech / Canary-Qwen / Cohere Transcribe). Parameter count is **not disclosed** by Microsoft |
 | Fun-ASR (Alibaba) | `fun-asr-realtime` | The hosted **Fun-Realtime-ASR-preview** currently **tops the Artificial Analysis leaderboard at ~1.7% WER** (ahead of ElevenLabs Scribe v2 and MAI-Transcribe-1.5) | Best published accuracy of the integrated providers, but **no German**; strongest fit is Chinese (incl. dialects) and East/SE-Asian languages. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 
 ---
@@ -119,8 +119,21 @@ Recommendation:
 ### Azure LLM Speech (MAI-Transcribe)
 
 - Currently in **public preview** — no SLA; behavior and pricing can change.
-- Requires a Speech / Foundry resource in a region that supports LLM Speech,
-  plus the per-resource endpoint (not just a key).
+- "Azure LLM Speech" is the service and MAI-Transcribe the model behind it:
+  one engine in this app. Microsoft offers no MAI API outside Azure.
+- MAI-Transcribe-2 (the app's default since 2026-09-19): Microsoft's
+  announcement of 2026-09-03 prices it at "$0.10 per hour as a limited-time
+  offer until the end of the year"; what it costs from 2027 on is not
+  announced. MAI-Transcribe-1.5 stays at $0.36/hour, i.e. 3.6 times the
+  offer price. MAI-Transcribe-1 was deprecated by Microsoft on 2026-08-20.
+- Requires a Speech / Foundry resource in a region that supports LLM Speech
+  with MAI-Transcribe -- six when read on 2026-09-19 (`centralindia`,
+  `eastus`, `northeurope`, `southeastasia`, `westus`, `westus2`), of which
+  `northeurope` (Ireland) is the only one in Europe -- plus the per-resource
+  endpoint (not just a key).
+- **Not verified against the live service**: no Azure resource was available
+  when the integration was written or when MAI-Transcribe-2 was added. The
+  request follows Microsoft's documented contract.
 - The F0 free tier's 5 audio hours/month is a hard monthly cap that cannot be
   raised; beyond that, pay-as-you-go (Standard, S0) billing applies.
 - This is a cloud-only model. There is **no local / ONNX runtime** for it, and
@@ -175,6 +188,8 @@ Recommendation:
 - Azure MAI-Transcribe model: <https://learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe>
 - Azure Speech pricing: <https://azure.microsoft.com/pricing/details/speech/>
 - Alibaba Model Studio pricing: <https://www.alibabacloud.com/help/en/model-studio/model-pricing>
+- MAI-Transcribe-2 announcement (price, leaderboard claim): <https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/>
 - MAI-Transcribe-1.5 announcement: <https://microsoft.ai/news/mai-transcribe-1-5more-accurate-context-aware-and-built-for-production/>
+- Azure Speech regions with LLM Speech: <https://learn.microsoft.com/azure/ai-services/speech-service/regions?tabs=llmspeech>
 - Artificial Analysis speech-to-text leaderboard: <https://artificialanalysis.ai/speech-to-text>
 - Voice Writer STT leaderboard: <https://voicewriter.io/speech-to-text-api-leaderboard/>

@@ -2836,6 +2836,41 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **ElevenLabs batch model selection**: `scribe_v2` is the only supported model.
   ElevenLabs removed `scribe_v1` on 2026-07-09; legacy stored selections migrate
   to `scribe_v2` and the removed identifier must not be sent to the API.
+- **The Azure model roster is Microsoft's table, and an Azure engine that was
+  never configured moves to the current default once (schema 24)**
+  (2026-09-19). "Azure LLM Speech" is the service and MAI-Transcribe the model
+  behind it, and Microsoft offers no MAI API outside Azure, so MAI is not a
+  second provider to add: the engine gained `mai-transcribe-2` (announced
+  2026-09-03, 60 languages) as its default, keeps `mai-transcribe-1.5` (43
+  languages; `zh` had been missing from the app's list) and keeps
+  `mai-transcribe-1` selectable although Microsoft's page marks it "Deprecated
+  on Aug 20, 2026" -- deprecated is not removed, whether the service still
+  answers for it is not documented, and its label says so. Rules:
+  - **Settings store the lower-case id; `AZURE_API_MODEL_NAMES` is what is
+    sent.** Every example on Microsoft's page writes `MAI-Transcribe-2`, and
+    whether the service compares case-insensitively is not documented, so the
+    documented spelling goes out -- for the two older models as well, which
+    were sent lower-case until now.
+  - **The language lists are that page's table in the app's codes**
+    (`AZURE_LOCALE_OVERRIDES`: `no` -> `nb`, `tl` -> `fil`), and a test
+    compares the codes the provider would *send* with the documented set per
+    model, in both directions. That comparison is what found the missing `zh`.
+  - **Schema 24**: every file written before it carries `mai-transcribe-1.5`
+    for everyone, so the stored value is not a choice; without an
+    `azure_endpoint` the engine could never run, so nothing was chosen, and
+    such a file adopts the default once. A file with an endpoint keeps its
+    model, and so does every file saved from now on. It matters because of the
+    price: Microsoft's announcement gives MAI-Transcribe-2 "$0.10 per hour as a
+    limited-time offer until the end of the year" (2026; the price afterwards
+    is not announced) against $0.36/hour for 1.5. An older build reading a
+    schema-24 file does not know the id and falls back to its own default.
+  - **Not verified against the live service.** No Azure resource was available
+    when the integration was written or now; the keyring holds AssemblyAI and
+    Groq keys only. The request follows the documented contract, and
+    `docs/azure-llm-speech.md` says so at its top.
+  - The service also offers diarization, word timestamps, a phrase list and a
+    "clean" transcript style. The app sends none of them, so custom vocabulary
+    stays unwired for Azure.
 - **AssemblyAI Universal-3.5 Pro realtime**: the legacy v2 realtime and earlier
   Universal-Streaming model are retired paths and must not be reintroduced.
   Streaming uses `assemblyai.streaming.v3.StreamingClient` with the
@@ -5196,7 +5231,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
-  secret store. Model select picks `mai-transcribe-1.5` / `mai-transcribe-1`.
+  secret store. Model select picks `mai-transcribe-2` (default),
+  `mai-transcribe-1.5` or the deprecated `mai-transcribe-1`. "Azure LLM
+  Speech" is the service and MAI-Transcribe the model behind it: one engine,
+  not two.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
   driven over the realtime WebSocket in batch mode. It covers 31 languages but
   **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
