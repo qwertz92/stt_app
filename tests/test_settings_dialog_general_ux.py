@@ -81,6 +81,9 @@ def test_vocabulary_hint_explains_parsing_and_model_support(
     assert "batch mode by OpenAI and Groq" in hint
     assert "Nemotron" in hint
     assert "Cohere/Granite ONNX" in hint
+    # Its own runtime, and no biasing input either: left out, the sentence
+    # read as if the one local model it did not name might use the terms.
+    assert "Granite Speech 5.0" in hint
     assert "ignore it" in hint
     assert "Splunk SOAR" in dialog.custom_vocabulary_edit.placeholderText()
 

@@ -3433,10 +3433,12 @@ def test_benchmark_controls_explain_their_options():
     )
 
     assert "fastest" in dialog.benchmark_compute_type_combo.toolTip()
-    # Nemotron is measured on these targets too, so the tooltip must name it.
-    assert (
-        "Cohere, Granite and Nemotron" in dialog.benchmark_webgpu_device_combo.toolTip()
-    )
+    # Nemotron is measured on these targets too, so the tooltip must name it,
+    # and it names the Granite generations that can use a GPU: "Granite" alone
+    # would take in Granite Speech 5.0, which always runs on the CPU.
+    device_tooltip = dialog.benchmark_webgpu_device_combo.toolTip()
+    assert "Cohere, Granite 4.0/4.1 and Nemotron" in device_tooltip
+    assert "Granite Speech 5.0" not in device_tooltip
     assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
     assert "Beam size controls decoding breadth" in dialog.benchmark_beam_size_spin.toolTip()
     assert "fixed language removes one source of model guesswork" in dialog.benchmark_language_combo.toolTip()

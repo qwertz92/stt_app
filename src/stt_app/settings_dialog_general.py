@@ -215,8 +215,8 @@ class _GeneralTabMixin:
             "or new lines. Spaces inside a phrase are kept (for example, "
             "Splunk SOAR). Supported in both modes by faster-whisper, "
             "AssemblyAI, and Deepgram, and in batch mode by OpenAI and Groq. "
-            "Parakeet, Canary, Nemotron, Cohere/Granite ONNX, ElevenLabs, "
-            "Azure, and Fun-ASR ignore it."
+            "Parakeet, Canary, Nemotron, Cohere/Granite ONNX, Granite Speech "
+            "5.0, ElevenLabs, Azure, and Fun-ASR ignore it."
         )
         self.vocabulary_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.vocabulary_hint_label)

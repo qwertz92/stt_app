@@ -226,3 +226,18 @@ def test_public_download_path_keeps_the_repo_error_for_mirrored_models(
         local_webgpu_asr.download_webgpu_model_snapshot("granite-4.0-1b-speech")
 
     assert "no ModelScope mirror" not in str(excinfo.value)
+
+
+def test_the_download_script_names_every_model_without_a_mirror():
+    """Its module docstring is the `--help` epilog a user on a blocked network
+    reads, and it still said "Three models" and listed three after a fourth had
+    joined the set. `docs/models.md` has a table of its own."""
+    import ast
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[1] / "scripts" / "download_model.py"
+    docstring = ast.get_docstring(ast.parse(script.read_text(encoding="utf-8")))
+
+    assert docstring is not None
+    for model_name in sorted(MODELS_WITHOUT_MODELSCOPE_MIRROR):
+        assert model_name in docstring, model_name
