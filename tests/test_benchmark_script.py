@@ -797,7 +797,45 @@ def test_an_english_only_model_is_not_run_in_another_language(
     assert cases[-1].error is None
 
 
-@pytest.mark.parametrize("language", [None, "auto", "en", "EN"])
+@pytest.mark.parametrize(
+    ("given", "received"),
+    [(None, None), ("", None), ("  ", None), ("\t", None), (" de ", "de"), ("en", "en")],
+)
+def test_a_blank_language_is_no_language(tmp_path, monkeypatch, given, received):
+    """`--language " "` is a truthy string, so `language or default` kept it:
+    the English-only guard refused the model for "the language '  '", and
+    Canary's `not language` check let it through to a runtime that maps an
+    unknown code onto a trained one -- the translation that check exists to
+    prevent. The runner reads the language once, and blank is none."""
+    seen: list[object] = []
+
+    def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
+        seen.append(kwargs.get("language"))
+        return local_benchmark.BenchmarkCase(
+            model=str(kwargs.get("model_name")),
+            device="cpu",
+            compute_type="stub",
+            download_seconds=0.0,
+            load_seconds=0.0,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_case", fake_case)
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+
+    local_benchmark.run_benchmark_cases(
+        audio_path=audio,
+        model_names=["small"],
+        runs=1,
+        device="cpu",
+        language=given,
+    )
+
+    assert seen == [received]
+
+
+@pytest.mark.parametrize("language", [None, "auto", "en", "EN", "  ", " en "])
 def test_an_english_only_model_runs_with_auto_and_english(
     tmp_path, monkeypatch, language
 ):

@@ -759,6 +759,12 @@ def run_benchmark_cases(
     # importable without touching the transcriber package at all.
     from .transcriber.base import TranscriptionCanceled
 
+    # Read once, and blank is no language. The CLI's `--language " "` is a
+    # truthy string: every `language or default` below kept it, the
+    # English-only guard refused its model for "the language '  '", and
+    # Canary's `not language` check let it through to a runtime that maps an
+    # unknown code onto a trained one.
+    language = (str(language).strip() or None) if language is not None else None
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
     planned = planned_benchmark_cases(
@@ -779,7 +785,7 @@ def run_benchmark_cases(
         try:
             if (
                 model_name in LOCAL_ENGLISH_ONLY_MODELS
-                and str(language or "auto").strip().lower() not in {"auto", "en"}
+                and (language or "auto").lower() not in {"auto", "en"}
             ):
                 # The Run Benchmark window refuses this before the run; the
                 # CLI and every other caller arrive here. The Granite CTC
