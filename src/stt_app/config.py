@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -997,7 +997,75 @@ DEEPGRAM_NOVA_2_LANGUAGE_MODES = (
 )
 # Azure LLM Speech (MAI-Transcribe). "auto" uses the model's default
 # multilingual mode; selecting a language sends a `locales` hint.
-# MAI-Transcribe-1.5 covers 42 languages; MAI-Transcribe-1 a smaller subset.
+# Copied from the language table on Microsoft's MAI-Transcribe page (read
+# 2026-09-19, page updated 2026-09-10): 60 languages for MAI-Transcribe-2, 43
+# for MAI-Transcribe-1.5. The page no longer lists MAI-Transcribe-1, which it
+# marks as deprecated, so that list is the one this app shipped with. The
+# codes are the app's: Azure's `nb` and `fil` are `no` and `tl` here
+# (`AZURE_LOCALE_OVERRIDES`).
+AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES = (
+    "auto",
+    "de",
+    "en",
+    "af",
+    "ar",
+    "as",
+    "az",
+    "bg",
+    "bn",
+    "bs",
+    "ca",
+    "cs",
+    "da",
+    "el",
+    "es",
+    "et",
+    "fa",
+    "fi",
+    "fr",
+    "gl",
+    "gu",
+    "he",
+    "hi",
+    "hu",
+    "hy",
+    "id",
+    "is",
+    "it",
+    "ja",
+    "kk",
+    "kn",
+    "ko",
+    "lt",
+    "lv",
+    "mk",
+    "ml",
+    "mr",
+    "ms",
+    "ne",
+    "nl",
+    "no",
+    "or",
+    "pa",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "sw",
+    "ta",
+    "te",
+    "th",
+    "tl",
+    "tr",
+    "uk",
+    "ur",
+    "vi",
+    "yue",
+    "zh",
+)
 AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES = (
     "auto",
     "de",
@@ -1042,6 +1110,7 @@ AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES = (
     "tr",
     "uk",
     "vi",
+    "zh",
 )
 AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES = (
     "auto",
@@ -1070,9 +1139,10 @@ AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES = (
     "tr",
     "vi",
 )
-AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES
+# The engine-level list is the default model's.
+AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES
 # App language code -> Azure locale code, where they differ.
-AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb"}
+AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb", "tl": "fil"}
 # Alibaba Fun-ASR (DashScope Model Studio) covers 31 languages. Notably it does
 # NOT document German support; its strength is Chinese (incl. dialects) and
 # East/Southeast-Asian languages. "auto" uses multilingual mode; a specific
@@ -1158,6 +1228,7 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
+    ("azure", "mai-transcribe-2"): AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES,
     ("azure", "mai-transcribe-1.5"): AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
     ("azure", "mai-transcribe-1"): AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
@@ -1265,11 +1336,24 @@ DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
 
 # Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
 # These are remote, cloud-only models from the Microsoft AI (MAI) team.
+# `mai-transcribe-1` stays selectable although Microsoft marked it
+# "Deprecated on Aug 20, 2026": deprecated is not removed, and whether the
+# service still answers for it is not documented. Its label says so.
 AZURE_SPEECH_MODELS = (
+    "mai-transcribe-2",
     "mai-transcribe-1.5",
     "mai-transcribe-1",
 )
-DEFAULT_AZURE_SPEECH_MODEL = "mai-transcribe-1.5"
+DEFAULT_AZURE_SPEECH_MODEL = "mai-transcribe-2"
+# What `enhancedMode.model` is sent as. Settings store the lower-case id;
+# every example on Microsoft's page writes the name this way, and whether the
+# service compares case-insensitively is not documented, so the documented
+# spelling is the one that is sent.
+AZURE_API_MODEL_NAMES: dict[str, str] = {
+    "mai-transcribe-2": "MAI-Transcribe-2",
+    "mai-transcribe-1.5": "MAI-Transcribe-1.5",
+    "mai-transcribe-1": "MAI-Transcribe-1",
+}
 # REST API version for the fast-transcription `:transcribe` endpoint.
 AZURE_SPEECH_API_VERSION = "2025-10-15"
 # Per-resource endpoint, e.g. "https://<resource>.cognitiveservices.azure.com".

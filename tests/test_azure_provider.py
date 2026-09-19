@@ -138,6 +138,93 @@ class TestAzureInit:
         )
         assert t._azure_locale() == "nb"
 
+    def test_filipino_is_sent_under_azures_code(self):
+        """The app calls it `tl`; Microsoft's table lists `fil`."""
+        t = AzureLlmSpeechTranscriber(
+            api_key="key",
+            endpoint=_ENDPOINT,
+            language_mode="tl",
+            model="mai-transcribe-2",
+        )
+        assert t._language_mode == "tl"
+        assert t._azure_locale() == "fil"
+
+    def test_the_default_model_is_the_current_generation(self):
+        assert DEFAULT_AZURE_SPEECH_MODEL == "mai-transcribe-2"
+
+
+# Microsoft's language table for MAI-Transcribe, read on 2026-09-19 from
+# learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe (page
+# updated 2026-09-10), in Azure's own codes.
+_DOCUMENTED_MAI_2 = frozenset(
+    {
+        "af", "ar", "as", "az", "bg", "bn", "bs", "ca", "cs", "da", "de", "el",
+        "en", "es", "et", "fa", "fi", "fil", "fr", "gl", "gu", "he", "hi", "hu",
+        "hy", "id", "is", "it", "ja", "kk", "kn", "ko", "lt", "lv", "mk", "ml",
+        "mr", "ms", "nb", "ne", "nl", "or", "pa", "pl", "pt", "ro", "ru", "sk",
+        "sl", "sv", "sw", "ta", "te", "th", "tr", "uk", "ur", "vi", "yue", "zh",
+    }
+)
+_DOCUMENTED_MAI_1_5 = frozenset(
+    {
+        "ar", "as", "bg", "bn", "ca", "cs", "da", "de", "el", "en", "es", "et",
+        "fi", "fr", "gu", "hi", "hu", "id", "it", "ja", "kn", "ko", "lt", "ml",
+        "mr", "nb", "nl", "or", "pa", "pl", "pt", "ro", "ru", "sk", "sl", "sv",
+        "ta", "te", "th", "tr", "uk", "vi", "zh",
+    }
+)
+
+
+class TestAzureModelRoster:
+    @pytest.mark.parametrize(
+        ("model", "documented"),
+        [
+            ("mai-transcribe-2", _DOCUMENTED_MAI_2),
+            ("mai-transcribe-1.5", _DOCUMENTED_MAI_1_5),
+        ],
+    )
+    def test_the_language_list_is_microsofts_table(self, model, documented):
+        """Every offered language, sent the way this provider sends it, is a
+        code Microsoft lists for that model -- and none it lists is missing.
+        `zh` was missing from the 1.5 list."""
+        from stt_app.config import (
+            AZURE_LOCALE_OVERRIDES,
+            LANGUAGE_MODE_LABELS,
+            language_modes_for_selection,
+        )
+
+        modes = language_modes_for_selection("azure", model)
+
+        assert modes[0] == "auto"
+        assert len(set(modes)) == len(modes)
+        assert all(mode in LANGUAGE_MODE_LABELS for mode in modes)
+        sent = {AZURE_LOCALE_OVERRIDES.get(mode, mode) for mode in modes[1:]}
+        assert sent == documented
+
+    def test_the_counts_are_the_ones_the_labels_state(self):
+        assert len(_DOCUMENTED_MAI_2) == 60
+        assert len(_DOCUMENTED_MAI_1_5) == 43
+
+    def test_every_selectable_model_has_a_documented_api_name(self):
+        from stt_app.config import AZURE_API_MODEL_NAMES, AZURE_SPEECH_MODELS
+
+        assert set(AZURE_API_MODEL_NAMES) == set(AZURE_SPEECH_MODELS)
+        for model, api_name in AZURE_API_MODEL_NAMES.items():
+            assert api_name.lower() == model
+            assert api_name.startswith("MAI-Transcribe-")
+
+    def test_every_selectable_model_has_a_label_and_the_deprecated_one_says_so(
+        self,
+    ):
+        from stt_app.config import AZURE_SPEECH_MODELS
+        from stt_app.settings_dialog_helpers import _REMOTE_MODEL_LABELS
+
+        for model in AZURE_SPEECH_MODELS:
+            assert model in _REMOTE_MODEL_LABELS
+        assert "deprecated" in _REMOTE_MODEL_LABELS["mai-transcribe-1"]
+        assert "60 languages" in _REMOTE_MODEL_LABELS["mai-transcribe-2"]
+        assert "43 languages" in _REMOTE_MODEL_LABELS["mai-transcribe-1.5"]
+
 
 class TestAzureBatchTranscription:
     @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
@@ -165,7 +252,10 @@ class TestAzureBatchTranscription:
         body = req.data.decode("utf-8", errors="ignore")
         assert 'name="definition"' in body
         assert "enhancedMode" in body
-        assert "mai-transcribe-1.5" in body
+        # The documented spelling, not the id the settings store: every
+        # example on Microsoft's page writes it this way.
+        assert '"model": "MAI-Transcribe-1.5"' in body
+        assert "mai-transcribe-1.5" not in body
         assert "locales" in body
         assert '"de"' in body
         assert 'name="audio"' in body

@@ -5,8 +5,9 @@ enhanced mode enabled (`:transcribe` endpoint). This is a remote, cloud-only
 service from Microsoft Foundry; there is no local/ONNX runtime for it.
 
 The enhanced mode is backed by the Microsoft AI (MAI) team's MAI-Transcribe
-models (`mai-transcribe-1.5`, `mai-transcribe-1`), which combine a speech
-model with an LLM for high accuracy and multilingual support.
+models (`mai-transcribe-2`, `mai-transcribe-1.5` and the deprecated
+`mai-transcribe-1`), which combine a speech model with an LLM for high
+accuracy and multilingual support.
 
 Unlike the other remote providers, Azure needs *two* pieces of configuration:
 an API key (the Speech resource key) and a per-resource endpoint, for example
@@ -28,6 +29,7 @@ from pathlib import Path
 from ..config import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
+    AZURE_API_MODEL_NAMES,
     AZURE_LOCALE_OVERRIDES,
     AZURE_SPEECH_API_VERSION,
     AZURE_SPEECH_MODELS,
@@ -161,7 +163,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         ``"auto"`` for automatic multilingual detection, or a language code
         like ``"de"`` / ``"en"`` to send a ``locales`` hint.
     model : str
-        MAI-Transcribe model name. Defaults to ``mai-transcribe-1.5``.
+        MAI-Transcribe model id. Defaults to ``mai-transcribe-2``.
     """
 
     def __init__(
@@ -205,7 +207,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         definition: dict = {
             "enhancedMode": {
                 "enabled": True,
-                "model": self._model,
+                "model": AZURE_API_MODEL_NAMES[self._model],
             }
         }
         if self._language_mode != DEFAULT_LANGUAGE_MODE:

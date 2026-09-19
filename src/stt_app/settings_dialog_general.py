@@ -558,7 +558,7 @@ class _GeneralTabMixin:
         elif provider == "azure":
             note = (
                 "Cloud, batch-only. Configure the endpoint and key on the Remote "
-                "tab; MAI-Transcribe 1.5 supports the most languages."
+                "tab; MAI-Transcribe 2 supports the most languages."
             )
         elif provider == "funasr":
             note = (

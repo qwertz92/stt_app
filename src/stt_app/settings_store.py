@@ -113,6 +113,7 @@ logger = logging.getLogger(__name__)
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
 _SILENCE_GATE_DEFAULT_SCHEMA_VERSION = 22
+_AZURE_MODEL_DEFAULT_SCHEMA_VERSION = 24
 _LEGACY_DEFAULT_HISTORY_MAX_ITEMS = 20
 
 DEFAULTS = {
@@ -411,6 +412,16 @@ class AppSettings:
         azure_endpoint = str(
             merged.get("azure_endpoint", DEFAULT_AZURE_ENDPOINT)
         ).strip()
+        if (
+            raw_schema_version < _AZURE_MODEL_DEFAULT_SCHEMA_VERSION
+            and not azure_endpoint
+        ):
+            # Every file written before MAI-Transcribe-2 existed carries the
+            # previous default for everyone, so the stored model is not a
+            # choice -- and without an endpoint the engine could never run,
+            # so nothing was chosen. Adopt the current default once; a file
+            # with an endpoint, or one saved from now on, keeps its model.
+            azure_speech_model = DEFAULT_AZURE_SPEECH_MODEL
         funasr_model = str(merged.get("funasr_model", DEFAULT_FUNASR_MODEL))
         if funasr_model not in FUNASR_MODELS:
             funasr_model = DEFAULT_FUNASR_MODEL

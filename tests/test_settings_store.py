@@ -1038,6 +1038,62 @@ def test_deliberate_silence_gate_off_is_kept(tmp_path, monkeypatch):
     assert settings.silence_gate_enabled is False
 
 
+def _load_settings_file(tmp_path, monkeypatch, payload):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = tmp_path / "stt_app" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return SettingsStore(path).load()
+
+
+def test_an_azure_engine_that_was_never_configured_adopts_the_current_model(
+    tmp_path, monkeypatch
+):
+    """Every file written before MAI-Transcribe-2 existed carries the
+    previous default, so the stored value is not a choice -- and without an
+    endpoint the engine could never run, so nothing was chosen at all. Left
+    alone, setting Azure up later would silently use the older model at
+    3.6 times the price."""
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {"schema_version": 23, "azure_speech_model": "mai-transcribe-1.5"},
+    )
+
+    assert settings.azure_speech_model == "mai-transcribe-2"
+
+
+def test_a_configured_azure_engine_keeps_its_model(tmp_path, monkeypatch):
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {
+            "schema_version": 23,
+            "azure_speech_model": "mai-transcribe-1.5",
+            "azure_endpoint": "https://res.cognitiveservices.azure.com",
+        },
+    )
+
+    assert settings.azure_speech_model == "mai-transcribe-1.5"
+
+
+def test_an_azure_model_chosen_at_the_current_schema_is_kept(
+    tmp_path, monkeypatch
+):
+    """The adoption happens once: a model picked before the endpoint is
+    entered must not flip back on the next load."""
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "azure_speech_model": "mai-transcribe-1.5",
+        },
+    )
+
+    assert settings.azure_speech_model == "mai-transcribe-1.5"
+
+
 def test_local_onnx_device_round_trips_and_rejects_unknown_values(tmp_path):
     """An unknown or hand-edited value must fall back to auto rather than fail
     the load, and a valid one must survive save/load."""
