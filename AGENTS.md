@@ -51,6 +51,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
 - onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary, CPU only
+- numpy + ONNX Runtime (CPU provider) + `tokenizers` for IBM Granite Speech 5.0
+  470M TurboCTC (INT8, English only, batch only)
 - Remote providers: AssemblyAI (SDK batch + Universal-3.5 Pro realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
@@ -72,7 +74,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
-| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate` |
+| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |
+| `transcriber/local_granite_ctc.py` | Batch-only IBM Granite Speech 5.0 470M TurboCTC: numpy log-mel features, the INT8 CTC graph on ONNX Runtime's CPU provider, greedy CTC and `tokenizers` decode; English only, passes of at most 180 s, mid-run cancel via `RunOptions.terminate` |
+| `transcriber/_pcm_audio.py` | Linear resampling shared by the Nemotron and Granite CTC runtimes |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
@@ -3162,6 +3166,115 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `collect_all('onnx_asr')`, not just a hidden import: the mel/resampler graphs
   are package *data* loaded via `importlib.resources`, and without them every
   model fails while constructing its preprocessor.
+- **Granite Speech 5.0 470M TurboCTC is one INT8 graph on the CPU, in pure
+  Python (`transcriber/local_granite_ctc.py`, 2026-09-19)**: a fifth local
+  runtime (`LOCAL_MODEL_RUNTIME` value `granite-ctc`) and the only one that
+  owns its `InferenceSession`: the graph is a single CTC encoder
+  (`input_features` float32 `[1, frames, 320]` -> `logits`
+  `[1, frames // 4, 16384]`), so the module supplies what a runtime library
+  would -- log-mel features in numpy, a greedy CTC decode (blank id 0) and the
+  `tokenizers` byte-level BPE decode. numpy, `onnxruntime` (CPU build) and
+  `tokenizers` were all installed already; no dependency, no Node.js, no
+  torch. The weights are the user's own public export,
+  `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (revision `e6e3b4d`), and
+  the layout fetches nine files, 552,442,697 bytes, of which
+  `onnx/model_int8.onnx` is 551,294,349 -- verified on 2026-09-19 with
+  `snapshot_download(dry_run=True)` and the layout's real allow-patterns. The
+  same repository holds an fp32 (1.89 GB) and an fp16 (947 MB) graph, and
+  `onnx/*.onnx` would have fetched all three.
+  - **Why one variant and no GPU path.** The export branch measured all three
+    on one 29.4 s clip (`reports/benchmark_*.json` in that repository): CPU,
+    12 threads, INT8 0.28 s, FP32 0.97 s, FP16 8.50 s; DirectML on an Arc
+    A750 through onnxruntime-node 1.24.3, FP32 0.107 s, INT8 0.137 s, FP16
+    0.179 s. FP16 is unusable on a CPU and the slowest of the three on that
+    GPU, and the whole gain of any GPU variant over INT8 on the CPU is
+    0.10-0.18 s per half-minute recording. A GPU path costs a second download
+    of 0.95-1.89 GB, a raw-graph Node runtime (the Python ONNX Runtime is the
+    CPU build and `onnxruntime-directml` must never be installed; the
+    raw-graph Node path was removed on 2026-08-26) and a second feature
+    extractor in JavaScript. Not built; it is the user's decision, not a
+    default.
+  - **The feature extractor is a numpy port of
+    `GraniteSpeech5FeatureExtractor`**, which lives in `transformers` and
+    pulls torch and torchaudio: 16 kHz, `n_fft` 512 with a periodic 400-sample
+    Hann window zero-padded to the centre, hop 160, `center=True` with reflect
+    padding, power 2, 80 HTK mel bins without normalisation,
+    `log10(max(mel, 1e-10))`, a floor 8.0 below the clip's maximum, `/ 4 + 1`,
+    deltas of window 3 (a centred difference with replicated edges), then two
+    frames stacked to 320 values; the waveform is right-padded so an odd mel
+    frame count fills its pair. `tests/data/granite_ctc_reference.npz` is what
+    proves the port: a 7,840-sample int16 waveform (49 mel frames, so the
+    padding branch runs, with a stretch of digital silence, so the relative
+    floor matters) and the 25 x 320 features the real processor produced from
+    it (transformers 5.16.0, torch 2.11.0, torchaudio 2.11.0, in the export
+    branch's WSL environment). The test bounds the difference at 1e-4;
+    measured 5.1e-6. On the branch's 20 real clips the port agreed with the
+    real processor within 2.4e-5 and produced the identical token stream
+    20/20; against the PyTorch model's argmax 19/20, and that one difference
+    ("adam paintings" for "a paintings") is the INT8 graph's own, present in
+    the branch's INT8 report.
+  - **`preprocessor_config.json` is compared with the hard-coded parameters
+    at load**, and it is a required file of the layout: a re-export with
+    another hop or mel count would otherwise be transcribed into garbage
+    without one error.
+  - **A recording runs in passes of at most 180 s.** One pass allocates
+    activations for the whole recording: peak working set measured 1.05 GB
+    after the load, 1.42 GB for 188 s and 2.39 GB for 563 s. Past
+    `_MAX_PASS_SECONDS` the waveform is cut at the quietest 20 ms frame of the
+    last 15 s of each window; the windows share no audio and concatenate back
+    to the input exactly. Measured on the real model: 563 s in 8.1 s, the same
+    word count as the per-clip transcripts and a word agreement of
+    0.9956-0.9978 per 188 s tile.
+  - **Lower case without punctuation is the model, not a defect**: no merged
+    token of its 16,384-entry vocabulary holds an upper-case letter (only the
+    byte-level alphabet's 26 single letters do), and the 452 words of the 20
+    reference clips consist of `a-z`, spaces and one digit -- "mister quilter
+    is the apostle of the middle classes" -- on the PyTorch model's own argmax
+    as well. The picker label, the runtime note and `docs/models.md` say so;
+    do not post-process it.
+  - **English only, and the graph has no language input**:
+    `LOCAL_ENGLISH_ONLY_MODELS` gives `("auto", "en")` and both mean the same
+    request. Adding a second English-only model surfaced three sentences that
+    named `distil-large-v3.5` as *the* English-only model (the General tab's
+    language note, the benchmark's German refusal, `download_model.py
+    --list`'s substring test on "distil"); all three read the set now.
+  - **Cancel** reuses `_RunAbortHandle` and `_CancelWatchdog` from
+    `local_onnx_asr` -- no session wrapping is needed, because this module
+    passes its own `RunOptions` -- and checks before the load, between passes
+    and mid-run. Measured on the real model: a cancel 0.4 s into the 563 s
+    recording returned after 0.46 s and the next transcription was correct.
+  - **Shared rather than copied**: `resolve_or_download_onnx_model` (module
+    level in `local_onnx_asr`, imports still inside the function so the
+    existing monkeypatch targets resolve), `_read_wav_float32` -- which now
+    refuses a header rate of 0, since `wave` validates the channel count and
+    the sample width and not the rate, and this runtime's resampler divided by
+    it -- and `_pcm_audio.resample_linear`, moved out of Nemotron.
+  - **It is not device-aware**: absent from `DEVICE_AWARE_LOCAL_MODELS`, so
+    the ONNX Device row is disabled with a note of its own,
+    `benchmark_device_targets` yields the one `auto` case, a stored
+    `onnx_auto_preferred_devices` entry never reaches the constructor, and the
+    identity reads the same four fields as onnx-asr.
+  - **The Local tab's row suffix is one rule now**
+    (`LOCAL_ONNX_MODEL_RUNTIME_LABELS` plus `supports_streaming`): a branch
+    per runtime family had left the two onnx-asr rows without "batch only".
+  - **It is the fastest local model on English, and its text is the price.**
+    The app's own benchmark runner, one process, CPU, the branch's 29.4 s
+    clip, three runs after a warm-up (2026-09-19): mean RTF 0.0135, against
+    0.0245 for `tiny`, 0.0501 for Parakeet and 0.1593 for `small`. Besides the
+    casing and the punctuation there is no apostrophe either, so a possessive
+    comes out as "is" ("nor is mister quilter is manner less interesting").
+    `DEFAULT_MODEL_SIZE` stays Parakeet: one language against 25, and text a
+    dictation can be pasted from.
+  Verified with the real model in a sandboxed Model Dir whose seven files are
+  byte-identical to the hosted ones (git blob ids and LFS SHA-256): 20/20
+  clips equal to the validated prototype, load 1.7 s, RTF 0.016 over 187.7 s
+  on the Ryzen 5 7600X (Windows, ONNX Runtime 1.28.0), WAV path, WAV bytes and
+  raw PCM identical, and a 20-mutant negative control with no survivor. A
+  PyInstaller 6.22.0 bundle built from `0d1c5b2` loads and transcribes with it
+  (`scripts/release_check_frozen_bundle.py --model-dir`, which now prefers
+  this model as the fifth runtime: load 1.6 s, RTF 0.016, the prototype's
+  text). **Not verified**: the real 552 MB transfer through the app (only its
+  plan), and a recording that is not English.
 - **Local ONNX execution device (`local_onnx_device`, default `auto`, schema
   23)**: the Benchmark tab could always pin a device, but daily dictation
   always ran on `auto` because `factory.py` never passed one. The General tab's
@@ -3960,7 +4073,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     would make the test pass without testing anything, which happened once with
     `keep_onnx_model_loaded`).
   - **The identity is built per engine, and for `local` per runtime.**
-    `local` is four runtimes with four different constructor signatures, so
+    `local` is five runtimes with four different constructor signatures
+    (onnx-asr and the Granite CTC graph take the same four arguments), so
     one flat list of every local field is wrong in the other direction: it made
     Parakeet reload its 670 MB model when the user typed a custom-vocabulary
     term that onnx-asr never receives, and a Nemotron reload for
@@ -4238,7 +4352,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   block and finds them, while `_LAZY_ATTRIBUTES` is strings it cannot read.
   Verified on PyInstaller 6.22: a graph rooted at
   `from stt_app.transcriber import create_transcriber` contains `factory`, all
-  seven providers and all four local runtimes. The typed/lazy agreement test
+  seven providers and all four local runtimes; the fifth, `local_granite_ctc`,
+  was confirmed on 2026-09-19 by running a bundle built with the same
+  PyInstaller through the frozen-bundle check. The typed/lazy agreement test
   is what keeps the block from being deleted or renamed.
   Note that the package no longer binds its submodules as attributes until
   something resolves a lazy name, so `stt_app.transcriber.base` raises
@@ -5318,6 +5434,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   parameters as if they were speech statistics. Separating a knock from a
   short word needs spectral features (a real VAD); until then, do not move
   the threshold on synthetic evidence alone.
+- **A WAV that is not 16 kHz is resampled by linear interpolation** in the
+  Nemotron and Granite CTC runtimes (`_pcm_audio.resample_linear`), which has
+  no anti-aliasing filter: content above 8 kHz in a 44.1 or 48 kHz file folds
+  back into the band the model hears. The app's own recordings are 16 kHz, so
+  only an imported file or a benchmark sample reaches it; a proper resampler
+  means a low-pass filter before the decimation, which neither runtime has.
+  Recorded.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - **Clipboard restore is not lossless.** Every HGLOBAL format is captured
   and put back (F12 of the 2026-09-12 review); what still is not: the

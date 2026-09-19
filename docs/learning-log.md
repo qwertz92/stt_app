@@ -8666,3 +8666,86 @@ follow-up with no P1 or P2 open.
 that protects "what happens today". The first version's tests all started
 from an empty map, where the two are the same thing; the defect needed a
 second run, and it took a reviewer thinking in sequences to ask for one.
+
+## After v0.9.0: Granite Speech 5.0 470M TurboCTC as a fifth local runtime (2026-09-19)
+
+**What was asked.** The user had exported IBM's Granite Speech 5.0 470M
+TurboCTC to ONNX in three precisions on a side branch
+(`feat/granite-speech-5-onnx-export`) and remembered "INT8 is faster on the
+CPU, FP16 on the GPU"; the request was to ship both variants and pick per
+device.
+
+**What the branch's own reports say** (`reports/benchmark_*.json`, one 29.4 s
+clip): CPU with 12 threads, INT8 0.28 s, FP32 0.97 s, FP16 8.50 s; DirectML on
+an Arc A750, FP32 0.107 s, INT8 0.137 s, FP16 0.179 s. The recollection is
+half right: INT8 is the CPU variant by a factor of three, but FP16 is the
+*slowest* of the three on that GPU and thirty times slower than INT8 on a CPU,
+and the best any GPU variant buys over INT8 on the CPU is 0.18 s per
+half-minute recording. So one variant shipped -- INT8 on the CPU -- and the
+GPU variant went to the user as a decision with its cost named, instead of
+being built on a premise the measurements do not carry.
+
+**A premise corrected on the way.** The work was first planned as blocked on
+"the exports have to be hosted somewhere". They already were: the branch had
+published `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (last updated
+2026-09-04). One API call settled what a planning paragraph had assumed.
+
+**How the port was proven.** The feature extractor is a numpy reimplementation
+of a `transformers` class the app cannot import (torch, torchaudio). A
+prototype was checked first against the real processor in the branch's WSL
+environment: features within 2.4e-5 on 20 clips, token streams identical
+20/20. The committed fixture comes from the real processor, not from the port
+(7,840 samples chosen for an odd mel frame count and a silent stretch, the two
+branches a smooth clip never enters). The one clip where the ONNX INT8 text
+differs from the PyTorch argmax differs in the branch's own INT8 report too,
+so it is quantisation, not the port.
+
+**Findings of the lead's verification pass over the implementation** (an Opus
+subagent wrote it against a written specification; none of these is visible in
+a green suite):
+- A WAV header declaring a sample rate of 0 raised `ZeroDivisionError` out of
+  `transcribe_batch`: `wave` validates channels and sample width, not the
+  rate, and this runtime resamples. Fixed in the shared reader, which the
+  onnx-asr runtime uses too (there the 0 reached the model as `sample_rate=0`).
+- The layout test's "repository listing" carried two invented file names
+  (`conversion/convert.py`, `reports/parity.json`) under a comment saying it
+  had been listed that day. Replaced by the API's real 27 entries.
+- `docs/models.md` still said "the three listed below" above a table of four,
+  gave one file in GiB beside another in MB, and told the reader how to clone
+  only the INT8 graph without saying where the clone has to go.
+- The Local tab gained a fourth per-family branch for its row suffix while the
+  two onnx-asr rows still said nothing; one rule over the two shared tables
+  replaced all of them.
+- `config.py` still called Parakeet "the fastest local model by a wide margin"
+  with single-run figures (0.042 against 0.152) -- the wording AGENTS.md had
+  retired: `tiny` is quicker on that very recording, and this model measured
+  RTF 0.016 on its English clips.
+
+**Verification with real means.** The app's own transcriber against the real
+graph in a sandboxed Model Dir (files byte-identical to the hosted ones): 20/20
+clips equal to the validated prototype, 563 s in 8.1 s across several passes,
+a cancel honoured after 0.46 s, WAV path / WAV bytes / raw PCM identical. The
+download was checked as a plan only -- `snapshot_download(dry_run=True)` with
+the layout's allow-patterns lists nine files and 552,442,697 bytes -- because
+fetching half a gigabyte needs the user's permission. A 20-mutant negative
+control over the new behaviours left no survivor (one mutant had to be re-run
+by hand: its anchor matched twice, which the harness reported instead of
+mutating the wrong line). A PyInstaller 6.22.0 bundle built from `0d1c5b2`
+into a scratch folder was run through `release_check_frozen_bundle.py`, which
+gained `--model-dir` for exactly this: the frozen worker found the model,
+loaded it in 1.6 s and returned the prototype's text at RTF 0.016. And the
+app's own benchmark runner measured it against its neighbours on the branch's
+29.4 s clip, CPU, three runs after a warm-up: 0.0135, against 0.0245 for
+`tiny`, 0.0501 for Parakeet and 0.1593 for `small` -- the fastest local model
+on English, with text that has no capitals, no punctuation and no apostrophes
+("mister quilter is manner"), which is why it did not become the default.
+
+**Lessons.**
+- *Check whether the blocker exists before planning around it.* "Needs
+  hosting" cost a paragraph of plan; the listing call cost a second.
+- *A remembered benchmark result is a hypothesis.* The reports were in the
+  repository; reading them changed the design from two variants to one.
+- *A port is proven by the original's output, generated by the original.* A
+  fixture produced by the port itself would have pinned the port's mistakes.
+- *"Listed on <date>" is a claim.* A test fixture that names files has to come
+  from the listing, not from what such a repository usually contains.

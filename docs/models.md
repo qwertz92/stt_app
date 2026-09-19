@@ -19,8 +19,13 @@ The app has five local runtime families:
   that did. Batch mode only.
 - **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
   that runs on the CPU provider the app already ships, with numpy features and
-  the `tokenizers` package; no Node.js and no GPU. English only, batch only,
-  and its output is lower case without punctuation.
+  the `tokenizers` package; no Node.js and no GPU. English only, batch only.
+  It is the fastest local model here on English: on one 29.4 s English
+  recording (Ryzen 5 7600X, CPU, mean of three runs, measured 2026-09-19) RTF
+  0.014, against 0.025 for Whisper `tiny`, 0.050 for Parakeet and 0.159 for
+  `small`. The price is the text: lower case, no punctuation and no
+  apostrophes, so "Mr. Quilter's manner" comes out as "mister quilter is
+  manner". That is how the model was trained, not something the app strips.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -54,16 +59,18 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
-| `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Smallest local model that is not a Whisper size; writes lower case without punctuation, batch mode only |
+| `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Fastest local model on English (RTF 0.014 on CPU) and the smallest that is not a Whisper size; writes lower case without punctuation or apostrophes, batch mode only |
 
 ### Which model should I use?
 
 Accuracy and speed no longer point at the same model. For **accuracy** with a GPU
 and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
 needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
-GPU model in the same run on its GPU. Whisper `tiny` is quicker still (0.033)
-and is the only local model that is, but it is also the weakest of the models
-that transcribed the recording, which is why the default is Parakeet. Between
+GPU model in the same run on its GPU. Whisper `tiny` is quicker still (0.033),
+but it is also the weakest of the models that transcribed the recording, and
+the English-only `granite-speech-5.0-470m-turboctc` is quicker than both (see
+above) but writes plain lower-case text and knows no other language, which is
+why the default is Parakeet. Between
 models that both worked, that benchmark cannot tell you which is more
 accurate -- see the
 [report](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md) -- so pick on
@@ -80,8 +87,8 @@ hardware.
 | Zero setup: fastest accurate local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
 | Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
-| English only, maximum speed | `distil-large-v3.5` |
-| English only, smallest non-Whisper download, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` (CPU) |
+| English only, punctuated text at Whisper quality | `distil-large-v3.5` |
+| English only, fastest, plain lower-case text is acceptable, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` (CPU) |
 | Smaller GPU model / Granite 4.0 fallback | `granite-4.0-1b-speech` |
 | Testing / very limited resources | `tiny` |
 
