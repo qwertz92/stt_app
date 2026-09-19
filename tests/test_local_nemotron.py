@@ -222,6 +222,26 @@ def test_a_cancel_is_seen_before_the_recording_is_decoded(monkeypatch, tmp_path)
     assert decoded == []
 
 
+@pytest.mark.parametrize("declared_rate", [0, 1, 7_999])
+def test_a_wav_declaring_an_implausible_sample_rate_is_refused(
+    monkeypatch, tmp_path, declared_rate
+):
+    """The header's rate decides how many samples the resampler makes: 1 Hz
+    turned a 3 KB file into 1,600 s of audio (measured 2026-09-19), and this
+    runtime then walks that in 560 ms chunks. A hundred samples keep the
+    unguarded code cheap enough to fail here."""
+    runtime = _FakeRuntime()
+    transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
+    payload = bytearray(_wav_bytes(100))
+    payload[24:28] = declared_rate.to_bytes(4, "little")
+
+    # 0 is refused by this runtime's own reader, in its own words.
+    with pytest.raises(TranscriptionError, match="sample rate"):
+        transcriber.transcribe_batch(bytes(payload))
+
+    assert runtime.generators == []
+
+
 def test_a_raising_cancel_check_does_not_fail_a_nemotron_batch(monkeypatch, tmp_path):
     runtime = _FakeRuntime()
     transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")

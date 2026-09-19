@@ -370,18 +370,44 @@ def test_a_48_khz_wav_is_resampled_to_the_rate_the_graph_was_trained_on(
     assert fake.features[0].shape == (1, 50, FEATURE_SIZE)
 
 
-def test_a_wav_declaring_no_sample_rate_is_a_transcription_error(
+@pytest.mark.parametrize("declared_rate", [0, 1, 7_999])
+def test_a_wav_declaring_an_implausible_sample_rate_is_a_transcription_error(
+    tmp_path, monkeypatch, declared_rate
+):
+    """This runtime resamples, and the header's rate decides how much audio
+    comes out: 0 was a `ZeroDivisionError` out of `transcribe_batch`, and 1 Hz
+    turned a 3 KB file into 1,600 s of samples and ten graph passes (measured
+    2026-09-19). Ten milliseconds of audio keep the unguarded code cheap
+    enough to fail here."""
+    transcriber, fake = _transcriber(tmp_path, monkeypatch)
+    payload = bytearray(_wav_bytes(_speech_pcm(0.01)))
+    payload[24:28] = declared_rate.to_bytes(4, "little")
+
+    with pytest.raises(
+        TranscriptionError, match=f"sample rate of {declared_rate} Hz"
+    ):
+        transcriber.transcribe_batch(bytes(payload))
+
+    assert fake.features == []
+
+
+def test_audio_that_cannot_be_held_in_memory_is_a_transcription_error(
     tmp_path, monkeypatch
 ):
-    """This runtime resamples, so a header rate of 0 was a `ZeroDivisionError`
-    out of `transcribe_batch` -- a raw exception where the controller expects
-    a `TranscriptionError` it can show and keep the recording for."""
-    transcriber, fake = _transcriber(tmp_path, monkeypatch)
-    payload = bytearray(_wav_bytes(_speech_pcm(0.5)))
-    payload[24:28] = (0).to_bytes(4, "little")
+    """Decoding and resampling sit in front of the graph call's own `try`, so
+    a `MemoryError` for a recording too long to hold left `transcribe_batch`
+    as a raw exception."""
+    from stt_app.transcriber import local_granite_ctc
 
-    with pytest.raises(TranscriptionError, match="sample rate"):
-        transcriber.transcribe_batch(bytes(payload))
+    transcriber, fake = _transcriber(tmp_path, monkeypatch)
+
+    def _exhausted(*_args, **_kwargs):
+        raise MemoryError("Unable to allocate 8 GiB for an array")
+
+    monkeypatch.setattr(local_granite_ctc, "resample_linear", _exhausted)
+
+    with pytest.raises(TranscriptionError, match="Unable to allocate 8 GiB"):
+        transcriber.transcribe_batch(_wav_bytes(_speech_pcm(0.5)))
 
     assert fake.features == []
 

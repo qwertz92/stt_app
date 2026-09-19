@@ -422,7 +422,14 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         self._raise_if_canceled()
-        waveform = self._waveform_from(audio_source)
+        try:
+            waveform = self._waveform_from(audio_source)
+        except TranscriptionError:
+            raise
+        except Exception as exc:
+            # Decoding and resampling sit in front of the graph call's own
+            # `try`, and a recording too long to hold is a `MemoryError`.
+            raise TranscriptionError(f"Could not read the audio: {exc}") from exc
         if waveform.size == 0:
             return ""
 
