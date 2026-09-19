@@ -745,6 +745,80 @@ def test_canary_refuses_to_benchmark_without_a_language(tmp_path):
         )
 
 
+def _runners_that_record_their_calls(monkeypatch) -> list[str]:
+    called: list[str] = []
+
+    def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
+        called.append(str(kwargs.get("model_name")))
+        return local_benchmark.BenchmarkCase(
+            model=str(kwargs.get("model_name")),
+            device="cpu",
+            compute_type="stub",
+            download_seconds=0.0,
+            load_seconds=0.0,
+            runs=[],
+        )
+
+    for runner in ("_run_case", "_run_onnx_case", "_run_webgpu_case"):
+        monkeypatch.setattr(local_benchmark, runner, fake_case)
+    return called
+
+
+def test_an_english_only_model_is_not_run_in_another_language(
+    tmp_path, monkeypatch
+):
+    """The Granite CTC graph takes no language input: asked for German it
+    fell back to Auto with a log line, decoded English, and the stored run
+    said `de` -- a German measurement that never happened (2026-09-19,
+    through the real model). distil decodes nonsense under a German token.
+    The Run Benchmark window refuses the combination before the run; the CLI
+    and every other caller of the runner did not."""
+    from stt_app.config import LOCAL_ENGLISH_ONLY_MODELS
+
+    called = _runners_that_record_their_calls(monkeypatch)
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio,
+        model_names=[*LOCAL_ENGLISH_ONLY_MODELS, "small"],
+        runs=1,
+        device="cpu",
+        language="de",
+    )
+
+    assert called == ["small"]
+    refused = cases[: len(LOCAL_ENGLISH_ONLY_MODELS)]
+    assert [case.model for case in refused] == list(LOCAL_ENGLISH_ONLY_MODELS)
+    for case in refused:
+        assert case.runs == []
+        assert "English only" in str(case.error)
+        assert "'de'" in str(case.error)
+    assert cases[-1].error is None
+
+
+@pytest.mark.parametrize("language", [None, "auto", "en", "EN"])
+def test_an_english_only_model_runs_with_auto_and_english(
+    tmp_path, monkeypatch, language
+):
+    from stt_app.config import LOCAL_ENGLISH_ONLY_MODELS
+
+    called = _runners_that_record_their_calls(monkeypatch)
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio,
+        model_names=list(LOCAL_ENGLISH_ONLY_MODELS),
+        runs=1,
+        device="cpu",
+        language=language,
+    )
+
+    assert called == list(LOCAL_ENGLISH_ONLY_MODELS)
+    assert [case.error for case in cases] == [None, None]
+
+
 def test_a_case_runs_off_the_main_thread_so_ctrl_c_can_reach_the_model():
     """The in-process path must not block Ctrl+C inside the model call.
 

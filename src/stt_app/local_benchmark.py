@@ -15,6 +15,7 @@ from typing import Any
 from .benchmark_environment import BenchmarkEnvironment, text_or_empty
 from .config import (
     CANARY_MODEL_SIZE,
+    LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
@@ -776,6 +777,18 @@ def run_benchmark_cases(
                 f"{model_name} ({device_target}/{display_compute_type})"
             )
         try:
+            if (
+                model_name in LOCAL_ENGLISH_ONLY_MODELS
+                and str(language or "auto").strip().lower() not in {"auto", "en"}
+            ):
+                # The Run Benchmark window refuses this before the run; the
+                # CLI and every other caller arrive here. The Granite CTC
+                # graph takes no language input, so it decoded English and
+                # the run was stored under the language that was asked for.
+                raise ValueError(
+                    f"{model_name} transcribes English only, so it was not "
+                    f"run with the language '{language}'. Use Auto or English."
+                )
             if runtime == "faster-whisper":
                 case = _run_case(
                     audio_path=path,
