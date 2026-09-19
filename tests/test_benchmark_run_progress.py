@@ -147,7 +147,10 @@ def test_the_german_refusal_names_the_english_only_models_that_were_selected(
     """There is more than one English-only model, and the sentence named a
     fixed one -- so a run refused because of the Granite CTC graph told the
     user to deselect distil-large-v3.5, which they may not even have
-    installed."""
+    installed. And it names them the way the model list above it does: the
+    settings id `granite-speech-5.0-470m-turboctc` appears nowhere on
+    screen, so a sentence built from it sent the user looking for a row
+    that does not exist."""
     dialog, app = _dialog(
         tmp_path, ["small", "granite-speech-5.0-470m-turboctc"]
     )
@@ -162,7 +165,8 @@ def test_the_german_refusal_names_the_english_only_models_that_were_selected(
 
     status = dialog.benchmark_status_label.text()
     assert dialog._active_benchmark_thread is None
-    assert "granite-speech-5.0-470m-turboctc" in status
+    assert "deselect IBM Granite Speech 5.0 470M." in status
+    assert "granite-speech-5.0-470m-turboctc" not in status
     # The multilingual model in the same selection is not the problem, and
     # neither is an English-only model nobody selected.
     assert "small" not in status

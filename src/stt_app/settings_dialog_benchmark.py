@@ -47,6 +47,7 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
     compact_table_row_height,
     configure_button_row,
+    local_model_short_label,
     onnx_device_label,
 )
 from .settings_store import auto_first_onnx_device
@@ -1980,7 +1981,11 @@ class _BenchmarkMixin:
         if language_value == "de" and english_only:
             # Named from the selection: with more than one English-only model
             # a fixed name sent the user after a model they had not selected.
-            blocking = ", ".join(english_only)
+            # And by the name the list above shows, not by the settings id,
+            # which appears nowhere on screen.
+            blocking = ", ".join(
+                local_model_short_label(model_name) for model_name in english_only
+            )
             plural = "s" if len(english_only) > 1 else ""
             self._set_benchmark_status(
                 f"German cannot be benchmarked with the selected English-only "
