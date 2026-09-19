@@ -99,7 +99,18 @@ def test_features_match_the_real_transformers_processor():
 def test_the_blockwise_stft_is_the_single_pass_result(monkeypatch):
     """A long recording must not materialise one `frames x 512` matrix, so the
     STFT runs in blocks. The blocking is invisible only if it computes the same
-    thing, which a block size no real input reaches cannot show."""
+    thing, which a block size no real input reaches cannot show.
+
+    The same thing to within rounding, not to the bit. The mel projection is a
+    BLAS product, and which kernel sums a row depends on the block's shape and
+    on the CPU OpenBLAS picked its kernels for. Measured on 2026-09-19 over this
+    fixture and twenty real clips with `OPENBLAS_CORETYPE` set to Zen, Haswell,
+    SkylakeX, Sandybridge, Nehalem and Core2: never more than one float32 step
+    (1.2e-7), and not zero under Zen, Haswell and Core2 -- so bit equality
+    passed on the developer's machine and failed on a CI runner with another
+    CPU. A block whose offsets restart, a block shifted by one frame and a
+    dropped last block each move a feature by more than 1.4.
+    """
     from stt_app.transcriber import local_granite_ctc
 
     waveform, _reference = _reference_case()
@@ -108,7 +119,8 @@ def test_the_blockwise_stft_is_the_single_pass_result(monkeypatch):
     monkeypatch.setattr(local_granite_ctc, "_STFT_BLOCK_FRAMES", 3)
     blocked = extract_features(waveform)
 
-    assert np.array_equal(blocked, single_pass)
+    assert blocked.shape == single_pass.shape
+    assert float(np.abs(blocked - single_pass).max()) < 1e-6
 
 
 @pytest.mark.parametrize(
