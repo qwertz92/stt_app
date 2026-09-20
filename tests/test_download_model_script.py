@@ -130,13 +130,13 @@ def _certificate_failure() -> Exception:
     [
         (
             "mirrored ONNX model, Hugging Face refused",
-            "Model download for 'onnx-community/x' failed: {cause}. "
-            "See docs/models.md.",
+            ("Model download for 'onnx-community/x' failed: {cause}. "
+             "See docs/models.md."),
         ),
         (
             "both sources failed",
-            "Model download for 'onnx-community/x' failed on Hugging Face "
-            "({cause}) and on the ModelScope mirror (connection timed out).",
+            ("Model download for 'onnx-community/x' failed on Hugging Face "
+             "({cause}) and on the ModelScope mirror (connection timed out)."),
         ),
     ],
 )

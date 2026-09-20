@@ -273,9 +273,9 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._worst_case_notes = tuple(
             " ".join(
                 (
-                    f"This entry was recorded with '{entry_label}', which "
-                    f"this version no longer offers, so {chosen} was "
-                    f"chosen instead.",
+                    (f"This entry was recorded with '{entry_label}', which "
+                     f"this version no longer offers, so {chosen} was "
+                     f"chosen instead."),
                     _LANGUAGE_SUBSTITUTION_NOTE.format(
                         requested="auto", selected="auto"
                     ),

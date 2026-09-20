@@ -191,8 +191,8 @@ def verify_windows_publisher_signature(
             return True, publisher
         return (
             False,
-            "Windows verified the signature, but this app version does not trust "
-            f"its publisher identity ({publisher or 'unknown publisher'}).",
+            ("Windows verified the signature, but this app version does not trust "
+             f"its publisher identity ({publisher or 'unknown publisher'})."),
         )
     status = lines[0] if lines else "verification failed"
     return False, f"Windows reported the publisher signature as {status}."

@@ -226,26 +226,26 @@ def _module(
         (
             "two identical modules at their rated speed",
             [_module(), _module()],
-            "2 x 16 GB DDR5-6000, running at 6000 MT/s "
-            "(48.0 GB/s per channel, theoretical)",
+            ("2 x 16 GB DDR5-6000, running at 6000 MT/s "
+             "(48.0 GB/s per channel, theoretical)"),
         ),
         (
             "XMP/EXPO not enabled",
             [_module(configured=4800)],
-            "1 x 16 GB DDR5-6000, rated 6000 MT/s, running at 4800 MT/s "
-            "(38.4 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR5-6000, rated 6000 MT/s, running at 4800 MT/s "
+             "(38.4 GB/s per channel, theoretical)"),
         ),
         (
             "only the rated speed is known",
             [_module(configured=None)],
-            "1 x 16 GB DDR5-6000, running at 6000 MT/s "
-            "(48.0 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR5-6000, running at 6000 MT/s "
+             "(48.0 GB/s per channel, theoretical)"),
         ),
         (
             "only the configured speed is known",
             [_module(speed=None, configured=4800)],
-            "1 x 16 GB DDR5-4800, running at 4800 MT/s "
-            "(38.4 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR5-4800, running at 4800 MT/s "
+             "(38.4 GB/s per channel, theoretical)"),
         ),
         (
             "no speed at all: no rate suffix and no bandwidth clause",
@@ -260,32 +260,32 @@ def _module(
         (
             "an unknown type code",
             [_module(type_code=99)],
-            "1 x 16 GB RAM-6000, running at 6000 MT/s "
-            "(48.0 GB/s per channel, theoretical)",
+            ("1 x 16 GB RAM-6000, running at 6000 MT/s "
+             "(48.0 GB/s per channel, theoretical)"),
         ),
         (
             "SMBIOS 26 is DDR4",
             [_module(type_code=26, speed=3200, configured=3200)],
-            "1 x 16 GB DDR4-3200, running at 3200 MT/s "
-            "(25.6 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR4-3200, running at 3200 MT/s "
+             "(25.6 GB/s per channel, theoretical)"),
         ),
         (
             "SMBIOS 18 is DDR, and 20 is DDR2 FB-DIMM rather than DDR",
             [_module(type_code=18, speed=400, configured=400)],
-            "1 x 16 GB DDR-400, running at 400 MT/s "
-            "(3.2 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR-400, running at 400 MT/s "
+             "(3.2 GB/s per channel, theoretical)"),
         ),
         (
             "SMBIOS 19 is DDR2, and 21 is reserved rather than DDR2",
             [_module(type_code=19, speed=800, configured=800)],
-            "1 x 16 GB DDR2-800, running at 800 MT/s "
-            "(6.4 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR2-800, running at 800 MT/s "
+             "(6.4 GB/s per channel, theoretical)"),
         ),
         (
             "SMBIOS 20 is DDR2 FB-DIMM",
             [_module(type_code=20, speed=667, configured=667)],
-            "1 x 16 GB DDR2 FB-DIMM-667, running at 667 MT/s "
-            "(5.3 GB/s per channel, theoretical)",
+            ("1 x 16 GB DDR2 FB-DIMM-667, running at 667 MT/s "
+             "(5.3 GB/s per channel, theoretical)"),
         ),
         (
             "SMBIOS 21 is reserved, so it reads as plain RAM",
@@ -295,8 +295,8 @@ def _module(
         (
             "a 32 GB module",
             [_module(capacity=34359738368)],
-            "1 x 32 GB DDR5-6000, running at 6000 MT/s "
-            "(48.0 GB/s per channel, theoretical)",
+            ("1 x 32 GB DDR5-6000, running at 6000 MT/s "
+             "(48.0 GB/s per channel, theoretical)"),
         ),
         (
             "a module that says nothing at all is skipped",

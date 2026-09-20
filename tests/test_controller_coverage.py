@@ -4092,8 +4092,8 @@ def test_retry_last_transcription_blocked_while_the_microphone_is_open(microphon
     assert store.transcribing_ids == []
     assert controller._last_failed_wav_bytes == b"wav-W"
     assert tray == [
-        "Finish the current recording before retrying the last failed "
-        "transcription."
+        ("Finish the current recording before retrying the last failed "
+         "transcription.")
     ]
     controller._recording_start_in_progress = False
     controller._recording_stop_in_progress = False

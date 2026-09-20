@@ -5,11 +5,11 @@ description = "Local and cloud speech-to-text dictation for Windows 11"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "PySide6==6.11.1",
-    "sounddevice==0.5.5",
-    "numpy==2.5.2",
+    "PySide6==6.11.2",
+    "sounddevice==0.5.6",
+    "numpy==2.5.3",
     "faster-whisper==1.2.1",
-    "onnxruntime-genai==0.15.2; platform_system == 'Windows'",
+    "onnxruntime-genai==0.16.0; platform_system == 'Windows'",
     # Pure-Python NeMo runtime (Parakeet/Canary). Resolves the same
     # onnxruntime distribution onnxruntime-genai already requires; do NOT
     # add onnxruntime-directml, which overwrites it and breaks genai.
@@ -17,10 +17,10 @@ dependencies = [
     "keyring==25.7.0",
     "pywin32==312; platform_system == 'Windows'",
     "comtypes==1.4.16; platform_system == 'Windows'",
-    "assemblyai==0.64.33",
-    "groq==1.6.0",
+    "assemblyai==1.5.5",
+    "groq==1.7.0",
     "truststore==0.10.4",
-    "websocket-client==1.9.0",
+    "websocket-client==1.9.2",
 ]
 
 [project.scripts]
@@ -98,9 +98,9 @@ faulthandler_timeout = 600
 
 [dependency-groups]
 dev = [
-    "pyinstaller==6.22.0",
+    "pyinstaller==6.22.3",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-mock==3.15.1",
-    "ruff==0.15.8",
+    "ruff==0.16.8",
 ]

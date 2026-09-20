@@ -2184,7 +2184,11 @@ class _BenchmarkMixin:
                     # exactly that state: a `BaseException`, or one of the
                     # `_benchmark_summary` calls inside the arms themselves.
                     # Nothing is computed here for the same reason.
-                    logger.exception("benchmark_worker_failed")
+                    # LOG004 asks for an `except` block around `.exception()`;
+                    # this `finally` is only reached with `emitted` False
+                    # while an exception is propagating, so `exc_info` is set
+                    # and the traceback is what the log line is for.
+                    logger.exception("benchmark_worker_failed")  # noqa: LOG004
                     _finish(
                         False,
                         "",
@@ -2368,8 +2372,8 @@ class _BenchmarkMixin:
                 " ".join(
                     part
                     for part in (
-                        "Benchmark completed with errors and was saved to "
-                        "history. See the summary for details.",
+                        ("Benchmark completed with errors and was saved to "
+                         "history. See the summary for details."),
                         # A run that failed on one model can still have
                         # compared another on two devices, and that write has
                         # already happened -- so it has to be reported on this

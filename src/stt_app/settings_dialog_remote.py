@@ -119,8 +119,8 @@ def _build_connection_tester(
         if not snapshot.azure_endpoint:
             return (
                 None,
-                "No Azure endpoint entered. "
-                "Enter the resource endpoint above first.",
+                ("No Azure endpoint entered. "
+                 "Enter the resource endpoint above first."),
             )
         kwargs["endpoint"] = snapshot.azure_endpoint
     try:

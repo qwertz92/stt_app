@@ -954,9 +954,9 @@ def format_benchmark_summary(
     if best_rtf is not None:
         lines.extend(
             [
-                "Best real-time factor: "
-                f"{best_rtf.model} on {best_rtf.device} "
-                f"({_format_number(best_rtf.avg_rtf)})",
+                ("Best real-time factor: "
+                 f"{best_rtf.model} on {best_rtf.device} "
+                 f"({_format_number(best_rtf.avg_rtf)})"),
                 "RTF < 1.0 means faster than real-time.",
             ]
         )

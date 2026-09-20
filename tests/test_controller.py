@@ -3585,8 +3585,8 @@ def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray
         assert inserter.calls == pasted, "it pasted during a transcription in flight"
         assert overlay.states == painted, overlay.states[len(painted) :]
         assert tray == [
-            "Wait for the current transcription to finish before inserting "
-            "the last transcript again."
+            ("Wait for the current transcription to finish before inserting "
+             "the last transcript again.")
         ]
 
         release.set()
