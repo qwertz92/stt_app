@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtWidgets
 
 from .config import (
     CANARY_MODEL_SIZE,
+    CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
@@ -32,6 +33,7 @@ from .config import (
     VALID_PASTE_MODES,
     language_modes_for_selection,
     onnx_auto_device_order,
+    supports_custom_vocabulary,
     supports_streaming,
 )
 from .settings_dialog_helpers import (
@@ -54,6 +56,41 @@ from .settings_dialog_helpers import (
 )
 from .settings_store import AppSettings, apply_engine_model_selection
 
+# How each engine that reads the custom vocabulary passes it on, named after
+# the request field it ends up in. `{name}` is the model or provider as the
+# screen names it. Which engines appear here is not a second list: keys absent
+# from `CUSTOM_VOCABULARY_ENGINES` (plus `local`, whose faster-whisper runtime
+# is the one that reads the terms) are never asked for, and a supported engine
+# missing here would show an empty note, which
+# `test_every_engine_that_uses_the_vocabulary_has_a_sentence` refuses.
+_VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
+    "local": (
+        "{name} uses the custom vocabulary as faster-whisper's initial "
+        "prompt, in batch and streaming."
+    ),
+    "assemblyai": (
+        "{name} uses the custom vocabulary as its key-terms prompt, in batch "
+        "and streaming."
+    ),
+    "deepgram": (
+        "{name} uses the custom vocabulary as keyterm (Nova-3) or keywords "
+        "(Nova-2), in batch and streaming."
+    ),
+    "openai": "{name} uses the custom vocabulary as the request prompt (batch only).",
+    "groq": "{name} uses the custom vocabulary as the request prompt (batch only).",
+}
+
+# Where the two things the Model row does not do are done. The tabs are named
+# Models and API Keys, so both sentences name a tab the user can see; they are
+# appended to the notes already reserved under the Model combo rather than
+# given lines of their own, because the Transcription tab has 4 px of its
+# height budget left (measured).
+_LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models tab."
+# Shorter than "The API key for this provider is set ...": with that wording
+# the Fun-ASR note needed 45 px of the 42 reserved at the dialog's minimum
+# width, and "this provider" repeats what the row already shows.
+_REMOTE_MODEL_KEY_POINTER = "The API key is set on the API Keys tab."
+
 # Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
 # benchmark can be selected for daily dictation with the same wording.
 _LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
@@ -74,7 +111,7 @@ class _GeneralTabMixin:
         cls,
         title: str,
     ) -> tuple[QtWidgets.QGroupBox, QtWidgets.QFormLayout]:
-        """Create a consistently spaced form section for the General tab."""
+        """Create a consistently spaced form section for the Transcription tab."""
         box = QtWidgets.QGroupBox(title)
         form = QtWidgets.QFormLayout(box)
         form.setContentsMargins(10, 10, 10, 10)
@@ -210,13 +247,19 @@ class _GeneralTabMixin:
         self.custom_vocabulary_edit.setPlaceholderText(
             "e.g. Kubernetes, Splunk SOAR"
         )
+        # Whether the *selected* model is sent these terms. The static hint
+        # below used to carry both lists, which meant reading eleven model
+        # names to find out what the one selected model does -- and the list
+        # went stale every time a model was added. The field stays editable
+        # either way: the terms are stored for whatever model is picked next.
+        self.vocabulary_support_label = QtWidgets.QLabel("")
+        self.vocabulary_support_label.setWordWrap(True)
+        self._style_field_hint_label(self.vocabulary_support_label)
+        self._reserve_dynamic_hint_height(self.vocabulary_support_label)
         self.vocabulary_hint_label = QtWidgets.QLabel(
             "Enter up to 100 terms or phrases, separated by commas, semicolons, "
             "or new lines. Spaces inside a phrase are kept (for example, "
-            "Splunk SOAR). Supported in both modes by faster-whisper, "
-            "AssemblyAI, and Deepgram, and in batch mode by OpenAI and Groq. "
-            "Parakeet, Canary, Nemotron, Cohere/Granite ONNX, Granite Speech "
-            "5.0, ElevenLabs, Azure, and Fun-ASR ignore it."
+            "Splunk SOAR)."
         )
         self.vocabulary_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.vocabulary_hint_label)
@@ -224,6 +267,7 @@ class _GeneralTabMixin:
             "Vocabulary",
             self._field_with_hint(
                 self.custom_vocabulary_edit,
+                self.vocabulary_support_label,
                 self.vocabulary_hint_label,
             ),
         )
@@ -367,11 +411,15 @@ class _GeneralTabMixin:
         )
         layout.addWidget(paste_box)
 
-        # The shared label column spanning General, Hotkeys & Display and
-        # Audio & Recording is applied by _build_audio_tab once all exist.
+        # The shared label column spanning Transcription, Hotkeys & Display
+        # and Audio is applied by _build_audio_tab once all three exist.
         self._general_forms = (engine_form, paste_form)
         layout.addStretch(1)
-        self.tabs.addTab(tab, "General")
+        # "Transcription", not "General": this is where the engine, the
+        # model, the language and the mode are chosen, and a tab called
+        # General says nothing about that while "Local" and "Remote" --
+        # now Models and API Keys -- read as if they did.
+        self.tabs.addTab(tab, "Transcription")
 
     # Shared with the overlay retranscribe dialog; the table itself lives in
     # settings_dialog_helpers so both callers label a model identically.
@@ -489,7 +537,7 @@ class _GeneralTabMixin:
         self.import_language_combo.blockSignals(False)
         self._import_language_values[key] = target_mode
         self.import_language_note.setText(
-            "Used only for this imported file; it does not change the General tab."
+            "Used only for this imported file; it does not change the Transcription tab."
         )
         self.import_language_combo.setToolTip(self.import_language_note.text())
 
@@ -556,9 +604,12 @@ class _GeneralTabMixin:
                 "Realtime Scribe exists, but is not yet wired into this app."
             )
         elif provider == "azure":
+            # Only the endpoint is named here; the key is the sentence every
+            # remote engine gets below, and saying both twice filled the two
+            # reserved lines with one instruction.
             note = (
-                "Cloud, batch-only. Configure the endpoint and key on the Remote "
-                "tab; MAI-Transcribe 2 supports the most languages."
+                "Cloud, batch-only. MAI-Transcribe 2 supports the most "
+                "languages; Azure also needs an endpoint beside the key."
             )
         elif provider == "funasr":
             note = (
@@ -566,7 +617,12 @@ class _GeneralTabMixin:
                 "East/Southeast Asia, but no German. Use Azure or local for German."
             )
 
+        # Every remote engine needs a key, and the tab that holds it is no
+        # longer called Remote. Inside the two reserved lines: measured, the
+        # longest of these notes plus this sentence needs 30 px of the 42.
+        note = f"{note} {_REMOTE_MODEL_KEY_POINTER}"
         self.remote_model_note_label.setText(note)
+        self.remote_model_note_label.setToolTip(note)
         self.remote_model_combo.blockSignals(False)
 
     def _language_modes_for_current_selection(self) -> tuple[str, ...]:
@@ -656,10 +712,14 @@ class _GeneralTabMixin:
             )
 
         if engine == "azure":
+            # Trimmed from 186 to 137 characters: at the dialog's 581 px
+            # minimum width the longer wording needed 45 px of the 42 reserved
+            # here, so its last line was cut off with only the tooltip left to
+            # read it in. It was the one note in this dialog that did.
             return (
-                "Azure LLM Speech (MAI-Transcribe) is multilingual. 'Auto' lets "
-                "the model detect language; selecting one sends a locale hint. "
-                "Available languages follow the selected MAI-Transcribe model."
+                "Azure MAI-Transcribe is multilingual. 'Auto' detects the "
+                "language; selecting one sends a locale hint. The list follows "
+                "the selected model."
             )
 
         if engine == "funasr":
@@ -839,55 +899,115 @@ class _GeneralTabMixin:
         warning_style = "color: #b71c1c; font-size: 11px;"
         note_style = "color: #666666; font-size: 11px;"
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
-            self.local_model_runtime_warning_label.setStyleSheet(warning_style)
+            style = warning_style
             # The order Auto tries is no longer fixed -- a benchmark can put
             # CPU first -- and the ONNX Device row below owns it either way, so
             # restating it here could only ever contradict it.
-            self.local_model_runtime_warning_label.setText(
+            text = (
                 "Batch mode only. Runs on the device chosen under ONNX Device "
                 "(the active one is shown in the overlay)."
             )
-            return
-        if engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
-            self.local_model_runtime_warning_label.setStyleSheet(note_style)
-            if model_name == CANARY_MODEL_SIZE:
-                self.local_model_runtime_warning_label.setText(
-                    "Batch mode only, CPU. Pick a language: this model has no "
-                    "auto-detect and would otherwise translate into English."
-                )
-            else:
-                # Not "the fastest local model here": `tiny` measured 0.033
-                # against Parakeet's 0.043 in the same run.
-                self.local_model_runtime_warning_label.setText(
-                    "Batch mode only, CPU. Multilingual, no language selection "
-                    "needed; the recommended default."
-                )
-            return
-        if engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
-            self.local_model_runtime_warning_label.setStyleSheet(note_style)
+        elif engine == "local" and model_name == CANARY_MODEL_SIZE:
+            style = note_style
+            text = (
+                "Batch mode only, CPU. Pick a language: this model has no "
+                "auto-detect and would otherwise translate into English."
+            )
+        elif engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
+            style = note_style
+            # Not "the fastest local model here": `tiny` measured 0.033
+            # against Parakeet's 0.043 in the same run.
+            text = (
+                "Batch mode only, CPU. Multilingual, no language selection "
+                "needed; the recommended default."
+            )
+        elif engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
+            style = note_style
             # The casing and the missing punctuation are what the CTC head
             # writes, not a setting -- say so here rather than let it look
             # like a defect after the first dictation.
-            self.local_model_runtime_warning_label.setText(
+            text = (
                 "Batch mode only, CPU. English only; writes lowercase text "
                 "without punctuation."
             )
-            return
-        if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-            self.local_model_runtime_warning_label.setStyleSheet(warning_style)
-            self.local_model_runtime_warning_label.setText(
+        elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            style = warning_style
+            text = (
                 "Streams with a fixed 560 ms ONNX chunk. Runs on the device "
                 "chosen under ONNX Device."
             )
-            return
-        self.local_model_runtime_warning_label.setStyleSheet(note_style)
+        elif engine == "local" and model_name:
+            style = note_style
+            # The vocabulary half of this sentence moved to the Vocabulary
+            # row's own note, which says it for every engine and is the row
+            # the user is reading when the question comes up.
+            text = "faster-whisper runs via CTranslate2 in batch and streaming."
+        else:
+            style = note_style
+            text = " "
+
         if engine == "local" and model_name:
-            self.local_model_runtime_warning_label.setText(
-                "faster-whisper runs via CTranslate2 in batch and streaming. "
-                "Vocabulary biasing is available in both modes."
-            )
+            # Where the download lives, now that the tab is called Models
+            # rather than Local: this row offers models that may not be on
+            # disk yet, and nothing beside it said where to get them. It goes
+            # inside the two lines already reserved here rather than on a line
+            # of its own -- measured, the longest combination needs 30 px of
+            # the 42 reserved, at the dialog's 581 px minimum width as well.
+            text = f"{text} {_LOCAL_MODEL_DOWNLOAD_POINTER}"
+        self.local_model_runtime_warning_label.setStyleSheet(style)
+        self.local_model_runtime_warning_label.setText(text)
+        self.local_model_runtime_warning_label.setToolTip(
+            text if text.strip() else ""
+        )
+
+    def _update_custom_vocabulary_note(self) -> None:
+        """Say whether the selected model is sent the custom vocabulary.
+
+        Eight of the twelve selectable engines/runtimes have no biasing input
+        at all, so terms typed for one of them do nothing and nothing said so
+        -- the static hint listed all eleven names and required reading the
+        list to find the one selected model in it. The label keeps a reserved
+        two-line area and only its text and colour change, so no selection can
+        move the fields below it.
+        """
+        if not hasattr(self, "vocabulary_support_label"):
             return
-        self.local_model_runtime_warning_label.setText(" ")
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        model = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+        # Named the way the screen names it: `local_model_short_label` for a
+        # local model and the provider label for a remote one. A settings id
+        # ('parakeet-tdt-0.6b-v3') matches nothing the user can see.
+        name = (
+            local_model_short_label(model)
+            if engine == DEFAULT_ENGINE
+            else self._provider_label(engine)
+        )
+
+        if not supports_custom_vocabulary(engine, model):
+            # Amber, not the #b71c1c of a real failure: nothing is broken and
+            # the terms stay stored for the next model.
+            self.vocabulary_support_label.setStyleSheet(
+                "color: #b26a00; font-size: 11px; padding: 0;"
+            )
+            text = (
+                f"{name} ignores the custom vocabulary. Models that use it: "
+                f"{CUSTOM_VOCABULARY_SUPPORTED_SUMMARY}."
+            )
+        else:
+            self.vocabulary_support_label.setStyleSheet(
+                "color: #555; font-size: 11px; padding: 0;"
+            )
+            text = _VOCABULARY_SUPPORTED_NOTES.get(engine, "").format(name=name)
+
+        self.vocabulary_support_label.setText(text)
+        # Two reserved lines are not much room at the dialog's minimum width,
+        # so the whole sentence is the tooltip as well -- what every other
+        # changing note in this dialog does.
+        self.vocabulary_support_label.setToolTip(text)
 
     def _update_engine_indicator(self) -> None:
         """Update the always-visible engine indicator bar."""
@@ -974,6 +1094,7 @@ class _GeneralTabMixin:
         self._update_language_availability()
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
+        self._update_custom_vocabulary_note()
         self._update_remote_model_selector()
         self._update_import_engine_note()
 
@@ -987,6 +1108,9 @@ class _GeneralTabMixin:
         self._update_language_availability()
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
+        # Only the local models differ from one another here; a remote engine's
+        # answer is the same for all of its models.
+        self._update_custom_vocabulary_note()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
@@ -995,7 +1119,7 @@ class _GeneralTabMixin:
             status = (
                 "Checking the selected model directory in the background."
                 if self._inventory_tab_is_visible()
-                else "Open Local or Benchmark to verify this model directory in the background."
+                else "Open Models or Benchmark to verify this model directory in the background."
             )
             self._show_local_model_unverified_state(status)
         if self._inventory_tab_is_visible():

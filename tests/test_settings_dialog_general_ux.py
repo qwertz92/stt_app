@@ -69,23 +69,145 @@ def _switch_to_tab(dialog: SettingsDialog, title: str) -> None:
     raise AssertionError(f"tab not found: {title}")
 
 
-def test_vocabulary_hint_explains_parsing_and_model_support(
-    dialog: SettingsDialog,
-) -> None:
+def test_vocabulary_hint_explains_parsing_only(dialog: SettingsDialog) -> None:
+    """Which models use the terms is the job of the changing note above this
+    hint. It used to be a list of eleven names here, which meant finding the
+    selected model in a sentence, and which went stale whenever a model was
+    added."""
     hint = dialog.vocabulary_hint_label.text()
 
     assert "commas, semicolons, or new lines" in hint
     assert "Spaces inside a phrase are kept" in hint
     assert "Splunk SOAR" in hint
-    assert "both modes by faster-whisper, AssemblyAI, and Deepgram" in hint
-    assert "batch mode by OpenAI and Groq" in hint
-    assert "Nemotron" in hint
-    assert "Cohere/Granite ONNX" in hint
-    # Its own runtime, and no biasing input either: left out, the sentence
-    # read as if the one local model it did not name might use the terms.
-    assert "Granite Speech 5.0" in hint
-    assert "ignore it" in hint
     assert "Splunk SOAR" in dialog.custom_vocabulary_edit.placeholderText()
+    for name in ("faster-whisper", "Nemotron", "Cohere", "Granite", "ignore"):
+        assert name not in hint, name
+
+
+def test_the_vocabulary_note_says_whether_the_selected_model_uses_the_terms(
+    dialog: SettingsDialog,
+) -> None:
+    """One sentence per selection, naming the model the way the screen does,
+    and agreeing with what the factory actually hands the runtime."""
+    from stt_app.config import (
+        CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
+        VALID_ENGINES,
+        VALID_MODEL_SIZES,
+        supports_custom_vocabulary,
+    )
+    from stt_app.settings_dialog_helpers import local_model_short_label
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    def note_for(engine: str, model: str = "") -> str:
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+        if model:
+            dialog.model_combo.setCurrentIndex(dialog.model_combo.findData(model))
+        app.processEvents()
+        return dialog.vocabulary_support_label.text()
+
+    for engine in VALID_ENGINES:
+        models = VALID_MODEL_SIZES if engine == "local" else ("",)
+        for model in models:
+            if model and dialog.model_combo.findData(model) < 0:
+                continue
+            note = note_for(engine, model)
+            name = (
+                local_model_short_label(model)
+                if engine == "local"
+                else dialog._provider_label(engine)
+            )
+            assert note.startswith(name), (engine, model, note)
+            assert note == dialog.vocabulary_support_label.toolTip()
+            if supports_custom_vocabulary(engine, model):
+                assert "uses the custom vocabulary" in note, (engine, model)
+                assert "ignores" not in note, (engine, model)
+            else:
+                assert "ignores the custom vocabulary" in note, (engine, model)
+                # The note has to answer "so what do I switch to".
+                assert CUSTOM_VOCABULARY_SUPPORTED_SUMMARY in note
+
+    # A model that ignores the terms must not disable the field: the user may
+    # be typing them for the model they are about to switch to.
+    note_for("local", "parakeet-tdt-0.6b-v3")
+    assert dialog.custom_vocabulary_edit.isEnabled()
+    assert dialog.custom_vocabulary_edit.isReadOnly() is False
+
+
+def test_every_engine_that_uses_the_vocabulary_has_a_sentence() -> None:
+    """A supported engine missing from the table would paint an empty note --
+    indistinguishable from "nothing to say" on the row that decides whether
+    typed terms do anything."""
+    from stt_app.config import CUSTOM_VOCABULARY_ENGINES, DEFAULT_ENGINE
+    from stt_app.settings_dialog_general import _VOCABULARY_SUPPORTED_NOTES
+
+    assert set(_VOCABULARY_SUPPORTED_NOTES) == {
+        DEFAULT_ENGINE,
+        *CUSTOM_VOCABULARY_ENGINES,
+    }
+    for engine, sentence in _VOCABULARY_SUPPORTED_NOTES.items():
+        assert "{name}" in sentence, engine
+        assert sentence.format(name="X").strip()
+
+
+def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> None:
+    """It changes on every engine and model switch, so it is reserved rather
+    than sized to its text -- one model's two-line sentence would otherwise
+    push Mode, New Recording and the whole Text Insertion group down."""
+    from stt_app.config import VALID_ENGINES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    # One model per local runtime, plus every engine.
+    selections: list[tuple[str, str]] = [
+        ("local", "small"),  # faster-whisper
+        ("local", "cohere-transcribe-03-2026"),  # Transformers.js
+        ("local", "nemotron-3.5-asr-streaming-0.6b-int4"),  # ORT GenAI
+        ("local", "parakeet-tdt-0.6b-v3"),  # onnx-asr
+        ("local", "granite-speech-5.0-470m-turboctc"),  # Granite CTC
+    ]
+    selections.extend((engine, "") for engine in VALID_ENGINES)
+    selections.append(("local", "small"))
+
+    watched = {
+        "mode": dialog.mode_combo,
+        "new recording": dialog.concurrent_mode_combo,
+        "paste mode": dialog.paste_mode_combo,
+    }
+    baseline: dict[str, int] | None = None
+    note_height: int | None = None
+    for engine, model in selections:
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+        if model:
+            index = dialog.model_combo.findData(model)
+            assert index >= 0, model
+            dialog.model_combo.setCurrentIndex(index)
+        app.processEvents()
+
+        positions = {
+            name: widget.mapTo(dialog, QtCore.QPoint()).y()
+            for name, widget in watched.items()
+        }
+        if baseline is None:
+            baseline = positions
+            note_height = dialog.vocabulary_support_label.height()
+        assert positions == baseline, (engine, model)
+        assert dialog.vocabulary_support_label.height() == note_height
+
+        # And the sentence fits the area reserved for it rather than clipping.
+        label = dialog.vocabulary_support_label
+        required = label.fontMetrics().boundingRect(
+            QtCore.QRect(0, 0, label.width(), 1000),
+            QtCore.Qt.TextWordWrap,
+            label.text(),
+        ).height()
+        assert required <= label.height(), (engine, model, label.text())
 
 
 def test_new_recording_choice_explains_the_previous_job(
@@ -123,7 +245,7 @@ def test_field_hints_are_closer_to_their_control_than_the_next_field(
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
-    _switch_to_tab(dialog, "Audio && Recording")
+    _switch_to_tab(dialog, "Audio")
     app.processEvents()
 
     control = dialog.keep_microphone_warm_checkbox
@@ -192,59 +314,76 @@ def test_dynamic_engine_hints_keep_general_rows_stationary(
 def test_dynamic_notes_reserve_exactly_two_text_lines(
     dialog: SettingsDialog,
 ) -> None:
-    reserved_heights = {
-        label.minimumHeight()
-        for label in (
-            dialog.local_model_runtime_warning_label,
-            dialog.remote_model_note_label,
-            dialog.language_note_label,
-        )
-    }
+    notes = (
+        dialog.local_model_runtime_warning_label,
+        dialog.remote_model_note_label,
+        dialog.language_note_label,
+        dialog.vocabulary_support_label,
+    )
+    reserved_heights = {label.minimumHeight() for label in notes}
 
     assert len(reserved_heights) == 1
     reserved_height = reserved_heights.pop()
     assert reserved_height <= dialog.fontMetrics().lineSpacing() * 2 + 10
-    for label in (
-        dialog.local_model_runtime_warning_label,
-        dialog.remote_model_note_label,
-        dialog.language_note_label,
-    ):
+    for label in notes:
         assert label.maximumHeight() == reserved_height
 
 
 def test_dynamic_notes_fit_their_reserved_area(
     dialog: SettingsDialog,
 ) -> None:
+    """At the default width and at the dialog's own minimum.
+
+    The minimum is where the reservation is actually tight: with "The API key
+    for this provider is set on the API Keys tab." appended, only the Fun-ASR
+    note overflowed, and only at 581 px -- 45 px against the 42 reserved.
+    """
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
     app.processEvents()
+    default_width = dialog.width()
 
-    for engine in (
-        "local",
-        "assemblyai",
-        "groq",
-        "openai",
-        "deepgram",
-        "elevenlabs",
-        "azure",
-        "funasr",
-    ):
-        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+    for width in (default_width, dialog.minimumWidth()):
+        dialog.resize(width, dialog.height())
         app.processEvents()
-        model_note = (
-            dialog.local_model_runtime_warning_label
-            if engine == "local"
-            else dialog.remote_model_note_label
-        )
-        for label in (model_note, dialog.language_note_label):
-            required_height = label.fontMetrics().boundingRect(
-                QtCore.QRect(0, 0, label.width(), 1000),
-                QtCore.Qt.TextWordWrap,
-                label.text(),
-            ).height()
-            assert required_height <= label.height(), (engine, label.text())
+        for engine in (
+            "local",
+            "assemblyai",
+            "groq",
+            "openai",
+            "deepgram",
+            "elevenlabs",
+            "azure",
+            "funasr",
+        ):
+            dialog.engine_combo.setCurrentIndex(
+                dialog.engine_combo.findData(engine)
+            )
+            app.processEvents()
+            model_note = (
+                dialog.local_model_runtime_warning_label
+                if engine == "local"
+                else dialog.remote_model_note_label
+            )
+            for label in (
+                model_note,
+                dialog.language_note_label,
+                dialog.vocabulary_support_label,
+            ):
+                required_height = label.fontMetrics().boundingRect(
+                    QtCore.QRect(0, 0, label.width(), 1000),
+                    QtCore.Qt.TextWordWrap,
+                    label.text(),
+                ).height()
+                assert required_height <= label.height(), (
+                    width,
+                    engine,
+                    label.text(),
+                )
 
+    dialog.resize(default_width, dialog.height())
+    app.processEvents()
     assert dialog.language_note_label.text().strip()
 
 
@@ -296,21 +435,105 @@ def test_owned_delayed_callback_is_cancelled_with_its_dialog() -> None:
     assert calls == []
 
 
+def test_the_eight_tab_titles_fit_the_default_width_without_scroll_arrows(
+    dialog: SettingsDialog,
+) -> None:
+    """A title that does not fit turns the tab bar into a scrolling strip.
+
+    `usesScrollButtons` is on, so an over-long bar does not clip -- it hides
+    tabs behind two arrows, and the tab a user is told to open ("set the key
+    on the API Keys tab") is then not on screen. The eight titles measure
+    771 px of the 840 px the default dialog width gives the bar at 9 pt;
+    they measured 797 px before the rename.
+    """
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    for _ in range(5):
+        app.processEvents()
+
+    bar = dialog.tabs.tabBar()
+    needed = bar.sizeHint().width()
+    available = dialog.tabs.width()
+
+    point_size = app.font().pointSizeF()
+    if point_size != 9.0:
+        # Windows' "Text size" raises the application font without the DPI,
+        # and the titles grow with it; the budget is a 9 pt number.
+        pytest.skip(
+            f"the tab-bar budget was measured at 9 pt; this session runs at "
+            f"{point_size} pt and the bar needs {needed} px of {available} px"
+        )
+    assert dialog.width() == _DEFAULT_SETTINGS_DIALOG_SIZE.width()
+    assert needed <= available, (needed, available)
+    # And no arrow is actually showing: Qt's scroll buttons are tool buttons
+    # parented to the bar, so an off-by-one in the arithmetic above still
+    # leaves this visible.
+    arrows = [
+        button
+        for button in bar.findChildren(QtWidgets.QToolButton)
+        if button.isVisible()
+    ]
+    assert arrows == []
+    assert bar.tabRect(bar.count() - 1).right() <= bar.width()
+
+
+def test_the_model_row_says_where_downloads_and_api_keys_live(
+    dialog: SettingsDialog,
+) -> None:
+    """Choosing the model and getting it are on different tabs.
+
+    The Model row offers local models that may not be downloaded yet and
+    remote providers that need a key, and both of those are done elsewhere --
+    on tabs no longer called Local and Remote, so the row has to name them.
+    """
+    from stt_app.config import VALID_ENGINES, VALID_MODEL_SIZES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    for model in VALID_MODEL_SIZES:
+        index = dialog.model_combo.findData(model)
+        if index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(index)
+        app.processEvents()
+        note = dialog.local_model_runtime_warning_label.text()
+        assert "Models tab" in note, (model, note)
+        assert note == dialog.local_model_runtime_warning_label.toolTip()
+
+    for engine in VALID_ENGINES:
+        if engine == "local":
+            continue
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+        app.processEvents()
+        note = dialog.remote_model_note_label.text()
+        assert "API Keys tab" in note, (engine, note)
+        assert note == dialog.remote_model_note_label.toolTip()
+        # Said once: Azure used to name the key here as well as the endpoint,
+        # which filled both reserved lines with one instruction.
+        assert note.count("API Keys tab") == 1, (engine, note)
+
+
 def test_audio_and_recording_tab_hosts_capture_settings(
     dialog: SettingsDialog,
 ) -> None:
-    """The capture setup moved off General into its own tab.
+    """The capture setup moved off the first tab into its own.
 
-    General keeps what changes during daily dictation (engine/model,
-    insertion); microphone, VAD, tones, and recordings live on the Audio &
-    Recording tab, after General and Hotkeys & Display.
+    Transcription keeps what changes during daily dictation (engine/model,
+    insertion); microphone, VAD, tones, and recordings live on the Audio tab,
+    after Transcription and Hotkeys & Display.
     """
     titles = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
-    assert titles[:4] == [
-        "General",
+    assert titles[:5] == [
+        "Transcription",
         "Hotkeys && Display",
-        "Audio && Recording",
-        "Local",
+        "Audio",
+        "Models",
+        "API Keys",
     ]
 
     general_tab = dialog.tabs.widget(0)
@@ -377,7 +600,7 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
-    _switch_to_tab(dialog, "General")
+    _switch_to_tab(dialog, "Transcription")
     for _ in range(5):
         app.processEvents()
 
@@ -521,7 +744,7 @@ def test_the_recordings_retention_spin_box_never_changes_width(
     column it sits in, so it is not what decides the row's width.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    _switch_to_tab(dialog, "Audio && Recording")
+    _switch_to_tab(dialog, "Audio")
     dialog.show()
     app.processEvents()
     spin = dialog.recordings_max_spin
@@ -601,7 +824,7 @@ def test_inline_field_buttons_match_their_field_height(
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
-    _switch_to_tab(dialog, "Audio && Recording")
+    _switch_to_tab(dialog, "Audio")
     dialog.benchmark_window.show()
     app.processEvents()
 
@@ -811,7 +1034,7 @@ def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
     per download.
     """
     dialog.show()
-    _switch_to_tab(dialog, "Local")
+    _switch_to_tab(dialog, "Models")
     QtWidgets.QApplication.processEvents()
 
     watched = {
@@ -918,3 +1141,60 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
     copy_action.trigger()
     assert copied[-1] == message
     _ = app
+
+
+@pytest.mark.parametrize("downloaded", [1, 10, 13])
+def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
+    dialog: SettingsDialog,
+    downloaded: int,
+) -> None:
+    """Scrolled to the bottom, the last model must touch the popup's edge.
+
+    `QComboBox::showPopup` sizes the popup by summing the first
+    `maxVisibleItems` entries' heights, and a separator measures
+    `PM_DefaultFrameWidth` (2 px) against a model row's 30 px; QListView's
+    default `ScrollPerItem` then scrolls whole entries and paints the
+    viewport's leftover height as empty space below the last one. Measured
+    before the fix, with the dialog's own 30 px rows: 2 px of blank viewport
+    with 1 to 4 models downloaded and 28 px -- a whole row -- with 10 to 13,
+    where the separator falls outside the first ten entries so the popup is a
+    full 300 px while its last ten entries measure 272 px.
+    """
+    from stt_app.config import VALID_MODEL_SIZES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    dialog._refresh_model_combo(cached=list(VALID_MODEL_SIZES[:downloaded]))
+    app.processEvents()
+    combo = dialog.model_combo
+
+    # The grouping this popup exists for is still there: checked models on
+    # top, a separator, indented ones below.
+    texts = [combo.itemText(index) for index in range(combo.count())]
+    assert texts[0].startswith("✓")
+    assert [text.strip() for text in texts].count("") == 1
+    assert texts[-1].startswith("   ")
+
+    combo.showPopup()
+    app.processEvents()
+    try:
+        view = combo.view()
+        scrollbar = view.verticalScrollBar()
+        # Without scrolling there is nothing to reach the bottom of.
+        assert scrollbar.maximum() > 0
+        scrollbar.setValue(scrollbar.maximum())
+        app.processEvents()
+
+        last = combo.model().index(combo.count() - 1, combo.modelColumn())
+        bottom = view.visualRect(last).bottom()
+        empty_below = view.viewport().height() - 1 - bottom
+        assert empty_below == 0, (
+            f"{empty_below} px of empty popup below the last model "
+            f"(viewport {view.viewport().height()} px, last row ends at {bottom})"
+        )
+    finally:
+        combo.hidePopup()
+        app.processEvents()

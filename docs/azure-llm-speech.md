@@ -12,7 +12,7 @@ engine in this app, not two, and Microsoft offers no MAI API outside Azure.
 > when this integration was written or when MAI-Transcribe-2 was added
 > (2026-09-19). The request follows Microsoft's documented contract exactly;
 > the first thing to do after entering an endpoint and key is **Run
-> Connection Test** on the Remote tab.
+> Connection Test** on the API Keys tab.
 
 There is **no local / ONNX runtime** for these models, and Microsoft does not
 publish their parameter count. The feature is currently in **public preview**
@@ -59,7 +59,7 @@ Both come from the same place in the Azure portal (see below).
    - Copy **KEY 1** (or KEY 2).
 
 3. **Configure the app**
-   - Open **Settings → Remote Provider API Keys**.
+   - Open **Settings → API Keys → Remote Provider API Keys**.
    - Paste the key into the **Azure** field.
    - Paste the endpoint into the **Azure Endpoint** field (directly below the
      provider keys).
@@ -71,7 +71,7 @@ Both come from the same place in the Azure portal (see below).
      key, and region. A green result means you are ready.
 
 5. **Use it**
-   - On the General tab, set **Engine** to *Remote (Azure LLM Speech)*.
+   - On the Transcription tab, set **Engine** to *Remote (Azure LLM Speech)*.
    - Pick a **Remote Model** (`mai-transcribe-2` is the default and covers the
      most languages).
    - Dictate as usual — Azure transcribes after you stop (batch).

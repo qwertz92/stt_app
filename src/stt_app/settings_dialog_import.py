@@ -82,7 +82,7 @@ class _ImportTabMixin:
 
         self.import_language_combo = _WheelPassthroughComboBox()
         self.import_language_note = QtWidgets.QLabel(
-            "Used only for this imported file; it does not change the General tab."
+            "Used only for this imported file; it does not change the Transcription tab."
         )
         self.import_language_note.setWordWrap(True)
         self._style_note_label(self.import_language_note)

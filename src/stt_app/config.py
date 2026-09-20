@@ -1268,6 +1268,60 @@ def language_modes_for_selection(
     return ENGINE_LANGUAGE_MODES.get(normalized_engine, VALID_LANGUAGE_MODES)
 
 
+# --- Who actually receives the custom vocabulary --------------------------
+#
+# The single source of truth for that question, and the one the settings
+# dialog asks. It has to be derived rather than listed, because the answer is
+# per *runtime*, not per model: adding a model to LOCAL_MODEL_RUNTIME is what
+# decides it, and a hand-written list of model names silently went stale every
+# time one was added. `tests/test_custom_vocabulary_support.py` pins these
+# against `transcriber/factory.py`, which is where the terms are handed over
+# (or not) -- so the two cannot drift.
+#
+# Remote engines whose request carries the terms: AssemblyAI as
+# `keyterms_prompt`, OpenAI and Groq as `prompt`, Deepgram as its repeated
+# `keyterm` (nova-3) / `keywords` (nova-2) query parameters. ElevenLabs, Azure
+# LLM Speech and Fun-ASR expose no biasing input at all.
+CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
+    "assemblyai",
+    "groq",
+    "openai",
+    "deepgram",
+)
+# Local runtimes with a biasing input: faster-whisper takes the terms as its
+# `initial_prompt`. The onnx-asr (Parakeet, Canary), ONNX Runtime GenAI
+# (Nemotron), Transformers.js (Cohere, Granite ONNX) and Granite CTC runtimes
+# have none.
+CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
+# How the supported set is named in a sentence to the user. Written out rather
+# than generated: "Whisper models" is what the picker calls the seven
+# faster-whisper entries, and a generated list would have to name all seven.
+# A test pins that every engine above appears in it.
+CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
+    "Whisper models, OpenAI, Groq, AssemblyAI, and Deepgram"
+)
+
+
+def supports_custom_vocabulary(engine: str, model: str = "") -> bool:
+    """Whether this engine/model combination is sent the custom vocabulary."""
+    normalized_engine = str(engine or "").strip().lower()
+    if normalized_engine in CUSTOM_VOCABULARY_ENGINES:
+        return True
+    if (
+        normalized_engine in VALID_ENGINES
+        and normalized_engine != DEFAULT_ENGINE
+    ):
+        return False
+    # `local`, and any unknown engine: `create_transcriber` falls back to the
+    # local runtimes for those, and an unknown *model* falls through to
+    # faster-whisper there, so both answers mirror the factory.
+    runtime = LOCAL_MODEL_RUNTIME.get(
+        str(model or "").strip(),
+        CUSTOM_VOCABULARY_LOCAL_RUNTIMES[0],
+    )
+    return runtime in CUSTOM_VOCABULARY_LOCAL_RUNTIMES
+
+
 def parse_custom_vocabulary(raw: str) -> list[str]:
     """Parse the raw custom-vocabulary setting into a list of terms.
 

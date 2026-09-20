@@ -1278,7 +1278,7 @@ class _BenchmarkMixin:
         select_buttons_row.addStretch(1)
         models_layout.addLayout(select_buttons_row)
         models_help = QtWidgets.QLabel(
-            "Only locally available models can be benchmarked here. Download missing models on the Local tab first."
+            "Only locally available models can be benchmarked here. Download missing models on the Models tab first."
         )
         models_help.setWordWrap(True)
         self._style_note_label(models_help)
@@ -1354,7 +1354,7 @@ class _BenchmarkMixin:
             "their device themselves (CUDA if present, otherwise CPU); Parakeet, "
             "Canary and Granite Speech 5.0 always run on the CPU. A run that "
             "measures a model on more than one device also decides which one "
-            "Auto starts with in Settings > General."
+            "Auto starts with in Settings > Transcription."
         )
         webgpu_device_note.setWordWrap(True)
         self._style_note_label(webgpu_device_note)

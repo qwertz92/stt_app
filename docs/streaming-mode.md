@@ -113,7 +113,7 @@ Characteristics:
 - `start_stream()` uses native 18-language code switching and automatic
   language detection. Formatting is built into Universal-3.5 Pro rather than
   enabled with the legacy `format_turns` parameter.
-- General-tab vocabulary is sent through Universal-3.5 Pro
+- Transcription-tab vocabulary is sent through Universal-3.5 Pro
   `keyterms_prompt` (up to 100 app terms); a multi-word phrase remains one
   keyterm.
 - `push_audio_chunk()` enqueues raw PCM16 through `client.stream()` (the SDK

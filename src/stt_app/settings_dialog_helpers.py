@@ -252,8 +252,9 @@ _CONCURRENT_MODE_IMMEDIATE_UI_VALUE = "insert_immediate"
 
 # The Run Benchmark window's device choice that measures a model on a GPU and
 # on the CPU, i.e. the one a user has to pick for `auto` to learn anything.
-# Named once because the General tab's note tells them to pick it by name, and
-# a second copy of that string would drift the moment the combo is reworded.
+# Named once because the Transcription tab's note tells them to pick it by
+# name, and a second copy of that string would drift the moment the combo is
+# reworded.
 BENCHMARK_GPU_CPU_COMPARISON_LABEL = "GPU + CPU comparison"
 
 # How the device values read in a sentence. The transcriber has its own,

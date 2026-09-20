@@ -1,9 +1,12 @@
-"""Settings dialog: Audio & Recording tab mixin (split from the General tab).
+"""Settings dialog: Audio tab mixin (split from the Transcription tab).
 
 Hosts the set-and-forget capture setup — microphone selection, warm stream,
 VAD, silence gate, start/completion tones, and recording retention — so the
-General tab stays focused on what changes during daily dictation (engine,
-model, language, mode, insertion).
+Transcription tab stays focused on what changes during daily dictation
+(engine, model, language, mode, insertion).
+
+The mixin and its attributes keep the names they were split out under; only
+the visible tab titles were shortened.
 """
 from __future__ import annotations
 
@@ -34,7 +37,7 @@ from .settings_dialog_helpers import (
 
 class _AudioTabMixin:
     def _build_audio_tab(self) -> None:
-        """Build the Audio & Recording tab.
+        """Build the Audio tab.
 
         Must run after ``_build_general_tab`` and ``_build_hotkeys_tab``: it
         applies the shared form label column across all three tabs so fields
@@ -329,7 +332,9 @@ class _AudioTabMixin:
         layout.addWidget(recordings_box)
 
         layout.addStretch(1)
-        self.tabs.addTab(tab, "Audio && Recording")
+        # "Audio" alone: recording settings are audio settings, and the
+        # shorter title keeps the eight-tab bar clear of scroll arrows.
+        self.tabs.addTab(tab, "Audio")
 
         # One measured label column across General, Hotkeys & Display and
         # this tab keeps fields aligned when switching between the three

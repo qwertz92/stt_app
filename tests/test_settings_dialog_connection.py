@@ -686,7 +686,7 @@ def test_a_failed_connection_test_moves_nothing_on_the_remote_tab():
     dialog.resize(900, 880)
     dialog.show()
     for index in range(dialog.tabs.count()):
-        if dialog.tabs.tabText(index) == "Remote":
+        if dialog.tabs.tabText(index) == "API Keys":
             dialog.tabs.setCurrentIndex(index)
             break
     else:  # pragma: no cover - the tab is always built

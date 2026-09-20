@@ -353,7 +353,9 @@ class _RemoteProvidersMixin:
 
         layout.addWidget(provider_box)
         layout.addStretch(1)
-        self.tabs.addTab(tab, "Remote")
+        # "API Keys": this tab holds credentials only. The remote model
+        # that runs is picked on Transcription, which "Remote" implied.
+        self.tabs.addTab(tab, "API Keys")
 
     def _on_provider_key_changed(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
@@ -530,7 +532,7 @@ class _RemoteProvidersMixin:
         if engine == DEFAULT_ENGINE:
             self.import_engine_note.setStyleSheet("color: #555;")
             self.import_engine_note.setText(
-                "Local import transcription stays independent from the main Local tab selection."
+                "Local import transcription stays independent from the model selected on the Transcription tab."
             )
             return
         credential_issue = self._import_engine_credential_issue(engine)

@@ -161,7 +161,7 @@ By default, the app does not keep Cohere and Granite ONNX models loaded after
 normal dictation. The Node helper process is closed after the transcription
 finishes. This avoids surprise RAM/VRAM use and avoids idle CPU load.
 
-The Local tab has an expert option:
+The Models tab has an expert option:
 
 `Keep Cohere/Granite ONNX model loaded after dictation`
 

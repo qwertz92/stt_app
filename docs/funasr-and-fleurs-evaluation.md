@@ -85,7 +85,7 @@ drives the **real-time WebSocket API in a batch fashion** (`funasr_provider.py`)
 
 1. Create an **Alibaba Cloud Model Studio (DashScope)** account and an
    **API key in the Singapore region**.
-2. In **Settings → Remote Provider API Keys**, paste the key into the **Fun-ASR**
+2. In **Settings → API Keys → Remote Provider API Keys**, paste the key into the **Fun-ASR**
    field and **Save API Keys**.
 3. Set **Connection Target → Fun-ASR only** and **Run Connection Test**.
 4. Set **Engine → Remote (Fun-ASR / Alibaba)** and pick a language (or `Auto`).

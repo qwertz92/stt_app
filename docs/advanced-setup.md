@@ -436,7 +436,7 @@ By default, keys are stored via keyring (Windows Credential Manager).
 
 If your environment blocks keyring writes/reads:
 
-1. Open **Settings → Remote**.
+1. Open **Settings → API Keys**.
 2. Enable **Allow insecure local API key fallback (plain text)**.
 3. Save again.
 
@@ -550,7 +550,7 @@ the result in the app.
 
 A finished run that measured a Cohere, Granite or Nemotron model on more than
 one device (**GPU + CPU comparison** or **All explicit targets**) also decides
-which device `Auto` starts with for that model in Settings -> General ->
+which device `Auto` starts with for that model in Settings -> Transcription ->
 **ONNX Device**; the run's status line says when that changed something. The
 rule and how to undo it are described under "Letting a benchmark decide what
 `Auto` starts with" in [models.md](models.md). The command-line benchmark never

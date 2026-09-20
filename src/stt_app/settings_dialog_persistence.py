@@ -168,6 +168,7 @@ class _PersistenceMixin:
         )
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
+        self._update_custom_vocabulary_note()
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(
             self.insert_target_combo,
@@ -254,7 +255,7 @@ class _PersistenceMixin:
 
         if not self._prime_local_model_views_from_available_cache():
             self._show_local_model_unverified_state(
-                "Open Local or Benchmark to verify local model availability in the background."
+                "Open Models or Benchmark to verify local model availability in the background."
             )
         self._update_engine_indicator()
         self._refresh_history_list(force=True)

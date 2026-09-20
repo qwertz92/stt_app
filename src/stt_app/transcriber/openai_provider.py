@@ -49,7 +49,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         if not api_key:
             raise TranscriptionError(
                 "OpenAI API key is missing. "
-                "Enter your key in Settings -> Remote Provider API Keys."
+                "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL

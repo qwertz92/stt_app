@@ -68,8 +68,7 @@ class AudioSystemUnavailableError(RuntimeError):
         super().__init__(
             "The Windows audio system did not respond, so the microphone "
             "list is unavailable. This usually clears by itself: try again, "
-            "or press Refresh next to the microphone in Settings -> Audio & "
-            "Recording."
+            "or press Refresh next to the microphone in Settings -> Audio."
         )
 
 

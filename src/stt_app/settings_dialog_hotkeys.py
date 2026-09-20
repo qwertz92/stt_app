@@ -1,9 +1,10 @@
-"""Settings dialog: Hotkeys & Display tab mixin (split from the General tab).
+"""Settings dialog: Hotkeys & Display tab mixin (split from the Transcription
+tab).
 
 Hosts the set-once controls -- the four global hotkeys, the overlay corner and
-the tray middle-click toggle -- so the General tab holds only what changes
-during daily dictation (engine, model, language, mode, insertion) and fits
-without scrolling.
+the tray middle-click toggle -- so the Transcription tab holds only what
+changes during daily dictation (engine, model, language, mode, insertion) and
+fits without scrolling.
 """
 from __future__ import annotations
 

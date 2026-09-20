@@ -421,7 +421,6 @@ class SettingsDialog(
         self._build_history_tab()
         self._build_import_tab()
         self._build_benchmark_tab()
-        self._configure_combo_popups()
 
         # --- Bottom buttons ---
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
@@ -467,6 +466,10 @@ class SettingsDialog(
         root.addWidget(self.engine_indicator)
         root.addWidget(self.tabs, 1)
         root.addLayout(buttons)
+        # After the root layout, not before it: this walks the dialog's
+        # children, and until `self.tabs` is parented here every combo inside
+        # a tab is invisible to it (see the docstring).
+        self._configure_combo_popups()
         self._reserve_feedback_button_widths()
 
     def _set_bottom_status(self, text: str, color: str = "#2e7d32") -> None:
@@ -686,16 +689,24 @@ class SettingsDialog(
     @staticmethod
     def _field_with_hint(
         control: QtWidgets.QWidget,
-        hint: QtWidgets.QLabel,
+        *hints: QtWidgets.QLabel,
     ) -> QtWidgets.QWidget:
-        """Wrap *control* and its *hint* label in a tight vertical group."""
+        """Wrap *control* and its *hints* in a tight vertical group.
+
+        More than one hint is for a field that needs both a note that changes
+        with the selection and one that does not -- the Vocabulary row, whose
+        changing note says whether the selected model uses the terms while the
+        static one explains how to type them. They stack in the order given,
+        with the same 2 px gap that ties the first one to the control.
+        """
         wrapper = QtWidgets.QWidget()
         wrapper.setProperty("fieldWithHint", True)
         layout = QtWidgets.QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
         layout.addWidget(control)
-        layout.addWidget(hint)
+        for hint in hints:
+            layout.addWidget(hint)
         return wrapper
 
     @staticmethod
@@ -788,14 +799,52 @@ class SettingsDialog(
         )
 
     def _configure_combo_popups(self) -> None:
+        """Scroll every combo popup by pixel, so none can paint an empty strip.
+
+        **Call this after the root layout has parented `self.tabs`.** It walks
+        the dialog's children, and called from the middle of `_build_ui` it
+        reached 3 of the 21 combos -- only the pop-out Run Benchmark window's
+        three, which are parented to the dialog directly -- so every combo
+        inside a tab kept Qt's defaults. That is what let the reported strip
+        under the last model exist at all.
+
+        Why the scroll mode is the fix, and not the item heights.
+        `QComboBox::showPopup` sizes the popup by summing
+        `view->visualRect(index).height()` over the first `maxVisibleItems`
+        *entries*, and `QComboBoxDelegate::sizeHint` answers
+        `PM_DefaultFrameWidth` -- 2 px here -- for a separator against 30 px
+        for a model row. QListView's default `ScrollPerItem` then scrolls
+        whole entries: the bottom-most position shows the last N entries and
+        paints the viewport's remaining height as empty space under them.
+        Measured on the Model combo (15 entries with the separator, 30 px
+        rows, maxVisibleItems 10 at the time): 2 px of empty viewport with 1
+        to 4 models downloaded, and **28 px -- a whole row -- with 10 to 13**,
+        where the separator sits outside the first ten entries so the popup is
+        a full 300 px while its last ten entries measure only 272 px.
+        Per-pixel scrolling ends the bottom position at the content's last
+        pixel whatever the entries measure, which is also what every list and
+        table in this dialog already uses.
+
+        Deliberately *not* done here, although the version that never ran did:
+        `setUniformItemSizes(True)` would give the separator a model row's
+        30 px and draw a thin line in the middle of it, trading the strip for
+        a gap; and replacing the view with a plain `QListView` drops Qt's own
+        `QComboBoxListView`, which paints the popup background and selects
+        across the whole row -- the reason the three benchmark-window combos
+        look different from the rest today.
+
+        `combo.view()` builds the popup container, so this costs 2.6 ms for
+        the 21 combos at build time (measured); doing it lazily would need a
+        `showPopup` override per combo class for a third of a frame.
+        """
         for combo in self.findChildren(QtWidgets.QComboBox):
-            view = QtWidgets.QListView(combo)
-            view.setUniformItemSizes(True)
-            view.setLayoutMode(QtWidgets.QListView.SinglePass)
-            view.setSpacing(0)
-            view.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerItem)
-            combo.setView(view)
+            # 12 rather than Qt's 10: the local Model list has 14 entries plus
+            # its separator, and the dialog's own combos have asked for 12
+            # since this method was written.
             combo.setMaxVisibleItems(12)
+            combo.view().setVerticalScrollMode(
+                QtWidgets.QAbstractItemView.ScrollPerPixel
+            )
 
     @staticmethod
     def _disable_combo_popup_effects() -> None:

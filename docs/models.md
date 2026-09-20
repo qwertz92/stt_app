@@ -196,7 +196,7 @@ laptop performance and German dictation quality still need real user samples.
 
 ### Language selection
 
-Settings -> General rebuilds the language list for the selected engine and
+Settings -> Transcription rebuilds the language list for the selected engine and
 model. Auto is selected by default when supported. The app keeps one canonical
 language code and adapts it where a provider requires a different code format,
 such as ElevenLabs Scribe's three-letter codes.
@@ -245,7 +245,7 @@ not a replacement for a dedicated long-form transcription pipeline.
 
 Unlike faster-whisper and Nemotron, Cohere and Granite are not preloaded when
 the app starts. This avoids expensive background CPU model loading before the
-user actually starts a local ONNX transcription. The Local tab has an
+user actually starts a local ONNX transcription. The Models tab has an
 expert setting to keep the last Cohere or Granite ONNX model loaded after
 dictation when warm latency matters more than RAM/VRAM use.
 
@@ -273,7 +273,7 @@ WebGPU or DirectML is available, so Intel, AMD, and NVIDIA GPUs are all valid
 targets. If neither GPU runtime can be selected by the JavaScript runtime, the
 model uses CPU and will likely be slower than `large-v3-turbo`.
 
-**Choosing the device yourself.** Settings → General → **ONNX Device** applies to
+**Choosing the device yourself.** Settings → Transcription → **ONNX Device** applies to
 the local ONNX models (Cohere, Granite, Nemotron). It offers the same choices as
 the benchmark, so a device that proves faster there can be selected for everyday
 dictation:
@@ -301,7 +301,7 @@ choose **GPU + CPU comparison** (or **All explicit targets**) under ONNX
 Device, and run it. When the run finishes, the app stores, per model, the
 device it measured as fastest, and `Auto` tries that device first from then on;
 the rest of the chain stays in place as the fallback. The note under
-**ONNX Device** on the General tab says which device `Auto` starts with.
+**ONNX Device** on the Transcription tab says which device `Auto` starts with.
 
 The rule is deliberately conservative:
 
@@ -336,7 +336,7 @@ On first use, the app downloads the selected model automatically from HuggingFac
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
-The Settings **Local** tab downloads models one at a time. You can select and
+The Settings **Models** tab downloads models one at a time. You can select and
 queue more models while the current download continues. The active and queued
 models are marked in the list, and the tab shows approximate percentage,
 downloaded size, MB/s, and Mbit/s. Percentage and speed are estimated from
@@ -629,7 +629,7 @@ This is why you cannot just drop files into a folder — the download script and
 
 ### Reclaiming disk from retired models
 
-The Local tab lists and deletes only models the app currently offers, so when a
+The Models tab lists and deletes only models the app currently offers, so when a
 model is retired its downloaded snapshot stays on disk and becomes invisible to
 that list. Granite Speech 4.1 **Plus** and **NAR** were retired on 2026-08-26
 and are the only case so far; if you ever downloaded them, their caches are
