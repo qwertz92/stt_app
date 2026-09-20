@@ -32,6 +32,11 @@ from ..config import (
     language_modes_for_selection,
 )
 from ..model_download_coordinator import run_coordinated_download
+from ..model_download_progress import (
+    ProgressHook,
+    hub_progress_tqdm_class,
+    report_unknown_download_progress,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -466,7 +471,17 @@ def find_cached_webgpu_models(model_dir: str = "") -> list[str]:
     return [model_name for model_name in LOCAL_ONNX_MODEL_SIZES if model_name in found]
 
 
-def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
+def download_webgpu_model_snapshot(
+    model_name: str,
+    model_dir: str = "",
+    *,
+    progress_hook: ProgressHook | None = None,
+) -> str:
+    """Fetch one local ONNX model, optionally reporting `(done, total)` bytes.
+
+    See `download_model_snapshot` for what the hook is; without one the call
+    is unchanged.
+    """
     try:
         from huggingface_hub import snapshot_download  # type: ignore
     except ImportError as exc:
@@ -496,6 +511,9 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
         # costs another concurrent writer per download.
         "max_workers": 2,
     }
+    tqdm_class = hub_progress_tqdm_class(progress_hook)
+    if tqdm_class is not None:
+        kwargs["tqdm_class"] = tqdm_class
 
     try:
         path = str(snapshot_download(repo_id, **kwargs))
@@ -505,6 +523,11 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
         # ModelScope mirror, which hosts the same repo IDs and serves the LFS
         # weights from its own CDN. The flat local_dir layout is identical to
         # what snapshot_download produces, so the app finds it unchanged.
+        # The mirror reports nothing, so the last figure would freeze on
+        # screen for the whole transfer; retire it and let the caller fall
+        # back to directory growth, which the mirror's sequential writes make
+        # exact.
+        report_unknown_download_progress(progress_hook)
         path = _download_onnx_via_modelscope(
             repo_id, local_dir, layout.allow_patterns, hf_error, model_name
         )

@@ -1614,7 +1614,7 @@ def test_remote_provider_key_fields_align_with_azure_endpoint():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "Remote"
+        if dialog.tabs.tabText(index) == "API Keys"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     dialog.show()
@@ -1636,7 +1636,7 @@ def test_remote_provider_labels_align_with_key_field_center():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "Remote"
+        if dialog.tabs.tabText(index) == "API Keys"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     dialog.show()
@@ -1915,10 +1915,17 @@ def test_local_model_download_progress_shows_percent_speed_and_queue(monkeypatch
 
     assert dialog.local_model_download_progress_bar.isHidden() is False
     assert dialog.local_model_download_progress_bar.value() == 50
-    assert "approx. 50%" in dialog.local_models_action_label.text()
-    assert "50.0 MB/s" in dialog.local_models_action_label.text()
-    assert "400.0 Mbit/s" in dialog.local_models_action_label.text()
-    assert "1 model queued" in dialog.local_models_action_label.text()
+    shown = dialog.local_models_action_label.text()
+    assert "242 of 486 MB" in shown
+    # "approx." because nothing reported a total here: the fallback measures
+    # the destination directory and the size comes from the app's own table.
+    assert "approx. 50%" in shown
+    assert "50.0 MB/s" in shown
+    assert "400.0 Mbit/s" in shown
+    # The queue has a line of its own now, naming what starts next by the
+    # name the list shows rather than by a bare count.
+    assert dialog.local_model_download_queue_label.text() == "Next: base"
+    assert dialog.local_model_download_queue_label.isHidden() is False
     _ = app
 
 
@@ -3720,12 +3727,14 @@ def test_settings_dialog_logs_local_tab_timing(caplog, monkeypatch):
     QtTest.QTest.qWait(10)
 
     messages = [record.getMessage() for record in caplog.records]
+    # The timing log names the tab by its visible title, which is "Models"
+    # since the rename; the attribute is still `_local_tab_index`.
     assert any(
-        "settings_timing event=tab_change" in message and "tab=Local" in message
+        "settings_timing event=tab_change" in message and "tab=Models" in message
         for message in messages
     )
     assert any(
-        "settings_timing event=tab_paint" in message and "tab=Local" in message
+        "settings_timing event=tab_paint" in message and "tab=Models" in message
         for message in messages
     )
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -3747,7 +3756,7 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "Remote"
+        if dialog.tabs.tabText(index) == "API Keys"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     app.processEvents()

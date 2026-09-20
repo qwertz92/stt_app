@@ -76,7 +76,9 @@ from .config import (
 from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
 from .last_recording_store import LastRecordingStore
 from .local_model_download import (
+    DownloadBytesSample,
     model_download_process_error,
+    model_download_process_progress,
     start_model_download_process,
     terminate_model_download_process,
 )
@@ -129,6 +131,21 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
 _PRELOAD_PHASE_QUEUED = "queued"
 _PRELOAD_PHASE_DOWNLOAD = "download"
 _PRELOAD_PHASE_LOAD = "load"
+
+
+def _local_model_display_name(model_name: str) -> str:
+    """The model's name as every picker in the app spells it.
+
+    The overlay used to name a download by its settings id ("Downloading
+    'granite-speech-5.0-470m-turboctc'"), which matches nothing the user can
+    see on screen. The label table lives with the settings dialog's helpers,
+    where the pickers read it; the import is inside the function so that
+    module stays off the controller's own import path until a progress line
+    needs a name.
+    """
+    from .settings_dialog_helpers import local_model_short_label
+
+    return local_model_short_label(model_name)
 
 
 def _join_transcripts(texts: list[str]) -> str:
@@ -2365,7 +2382,7 @@ class DictationController(QtCore.QObject):
                 f"No speech detected (loudest 100 ms {peak_level:.4f}, gate "
                 f"{threshold:.4f}). Nothing was transcribed; {kept}. If this "
                 "was speech, lower the silence gate in "
-                "Settings -> Audio & Recording."
+                "Settings -> Audio."
             ),
         )
         return True
@@ -4044,6 +4061,17 @@ class DictationController(QtCore.QObject):
             return f" Press {hotkey} to {action}."
         return f" Use the tray's {TRAY_CANCEL_ACTION_LABEL} to {action}."
 
+    def preload_download_progress(self) -> DownloadBytesSample | None:
+        """The preload download's own byte counters, if it is reporting any.
+
+        The Settings Local tab renders a controller-started download as its
+        own, so it needs the same numbers this overlay line uses rather than
+        a second measurement of the directory.
+        """
+        with self._preload_download_lock:
+            process = self._preload_download_process
+        return model_download_process_progress(process)
+
     def _preload_progress_detail(self) -> str:
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
@@ -4094,14 +4122,29 @@ class DictationController(QtCore.QObject):
                 "now; transcription waits for this model."
                 f"{self._preload_abort_hint('abort loading')}"
             )
-        downloaded_bytes = estimate_cached_model_bytes(
-            model_name,
-            getattr(self._settings, "model_dir", ""),
-        )
+        # The worker's own byte counters when it reports them, the size of
+        # the download destination otherwise -- see
+        # `model_download_progress` for why the directory alone was not good
+        # enough once the Hub moved its repos onto Xet storage.
+        sample = self.preload_download_progress()
+        if sample is not None:
+            downloaded_bytes, reported_total = (
+                sample.downloaded_bytes,
+                sample.total_bytes,
+            )
+        else:
+            downloaded_bytes = estimate_cached_model_bytes(
+                model_name,
+                getattr(self._settings, "model_dir", ""),
+            )
+            reported_total = 0
 
         progress = self._preload_speed_tracker.measure(
             model_name,
             downloaded_bytes,
+            reported_total_bytes=reported_total,
+            display_name=_local_model_display_name(model_name),
+            from_downloader=sample is not None,
         )
         detail = format_model_download_progress(
             progress,

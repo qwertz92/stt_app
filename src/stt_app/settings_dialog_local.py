@@ -19,6 +19,7 @@ from .config import (
 from .dialog_style import make_label_selectable
 from .local_model_download import (
     model_download_process_error,
+    model_download_process_progress,
     terminate_model_download_process,
 )
 from .model_download_coordinator import (
@@ -26,16 +27,43 @@ from .model_download_coordinator import (
     ModelDownloadCanceled,
     model_download_coordinator,
 )
-from .model_download_progress import format_model_download_progress
+from .model_download_progress import (
+    format_download_queue_line,
+    format_model_download_progress,
+)
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
+    ElidingLabel,
     _emit_background_signal,
+    local_model_short_label,
 )
 from .ui_feedback import restore_vertical_scrollbar
 
 _logger = logging.getLogger(__name__)
+
+# Vertical breathing room inside the download bar, on top of the font's own
+# height. Four pixels of it are the 1 px border plus the 1 px groove inset on
+# each side; the rest keeps the percentage off the rounded ends.
+_DOWNLOAD_PROGRESS_BAR_PADDING_PX = 8
+
+# The dialog's own accent (`#1a73e8`, the selected tab's underline) on a
+# neutral groove, with the same 4 px radius the rest of the dialog uses.
+_DOWNLOAD_PROGRESS_BAR_STYLESHEET = """
+QProgressBar {
+    border: 1px solid #bbb;
+    border-radius: 4px;
+    background: #f0f0f0;
+    color: #0d47a1;
+    font-size: 11px;
+    text-align: center;
+}
+QProgressBar::chunk {
+    border-radius: 3px;
+    background: #1a73e8;
+}
+"""
 
 
 def _facade():
@@ -163,7 +191,8 @@ class _LocalModelsMixin:
         layout.setSpacing(6)
 
         active_model_note = QtWidgets.QLabel(
-            "The active local model is selected on the General tab (Engine && Mode)."
+            "This tab downloads and removes local models. The one that runs is "
+            "selected on the Transcription tab (Engine && Mode)."
         )
         active_model_note.setWordWrap(True)
         self._style_note_label(active_model_note)
@@ -327,6 +356,19 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar = QtWidgets.QProgressBar()
         self.local_model_download_progress_bar.setRange(0, 100)
         self.local_model_download_progress_bar.setTextVisible(True)
+        self.local_model_download_progress_bar.setAlignment(QtCore.Qt.AlignCenter)
+        # Pinned, so the digit count of the percentage ("9%" to "100%") cannot
+        # resize it -- but measured from the font rather than written as a
+        # constant: Windows' "Text size" raises the application font without
+        # the DPI, and a pixel constant would then clip the text it exists to
+        # show.
+        self.local_model_download_progress_bar.setFixedHeight(
+            self.local_model_download_progress_bar.fontMetrics().height()
+            + _DOWNLOAD_PROGRESS_BAR_PADDING_PX
+        )
+        self.local_model_download_progress_bar.setStyleSheet(
+            _DOWNLOAD_PROGRESS_BAR_STYLESHEET
+        )
         # Keep its space while hidden, for the same reason the action label
         # above it is reserved: without this the bar appearing the instant a
         # download starts pulled Download/Cancel/Delete 28 px up -- with the
@@ -337,12 +379,27 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar.setSizePolicy(policy)
         self.local_model_download_progress_bar.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_progress_bar)
+
+        # What the queue will start next. A row reading "Queued, 2 of 3" says
+        # where a model stands in the line; while the user is watching this
+        # area it does not say what the line is. Elided rather than wrapped,
+        # and its space is retained, so neither a long model name nor the
+        # download starting or ending moves the buttons above it.
+        self.local_model_download_queue_label = ElidingLabel()
+        self._style_note_label(self.local_model_download_queue_label)
+        queue_policy = self.local_model_download_queue_label.sizePolicy()
+        queue_policy.setRetainSizeWhenHidden(True)
+        self.local_model_download_queue_label.setSizePolicy(queue_policy)
+        self.local_model_download_queue_label.setVisible(False)
+        local_models_layout.addWidget(self.local_model_download_queue_label)
         self._show_local_model_unverified_state(
             "Open this tab to verify local model availability in the background."
         )
 
         layout.addWidget(self.local_models_box, 1)
-        self._local_tab_index = self.tabs.addTab(tab, "Local")
+        # "Models": this tab downloads and deletes them. "Local" read as the
+        # place to choose one, which is the Transcription tab.
+        self._local_tab_index = self.tabs.addTab(tab, "Models")
 
         # The controller downloads models on its own (preload after a save, or
         # lazily on first use) without going through this tab's queue, so the
@@ -399,8 +456,8 @@ class _LocalModelsMixin:
         if not getattr(self, "_local_model_download_bar_shown", False):
             return
         self._local_model_download_bar_shown = False
-        if hasattr(self, "local_model_download_progress_bar"):
-            self.local_model_download_progress_bar.setVisible(False)
+        self._show_download_widgets(False)
+        self._set_download_queue_line([])
         self._local_model_download_speed_tracker.reset()
         # Clear the stale "Downloading ... 27% ... measuring speed" line too;
         # hiding only the bar left it on screen indefinitely.
@@ -1715,7 +1772,7 @@ class _LocalModelsMixin:
                 "Waiting for another program to finish using the model "
                 "cache. The download starts as soon as it is free."
             )
-            self.local_model_download_progress_bar.setVisible(False)
+            self._show_download_widgets(False)
             self._local_model_download_bar_shown = False
             return
         # Deliberately not the snapshot's first element: that folds in a merely
@@ -1733,28 +1790,101 @@ class _LocalModelsMixin:
                 return
             model_name, model_dir = preload_active, self.model_dir_edit.text().strip()
             queued = []
+            from_preload = True
         else:
             model_name, model_dir = downloading
-        downloaded_bytes = _facade().estimate_cached_model_bytes(model_name, model_dir)
+            from_preload = False
+        downloaded_bytes, reported_total, reported = self._download_bytes(
+            model_name, model_dir, from_preload=from_preload
+        )
         progress = self._local_model_download_speed_tracker.measure(
             model_name,
             downloaded_bytes,
+            reported_total_bytes=reported_total,
+            display_name=local_model_short_label(model_name),
+            from_downloader=reported,
         )
 
         self.local_models_action_label.setStyleSheet("color: #0d47a1;")
         self.local_models_action_label.setText(
-            format_model_download_progress(progress, queued_count=len(queued))
+            format_model_download_progress(progress)
         )
         if progress.percent is None:
             self.local_model_download_progress_bar.setRange(0, 0)
         else:
             self.local_model_download_progress_bar.setRange(0, 100)
             self.local_model_download_progress_bar.setValue(progress.percent)
-            self.local_model_download_progress_bar.setFormat(
-                f"{model_name}: approx. %p%"
-            )
-        self.local_model_download_progress_bar.setVisible(True)
+            self.local_model_download_progress_bar.setFormat("%p%")
+        self._set_download_queue_line(
+            [local_model_short_label(name) for name, _model_dir in queued]
+        )
+        self._show_download_widgets(True)
         self._local_model_download_bar_shown = True
+
+    def _download_bytes(
+        self,
+        model_name: str,
+        model_dir: str,
+        *,
+        from_preload: bool,
+    ) -> tuple[int, int, bool]:
+        """`(downloaded, reported total, came from the downloader)`.
+
+        The worker's own byte counters when it has reported any, and the size
+        of the download destination otherwise -- an older worker, a
+        transcriber downloading from its own load path, or the moment before
+        the first event. A reported total of 0 means "no figure from the
+        downloader", and the estimate in `MODEL_ESTIMATED_SIZE_MB` is used.
+
+        The two sources are never mixed: which download is being shown was
+        decided by the caller, and the other one's sample is about a different
+        model.
+        """
+        if from_preload:
+            sample = self._preload_download_sample()
+        else:
+            with self._local_model_download_lock:
+                # getattr for the same reason the snapshot uses it: the
+                # visibility tests drive this mixin with a light stub.
+                process = getattr(self, "_local_model_download_process", None)
+            sample = model_download_process_progress(process)
+        if sample is not None:
+            return sample.downloaded_bytes, sample.total_bytes, True
+        return _facade().estimate_cached_model_bytes(model_name, model_dir), 0, False
+
+    def _preload_download_sample(self):
+        """The controller's preload download sample, if it is reporting one."""
+        getter = getattr(
+            getattr(self, "_controller", None), "preload_download_progress", None
+        )
+        if not callable(getter):
+            return None
+        try:
+            return getter()
+        except Exception:
+            return None
+
+    def _set_download_queue_line(self, queued_labels: list[str]) -> None:
+        label = getattr(self, "local_model_download_queue_label", None)
+        if label is None:
+            return
+        text = format_download_queue_line(queued_labels)
+        label.setText(text)
+        label.setToolTip(text)
+
+    def _show_download_widgets(self, visible: bool) -> None:
+        """Show or hide the bar and the queue line together.
+
+        Both retain their space while hidden, so this changes what is painted
+        and never the geometry of the buttons above them.
+        """
+        for name in (
+            "local_model_download_progress_bar",
+            "local_model_download_queue_label",
+        ):
+            widget = getattr(self, name, None)
+            if widget is not None:
+                widget.setVisible(visible)
 
     def _set_local_models_action_text(
         self,
@@ -1795,7 +1925,8 @@ class _LocalModelsMixin:
         self._active_local_model_download_thread = None
         self._local_model_download_progress_timer.stop()
         self._local_model_download_speed_tracker.reset()
-        self.local_model_download_progress_bar.setVisible(False)
+        self._show_download_widgets(False)
+        self._set_download_queue_line([])
         # Clear the shown-flag with it. Leaving it set let the Local tab's 1 Hz
         # watchdog run the full hide body a second later, which blanks the
         # "Downloaded X" / "Download failed: <reason>" line the user needs.

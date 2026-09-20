@@ -38,6 +38,11 @@ from ..config import (
     language_modes_for_selection,
     parse_custom_vocabulary,
 )
+from ..model_download_progress import (
+    ProgressHook,
+    hub_progress_tqdm_class,
+    report_unknown_download_progress,
+)
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import merge_rolling_window, merge_rolling_window_transcript
 from ..vad import measure_longest_speech_run_s, measure_peak_windowed_rms_pcm
@@ -427,11 +432,26 @@ def format_model_download_error(model_name: str, exc: Exception) -> str:
     return f"Model download failed for '{model_name}': {exc}"
 
 
-def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
+def download_model_snapshot(
+    model_name: str,
+    model_dir: str = "",
+    *,
+    progress_hook: ProgressHook | None = None,
+) -> str:
+    """Fetch one model, optionally reporting `(downloaded, total)` bytes.
+
+    `progress_hook` is how the download worker turns huggingface_hub's own
+    accounting into the percentage the UI shows; see
+    `model_download_progress.hub_progress_tqdm_class`. Without one the call is
+    byte-for-byte what it always was, which is what the transcribers' own
+    load-path downloads and `scripts/download_model.py` still make.
+    """
     if model_name in LOCAL_ONNX_MODEL_SIZES:
         from .local_webgpu_asr import download_webgpu_model_snapshot
 
-        return download_webgpu_model_snapshot(model_name, model_dir)
+        return download_webgpu_model_snapshot(
+            model_name, model_dir, progress_hook=progress_hook
+        )
 
     try:
         from huggingface_hub import snapshot_download  # type: ignore
@@ -449,12 +469,15 @@ def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
     }
     if model_dir and model_dir.strip():
         kwargs["cache_dir"] = model_dir.strip()
+    tqdm_class = hub_progress_tqdm_class(progress_hook)
+    if tqdm_class is not None:
+        kwargs["tqdm_class"] = tqdm_class
 
     try:
         return str(snapshot_download(repo_id, **kwargs))
     except Exception as exc:
         return _download_faster_whisper_via_modelscope(
-            repo_id, model_dir, model_name, exc
+            repo_id, model_dir, model_name, exc, progress_hook=progress_hook
         )
 
 
@@ -463,6 +486,8 @@ def _download_faster_whisper_via_modelscope(
     model_dir: str,
     model_name: str,
     hf_error: Exception,
+    *,
+    progress_hook: ProgressHook | None = None,
 ) -> str:
     """Fall back to the ModelScope mirror when Hugging Face is unreachable.
 
@@ -488,6 +513,11 @@ def _download_faster_whisper_via_modelscope(
         repo_id,
         hf_error,
     )
+    # The mirror has no progress hook, so the last reported figure would have
+    # stayed frozen on screen for the whole transfer. Retire it: the mirror
+    # writes its files sequentially into the destination, which is exactly the
+    # case directory growth measures correctly.
+    report_unknown_download_progress(progress_hook)
     try:
         path = ms.download_faster_whisper_to_cache(
             repo_id, cache_dir, allow_patterns=_DOWNLOAD_ALLOW_PATTERNS
@@ -1422,7 +1452,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             "streaming_noise_floor_above_gate: no audio below "
             "silence_gate_threshold=%.4f for %.0f s. If the room really is "
             "this loud, pause detection and the segment protection are "
-            "inactive -- raise the threshold in Settings > Audio && Recording "
+            "inactive -- raise the threshold in Settings > Audio "
             "or reduce microphone gain. Continuous speech without a pause "
             "looks the same from here.",
             self.silence_gate_threshold,

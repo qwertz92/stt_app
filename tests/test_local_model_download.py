@@ -1,7 +1,31 @@
+import io
+import json
+import logging
 import subprocess
 from types import SimpleNamespace
 
 import stt_app.local_model_download as local_model_download
+from stt_app.model_download_progress import (
+    DOWNLOAD_EVENT_PREFIX,
+    DOWNLOAD_PROGRESS_UNKNOWN,
+)
+
+
+def _worker_stdout(*events: object) -> io.StringIO:
+    lines = []
+    for event in events:
+        if isinstance(event, str):
+            lines.append(event)
+        else:
+            lines.append(f"{DOWNLOAD_EVENT_PREFIX}{json.dumps(event)}")
+    return io.StringIO("\n".join(lines) + "\n")
+
+
+def _drain(stream) -> local_model_download._ProgressState:
+    """Run the reader inline, as its thread would."""
+    state = local_model_download._ProgressState()
+    local_model_download._pump_progress(stream, state, "small")
+    return state
 
 
 def test_model_download_command_uses_module_worker(monkeypatch):
@@ -37,22 +61,110 @@ def test_model_download_command_uses_frozen_worker_arg(monkeypatch):
     ]
 
 
-def test_start_model_download_process_disables_worker_progress(monkeypatch):
+def test_start_model_download_process_pipes_and_drains_the_worker(monkeypatch):
+    """stdout is a pipe now, because the worker reports its byte counts on it.
+
+    A pipe nobody reads blocks the child once the OS buffer fills, and this
+    one is written from inside hf_xet's progress callback -- so the reader
+    thread is part of the contract, not an optimisation.
+    """
     captured = {}
 
     def fake_popen(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
-        return SimpleNamespace()
+        return SimpleNamespace(stdout=_worker_stdout())
 
     monkeypatch.setattr(local_model_download.subprocess, "Popen", fake_popen)
 
-    local_model_download.start_model_download_process("small")
+    process = local_model_download.start_model_download_process("small")
 
     assert captured["env"]["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
-    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stdout"] is subprocess.PIPE
     assert captured["stderr"].readable() is True
     assert captured["stderr"].writable() is True
+    assert process._stt_progress_reader is not None
+    process._stt_progress_reader.join(timeout=5)
+
+
+def test_the_reader_publishes_the_latest_byte_sample():
+    state = _drain(
+        _worker_stdout(
+            {"event": "bytes", "done": 0, "total": 552_442_697},
+            {"event": "bytes", "done": 212_000_000, "total": 552_442_697},
+        )
+    )
+
+    sample = state.get()
+    assert sample is not None
+    assert sample.downloaded_bytes == 212_000_000
+    assert sample.total_bytes == 552_442_697
+
+
+def test_library_noise_on_stdout_is_not_a_sample():
+    state = _drain(
+        _worker_stdout(
+            "Downloading shards:  40%|####      | 2/5",
+            {"event": "bytes", "done": 7, "total": 9},
+            "",
+        )
+    )
+
+    assert state.get().downloaded_bytes == 7
+
+
+def test_a_worker_that_reports_nothing_leaves_the_caller_on_directory_growth(
+    caplog,
+):
+    """Every build before this one reported nothing, and so does a
+    huggingface_hub that stops feeding the hook. Both must keep working."""
+    with caplog.at_level(logging.INFO, logger=local_model_download.__name__):
+        state = _drain(_worker_stdout("no events here"))
+
+    assert state.get() is None
+    assert "model_download_progress_absent" in caplog.text
+
+
+def test_a_malformed_event_keeps_the_last_sample_and_is_logged_once(caplog):
+    local_model_download._malformed_logged.discard("small")
+    with caplog.at_level(logging.WARNING, logger=local_model_download.__name__):
+        state = _drain(
+            _worker_stdout(
+                {"event": "bytes", "done": 5, "total": 9},
+                f"{DOWNLOAD_EVENT_PREFIX}{{not json",
+                f"{DOWNLOAD_EVENT_PREFIX}{{\"event\": \"bytes\", \"done\": \"x\"}}",
+                {"event": "bytes", "done": -7, "total": 9},
+            )
+        )
+
+    assert state.get().downloaded_bytes == 5
+    assert caplog.text.count("model_download_progress_event_malformed") == 1
+
+
+def test_the_unknown_sentinel_drops_the_sample():
+    """The ModelScope mirror has no hook. Keeping the last figure would have
+    frozen it on screen for the whole mirror transfer."""
+    state = _drain(
+        _worker_stdout(
+            {"event": "bytes", "done": 212_000_000, "total": 552_442_697},
+            {
+                "event": "bytes",
+                "done": DOWNLOAD_PROGRESS_UNKNOWN,
+                "total": DOWNLOAD_PROGRESS_UNKNOWN,
+            },
+        )
+    )
+
+    assert state.get() is None
+    assert state.ever_reported is True
+
+
+def test_model_download_process_progress_tolerates_a_process_without_one():
+    assert local_model_download.model_download_process_progress(None) is None
+    assert (
+        local_model_download.model_download_process_progress(SimpleNamespace())
+        is None
+    )
 
 
 def test_model_download_process_error_reads_and_closes_spooled_log():
@@ -63,9 +175,10 @@ def test_model_download_process_error_reads_and_closes_spooled_log():
                 encoding="utf-8",
             )
             self._stt_error_log.write("first line\nlast useful detail\n")
+            self.stdout = io.StringIO()
 
-        def communicate(self, timeout=None):
-            return None, None
+        def wait(self, timeout=None):
+            return 0
 
     process = _Process()
 
@@ -128,9 +241,9 @@ def test_a_child_that_ignores_terminate_is_waited_for_after_the_kill():
 def test_reading_the_error_never_waits_on_the_child_for_ever():
     """This runs on the download queue worker, which holds the download slot.
 
-    An unbounded `communicate()` on a child that survived terminate and kill
-    blocked it permanently: the Settings cancel never completed, the slot was
-    never handed back, and every later download in this process -- plus the
+    An unbounded wait on a child that survived terminate and kill blocked it
+    permanently: the Settings cancel never completed, the slot was never
+    handed back, and every later download in this process -- plus the
     benchmark worker and scripts/download_model.py, which share the
     machine-wide lock -- waited on it until the app was restarted.
     """
@@ -139,12 +252,13 @@ def test_reading_the_error_never_waits_on_the_child_for_ever():
     class _WedgedProcess:
         def __init__(self):
             self._killed = False
+            self.stdout = io.StringIO()
 
-        def communicate(self, timeout=None):
+        def wait(self, timeout=None):
             calls.append(timeout)
             if not self._killed:
                 raise subprocess.TimeoutExpired("worker", timeout)
-            return None, "worker gave up\n"
+            return -9
 
         def kill(self):
             calls.append("kill")
@@ -152,8 +266,28 @@ def test_reading_the_error_never_waits_on_the_child_for_ever():
 
     process = _WedgedProcess()
 
-    assert (
-        local_model_download.model_download_process_error(process)
-        == "worker gave up"
-    )
+    assert local_model_download.model_download_process_error(process) == ""
     assert calls == [5.0, "kill", 5.0], calls
+
+
+def test_reading_the_error_does_not_read_the_pipe_a_second_time():
+    """`communicate` would spawn a reader of its own for stdout, which the
+    progress reader thread is already draining."""
+
+    class _Process:
+        def __init__(self):
+            self.stdout = io.StringIO()
+            self.communicated = False
+
+        def wait(self, timeout=None):
+            return 0
+
+        def communicate(self, timeout=None):
+            self.communicated = True
+            return None, None
+
+    process = _Process()
+    local_model_download.model_download_process_error(process)
+
+    assert process.communicated is False
+    assert process.stdout.closed is True
