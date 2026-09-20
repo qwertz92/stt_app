@@ -26,6 +26,7 @@ from ..config import (
     CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     PARAKEET_MODEL_SIZE,
@@ -283,13 +284,26 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         # transcribing. The UI keeps `auto` out of its picker, but a stored
         # `auto` can still arrive here from an older history entry or another
         # engine's settings snapshot.
+        #
+        # That second sentence is true of Canary and of nothing else this
+        # runtime serves, so it is only emitted for the models it holds for.
+        # Parakeet offers `auto` alone, ignores the argument it is given and
+        # is never sent one (`_recognize_kwargs`), and it was the model the
+        # sentence was actually seen against -- a line telling the user their
+        # transcript may have been translated when nothing of the sort can
+        # happen.
+        translation_warning = (
+            " A wrong language makes this model translate rather than "
+            "transcribe."
+            if self.model_size in LOCAL_EXPLICIT_LANGUAGE_MODELS
+            else ""
+        )
         logger.warning(
-            "Language '%s' is not supported by '%s'; using '%s' instead. "
-            "A wrong language makes this model translate rather than "
-            "transcribe.",
+            "Language '%s' is not supported by '%s'; using '%s' instead.%s",
             requested,
             self.model_size,
             fallback,
+            translation_warning,
         )
         return fallback
 

@@ -238,6 +238,22 @@ def test_dropping_an_unsupported_language_is_logged(caplog):
     assert any("translate" in record.message for record in caplog.records)
 
 
+def test_parakeet_is_not_told_its_transcript_may_have_been_translated(caplog):
+    """Only Canary translates. Parakeet offers `auto` alone, so any stored
+    language substitutes -- and it is never sent one at all, so the sentence
+    about translation described something that cannot happen. The
+    substitution itself is still reported."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE, language_mode="de")
+
+    assert transcriber._language_mode == "auto"
+    messages = [record.message for record in caplog.records]
+    assert any("is not supported by" in text for text in messages)
+    assert not any("translate" in text for text in messages)
+
+
 # --------------------------------------------------------------------------
 # Cancelling a running transcription
 #
