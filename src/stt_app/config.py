@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -658,6 +658,14 @@ _NON_WHISPER_LANGUAGE_MODES = frozenset(
 WHISPER_LANGUAGE_MODES = tuple(
     value for value in VALID_LANGUAGE_MODES if value not in _NON_WHISPER_LANGUAGE_MODES
 )
+# Shared by all four OpenAI models, `gpt-transcribe` included. Its own guide
+# enumerates no list for it -- only the code *formats* it accepts ("ISO 639-1
+# codes, such as en, es, and fr", selected ISO 639-3 codes, and regional zh
+# locales) plus "The API rejects unsupported or incorrectly formatted language
+# codes" -- and points at the Whisper language list for `whisper-1`, which is
+# where this one comes from. Narrowing it for one model would need a source
+# that does not exist; a code the newer model refuses surfaces as the API's
+# own error rather than as a wrong transcript.
 OPENAI_LANGUAGE_MODES = (
     "auto",
     "de",
@@ -1279,9 +1287,11 @@ def language_modes_for_selection(
 # (or not) -- so the two cannot drift.
 #
 # Remote engines whose request carries the terms: AssemblyAI as
-# `keyterms_prompt`, OpenAI and Groq as `prompt`, Deepgram as its repeated
-# `keyterm` (nova-3) / `keywords` (nova-2) query parameters. ElevenLabs, Azure
-# LLM Speech and Fun-ASR expose no biasing input at all.
+# `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields
+# (`gpt-transcribe`) or as `prompt` (the three older models), Groq as
+# `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
+# query parameters. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing
+# input at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
     "groq",
@@ -1351,12 +1361,38 @@ def parse_custom_vocabulary(raw: str) -> list[str]:
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 
+# `POST /v1/audio/transcriptions` accepts five model ids. Four are offered
+# here; `gpt-4o-transcribe-diarize` is deliberately not, because the app has
+# no speaker UI and OpenAI's guide calls it a specialized model that "isn't
+# the recommended model for ordinary file transcription".
+#
+# `gpt-transcribe` is the current one -- "Start with gpt-transcribe. This is
+# the recommended model for transcribing recorded speech in its original
+# language." The other three were notified of deprecation on 2026-08-26 and
+# OpenAI's deprecations page gives 2027-02-26 as their removal date from the
+# API, so they stay selectable and their labels carry the date. (Both pages
+# read 2026-09-21; the replacement the deprecation notice names for realtime
+# use, `gpt-live-transcribe`, is a realtime-session model and does not answer
+# on this endpoint.)
 OPENAI_MODELS = (
+    "gpt-transcribe",
     "gpt-4o-mini-transcribe",
     "gpt-4o-transcribe",
     "whisper-1",
 )
-DEFAULT_OPENAI_MODEL = "gpt-4o-mini-transcribe"
+DEFAULT_OPENAI_MODEL = "gpt-transcribe"
+# Which models take the repeated array fields `languages[]` and `keywords[]`
+# instead of the singular `language` and `prompt`: "For gpt-transcribe,
+# languages replaces the singular language field. Don't send both fields."
+# Named as a set rather than compared against `DEFAULT_OPENAI_MODEL` so the
+# request shape does not silently follow a change of default.
+OPENAI_ARRAY_FIELD_MODELS = ("gpt-transcribe",)
+# Characters OpenAI refuses inside a `keywords[]` term: "Keep each keyword on
+# one line and don't include <, >, a carriage return, or a line feed. The API
+# rejects the entire request when it encounters one of these characters."
+# `parse_custom_vocabulary` splits on newlines but not on carriage returns, so
+# a lone CR inside a line survives its `strip()` and would reach the request.
+OPENAI_KEYWORD_FORBIDDEN_CHARACTERS = ("<", ">", "\r", "\n")
 
 DEEPGRAM_MODELS = (
     "nova-3",

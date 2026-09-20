@@ -76,7 +76,13 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "{name} uses the custom vocabulary as keyterm (Nova-3) or keywords "
         "(Nova-2), in batch and streaming."
     ),
-    "openai": "{name} uses the custom vocabulary as the request prompt (batch only).",
+    # Two request shapes, named the way Deepgram's line names its two: the
+    # terms go out as repeated keywords for gpt-transcribe and as the request
+    # prompt for the three older models.
+    "openai": (
+        "{name} uses the custom vocabulary as keywords (gpt-transcribe) or "
+        "the request prompt (older models), batch only."
+    ),
     "groq": "{name} uses the custom vocabulary as the request prompt (batch only).",
 }
 

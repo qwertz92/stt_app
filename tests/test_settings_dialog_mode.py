@@ -17,7 +17,7 @@ from stt_app.benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
-from stt_app.config import CANARY_MODEL_SIZE, LOCAL_BATCH_ONLY_MODELS
+from stt_app.config import CANARY_MODEL_SIZE, LOCAL_BATCH_ONLY_MODELS, OPENAI_MODELS
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.persistence import backup_path
@@ -3597,11 +3597,10 @@ def test_import_model_selector_tracks_selected_import_engine():
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
 
-    assert _combo_data(dialog.import_model_combo) == [
-        "gpt-4o-mini-transcribe",
-        "gpt-4o-transcribe",
-        "whisper-1",
-    ]
+    # The engine's whole roster, in its order: written as the constant rather
+    # than restated, so adding a model cannot leave this test pinning an old
+    # list that still passes.
+    assert _combo_data(dialog.import_model_combo) == list(OPENAI_MODELS)
     assert dialog.import_model_combo.currentData() == "whisper-1"
     _ = app
 

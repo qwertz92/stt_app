@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -12,6 +13,8 @@ from ..config import (
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENAI_MODEL,
+    OPENAI_ARRAY_FIELD_MODELS,
+    OPENAI_KEYWORD_FORBIDDEN_CHARACTERS,
     OPENAI_MODELS,
     language_modes_for_selection,
     parse_custom_vocabulary,
@@ -32,6 +35,8 @@ from .base import (
     StreamingCallback,
     TranscriptionError,
 )
+
+logger = logging.getLogger(__name__)
 
 OPENAI_API_BASE = "https://api.openai.com/v1"
 
@@ -56,7 +61,16 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self._request_timeout_s = max(5, int(request_timeout_s))
-        self._prompt = self._build_prompt(custom_vocabulary)
+        self._uses_array_fields = self._model in OPENAI_ARRAY_FIELD_MODELS
+        terms = parse_custom_vocabulary(custom_vocabulary)
+        # Two request shapes, one setting. `gpt-transcribe` takes the terms as
+        # repeated `keywords[]` fields, which is what they are -- "Use
+        # keywords for literal terms you expect to hear" -- while the three
+        # older models have no such field and keep the comma-joined `prompt`.
+        self._prompt = "" if self._uses_array_fields else ", ".join(terms)
+        self._keywords, self._dropped_keyword_count = (
+            self._split_keywords(terms) if self._uses_array_fields else ([], 0)
+        )
 
     def _normalize_language_mode(self, mode: str) -> str:
         normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
@@ -65,10 +79,22 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         return normalized
 
     @staticmethod
-    def _build_prompt(custom_vocabulary: str) -> str:
-        """Build the OpenAI ``prompt`` field from the custom vocabulary setting."""
-        terms = parse_custom_vocabulary(custom_vocabulary)
-        return ", ".join(terms)
+    def _split_keywords(terms: list[str]) -> tuple[list[str], int]:
+        """Split the vocabulary into terms OpenAI accepts and a dropped count.
+
+        "The API rejects the entire request when it encounters one of these
+        characters", so one `<` in one term would cost the whole dictation.
+        Dropping the term keeps the rest of the vocabulary and the recording.
+        """
+        kept = [
+            term
+            for term in terms
+            if not any(
+                character in term
+                for character in OPENAI_KEYWORD_FORBIDDEN_CHARACTERS
+            )
+        ]
+        return kept, len(terms) - len(kept)
 
     def _auth_header(self) -> str:
         return f"Bearer {self._api_key}"
@@ -81,6 +107,45 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
     def _normalize_text(self, value: str) -> str:
         return normalize_transcript_text(value)
 
+    def _request_fields(self) -> list[tuple[str, str]]:
+        """The multipart fields beside the audio, in the order they are sent.
+
+        `multipart_form_data` takes a list of pairs rather than a mapping, so
+        a repeated field is just the same name twice -- which is exactly what
+        the guide's own example sends: `-F 'keywords[]=premium plan' -F
+        'keywords[]=AC-42' -F 'languages[]=en' -F 'languages[]=fr'`.
+
+        `response_format=json` is sent for every model. The guide's
+        `gpt-transcribe` examples omit it and rely on the default, but `json`
+        is the shape this provider parses (`{"text": ...}`, with the
+        `languages` array beside it that the app has no use for), so it is
+        stated rather than assumed.
+        """
+        fields: list[tuple[str, str]] = [("model", self._model)]
+        if self._uses_array_fields:
+            if self._language_mode != DEFAULT_LANGUAGE_MODE:
+                # Never `language` as well: "languages replaces the singular
+                # language field. Don't send both fields."
+                fields.append(("languages[]", self._language_mode))
+            fields.extend(("keywords[]", term) for term in self._keywords)
+            if self._dropped_keyword_count:
+                # The count, never the terms: the vocabulary is the user's own
+                # text and does not belong in a log file. INFO, because
+                # nothing failed -- the request goes out with the rest.
+                logger.info(
+                    "openai_keywords_dropped count=%d model=%s "
+                    "reason=forbidden_character",
+                    self._dropped_keyword_count,
+                    self._model,
+                )
+        else:
+            if self._language_mode != DEFAULT_LANGUAGE_MODE:
+                fields.append(("language", self._language_mode))
+            if self._prompt:
+                fields.append(("prompt", self._prompt))
+        fields.append(("response_format", "json"))
+        return fields
+
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         try:
             if isinstance(audio_source, bytes):
@@ -91,12 +156,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
                 audio_bytes = path.read_bytes()
                 filename = path.name or "audio.wav"
 
-            fields: list[tuple[str, str]] = [("model", self._model)]
-            if self._language_mode != DEFAULT_LANGUAGE_MODE:
-                fields.append(("language", self._language_mode))
-            if self._prompt:
-                fields.append(("prompt", self._prompt))
-            fields.append(("response_format", "json"))
+            fields = self._request_fields()
 
             body, content_type = multipart_form_data(
                 fields=fields,

@@ -9,6 +9,7 @@ import pytest
 from PySide6 import QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
+from stt_app.config import OPENAI_MODELS
 from stt_app.provider_connection_test_store import ProviderConnectionTestStore
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_persistence import _PersistenceMixin
@@ -445,11 +446,7 @@ def test_save_persists_only_supported_remote_keys():
         "elevenlabs",
     ]
     assert "azure" not in providers
-    assert dialog._loaded_settings.openai_model in {
-        "gpt-4o-mini-transcribe",
-        "gpt-4o-transcribe",
-        "whisper-1",
-    }
+    assert dialog._loaded_settings.openai_model in OPENAI_MODELS
     assert dialog._loaded_settings.deepgram_model in {"nova-3", "nova-2"}
     assert dialog._loaded_settings.assemblyai_model in {
         "universal-3-5-pro",

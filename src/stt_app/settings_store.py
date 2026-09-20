@@ -114,6 +114,7 @@ CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
 _SILENCE_GATE_DEFAULT_SCHEMA_VERSION = 22
 _AZURE_MODEL_DEFAULT_SCHEMA_VERSION = 24
+_OPENAI_MODEL_DEFAULT_SCHEMA_VERSION = 25
 _LEGACY_DEFAULT_HISTORY_MAX_ITEMS = 20
 
 DEFAULTS = {
@@ -391,6 +392,25 @@ class AppSettings:
         openai_model = str(merged.get("openai_model", DEFAULT_OPENAI_MODEL))
         if openai_model not in OPENAI_MODELS:
             openai_model = DEFAULT_OPENAI_MODEL
+        # Read here rather than only at the bottom: the OpenAI migration below
+        # is keyed on it, and parsing the same field twice would let the two
+        # readings drift.
+        has_openai_key = parse_json_bool(merged.get("has_openai_key"))
+        if (
+            raw_schema_version < _OPENAI_MODEL_DEFAULT_SCHEMA_VERSION
+            and not has_openai_key
+        ):
+            # Same rule as the Azure one below, with the key flag in the
+            # endpoint's place: every file written before `gpt-transcribe`
+            # existed carries `gpt-4o-mini-transcribe` for everyone, so the
+            # stored value is not a choice -- and without a stored OpenAI key
+            # the engine could never run, so nothing was chosen. Adopt the
+            # current default once; a file that shows OpenAI was configured,
+            # and every file saved from now on, keeps its model. It matters
+            # because the three older ids are removed from the API on
+            # 2027-02-26: left alone, adding a key later would pick a model
+            # with an expiry date.
+            openai_model = DEFAULT_OPENAI_MODEL
         deepgram_model = str(merged.get("deepgram_model", DEFAULT_DEEPGRAM_MODEL))
         if deepgram_model not in DEEPGRAM_MODELS:
             deepgram_model = DEFAULT_DEEPGRAM_MODEL
@@ -653,7 +673,7 @@ class AppSettings:
             ),
             overlay_corner=overlay_corner,
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
-            has_openai_key=parse_json_bool(merged.get("has_openai_key")),
+            has_openai_key=has_openai_key,
             has_deepgram_key=parse_json_bool(merged.get("has_deepgram_key")),
             has_assemblyai_key=parse_json_bool(merged.get("has_assemblyai_key")),
             has_groq_key=parse_json_bool(merged.get("has_groq_key")),
