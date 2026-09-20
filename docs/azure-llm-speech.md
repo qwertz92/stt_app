@@ -107,8 +107,19 @@ automatically.
 
 ## Cost and free tier
 
-- **Free (F0) tier:** 5 audio hours/month for speech to text (hard monthly cap,
-  not adjustable).
+- **There is no Free (F0) tier for this feature.** Microsoft's
+  [quotas and limits page](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits)
+  (checked 2026-09-21, `ms.date` 2026-09-09) lists "Not applicable" in the
+  Free (F0) column for every row under "LLM speech quotas and limits" and
+  "Fast transcription" — the two features this app's Azure engine uses. A
+  resource must be **Standard (S0)** before any request from this app can
+  succeed at all. This page previously stated a "5 audio hours/month" F0
+  allowance for this engine; that figure was wrong (it likely described a
+  different, older Speech feature) and has been removed.
+- A general new-account [Azure free account](https://azure.microsoft.com/free/)
+  credit (currently $200, valid 30 days) can pay for early testing on an S0
+  resource, but it is a whole-account credit shared with every other Azure
+  service, not something specific to Speech.
 - **Pay-as-you-go (Standard, S0):** ~$0.36/hour for fast transcription with
   MAI-Transcribe-1.5. For MAI-Transcribe-2 Microsoft announced "$0.10 per hour
   as a limited-time offer until the end of the year" (2026); it has not said
@@ -120,9 +131,19 @@ automatically.
 
 - **Batch only** in this app (no streaming/live partials).
 - **Public preview** — behavior and pricing can change; no SLA.
-- Audio: WAV, MP3 or FLAC according to the MAI-Transcribe page; the REST
-  reference requires audio "shorter than 2 hours in audio duration and smaller
-  than 250 MB in size".
+- Audio: WAV, MP3 or FLAC according to the MAI-Transcribe page. **Two
+  Microsoft pages disagree on the size/duration limit, both current as of
+  2026-09-21**: the
+  [REST reference for the `transcribe` endpoint](https://learn.microsoft.com/rest/api/speechtotext/transcriptions/transcribe)
+  documents the `audio` parameter as "shorter than 2 hours in audio duration
+  and smaller than 250 MB in size", while the
+  [quotas and limits page](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits)
+  and the
+  [LLM Speech how-to page](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/llm-speech)
+  both say "less than five hours long and less than 500 MB in size". This app
+  cannot resolve the discrepancy without a live Azure resource to test
+  against; plan for the smaller, older figure (250 MB / 2 hours) until it is
+  verified which one the service actually enforces.
 - Data leaves your machine and is processed in Azure. For fully offline use,
   pick a local engine instead.
 
@@ -140,6 +161,8 @@ automatically.
 - LLM Speech API: <https://learn.microsoft.com/azure/ai-services/speech-service/llm-speech>
 - MAI-Transcribe model: <https://learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe>
 - REST reference (limits): <https://learn.microsoft.com/rest/api/speechtotext/transcriptions/transcribe>
+- Quotas and limits (F0/S0, checked 2026-09-21): <https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits>
 - MAI-Transcribe-2 announcement (price): <https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/>
 - Azure Speech pricing: <https://azure.microsoft.com/pricing/details/speech/>
+- Azure free account (general credit): <https://azure.microsoft.com/free/>
 - Cost comparison across providers: [provider-costs.md](provider-costs.md)

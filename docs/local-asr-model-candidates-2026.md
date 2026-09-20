@@ -700,3 +700,102 @@ Per runtime:
    option 1 has been given time.
 
 A ModelScope mirror is moot until an ONNX export exists at all.
+
+## Checked 2026-09-21
+
+A pre-release documentation pass for v0.10 re-checked the standing candidates
+above and a few new ones. Nothing here changes the app; it records why each
+one is still not integrated.
+
+### IBM Granite Speech 5.0 has no multilingual variant
+
+Confirmed against IBM's own Hugging Face listing (checked 2026-09-21): the
+Granite Speech 5.0 generation has exactly two model cards,
+[`ibm-granite/granite-speech-5.0-470m-turboctc`](https://huggingface.co/ibm-granite/granite-speech-5.0-470m-turboctc)
+(Apache-2.0, the one this app already integrates) and its `-nc` sibling
+(CC-BY-NC-SA-4.0, non-commercial). Both are the same English-only 470M CTC
+encoder described earlier in this document — see the
+["blocked, 2026-08-30" section](#ibm-granite-speech-50-470m-turboctc---blocked-2026-08-30)
+above. There is no 5.0 checkpoint trained on other languages to watch for; a
+multilingual Granite Speech 5.0 would need IBM to train and release one, not
+just export it to ONNX.
+
+### Qwen3-ASR-1.7B: still no ONNX/CTranslate2 path, German is supported
+
+[`Qwen/Qwen3-ASR-1.7B`](https://huggingface.co/Qwen/Qwen3-ASR-1.7B) (checked
+2026-09-21) is Apache-2.0 and its model card lists German among its 30
+supported languages — so the language gap noted for earlier Qwen3-ASR
+entries in this document is not the blocker here. The blocker is unchanged
+from the 0.6B/1.7B entry above: the model card documents deployment through
+`vLLM`, Docker, and the `qwen-asr` Python package only, with no official or
+community ONNX or CTranslate2 export mentioned on the page. Integrating it
+would still mean a new runtime family, not a drop into `onnx-asr` or the
+Transformers.js pipeline. Watch, do not add.
+
+### Mistral Voxtral: open weights exist, no ONNX export found
+
+Mistral's open-weight Voxtral line is Voxtral Small 24B and Voxtral Mini 3B
+(both Apache-2.0, released July 2025), with a Voxtral Small 24B 2507 STT
+update listed August 2026 (per
+[Mistral's model-weights page](https://docs.mistral.ai/getting-started/models/weights)
+and general web search, checked 2026-09-21 — this session did not fetch
+Mistral's page directly, only searched it, so treat the exact version string
+as approximate). Both sizes are far larger than every local model this app
+ships (24B and 3B against the app's 0.5B-2B range) and no ONNX or
+CTranslate2 export was found for either. A 3B model at fp16/bf16 alone would
+be roughly the size of every other local model in this app combined; not
+worth prototyping without a quantized ONNX export and a size/accuracy case
+that beats Cohere Transcribe or Granite Speech 4.1 2B. Mistral's hosted
+Voxtral **API** was evaluated separately as a remote-provider candidate; see
+below.
+
+### Newer NVIDIA Parakeet/Canary releases
+
+[`nvidia/parakeet-unified-en-0.6b`](https://huggingface.co/nvidia/parakeet-unified-en-0.6b)
+(released 2026-04-07, checked 2026-09-21) is a genuinely new NVIDIA release
+since Parakeet TDT 0.6B v3 was integrated: a 600M-parameter RNN-T model that
+combines offline and streaming inference in one checkpoint (minimum latency
+160 ms), reporting 1.63% WER on LibriSpeech test-clean. It is **English
+only** — a step back from the 25-language coverage of `parakeet-tdt-0.6b-v3`,
+this app's default — and its unified streaming/offline design does not match
+either of this app's existing Parakeet integration points (`onnx-asr`,
+batch-only) or the true-streaming Nemotron path, so adopting it would need
+new runtime work for a model that only helps English users. Not worth it
+while the multilingual v3 default already covers English well. No newer
+Canary release was found beyond `nvidia/canary-1b-v2`, which is already the
+model this app ships.
+
+### An open idea: a punctuation/true-casing companion for Granite Speech 5.0
+
+Granite Speech 5.0's CTC decoder writes lower-case text with no punctuation
+by design (see the entry above) — its transcripts read like
+"mister quilter is manner". A separate restoration model could run on that
+output before it reaches the clipboard.
+[`1-800-BAD-CODE/punctuation_fullstop_truecase_english`](https://huggingface.co/1-800-BAD-CODE/punctuation_fullstop_truecase_english)
+(checked 2026-09-21) is one candidate: Apache-2.0 licensed, a "base-sized
+Transformer" (6 layers, model dimension 512 — no total parameter count is
+given on the page) with separate heads for punctuation, sentence-boundary,
+and true-casing, and it **does** ship an ONNX export (`PunctCapSegModelONNX`
+via the `punctuators` Python package). This is recorded as an idea, not a
+plan: it would be a second inference pass after every Granite Speech 5.0
+transcription, needs its own dependency (`punctuators` or a hand-rolled
+ONNX Runtime session) and its own download/cache entry, and nobody has
+measured its added latency or English quality against this app's audio.
+Worth a prototype if Granite Speech 5.0's plain-text output becomes the
+limiting complaint against an otherwise very fast English model.
+
+### Why Soniox and Voxtral were not added as remote (hosted) providers
+
+Both were considered as new **remote** engines (as opposed to the local
+Voxtral weights above). Read on the
+[Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text)
+on 2026-09-21: Soniox v5 Async reads 3.8% WER at $1.66 per 1,000 minutes, and
+Voxtral Small reads 2.8% WER at $4.00 per 1,000 minutes. Neither beats what
+this app already offers on *both* axes at once — Azure's MAI-Transcribe-2
+(2.0% WER, $1.67 per 1,000 minutes) leads on price and is more accurate than
+both, and ElevenLabs Scribe v2 (2.2% WER, $3.67 per 1,000 minutes) is also
+more accurate than both. Full figures and the reasoning are in
+[provider-costs.md](provider-costs.md#5-hosted-candidates-not-integrated);
+this is recorded here as well because it is a "candidate not integrated"
+decision like the others on this page. Re-run the comparison before deciding
+differently — leaderboard rank and price both move.

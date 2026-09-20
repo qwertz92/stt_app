@@ -8,7 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
-- **GPU-accelerated models** — optional Cohere and IBM Granite Speech models run on your GPU (WebGPU); Granite Speech 4.1 2B currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) for accuracy
+- **GPU-accelerated models** — optional Cohere and IBM Granite Speech models run on your GPU (WebGPU); Granite Speech 4.1 2B led the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) at launch (2026-06) and remains the most accurate local model in this app — see [docs/models.md](docs/models.md#which-model-should-i-use) for whether it still leads the live leaderboard
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, or Fun-ASR (Alibaba) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
@@ -92,7 +92,7 @@ also support streaming.
 
 | Use case | Recommended model | Runtime | Size |
 |----------|-------------------|---------|------|
-| Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
+| Best accuracy among this app's local models | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
 | Zero-setup default: fastest accurate local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
 | Higher German accuracy than Parakeet, still CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |

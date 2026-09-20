@@ -31,9 +31,17 @@ The app has five local runtime families:
   experimental rolling-window streaming mode.
 
 Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
-Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0, and
-currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
-for accuracy. The Plus and NAR variants were **retired on 2026-08-26**: their
+Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0.
+It topped the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
+at 5.33% mean WER when IBM shipped it (2026-06), five weeks after Cohere
+Transcribe had briefly held the top spot at 5.42%. **It is likely no longer
+#1**: a 2026-07-23 survey reports newer models (ARK-ASR-3B at 5.04%,
+MOSS-Transcribe-preview-2B) posting lower WER since, though on a different
+number of test sets, so the figures are not directly comparable
+([MarkTechPost](https://www.marktechpost.com/2026/07/23/best-open-speech-recognition-asr-models-in-2026-wer-languages-latency-and-license-compared/),
+read 2026-09-21). The leaderboard itself is an interactive page this
+document could not re-read live this session — check it directly for the
+current #1 rather than trusting a rank quoted here. The Plus and NAR variants were **retired on 2026-08-26**: their
 exports cannot use any GPU here, they measured 4.5x and 42x slower than the base
 4.1 2B on WebGPU, and their transcripts were unusable. See
 [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md) for the
@@ -55,7 +63,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `distil-large-v3.5` | CTranslate2 | ~1.52 GB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
-| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
+| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy among this app's local models** — led the Open ASR Leaderboard at launch, 2026-06 (q4, WebGPU), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
@@ -81,7 +89,7 @@ hardware.
 
 | Situation | Recommendation |
 |-----------|---------------|
-| Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` (GPU) |
+| Best accuracy among this app's local models | `granite-speech-4.1-2b` (GPU) |
 | High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
 | Zero setup: fastest accurate local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
@@ -135,7 +143,10 @@ Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benc
 Conformer-encoder + LLM-decoder systems and generally beat the older Whisper
 models on the public
 [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard).
-`granite-speech-4.1-2b` currently tops it (~5.3% mean English WER). Real-world and
+`granite-speech-4.1-2b` led it at launch (2026-06, ~5.33% mean English WER);
+see [provider-costs.md](provider-costs.md#3-quality-comparison-published-signals)
+for why that rank should not be quoted as current without checking the live
+page. Real-world and German quality still depend on your microphone and audio, so benchmark on your own
 German quality still depend on your microphone and audio, so benchmark on your own
 samples before changing the default.
 
@@ -193,6 +204,18 @@ test Ryzen 5 7600X, two runs measured:
 
 That CPU result is comfortably faster than real time on the test desktop, but
 laptop performance and German dictation quality still need real user samples.
+
+### Custom vocabulary
+
+The Transcription tab's **Custom vocabulary** field biases transcription
+toward names, product terms, and jargon you type in — but only some engines
+and models read it. It is sent to the Whisper models (`tiny` through
+`distil-large-v3.5`), OpenAI, Groq, AssemblyAI, and Deepgram. It is **ignored**
+by Parakeet, Canary, Nemotron, Cohere, every Granite model (4.0, 4.1, and
+Granite Speech 5.0), ElevenLabs, Azure LLM Speech, and Fun-ASR — those
+runtimes and providers expose no biasing input at all. The Transcription tab
+shows a note under the field for models that ignore it, so the field is
+never silently no-op without a warning.
 
 ### Language selection
 
@@ -337,10 +360,16 @@ On first use, the app downloads the selected model automatically from HuggingFac
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
 The Settings **Models** tab downloads models one at a time. You can select and
-queue more models while the current download continues. The active and queued
-models are marked in the list, and the tab shows approximate percentage,
-downloaded size, MB/s, and Mbit/s. Percentage and speed are estimated from
-on-disk cache growth. The speed uses a short rolling window so bursty cache
+queue more models while the current download continues; the row for a queued
+model shows its place in line, and a "Next: ..." line under the active
+download names what starts after it. The active download shows the
+downloader's own byte count and total — for example "212 of 552 MB (38%),
+11.8 MB/s (94.4 Mbit/s), about 25 s left" — with a progress bar. Percentage
+and speed fall back to estimating from on-disk cache growth only when there
+is no worker to ask (a model a transcriber downloads directly from its own
+load path outside the queue, or the brief window before a queued download's
+first progress event); that fallback is what the "approx." wording, when it
+appears, refers to. The speed uses a short rolling window so bursty cache
 writes do not immediately display `0.0`, but short pauses or jumps can still
 occur while Hugging Face finalizes files.
 
