@@ -90,12 +90,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
-| `settings_dialog_general.py` | General tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
-| `settings_dialog_hotkeys.py` | Hotkeys & Display tab: the four global hotkeys, overlay corner, and tray middle-click toggle mixin (split from the General tab) |
-| `settings_dialog_audio.py` | Audio & Recording tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the General tab) |
-| `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
+| `settings_dialog_general.py` | Transcription tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_hotkeys.py` | Hotkeys & Display tab: the four global hotkeys, overlay corner, and tray middle-click toggle mixin (split from the Transcription tab) |
+| `settings_dialog_audio.py` | Audio tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the Transcription tab) |
+| `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the Transcription tab) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
-| `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
+| `settings_dialog_remote.py` | API Keys tab: provider API keys and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
@@ -161,16 +161,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   local/benchmark mixins so the patch target still resolves after the split. The
   accessor imports the facade lazily (not at module scope) so a mixin can be
   imported directly without an import cycle.
-- **General tab hosts daily-use settings; capture setup lives on Audio &&
-  Recording**: the General tab kept growing until it needed its own scroll
+- **Transcription tab hosts daily-use settings; capture setup lives on Audio**: the Transcription tab kept growing until it needed its own scroll
   marathon, so the set-and-forget capture groups ("Audio && Voice Detection"
-  and "Recordings") moved to a dedicated Audio && Recording tab
+  and "Recordings") moved to a dedicated Audio tab
   (`settings_dialog_audio.py`). That split was not enough: with Hotkeys,
-  Display, Engine && Mode and Text Insertion, General still needed 1342 px
+  Display, Engine && Mode and Text Insertion, the tab still needed 1342 px
   and scrolled by 283 px on a 1392 px screen (measured 2026-09-18; it was the
   only tab that scrolled, and a smaller screen scrolls by more). Hotkeys and
   Display therefore moved to a Hotkeys && Display tab
-  directly after General (`settings_dialog_hotkeys.py`), which leaves General
+  directly after it (`settings_dialog_hotkeys.py`), which left the tab
   at 781 px: Engine && Mode and Text Insertion, what actually changes during
   daily dictation. "History Time" left the Display group for the History
   tab's top row ("Time Zone"), because it changes nothing but how that list
@@ -185,6 +184,44 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (`_general_forms`, `_hotkeys_forms` and its own two). An eighth tab takes
   the tab bar from 660 to 797 px of the 840 px the default dialog width
   gives it at 9 pt; a ninth would not fit without scroll arrows.
+- **Tab titles say what the tab is for** (2026-09-20): Transcription (was
+  General), Hotkeys && Display, Audio (was Audio && Recording), Models (was
+  Local), API Keys (was Remote), History, Import Audio, Benchmark. The
+  model that runs is chosen on the first one, while Local only managed
+  downloads and Remote only held keys, which the old names hid. Module,
+  mixin and attribute names are unchanged (`settings_dialog_general.py`,
+  `_local_tab_index`), this file uses the new titles throughout, and
+  `docs/learning-log.md` keeps the names of its day. The tab bar needs
+  771 of the 840 px the default width gives it at 9 pt (pinned by a test).
+  The local runtime note ends with "Download or remove local models on the
+  Models tab." and the remote model note with "The API key is set on the
+  API Keys tab.", both inside height they already reserved. The
+  `settings_timing` log names a tab by its visible title, so it reads
+  `tab=Models` now.
+- **The vocabulary field says when the selected model ignores it**
+  (2026-09-20). `config.supports_custom_vocabulary(engine, model)` is the
+  single answer, derived from `LOCAL_MODEL_RUNTIME` and
+  `CUSTOM_VOCABULARY_ENGINES`, and pinned against the factory: a recorder
+  stands in for every transcriber class and the test asserts the answer
+  equals "the constructor received `custom_vocabulary`" for every engine
+  and every local model. The note under the field is reserved (42 px,
+  worst case 30 px at the minimum width), amber when the model ignores the
+  vocabulary and names it the way the screen does; the field stays
+  editable, because the user may switch models later. Cost, measured: the
+  Transcription tab's content is 960 px at the default width (916 px
+  without the note), so it scrolls on a screen whose available height is
+  below about 1139 px.
+- **`_configure_combo_popups` runs after the root layout is built.**
+  `findChildren` walks the parent tree, and before `self.tabs` was parented
+  it reached 3 of the 21 combos, none of them `model_combo`. With Qt's
+  defaults the popup is sized by summing the first `maxVisibleItems`
+  *entries*, a separator counts as one and is 2 px tall, so a separator
+  inside that window made the popup up to 28 px short of its rows, and
+  `ScrollPerItem` left that remainder blank under the last model (field
+  report: "an empty white strip"). Measured by the number of downloaded
+  models: 2 px for 1-4, 28 px for 10-13, 0 otherwise. Every combo gets
+  `maxVisibleItems(12)` and `ScrollPerPixel`; `setUniformItemSizes(True)`
+  was rejected because it makes the separator a full row.
 - **An Audio-tab value that is only read while its checkbox is on is
   disabled while it is off** (VAD threshold, start tone, completion tone):
   `toggled` is connected to `setEnabled` and the state is synced once at
@@ -215,8 +252,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   helper, and there the boolean *was* the destructive value: `True` parsed
   to a limit of 1, and one dictation at that limit deleted every transcript
   but the newest (measured: 5 lost from a hand-edited file).
-- **Model selection is unified on the General tab; Local tab is management-only**:
-  "what do I use" (engine, model, language, mode) all live in the General tab's
+- **Model selection is unified on the Transcription tab; Models tab is management-only**:
+  "what do I use" (engine, model, language, mode) all live in the Transcription tab's
   "Engine && Mode" group box. A single "Model" form row hosts a
   `model_selector_stack` `QStackedWidget` with page 0 (`model_combo` plus
   `local_model_runtime_warning_label`) for the local engine and page 1
@@ -226,7 +263,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `QStackedWidget.sizeHint()` already reflects the largest page regardless of
   the current index, so switching pages never shifts the rows below. The Local
   tab keeps Model Dir, cached-model inventory, scan/refresh, download queue,
-  and delete only, with a short gray note pointing to the General tab for the
+  and delete only, with a short gray note pointing to the Transcription tab for the
   active model.
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
@@ -460,7 +497,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `capture.start()` so a first callback delivered from inside that call reaches
   the active transcriber instead of being discarded.
 - **Microphone selection and audio device changes**: `input_device_name`
-  (Audio && Recording-tab picker; empty = system default) is resolved to a PortAudio index
+  (Audio-tab picker; empty = system default) is resolved to a PortAudio index
   only at stream open via `audio_devices.resolve_input_device`; a selected but
   missing microphone fails the recording with an actionable error — never
   silently record from another device. Explicit selections resolve to WASAPI
@@ -961,21 +998,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   native Qt/Windows menu indicator can be vertically misaligned under the
   overlay stylesheet. Its regression test renders the button and verifies that
   the chevron pixels remain inside that zone and centered on it.
-  The Local/General model runtime note keeps a reserved
+  The Transcription-tab model runtime note keeps a reserved
   three-line area and shows a neutral gray note for faster-whisper models so
   model switches never shift the layout.
-- **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.
-  Cached inventories are used for initial Local/Benchmark tab rendering, then
+- **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Models tab can render immediately without silently mutating user settings.
+  Cached inventories are used for initial Models/Benchmark tab rendering, then
   disk verification starts automatically after the tab has had a chance to
   paint. App startup also refreshes the persistent inventory in the background.
   Source-tree and packaged runs isolate that scan in a subprocess so Python
   filesystem work cannot stall the Qt UI thread.
   Settings dialog lifecycle, tab paint, inventory render, and inventory scan
   timings are logged as `settings_timing` diagnostics for later troubleshooting.
-  Local/Benchmark list widgets intentionally keep `AdjustToContents`; if first
+  Models/Benchmark list widgets intentionally keep `AdjustToContents`; if first
   paint regresses again, use the timing diagnostics before changing this policy.
   The tray schedules a hidden settings-dialog preparation after startup so the
-  first visible open and first Local tab paint avoid lazy Qt layout work. A
+  first visible open and first Models tab paint avoid lazy Qt layout work. A
   hidden prepared dialog reloads settings from disk before it is shown.
 - **Qt dialog feedback and refresh state**: transient button text such as
   "Copied" must reserve enough width for all feedback states via
@@ -992,7 +1029,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   render it taller than its field or clipped at the bottom. Action rows keep
   explicit spacing rather than relying on platform defaults. Settings tab selection must
   not change tab font weight or measured tab width; use color/border changes for
-  the selected state. General, Hotkeys && Display and Audio && Recording form
+  the selected state. Transcription, Hotkeys && Display and Audio form
   sections share one measured label column (applied by `_build_audio_tab`
   after all three tabs exist)
   so fields align across group boxes and when switching between the two tabs. Pressing Save with no effective setting or
@@ -1400,7 +1437,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_start_local_model_download` already did, and `_on_update_check_finished`
   shows no dialog then. Both roads were opened by the delivery itself
   (`6cf8cbd`, wave 9).
-- **General/Audio-tab field hints have explicit visual ownership**: a control
+- **Transcription/Audio-tab field hints have explicit visual ownership**: a control
   and its descriptive hint use `_field_with_hint` with a 2 px internal gap;
   these forms use a 10 px row gap before the next setting. Changing model/language
   notes reserve two fixed lines so engine switches never move later fields.
@@ -1569,7 +1606,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Each entry lists every caption its button can ever show, because a caption
   swap must not reflow its row; Clear is deliberately single-caption, and the
   Cancel/Retry/Insert slot is sized for the widest of the three.
-- **Custom vocabulary** (`custom_vocabulary`, General tab): user terms parsed
+- **Custom vocabulary** (`custom_vocabulary`, Transcription tab): user terms parsed
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
   `initial_prompt` (batch + rolling-window streaming), OpenAI/Groq `prompt`,
@@ -1579,7 +1616,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   ONNX expose no biasing input and stay unwired.
 - **A changing status line is reserved or elided, never left to grow.**
   Three of them were not, and each moved something the user was pointing at:
-  every Remote-tab provider row's word-wrapped "Last test" label reserved one
+  every API Keys-tab provider row's word-wrapped "Last test" label reserved one
   line where a failure message is two, so one failing provider moved 43 of 50
   widgets by 15 px and all seven pushed the "Run Connection Test" button
   105 px down; the Run Benchmark window's status label sits under the scroll
@@ -1617,7 +1654,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   text, or no selection, copies the message as written, and a part of it
   copies as selected.
 - **A widget that appears mid-interaction keeps its space while hidden.**
-  The Local tab's download progress bar appears the instant a download starts,
+  The Models tab's download progress bar appears the instant a download starts,
   and without `retainSizeWhenHidden` its 28 px left the layout: pressing
   Download pulled Download/Cancel/Delete up under the cursor -- with Cancel
   sliding into the place the pointer was on -- and pushed them back down on
@@ -1637,7 +1674,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   toggles, matching the file explorer. Do not reintroduce `MultiSelection`.
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
-  they are diagnostic UI state rather than configuration. The Remote tab should
+  they are diagnostic UI state rather than configuration. The API Keys tab should
   restore these labels on open and overwrite only the providers tested. Saving a
   new provider key or deleting a provider key must clear that provider's stored
   test result because the old result no longer describes the active credential.
@@ -1826,7 +1863,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   policy, a transient backend error). `get_api_key` and
   `get_api_key_source` read the keyring before the file, so the new key B
   sat unused in plaintext while every request kept using the old key A,
-  the dialog said "API key storage updated", the Remote tab said
+  the dialog said "API key storage updated", the API Keys tab said
   "keyring", and nothing reconciled the two when the keyring recovered
   (measured with a backend whose read and write fail independently: no
   exception, keyring A, fallback B, `get_api_key -> A`).
@@ -2005,9 +2042,54 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   already reset: only `_consume_cancel_locked` empties that list, so the
   next drain's first Cancel reported the crashed drain's removed models as
   its own (drain 2 queued `medium` and `large-v3`; its summary named `base`
-  and `small` before them). Progress and its rolling transfer rate are approximate
-  because they are derived from cache growth and the estimated total sizes in
-  `MODEL_ESTIMATED_SIZE_MB`.
+  and `small` before them). Progress and its transfer rate come from the
+  download worker's own byte count; cache growth and the estimated sizes in
+  `MODEL_ESTIMATED_SIZE_MB` are the fallback (next entry).
+- **Download progress is the downloader's own byte count, not directory
+  growth** (2026-09-20, field report). A steady 100 Mbit/s download of
+  Granite Speech 5.0 showed "measuring speed", one absurd rate and a jump
+  from 0% to about 30%. `estimate_cached_model_bytes` sums `st_size`, which
+  for a file written out of order is the highest offset written, not the
+  bytes present, and a Xet-backed repository is reconstructed from up to 60
+  concurrent ranges (the user's hf_xet log: 552 MB in 43 s). Measured with
+  a synthetic writer placing 64 MB blocks out of order: `st_size` claims
+  36.4% with 12.1% present; the 5 s speed window then saw one step and
+  nothing between steps. A stale Windows `stat` was the other suspect and
+  is refuted: a file another process was writing answered its current size
+  every time. The worker (`local_model_download_worker.py`) therefore
+  installs `snapshot_download(tqdm_class=hub_progress_tqdm_class(...))` and
+  streams `@@STTDL@@{"event":"bytes",...}` lines on stdout, which a daemon
+  reader thread in the parent (`local_model_download._pump_progress`)
+  drains -- a pipe nobody reads blocks the child from inside hf_xet's
+  callback, so the reader is part of the contract, and
+  `model_download_process_error` waits with `wait()` because
+  `communicate()` would read the same pipe from a second thread. Rules:
+  - **The bar is selected by its exact name**,
+    `huggingface_hub.snapshot_download`. huggingface_hub 1.32.0 adds a
+    second `unit="B"` bar, `...snapshot_download.transfer`, whose
+    Xet-deduplicated count never reaches the file size, and `thread_map`
+    builds a files-count bar; a selector by `unit` double-counts.
+  - **The total is `max(reported, MODEL_ESTIMATED_SIZE_MB)`**: the Hub grows
+    its total per file as metadata arrives, and an early 1.1 MB total with
+    1.1 MB fetched read 99%. "approx." is dropped only when the reported
+    total reaches the table's figure. Percent is monotonic per download.
+  - **The rate needs a span of at least one second**, and "measuring
+    speed" is shown only until the first real sample pair exists.
+  - **Anything unrecognised is ignored** and the parent falls back to
+    directory growth, logged once as `model_download_progress_absent`: an
+    older worker, a future Hub version that renames the bar, a transcriber's
+    own in-process load-path download. The ModelScope mirror writes
+    sequentially and has no hook; the worker sends
+    `DOWNLOAD_PROGRESS_UNKNOWN` so the display returns to directory growth
+    instead of freezing.
+  - **The Models tab's progress bar and its "Next: ..." queue line keep
+    their space while hidden.** Negative control: without
+    `setRetainSizeWhenHidden` on the queue line, Download/Cancel/Delete
+    moved 25 px and the model list shrank by 25 px.
+  The overlay's preload line uses the same numbers and the on-screen model
+  name. **Not verified: a real network download** -- the hook was driven by
+  a test driver that reproduces the construction sequences of 1.8.0 and
+  1.32.0 from their source.
 - **Error text must be selectable**: Qt hands a `QMessageBox` only
   `LinksAccessibleByMouse`, so its text could be captured only by retyping it
   or screenshotting it. `dialog_style.install_selectable_message_text` installs
@@ -2026,10 +2108,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **There is exactly one download slot, and it is enforced across every
   process of the same Windows user**
   (`model_download_coordinator`). It exists because the controller's preload
-  path and the Local tab's queue each used to spawn a worker against the same
+  path and the Models tab's queue each used to spawn a worker against the same
   cache directory, which the user hit as three failures in one sitting:
   selecting an uncached model and pressing Save downloaded it while the Local
-  tab showed nothing; starting that same model from the Local tab then sat at
+  tab showed nothing; starting that same model from the Models tab then sat at
   0% forever, because progress is directory growth and the other process owned
   the directory; and switching model terminated the preload download *and*
   deleted its partial files, so a multi-gigabyte model restarted from a few
@@ -2065,7 +2147,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     check must see it, but the progress bar must not — it measures directory
     growth, so pointing it at a model nothing is writing to invents a
     percentage. The bar reads `_local_model_download_active` only.
-  - The Local tab renders a controller-started download in both the list and
+  - The Models tab renders a controller-started download in both the list and
     the progress bar, so `_poll_preload_download_state` drives
     `_refresh_local_model_download_progress` too; without that the progress
     branch is unreachable. The bar tracks its own shown-state rather than asking
@@ -2085,7 +2167,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     flag set and the tab's controls disabled with no way back.
   - **The slot has two layers, and both are load-bearing.** Inside the process
     a `threading.Condition` serializes callers and provides the join and
-    explicit-interest behaviour the Local tab depends on. Across processes an
+    explicit-interest behaviour the Models tab depends on. Across processes an
     OS-level lock (`file_lock.CrossProcessLock`, `msvcrt.locking` on Windows /
     `fcntl.flock` elsewhere) covers the out-of-process benchmark worker and
     `scripts/download_model.py` (a second copy of the app is separately
@@ -2871,6 +2953,56 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - The service also offers diarization, word timestamps, a phrase list and a
     "clean" transcript style. The app sends none of them, so custom vocabulary
     stays unwired for Azure.
+- **`gpt-transcribe` is OpenAI's current model, the app's default, and the
+  only one of the four with a different request shape (schema 25,
+  2026-09-21).** `POST /v1/audio/transcriptions` accepts five ids; four are
+  offered, `gpt-4o-transcribe-diarize` is not, because the app has no speaker
+  UI. OpenAI's deprecations page: `whisper-1`, `gpt-4o-transcribe`,
+  `gpt-4o-mini-transcribe` and the diarize model were notified on 2026-08-26
+  and are removed from the API on 2027-02-26, with `gpt-transcribe` as the
+  replacement for this endpoint (`gpt-live-transcribe` is realtime sessions
+  only and is not integrated). The three older models stay selectable and
+  their labels carry that date. Rules:
+  - **The request branches on `OPENAI_ARRAY_FIELD_MODELS`, not on the
+    default.** `gpt-transcribe` sends `languages[]=<code>` and never the
+    singular `language` (the guide: "languages replaces the singular language
+    field. Don't send both fields.") and one `keywords[]` per vocabulary term;
+    the three older models send `language` plus the comma-joined `prompt`
+    exactly as before, pinned by a test that parses the encoded multipart
+    body.
+  - **A term holding `<`, `>`, CR or LF is dropped rather than sent**: "The
+    API rejects the entire request when it encounters one of these
+    characters", so one bracket would cost the whole dictation. The drop is
+    logged once per request as a count at INFO and never as the terms, which
+    are the user's own text. `parse_custom_vocabulary` splits on newlines but
+    not on carriage returns, so the check is not redundant.
+  - **The language list is the engine's for all four models**: the guide
+    enumerates none for `gpt-transcribe`, only the code formats it accepts.
+  - **Schema 25 mirrors the Azure rule with `has_openai_key` in the
+    endpoint's place**: every file written before it carries
+    `gpt-4o-mini-transcribe` for everyone, and without a stored key the engine
+    could never run, so such a file adopts the current default once. A file
+    that shows OpenAI was configured keeps its model, and so does every file
+    saved from now on. Two accepted edges: an older build reading a schema-25
+    file normalizes the unknown id to its own default, and a file saved while
+    the keyring was unreadable carries `has_openai_key: false` and adopts the
+    default although a key exists -- the cost is a switch to the recommended
+    model, not a failure.
+  - **Not verified against the live service**: no OpenAI key exists on the
+    development machine. The request follows the guide's own curl example.
+- **Soniox and Mistral's Voxtral API were evaluated and not added
+  (2026-09-21).** The owner's rule: a new provider is worth its maintenance
+  only when it is both more accurate and cheaper than what is offered. Read
+  on Artificial Analysis' English leaderboard that day, MAI-Transcribe-2
+  (2.0% at $0.10/h) and ElevenLabs Scribe v2 (2.2%) lead both; Soniox (3.8%,
+  $0.10/h) and Voxtral Small (2.8%, $0.24/h) beat only OpenAI's older models
+  and Deepgram Nova-3 on both axes. Soniox's $0.12/h realtime price is the
+  one open argument, for streaming. `docs/provider-costs.md` and
+  `docs/local-asr-model-candidates-2026.md` carry the figures and links.
+  Free plans were checked the same day: Groq's free plan is the only
+  recurring free quota among the integrated providers that covers daily
+  dictation, and Azure's F0 tier does not cover LLM Speech ("Not applicable"
+  on Microsoft's quotas page), which the docs had claimed.
 - **AssemblyAI Universal-3.5 Pro realtime**: the legacy v2 realtime and earlier
   Universal-Streaming model are retired paths and must not be reintroduced.
   Streaming uses `assemblyai.streaming.v3.StreamingClient` with the
@@ -2969,7 +3101,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   overlay visibility and refresh all global hotkey registrations after
   display/session state has stabilized.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
-  is the shared source of truth for the General-tab language list, the overlay
+  is the shared source of truth for the Transcription-tab language list, the overlay
   quick selector, and provider validation. The overlay persists a selection for
   the next recording, disables changes while listening/processing, and shows a
   disabled `Lang: Auto` button when automatic detection is the only mode.
@@ -3135,6 +3267,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   touched by a lockfile change: a source-tree app that is running keeps the
   native binaries of its Node child loaded, so `npm ci` has to wait until the
   app is closed.
+- **Every Python dependency was brought to its newest release on 2026-09-21,
+  and each was measured through the code that uses it.** Direct pins: PySide6
+  6.11.2, sounddevice 0.5.6, numpy 2.5.3, onnxruntime-genai 0.16.0, assemblyai
+  1.5.5 (from 0.64.33, a major version), groq 1.7.0, websocket-client 1.9.2,
+  pyinstaller 6.22.3, ruff 0.16.8; through the lock onnxruntime 1.30.0,
+  huggingface-hub 1.32.0, hf-xet 1.6.0, ctranslate2 4.8.2, tokenizers 0.23.2.
+  Measured: the full suite; `scripts/release_check_providers.py` against the
+  live services (AssemblyAI batch and realtime, Groq batch, a quit during the
+  AssemblyAI poll, 4/4); one real model per local runtime from the source tree
+  (`small`, Parakeet, Granite Speech 5.0, Nemotron on the CPU, Cohere on
+  WebGPU). The pins are exact on purpose (a reproducible release build), so
+  `uv lock --upgrade` alone moves only the transitive tree: `uv tree
+  --outdated --depth 1` is what shows a direct pin that fell behind, and
+  `requirements-win.txt` / `requirements-dev-win.txt` mirror the pins (a test
+  compares them). ruff 0.16.8 added ISC004 (twenty implicit concatenations
+  inside collections, each read, all intended, now parenthesized) and LOG004
+  (one narrow suppression with its reason in the benchmark worker's
+  `finally`). `node_modules` was reinstalled with `npm ci --omit=dev` the same
+  day: it had still held the pre-4.3.0 tree (sharp 0.35.3), because a running
+  source-tree app keeps seven native files of its Node child loaded
+  (`onnxruntime_binding.node`, `onnxruntime.dll`, `dxil.dll`,
+  `dxcompiler.dll`, sharp's `.node` and two libvips DLLs).
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)**: a third local ONNX
   path in `transcriber/local_onnx_asr.py`, separate from the Cohere/Granite Node
   runtime and from Nemotron's ORT GenAI path. It is **pure Python and needs no
@@ -3270,7 +3424,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **English only, and the graph has no language input**:
     `LOCAL_ENGLISH_ONLY_MODELS` gives `("auto", "en")` and both mean the same
     request. Adding a second English-only model surfaced three sentences that
-    named `distil-large-v3.5` as *the* English-only model (the General tab's
+    named `distil-large-v3.5` as *the* English-only model (the Transcription tab's
     language note, the benchmark's German refusal, `download_model.py
     --list`'s substring test on "distil"); all three read the set now.
   - **Cancel** reuses `_RunAbortHandle` and `_CancelWatchdog` from
@@ -3312,7 +3466,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `benchmark_device_targets` yields the one `auto` case, a stored
     `onnx_auto_preferred_devices` entry never reaches the constructor, and the
     identity reads the same four fields as onnx-asr.
-  - **The Local tab's row suffix is one rule now**
+  - **The Models tab's row suffix is one rule now**
     (`LOCAL_ONNX_MODEL_RUNTIME_LABELS` plus `supports_streaming`): a branch
     per runtime family had left the two onnx-asr rows without "batch only".
     **Every row carries its whole text as a tooltip**: the list elides a
@@ -3346,7 +3500,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   plan), and a recording that is not English.
 - **Local ONNX execution device (`local_onnx_device`, default `auto`, schema
   23)**: the Benchmark tab could always pin a device, but daily dictation
-  always ran on `auto` because `factory.py` never passed one. The General tab's
+  always ran on `auto` because `factory.py` never passed one. The Transcription tab's
   "ONNX Device" row now feeds the same policy (`LOCAL_WEBGPU_DEVICE_POLICIES`)
   into `LocalOnnxWebGpuTranscriber`, with the same wording as the benchmark
   choices so a device proven faster there can be selected for real use.
@@ -4353,7 +4507,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and kept. Keep the pure in-process function for the CLI and the worker; only
   the settings dialog goes through the process path. Wire new worker args into
   the frozen entry point (`main.py`) and the PyInstaller `hiddenimports`.
-- **Every ONNX-device choice must be measurable**: the General tab pins
+- **Every ONNX-device choice must be measurable**: the Transcription tab pins
   `local_onnx_device` for Cohere/Granite *and* Nemotron, so the benchmark has
   to be able to compare the same targets. It used to expand
   `webgpu_device_targets` only for the `onnx-webgpu` runtime and run Nemotron
@@ -5043,7 +5197,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `snapshot_download(repo_id, cache_dir=download_root)`, which reads that one
   cache root and the `models--<repo>` layout alone. Searching the default
   Hugging Face cache as well, or accepting a flat folder, reported "cached"
-  for a model the Local tab then refused to offer a Download button for while
+  for a model the Models tab then refused to offer a Download button for while
   the next dictation fetched it again -- and offline mode could not load it at
   all. It is also the gate `_coordinated_download_if_missing` already used, so
   the inventory and the load path cannot disagree. The ONNX half stays
@@ -5237,6 +5391,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
   azure, funasr
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
+- **OpenAI** model select picks `gpt-transcribe` (default) or one of the three
+  models OpenAI removes on 2027-02-26.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
   secret store. Model select picks `mai-transcribe-2` (default),
@@ -5473,7 +5629,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_download_lock_dir` says why it is not inside the cache. Recorded rather
   than fixed.
 - **With a custom Model Dir, a faster-whisper copy that lives only in the
-  default Hugging Face cache can no longer be deleted from the Local tab.**
+  default Hugging Face cache can no longer be deleted from the Models tab.**
   Delete is gated on the inventory, and the inventory now answers "loadable
   from the configured Model Dir" -- which that copy is not, because
   `WhisperModel(download_root=...)` reads one cache root. `cached_model_paths`
@@ -5489,7 +5645,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   while it is transferring.** `run_coordinated_download` passes `cancel_check`
   into `acquire()`, so with the slot free -- the ordinary single-user case --
   the check is polled zero times and the transfer runs to completion.
-  `snapshot_download` exposes no progress or cancel callback, and the
+  `snapshot_download` exposes no cancel callback (its `tqdm_class` reports
+  progress only), and the
   ModelScope fallback reads its response in a plain loop with no poll. The
   visible consequence: with `keep_onnx_model_loaded` off, a Cohere/Granite
   model's only download is the one its transcriber starts from its own load
@@ -5720,11 +5877,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `QScrollArea` answers a fixed 58x58 whatever it holds, so the pin sees
   the one page that is not a scroll area (Benchmark, 585 px) and none of
   the others. Measured at 9 pt on 2026-09-18: at the 611 px minimum the
-  viewport is 585 px while General, Hotkeys && Display and Audio &&
-  Recording need 621 px and Local 709 px, so those four show a horizontal
-  scrollbar (36 and 124 px of travel); Remote 578, History 560 and Import
+  viewport is 585 px while Transcription, Hotkeys && Display and Audio need
+  621 px and Models 709 px, so those four show a horizontal scrollbar (36
+  and 124 px of travel); API Keys 578, History 560 and Import
   Audio 532 fit. Older than the tab split: the tree at `6bfa47b` shows the
-  same bar on General, Audio and Local. Only reached by dragging the
+  same bar on those three and on Models. Only reached by dragging the
   dialog narrower than about 735 px; the 860 px default is unaffected and
   nothing is unreachable. Closing it means raising the minimum width to
   the widest scroll page plus the 26 px of chrome (about 735 px, more at a

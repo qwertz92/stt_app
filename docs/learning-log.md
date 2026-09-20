@@ -8895,3 +8895,55 @@ tested) and the corrected quotation (documentation).
   "Both statements are the vendor's" was true of one of them.
 - *Fix garbage input where the value enters.* The reviewer's suggested fix was
   the guard; the entry point closed the guard and Canary's check together.
+
+### Before 0.10: field feedback on the download, the tabs and the providers (2026-09-21)
+
+The owner used the 0.10 candidate for a day and reported what he saw.
+
+- *The download display was wrong in three ways from one cause.* A steady
+  100 Mbit/s download read "measuring speed", then one absurd rate, and the
+  percentage jumped from 0 to about 30. Progress was the `st_size` sum of the
+  destination, and a Xet-backed repository is written out of order, so the
+  size is the highest offset, not the bytes present (synthetic writer: 36.4%
+  claimed with 12.1% present). The lead's second suspect, a stale Windows
+  `stat`, was measured and refuted. The worker now reports the downloader's
+  own byte count through `snapshot_download(tqdm_class=...)`; directory growth
+  is the fallback. The bar is matched by its exact name because
+  huggingface_hub 1.32.0 adds a second byte bar that never reaches the file
+  size. Not verified: a real network download.
+- *An empty strip under the last model in the picker.* `findChildren` walks
+  the parent tree, and `_configure_combo_popups` ran before the tab widget was
+  parented: it reached 3 of 21 combos. Qt sizes a popup by its first
+  `maxVisibleItems` entries and a separator is an entry 2 px tall, so the
+  popup came out up to 28 px short and per-item scrolling left that blank.
+- *"Local" and "Remote" sounded like the place to choose a model.* The tabs
+  are now Transcription, Hotkeys & Display, Audio, Models, API Keys, History,
+  Import Audio and Benchmark; the notes beside the model say where downloads
+  and keys live; a reserved note says when the selected model ignores the
+  custom vocabulary (`config.supports_custom_vocabulary`, pinned against the
+  factory).
+- *OpenAI's models had moved on.* `gpt-transcribe` is the default (schema 25);
+  the three older models are removed by OpenAI on 2027-02-26 and say so. Its
+  request differs (`languages[]`, `keywords[]`), and a vocabulary term with
+  `<`, `>`, CR or LF is dropped because OpenAI rejects the whole request for
+  one. Not verified against the live service: no key.
+- *Providers that were not added.* Soniox and Voxtral are neither more
+  accurate nor cheaper than MAI-Transcribe-2 and Scribe v2 on Artificial
+  Analysis' English leaderboard (read 2026-09-21), which was the owner's
+  condition. Granite Speech 5.0 has no multilingual variant.
+- *A documentation claim that was wrong since it was written:* Azure's F0 free
+  tier does not cover LLM Speech; Microsoft's quotas page says "Not
+  applicable" in every row.
+- *Every Python dependency went to its newest release*, assemblyai across a
+  major version (0.64.33 to 1.5.5), and each was measured through the code
+  that uses it: the live AssemblyAI and Groq services 4/4, one real model per
+  local runtime. `uv lock --upgrade` does not move an exact pin; `uv tree
+  --outdated --depth 1` shows it.
+
+**Lessons.**
+- *Measure the suspect you like least too.* The lead offered two causes for
+  the download display; the agent measured both and one was false.
+- *A selector by a property picks up the next thing that shares it.* The byte
+  bar is matched by name, not by `unit="B"`, because the next library version
+  adds a second bar with that unit.
+- *A helper that walks the widget tree must run after the tree exists.*
