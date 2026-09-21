@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from stt_app.config import (
+    DEFAULT_ENGINE,
     DEFAULT_MODEL_SIZE,
     LOCAL_ONNX_MODEL_SIZES,
     VALID_ENGINES,
@@ -14,6 +17,7 @@ from stt_app.config import (
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.azure_provider import AzureLlmSpeechTranscriber
+from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
@@ -323,3 +327,24 @@ def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
 
         assert not hasattr(transcriber, "preferred_device"), model_size
         assert not hasattr(transcriber, "provider_order"), model_size
+
+
+@pytest.mark.parametrize(
+    "engine", [engine for engine in VALID_ENGINES if engine != DEFAULT_ENGINE]
+)
+def test_a_missing_key_points_at_the_api_keys_tab(engine):
+    """The tab was renamed from Remote to API Keys on 2026-09-20.
+
+    Four of the seven messages followed; AssemblyAI, Deepgram and Groq wrote
+    the arrow as a character rather than as "->", so the search that renamed
+    the others never matched them and they kept naming a place the tab bar no
+    longer shows.
+    """
+    settings = AppSettings(
+        engine=engine, azure_endpoint="https://example.cognitiveservices.azure.com"
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        create_transcriber(settings, secret_store=None)
+    message = str(raised.value)
+    assert "key is missing" in message
+    assert message.endswith("Enter your key in Settings -> API Keys.")

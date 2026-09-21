@@ -135,7 +135,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         if not api_key:
             raise TranscriptionError(
                 "AssemblyAI API key is missing. "
-                "Enter your key in Settings → Remote Provider API Keys."
+                "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         # No class-specific validation: the base ``_normalize_language_mode``

@@ -74,7 +74,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         if not api_key:
             raise TranscriptionError(
                 "Groq API key is missing. "
-                "Enter your key in Settings → Remote Provider API Keys."
+                "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._model = model or DEFAULT_GROQ_MODEL
