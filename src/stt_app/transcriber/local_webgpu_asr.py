@@ -481,8 +481,8 @@ def download_webgpu_model_snapshot(
 ) -> str:
     """Fetch one local ONNX model, optionally reporting `(done, total)` bytes.
 
-    See `download_model_snapshot` for what the hook is; without one the call
-    is unchanged.
+    See `download_model_snapshot` for what the hook is; without one nothing is
+    measured and no bar is installed.
     """
     try:
         from huggingface_hub import snapshot_download  # type: ignore
@@ -496,6 +496,16 @@ def download_webgpu_model_snapshot(
     local_dir = webgpu_download_destination(model_name, model_dir)
     if repo_id is None or layout is None or local_dir is None:
         raise ValueError(f"Unknown local ONNX model '{model_name}'.")
+
+    # A partial left by a killed download is never read back by this version
+    # of huggingface_hub and only holds the reported percentage where it left
+    # off; in this layout it lives under
+    # `<local_dir>/.cache/huggingface/download/`. Imported here because
+    # `local_faster_whisper` imports this module at its top. No symlink probe:
+    # a flat `local_dir` download creates no symlinks.
+    from .local_faster_whisper import remove_orphaned_hub_partials
+
+    remove_orphaned_hub_partials(model_name, model_dir)
 
     kwargs: dict[str, object] = {
         "allow_patterns": layout.allow_patterns,
@@ -517,7 +527,7 @@ def download_webgpu_model_snapshot(
         # Files already complete in the flat destination never reach the hook:
         # huggingface_hub returns them before it builds a bar. See
         # `completed_download_bytes`. Both the scan and the bar stay behind
-        # this check, so a call without a hook is unchanged.
+        # this check, so a call with no hook reads nothing off the disk.
         kwargs["tqdm_class"] = hub_progress_tqdm_class(
             offset_progress_hook(
                 progress_hook, completed_download_bytes(model_name, local_dir)

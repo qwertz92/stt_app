@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import threading
 import time
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -82,6 +82,10 @@ _PARTIAL_DOWNLOAD_SUFFIXES = (".incomplete", ".ms-part")
 # huggingface_hub's bookkeeping folder inside a flat `local_dir`: metadata
 # files and the partials of that layout, none of it model content.
 _HUB_BOOKKEEPING_DIR = ".cache"
+# The two halves of the blob cache layout. Without symlink support the second
+# holds copies of files in the first -- see `completed_download_bytes`.
+_BLOB_DIR = "blobs"
+_SNAPSHOT_DIR = "snapshots"
 
 ProgressHook = Callable[[int, int], None]
 
@@ -312,10 +316,12 @@ def completed_download_bytes(model_name: str, destination: Path | None) -> int:
     Each exclusion is there for a reason:
 
     * A partial (`*.incomplete`, and the ModelScope mirror's `*.ms-part`) is
-      not counted. huggingface_hub resumes it and reports its bytes itself,
-      through the per-file bar's `initial=`, so counting it here would count
-      it twice -- which is the common resume case and the one that already
-      worked.
+      not counted. Within one `snapshot_download` its bytes reach the
+      percentage through the per-file bar's `initial=`, so counting them here
+      would count them twice. Across processes they are not read at all --
+      huggingface_hub 1.32.0 downloads to a process-unique
+      `<etag>.<8 hex>.incomplete` and never resumes one, which is why
+      `remove_orphaned_hub_partials` deletes them on the way into a download.
     * A symlink is not counted. The blob layout's snapshot entries point at
       blobs in the same tree and `stat()` follows them.
     * hub's bookkeeping folder is not counted: in the flat `local_dir` layout
@@ -324,6 +330,16 @@ def completed_download_bytes(model_name: str, destination: Path | None) -> int:
       *below* the destination, because the default cache root is itself
       `~/.cache/huggingface/hub` and matching the absolute path would exclude
       every file of every model.
+    * A file under `snapshots/` whose size equals a blob's is that blob's
+      *copy* and is counted once. Without the symlink privilege
+      `_create_symlink(..., new_blob=False)` copies rather than links a blob
+      it did not just fetch -- the state a download killed between writing
+      the blob and creating its pointer leaves behind, and the one a resume
+      then finds -- so both files are real: measured 3,000,000 bytes on disk
+      and 6,000,000 returned. Each blob absorbs at most one snapshot file, so
+      two blobs of one size beside one copy still count twice. Two unrelated
+      files of exactly the same size under-count one of them, which is the
+      safe direction, and nothing is hashed to tell them apart.
 
     The result is capped at the model's own size in `MODEL_ESTIMATED_SIZE_MB`.
     A blob cache keeps the blobs of every revision it ever fetched, so a repo
@@ -334,6 +350,8 @@ def completed_download_bytes(model_name: str, destination: Path | None) -> int:
     if destination is None:
         return 0
     total = 0
+    blob_sizes: Counter[int] = Counter()
+    snapshot_sizes: list[int] = []
     try:
         if not destination.is_dir():
             return 0
@@ -342,14 +360,29 @@ def completed_download_bytes(model_name: str, destination: Path | None) -> int:
                 continue
             if path.name.endswith(_PARTIAL_DOWNLOAD_SUFFIXES):
                 continue
-            if _HUB_BOOKKEEPING_DIR in path.relative_to(destination).parts:
+            parts = path.relative_to(destination).parts
+            if _HUB_BOOKKEEPING_DIR in parts:
                 continue
             try:
-                total += path.stat().st_size
+                size = path.stat().st_size
             except OSError:
                 continue
+            if parts[0] == _BLOB_DIR:
+                blob_sizes[size] += 1
+                total += size
+            elif parts[0] == _SNAPSHOT_DIR:
+                # Resolved after the walk: `rglob` does not promise to reach
+                # the blob before the copy that points at it.
+                snapshot_sizes.append(size)
+            else:
+                total += size
     except OSError:
         pass
+    for size in snapshot_sizes:
+        if blob_sizes[size]:
+            blob_sizes[size] -= 1
+            continue
+        total += size
     table_total = max(0, int(MODEL_ESTIMATED_SIZE_MB.get(model_name, 0) * 1_000_000))
     return min(total, table_total) if table_total else total
 

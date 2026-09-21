@@ -3,6 +3,7 @@ model preloading, and API validation."""
 
 from __future__ import annotations
 
+import logging
 import os
 import stat
 import types
@@ -27,8 +28,10 @@ from stt_app.transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     delete_cached_model,
     download_destination_dir,
+    download_model_snapshot,
     estimate_cached_model_bytes,
     find_cached_models,
+    remove_orphaned_hub_partials,
 )
 
 # ---------------------------------------------------------------------------
@@ -1027,3 +1030,214 @@ class TestDownloadProgressMeasuresTheDestination:
             return_value=str(tmp_path / "nowhere"),
         ):
             assert estimate_cached_model_bytes("tiny", str(model_dir)) == 2050
+
+
+# ---------------------------------------------------------------------------
+# Housekeeping before a download starts
+# ---------------------------------------------------------------------------
+
+
+class TestOrphanedHubPartials:
+    """huggingface_hub 1.32.0 never resumes a partial, so one left behind is
+    dead weight that only freezes the percentage (see
+    `remove_orphaned_hub_partials`)."""
+
+    def test_both_incomplete_name_shapes_go(self, tmp_path):
+        """1.8.0 wrote `<etag>.incomplete`, 1.32.0 `<etag>.<8 hex>.incomplete`.
+
+        Either can be on the disk of a machine that has run both versions, and
+        neither is read by a download made with the installed one.
+        """
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        (blobs / "aaa.incomplete").write_bytes(b"x" * 1_000)
+        (blobs / "aaa.1a2b3c4d.incomplete").write_bytes(b"y" * 500)
+
+        outcome = remove_orphaned_hub_partials("small", str(tmp_path))
+
+        assert tuple(outcome) == (2, 1_500, 0)
+        assert list(blobs.iterdir()) == []
+
+    def test_the_flat_onnx_layout_is_cleared_too(self, tmp_path):
+        """There huggingface_hub keeps its partials in its own bookkeeping
+        folder under the `local_dir` it downloads into."""
+        destination = tmp_path / "granite-4.0-1b-speech-ONNX"
+        downloads = destination / ".cache" / "huggingface" / "download"
+        downloads.mkdir(parents=True)
+        orphan = downloads / "onnx" / "model_q4.onnx.9f8e7d6c.incomplete"
+        orphan.parent.mkdir()
+        orphan.write_bytes(b"x" * 2_000)
+
+        outcome = remove_orphaned_hub_partials("granite-4.0-1b-speech", str(tmp_path))
+
+        assert tuple(outcome) == (1, 2_000, 0)
+        assert not orphan.exists()
+
+    def test_a_modelscope_partial_and_the_finished_files_are_left_alone(self, tmp_path):
+        """The mirror resumes its `*.ms-part` files, so removing one costs the
+        bytes it already fetched; and a complete blob is the download's
+        baseline, not its rubbish."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        mirror_partial = blobs / "bbb.ms-part"
+        mirror_partial.write_bytes(b"x" * 300)
+        complete = blobs / "ccc"
+        complete.write_bytes(b"y" * 700)
+
+        outcome = remove_orphaned_hub_partials("small", str(tmp_path))
+
+        assert tuple(outcome) == (0, 0, 0)
+        assert mirror_partial.exists()
+        assert complete.exists()
+
+    def test_only_the_destination_is_touched_never_a_second_cache_root(self, tmp_path):
+        """`cleanup_incomplete_model_download` sweeps every candidate root
+        because the user asked for a cleanup. This runs on the way into a
+        download, so it may only touch the directory that download writes."""
+        model_dir = tmp_path / "models"
+        default_cache = tmp_path / "hf"
+        folder = "models--Systran--faster-whisper-small"
+        for root in (model_dir, default_cache):
+            (root / folder / "blobs").mkdir(parents=True)
+            (root / folder / "blobs" / "aaa.incomplete").write_bytes(b"x" * 10)
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
+            return_value=str(default_cache),
+        ):
+            outcome = remove_orphaned_hub_partials("small", str(model_dir))
+
+        assert tuple(outcome) == (1, 10, 0)
+        assert not (model_dir / folder / "blobs" / "aaa.incomplete").exists()
+        assert (default_cache / folder / "blobs" / "aaa.incomplete").exists()
+
+    def test_a_destination_that_is_not_there_yet_is_not_an_error(self, tmp_path):
+        assert tuple(remove_orphaned_hub_partials("small", str(tmp_path))) == (
+            0,
+            0,
+            0,
+        )
+        assert tuple(remove_orphaned_hub_partials("no-such-model", "")) == (0, 0, 0)
+
+    @pytest.mark.skipif(
+        os.name != "nt", reason="an open handle blocks unlink on Windows"
+    )
+    def test_a_partial_that_cannot_be_removed_is_counted_and_not_raised(self, tmp_path):
+        """A foreign tool really is fetching the same model into the same
+        directory. The download still has to start."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        held = blobs / "aaa.incomplete"
+        held.write_bytes(b"x" * 400)
+
+        with held.open("rb"):
+            outcome = remove_orphaned_hub_partials("small", str(tmp_path))
+
+        assert tuple(outcome) == (0, 0, 1)
+        assert held.exists()
+
+
+class TestDownloadStartHousekeeping:
+    """What `download_model_snapshot` does before it asks for the first byte."""
+
+    def _fake_hub(self, monkeypatch, calls, tmp_path, orphan: Path | None = None):
+        import huggingface_hub
+
+        def fake_snapshot_download(_repo_id, **_kwargs):
+            calls.append("download")
+            if orphan is not None:
+                calls.append(f"orphan-on-disk:{orphan.exists()}")
+            return str(tmp_path / "snapshot")
+
+        monkeypatch.setattr(
+            huggingface_hub, "snapshot_download", fake_snapshot_download
+        )
+
+    def test_the_orphan_is_gone_before_the_first_byte_is_asked_for(
+        self, monkeypatch, tmp_path
+    ):
+        """Otherwise it is still there when the download starts, and the
+        percentage stays at the high-water mark it describes until the real
+        transfer passes it -- measured at 34 of 78 MB for four seconds after a
+        kill at 33.7 MB, which for a 1.5 GB model killed at 80% is minutes."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        orphan = blobs / "aaa.1a2b3c4d.incomplete"
+        orphan.write_bytes(b"x" * 1_000)
+        calls: list[str] = []
+        self._fake_hub(monkeypatch, calls, tmp_path, orphan=orphan)
+
+        download_model_snapshot("small", str(tmp_path))
+
+        assert calls == ["download", "orphan-on-disk:False"]
+
+    def test_a_cleanup_that_fails_does_not_fail_the_download(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """It is housekeeping on the way in. A download that cannot start
+        because a partial could not be listed would be a worse bug than the
+        one this removes."""
+        import stt_app.transcriber.local_faster_whisper as fw
+
+        def explode(*_args):
+            raise RuntimeError("no")
+
+        calls: list[str] = []
+        self._fake_hub(monkeypatch, calls, tmp_path)
+        monkeypatch.setattr(fw, "_remove_partials_under", explode)
+
+        with caplog.at_level(logging.WARNING, logger=fw.__name__):
+            download_model_snapshot("small", str(tmp_path))
+
+        assert calls == ["download"]
+        assert "model_download_orphaned_partials_failed" in caplog.text
+
+    def test_the_symlink_probe_is_settled_before_the_download_threads_race_it(
+        self, monkeypatch, tmp_path
+    ):
+        """`are_symlinks_supported` caches `True` before it runs its test, so a
+        second download thread asking inside that window calls `os.symlink` and
+        dies with WinError 1314 -- which `_create_symlink` does not catch, so
+        the whole `snapshot_download` fails. Measured against a zero-latency
+        local Hub stand-in, three small files, a fresh cache per run: 11 of 12
+        runs failed cold, 0 of 12 after one serial call here. The key is the
+        storage folder, because that is the `commonpath` of a blob and its
+        snapshot pointer, which is what `_create_symlink` asks with.
+        """
+        from huggingface_hub import file_download
+
+        calls: list[str] = []
+        probed: list[object] = []
+
+        def fake_probe(cache_dir=None):
+            calls.append("symlink-probe")
+            probed.append(cache_dir)
+            return False
+
+        self._fake_hub(monkeypatch, calls, tmp_path)
+        monkeypatch.setattr(file_download, "are_symlinks_supported", fake_probe)
+
+        download_model_snapshot("small", str(tmp_path))
+
+        assert calls == ["symlink-probe", "download"]
+        assert [str(path) for path in probed] == [
+            str(download_destination_dir("small", str(tmp_path)))
+        ]
+
+    def test_a_probe_that_is_gone_or_raises_does_not_fail_the_download(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """An upstream rename must cost the mitigation, not the download."""
+        from huggingface_hub import file_download
+
+        import stt_app.transcriber.local_faster_whisper as fw
+
+        calls: list[str] = []
+        self._fake_hub(monkeypatch, calls, tmp_path)
+        monkeypatch.delattr(file_download, "are_symlinks_supported")
+
+        with caplog.at_level(logging.WARNING, logger=fw.__name__):
+            download_model_snapshot("small", str(tmp_path))
+
+        assert calls == ["download"]
+        assert "hub_symlink_probe_unavailable" in caplog.text

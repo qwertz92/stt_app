@@ -62,6 +62,29 @@ def test_model_download_command_uses_frozen_worker_arg(monkeypatch):
     ]
 
 
+def test_the_worker_keeps_hub_warnings_out_of_the_error_it_reports(monkeypatch):
+    """The last stderr line is what a failed download shows as its reason.
+
+    huggingface_hub warns once per process that this machine cannot create
+    symlinks -- true on every Windows account without Developer Mode -- and a
+    `warnings.warn` ends in the source line `warnings.warn(message)`. A child
+    that died without writing a reason of its own (killed, out of memory) then
+    reported exactly that text as the cause (seen with a local Hub stand-in).
+    """
+    captured = {}
+
+    def fake_popen(command, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(stdout=_worker_stdout())
+
+    monkeypatch.setattr(local_model_download.subprocess, "Popen", fake_popen)
+
+    process = local_model_download.start_model_download_process("small")
+    process._stt_progress_reader.join(timeout=5)
+
+    assert captured["env"]["HF_HUB_DISABLE_SYMLINKS_WARNING"] == "1"
+
+
 def test_start_model_download_process_pipes_and_drains_the_worker(monkeypatch):
     """stdout is a pipe now, because the worker reports its byte counts on it.
 
@@ -85,6 +108,38 @@ def test_start_model_download_process_pipes_and_drains_the_worker(monkeypatch):
     assert captured["stderr"].readable() is True
     assert captured["stderr"].writable() is True
     assert process._stt_progress_reader is not None
+    process._stt_progress_reader.join(timeout=5)
+
+
+def test_the_orphan_of_a_killed_download_is_gone_before_the_child_starts(
+    monkeypatch, tmp_path
+):
+    """huggingface_hub 1.32.0 never reads a partial back, and the parent
+    measures directory growth until the child's first event.
+
+    So an orphan still on the disk at `Popen` time is read as progress that
+    the download then has to catch up with before the line moves again:
+    measured against a local Hub stand-in, a kill at 33.7 MB left "34 of
+    78 MB (approx. 43%), measuring speed" on screen for four seconds, while
+    the child re-requested the whole file with no `Range` header. For a
+    1.5 GB model killed at 80% that is minutes of a frozen line -- the very
+    symptom this rework was for.
+    """
+    blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+    blobs.mkdir(parents=True)
+    orphan = blobs / "aaa.1a2b3c4d.incomplete"
+    orphan.write_bytes(b"x" * 1_000)
+    seen: list[bool] = []
+
+    def fake_popen(command, **kwargs):
+        seen.append(orphan.exists())
+        return SimpleNamespace(stdout=_worker_stdout())
+
+    monkeypatch.setattr(local_model_download.subprocess, "Popen", fake_popen)
+
+    process = local_model_download.start_model_download_process("small", str(tmp_path))
+
+    assert seen == [False], "the child was started with the orphan still there"
     process._stt_progress_reader.join(timeout=5)
 
 
@@ -379,10 +434,89 @@ def test_releasing_a_canceled_download_gives_back_the_log_without_waiting():
 
 
 def test_releasing_a_download_twice_is_harmless():
-    process = SimpleNamespace(stdout=None, _stt_progress_reader=None)
+    """Two cancel paths can hold the same child: the preload worker's own and
+    any of the Qt-thread callers that reach it through the controller."""
+    error_log = local_model_download.tempfile.TemporaryFile(
+        mode="w+t", encoding="utf-8"
+    )
+    stream = _RecordingStream()
+    process = SimpleNamespace(
+        stdout=stream,
+        _stt_progress_reader=None,
+        _stt_error_log=error_log,
+        _stt_error_log_lock=threading.Lock(),
+    )
 
     local_model_download.release_model_download_process(process)
+
+    assert error_log.closed is True
+    assert process._stt_error_log is None
+    # No reader was ever started, so this end of the pipe is the caller's.
+    assert stream.closed_by == [threading.current_thread().name]
+
     local_model_download.release_model_download_process(process)
+
+    assert process._stt_error_log is None
+    assert stream.closed_by == [
+        threading.current_thread().name,
+        threading.current_thread().name,
+    ]
+
+
+def test_releasing_the_child_cannot_empty_the_error_another_thread_is_reading():
+    """`_download_model_for_preload` reads the failure on its worker thread
+    while `self._preload_download_process` still points at that child, so any
+    of the Qt-thread cancel paths can release it in the same moment.
+
+    Measured on the pre-fix code with a release landing between `seek(0)` and
+    `read()`: the spooled file was closed under the reader and the download's
+    only error message came back as "" -- new with the release call itself,
+    since before it nothing but this reader ever touched that log.
+    """
+    error_log = local_model_download.tempfile.TemporaryFile(
+        mode="w+t", encoding="utf-8"
+    )
+    error_log.write("boom: the real download failure text\n")
+    released = threading.Event()
+
+    class _RacingLog:
+        """Hands the other thread the log exactly between `seek` and `read`."""
+
+        def flush(self):
+            error_log.flush()
+
+        def seek(self, position):
+            error_log.seek(position)
+            releaser.start()
+            released.wait(5.0)
+            # It must still be waiting for the lock this read holds.
+            releaser.join(timeout=0.2)
+
+        def read(self):
+            return error_log.read()
+
+        def close(self):
+            error_log.close()
+
+    process = SimpleNamespace(
+        stdout=io.StringIO(),
+        _stt_progress_reader=None,
+        _stt_error_log=_RacingLog(),
+        _stt_error_log_lock=threading.Lock(),
+        wait=lambda timeout=None: 0,
+    )
+
+    def _release():
+        released.set()
+        local_model_download.release_model_download_process(process)
+
+    releaser = threading.Thread(target=_release, name="qt-thread", daemon=True)
+
+    message = local_model_download.model_download_process_error(process)
+
+    releaser.join(timeout=5)
+    assert message == "boom: the real download failure text"
+    assert error_log.closed is True
 
 
 def test_reading_the_error_does_not_read_the_pipe_a_second_time():

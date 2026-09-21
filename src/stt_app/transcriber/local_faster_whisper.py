@@ -298,6 +298,11 @@ class IncompleteCleanup(NamedTuple):
 _PARTIAL_REMOVED = "removed"
 _PARTIAL_GONE = "gone"
 _PARTIAL_LEFT = "left"
+# huggingface_hub's own suffix, and the ModelScope mirror's. Only the first is
+# swept on the way into a download: the mirror does resume its `*.ms-part`
+# files, so deleting one throws away bytes it would not fetch again.
+_HUB_PARTIAL_PATTERNS = ("*.incomplete",)
+_ALL_PARTIAL_PATTERNS = ("*.incomplete", "*.ms-part")
 # Long enough for a delete another program has under way to finish; a held
 # file is refused again after it either way.
 _PARTIAL_RETRY_DELAY_S = 0.01
@@ -339,10 +344,11 @@ def _unlink_partial(path: Path) -> str:
     except OSError:
         pass
     # A read-only partial is refused for good and is not "in use": a backup
-    # tool restored it, or a copy carried the attribute over. The resume
-    # could not append to it either, so it is as unusable as any other
-    # partial, and clearing the attribute lets the retry decide (measured:
-    # reported as "still in use" on every cleanup with nothing holding it).
+    # tool restored it, or a copy carried the attribute over. It is as
+    # unusable as any other partial -- the mirror's resume could not append to
+    # a read-only file, and huggingface_hub reads none of its own back -- so
+    # the attribute is cleared and the retry decides (measured: reported as
+    # "still in use" on every cleanup with nothing holding it).
     _clear_read_only(path)
     time.sleep(_PARTIAL_RETRY_DELAY_S)
     try:
@@ -352,6 +358,39 @@ def _unlink_partial(path: Path) -> str:
         return _PARTIAL_GONE
     except OSError:
         return _PARTIAL_LEFT if path.exists() else _PARTIAL_GONE
+
+
+def _remove_partials_under(root: Path, patterns: tuple[str, ...]) -> IncompleteCleanup:
+    """Remove every partial matching `patterns` below one directory.
+
+    Shared by the user-driven cleanup, which sweeps every candidate cache root
+    for both suffixes, and by `remove_orphaned_hub_partials`, which clears
+    huggingface_hub's own suffix out of the one directory a download is about
+    to write into. Neither prunes directories here.
+    """
+    removed_files = 0
+    removed_bytes = 0
+    left_files = 0
+    if not root.is_dir():
+        return IncompleteCleanup()
+    try:
+        partials = [path for pattern in patterns for path in root.rglob(pattern)]
+    except OSError:
+        return IncompleteCleanup()
+    for path in partials:
+        if not path.is_file():
+            continue
+        try:
+            size = path.stat().st_size
+        except OSError:
+            continue
+        outcome = _unlink_partial(path)
+        if outcome == _PARTIAL_REMOVED:
+            removed_files += 1
+            removed_bytes += size
+        elif outcome == _PARTIAL_LEFT:
+            left_files += 1
+    return IncompleteCleanup(removed_files, removed_bytes, left_files)
 
 
 def cleanup_incomplete_model_download(
@@ -365,27 +404,10 @@ def cleanup_incomplete_model_download(
     for root in _model_cache_dirs(model_name, model_dir):
         if not root.is_dir():
             continue
-        try:
-            incomplete_paths = [
-                path
-                for pattern in ("*.incomplete", "*.ms-part")
-                for path in root.rglob(pattern)
-            ]
-        except OSError:
-            continue
-        for path in incomplete_paths:
-            if not path.is_file():
-                continue
-            try:
-                size = path.stat().st_size
-            except OSError:
-                continue
-            outcome = _unlink_partial(path)
-            if outcome == _PARTIAL_REMOVED:
-                removed_files += 1
-                removed_bytes += size
-            elif outcome == _PARTIAL_LEFT:
-                left_files += 1
+        cleanup = _remove_partials_under(root, _ALL_PARTIAL_PATTERNS)
+        removed_files += cleanup.removed_files
+        removed_bytes += cleanup.removed_bytes
+        left_files += cleanup.left_files
 
         try:
             directories = sorted(
@@ -401,6 +423,99 @@ def cleanup_incomplete_model_download(
             except OSError:
                 continue
     return IncompleteCleanup(removed_files, removed_bytes, left_files)
+
+
+def remove_orphaned_hub_partials(
+    model_name: str,
+    model_dir: str = "",
+) -> IncompleteCleanup:
+    """Clear `*.incomplete` out of the directory a download is about to write.
+
+    huggingface_hub 1.32.0 downloads each file to a process-unique
+    `<etag>.<8 hex>.incomplete` and deletes it in a `finally` because "it
+    could not be reused anyway" (`file_download.py`,
+    `_download_to_tmp_and_move`, upstream PR #4228). The app cancels a
+    download by killing the child, so that `finally` never runs: the partial
+    stays on the disk and no later download ever reads it -- 1.8.0 resumed
+    `<etag>.incomplete`, this version does not. Measured against a local Hub
+    stand-in: after a kill at 33.7 MB the next run requested the file with no
+    `Range` header, while the parent's first directory sample still read
+    34 MB. The high-water mark is kept on purpose, so the line stood at "34 of
+    78 MB (approx. 43%), measuring speed" for four seconds until the restarted
+    transfer caught up with it; for a 1.5 GB model killed at 80% that is
+    minutes of a frozen percentage, which is the symptom this whole rework was
+    for. Nothing else removed the file either, short of the user pressing
+    Cancel on that model later.
+
+    Narrow on purpose. Only `*.incomplete`: the ModelScope mirror does resume
+    its `*.ms-part` files. Only `download_destination_dir`, never the
+    candidate roots of `_model_cache_dirs`: another root may hold a partial of
+    a download this one does not touch. No directory pruning: the download is
+    about to need those directories.
+
+    Never raises, and never counts what it did not do. A partial that cannot
+    be removed -- a foreign tool really is fetching the same model into the
+    same directory -- is left and counted, and the download starts anyway.
+    """
+    try:
+        destination = download_destination_dir(model_name, model_dir)
+        cleanup = (
+            IncompleteCleanup()
+            if destination is None
+            else _remove_partials_under(destination, _HUB_PARTIAL_PATTERNS)
+        )
+    except Exception:
+        # Housekeeping on the way in. A download that cannot start because a
+        # directory could not be listed would be worse than the orphan.
+        logger.warning(
+            "model_download_orphaned_partials_failed model=%s",
+            model_name,
+            exc_info=True,
+        )
+        return IncompleteCleanup()
+    if cleanup.removed_files or cleanup.left_files:
+        logger.info(
+            "model_download_orphaned_partials model=%s removed=%s bytes=%s left=%s",
+            model_name,
+            cleanup.removed_files,
+            cleanup.removed_bytes,
+            cleanup.left_files,
+        )
+    return cleanup
+
+
+def _settle_symlink_probe(destination: Path | None) -> None:
+    """Run huggingface_hub's symlink test once before the download threads do.
+
+    `are_symlinks_supported` writes `True` into its per-directory cache
+    *before* it runs its test (`file_download.py`, the
+    `_are_symlinks_supported_in_dir` assignment). On Windows without the
+    symlink privilege -- this machine, and every user who has not turned on
+    Developer Mode -- a second download thread that asks inside that window
+    reads the `True`, calls `os.symlink` and dies with `OSError [WinError
+    1314]`, which is not the `PermissionError` `_create_symlink` catches. The
+    whole `snapshot_download` then fails, and the app falls back to the
+    ModelScope mirror or, for a model without one, reports a failed download.
+    Measured against a zero-latency local Hub stand-in, three small files and
+    a fresh cache per run: 11 of 12 runs failed cold, 0 of 12 after one serial
+    call here. With real network latency the rate is lower and unknown.
+
+    The key is the storage folder, because that is the `commonpath` of a blob
+    and its snapshot pointer, which is what `_create_symlink` asks with. Only
+    this layout is affected: a flat `local_dir` download creates no symlinks.
+    """
+    if destination is None:
+        return
+    try:
+        from huggingface_hub.file_download import (  # type: ignore
+            are_symlinks_supported,
+        )
+
+        are_symlinks_supported(destination)
+    except Exception:
+        # An upstream rename costs the mitigation, not the download. One line
+        # per download start, which is rare enough to read as a diagnosis.
+        logger.warning("hub_symlink_probe_unavailable", exc_info=True)
 
 
 def format_model_download_error(model_name: str, exc: Exception) -> str:
@@ -444,9 +559,12 @@ def download_model_snapshot(
 
     `progress_hook` is how the download worker turns huggingface_hub's own
     accounting into the percentage the UI shows; see
-    `model_download_progress.hub_progress_tqdm_class`. Without one the call is
-    byte-for-byte what it always was, which is what the transcribers' own
-    load-path downloads and `scripts/download_model.py` still make.
+    `model_download_progress.hub_progress_tqdm_class`. Without one nothing is
+    measured and no bar is installed, which is the call the transcribers' own
+    load-path downloads and `scripts/download_model.py` make.
+
+    The two pieces of housekeeping below run either way, because both are
+    about the download itself rather than about reporting it.
     """
     if model_name in LOCAL_ONNX_MODEL_SIZES:
         from .local_webgpu_asr import download_webgpu_model_snapshot
@@ -466,6 +584,14 @@ def download_model_snapshot(
     if repo_id is None:
         raise ValueError(f"Unknown model '{model_name}'.")
 
+    destination = download_destination_dir(model_name, model_dir)
+    # Both before the first byte is asked for: a partial of a killed download
+    # is never read back and only holds the percentage where it left off, and
+    # hub's symlink probe kills whichever download thread loses the race with
+    # it. See `remove_orphaned_hub_partials` and `_settle_symlink_probe`.
+    remove_orphaned_hub_partials(model_name, model_dir)
+    _settle_symlink_probe(destination)
+
     kwargs: dict[str, object] = {
         "allow_patterns": _DOWNLOAD_ALLOW_PATTERNS,
     }
@@ -474,14 +600,12 @@ def download_model_snapshot(
     if progress_hook is not None:
         # Files already complete never reach the hook: huggingface_hub returns
         # them before it builds a bar. See `completed_download_bytes`. Both
-        # the scan and the bar stay behind this check, so a call without a
-        # hook is byte-for-byte the one every earlier build made.
+        # the scan and the bar stay behind this check, so a call with no hook
+        # reads nothing off the disk and installs nothing into the download.
         kwargs["tqdm_class"] = hub_progress_tqdm_class(
             offset_progress_hook(
                 progress_hook,
-                completed_download_bytes(
-                    model_name, download_destination_dir(model_name, model_dir)
-                ),
+                completed_download_bytes(model_name, destination),
             )
         )
 

@@ -156,7 +156,9 @@ def _names_phrase(names: list[str]) -> str:
 # What one queue entry did about its partial `*.incomplete` files.
 _CLEANUP_NONE = "none"  # no cleanup decision arose: nothing was interrupted
 _CLEANUP_RAN = "ran"  # the disk was read; `files` says what came off it
-_CLEANUP_KEPT = "kept"  # another caller is parked to resume the partials
+# Another caller is parked on this model; see `_cleanup_unless_awaited` for
+# what it can and cannot resume from.
+_CLEANUP_KEPT = "kept"
 _CLEANUP_SKIPPED = "skipped"  # cancelled before it ever held the download slot
 
 
@@ -1396,6 +1398,14 @@ class _LocalModelsMixin:
         the drain cannot tell "the disk held nothing" from "the disk was
         never read" out of a number, and it used to report both as "No
         incomplete files remained."
+
+        What a waiter can still resume from is the ModelScope mirror's
+        `*.ms-part` files. huggingface_hub stopped resuming its own
+        `*.incomplete` in 1.32.0 -- it downloads to a process-unique name and
+        reads no other -- so those bytes are dead whichever way this decides,
+        and `remove_orphaned_hub_partials` deletes them as the next download
+        starts. Keeping them here costs the disk space between the cancel and
+        that download, and the guard stays because the other suffix is real.
         """
         if model_download_coordinator().has_waiting_download(model_name, model_dir):
             _logger.info(

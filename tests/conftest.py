@@ -543,6 +543,12 @@ def _isolate_the_hugging_face_environment() -> None:
     os.environ["HF_HUB_CACHE"] = str(cache_root / "hub")
     os.environ["HF_HUB_OFFLINE"] = "1"
     os.environ["STT_APP_DISABLE_MODELSCOPE"] = "1"
+    # `download_model_snapshot` settles hub's symlink probe for real, and on a
+    # Windows account without the symlink privilege hub answers with a
+    # UserWarning per test that reaches it. That is a fact about the account
+    # running the suite, not about the code, and it is read at import like
+    # the constants above. The download child sets the same variable.
+    os.environ["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
     atexit.register(shutil.rmtree, cache_root, True)
 
 

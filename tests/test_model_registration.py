@@ -33,6 +33,25 @@ def test_model_is_registered_everywhere(model_name: str):
     assert config.language_modes_for_selection("local", model_name)
 
 
+def test_every_model_a_download_can_target_has_a_size_entry():
+    """The size table is also the cap on `completed_download_bytes`.
+
+    A model missing from it is not capped at all, so a blob of an earlier
+    revision -- which a blob cache keeps for ever -- would start its download
+    above 100%. The set that matters is wider than the selectable models the
+    check above walks: `download_destination_dir` answers for every key of
+    `MODEL_REPO_MAP` and `LOCAL_ONNX_MODEL_SIZES`, which is where a model kept
+    downloadable after it left the pickers would sit. The two sets happen to
+    coincide today, so this pins the wider one deliberately.
+    """
+    downloadable = set(config.MODEL_REPO_MAP) | set(config.LOCAL_ONNX_MODEL_SIZES)
+    missing = sorted(
+        name for name in downloadable if not config.MODEL_ESTIMATED_SIZE_MB.get(name, 0)
+    )
+
+    assert missing == []
+
+
 @pytest.mark.parametrize("model_name", config.LOCAL_ONNX_MODEL_SIZES)
 def test_local_onnx_model_has_a_layout_and_a_download_destination(model_name: str):
     assert model_name in local_webgpu_asr._MODEL_LAYOUTS

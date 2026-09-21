@@ -81,7 +81,12 @@ def start_model_download_process(
 ) -> subprocess.Popen[str]:
     env = dict(os.environ)
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+    # The child's last stderr line is what a failed download shows as its
+    # reason, and hub's once-per-process "this machine cannot create
+    # symlinks" warning ends in the source line `warnings.warn(message)`.
+    env["HF_HUB_DISABLE_SYMLINKS_WARNING"] = "1"
     command = model_download_command(model_name, model_dir, env)
+    _clear_orphaned_partials(model_name, model_dir)
     cwd = None if getattr(sys, "frozen", False) else str(_repo_root())
     # The worker can run for minutes and third-party download libraries may
     # write enough diagnostics to fill an unread pipe. A seekable temporary
@@ -109,8 +114,46 @@ def start_model_download_process(
         error_log.close()
         raise
     process._stt_error_log = error_log  # type: ignore[attr-defined]
+    # Attached with the log, because two threads reach it: the preload's own
+    # worker reads the failure while the controller still points at this
+    # child, so any of the Qt-thread cancel paths can release it in the same
+    # moment. See `_error_log_lock`.
+    process._stt_error_log_lock = threading.Lock()  # type: ignore[attr-defined]
     _attach_progress_reader(process, model_name)
     return process
+
+
+def _error_log_lock(process) -> threading.Lock:
+    """The lock pairing a read of this child's spooled stderr with its release.
+
+    Measured on the code before it existed, with a release landing between
+    `seek(0)` and `read()`: the file was closed under the reader and the
+    download's only error message came back as "". A stand-in process built
+    without one has no second owner to race, so a fresh lock is the honest
+    answer rather than an error.
+    """
+    lock = getattr(process, "_stt_error_log_lock", None)
+    return lock if lock is not None else threading.Lock()
+
+
+def _clear_orphaned_partials(model_name: str, model_dir: str) -> None:
+    """Remove a killed download's leftovers before this one is measured.
+
+    The child does the same thing before its own `snapshot_download`, and that
+    is too late for the parent: it measures the destination directory's growth
+    from the moment the child is created until the child's first byte event,
+    which is a Python start-up and a metadata round trip away. An orphan seen
+    in that window becomes the high-water mark, and the percentage stands
+    still until the restarted transfer catches up with it -- measured at "34
+    of 78 MB (approx. 43%)" for four seconds after a kill at 33.7 MB. See
+    `remove_orphaned_hub_partials`, which never raises.
+
+    Imported here rather than at the top: this module is loaded by the GUI at
+    start-up and must not pull the transcriber package in with it.
+    """
+    from .transcriber.local_faster_whisper import remove_orphaned_hub_partials
+
+    remove_orphaned_hub_partials(model_name, model_dir)
 
 
 def _attach_progress_reader(process: subprocess.Popen[str], model_name: str) -> None:
@@ -285,7 +328,6 @@ def terminate_model_download_process(process: subprocess.Popen[str] | None) -> N
 
 
 def model_download_process_error(process: subprocess.Popen[str]) -> str:
-    error_log = getattr(process, "_stt_error_log", None)
     try:
         # `wait`, not `communicate`: stdout is drained by this process's own
         # progress reader thread, and `communicate` would read the same pipe
@@ -307,22 +349,34 @@ def model_download_process_error(process: subprocess.Popen[str]) -> str:
     except Exception:
         pass
     _close_progress_reader(process)
-    stderr = ""
-    if error_log is not None:
+    stderr = _read_and_release_error_log(process)
+    lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
+    return lines[-1] if lines else ""
+
+
+def _read_and_release_error_log(process) -> str:
+    """Read this child's spooled stderr and close it, exactly once.
+
+    The lock is held across the read *and* the close, so a release on another
+    thread cannot land between them; both act on a spooled file and return at
+    once. A log some other caller released first is gone, and reads as "".
+    """
+    with _error_log_lock(process):
+        error_log = getattr(process, "_stt_error_log", None)
+        if error_log is None:
+            return ""
         try:
             error_log.flush()
             error_log.seek(0)
-            stderr = error_log.read()
+            return error_log.read()
         except Exception:
-            stderr = ""
+            return ""
         finally:
             try:
                 error_log.close()
             except Exception:
                 pass
             process._stt_error_log = None  # type: ignore[attr-defined]
-    lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
-    return lines[-1] if lines else ""
 
 
 def release_model_download_process(process: subprocess.Popen[str] | None) -> None:
@@ -335,13 +389,15 @@ def release_model_download_process(process: subprocess.Popen[str] | None) -> Non
     reading the message. The preload's cancel reads no message and left them
     behind.
 
-    Nothing here waits. Five of the six call sites of
+    Nothing here waits. Six of the seven call sites of
     `DictationController._terminate_preload_download_process` run on the Qt
     thread -- shutdown, a settings save, both preload restarts, the finished-
     preload slot and the cancel hotkey -- and a join there is the frozen UI
-    this project keeps closing. The reader is a daemon thread that owns its
-    stream and closes it when the child's write end goes, so dropping the
-    reference is the whole handover.
+    this project keeps closing. (The seventh is the preload's own download
+    worker, which is also the thread that reads the failure message: hence the
+    lock below.) The reader is a daemon thread that owns its stream and closes
+    it when the child's write end goes, so dropping the reference is the whole
+    handover.
     """
     if process is None:
         return
@@ -350,13 +406,14 @@ def release_model_download_process(process: subprocess.Popen[str] | None) -> Non
         _close_download_stream(process)
     else:
         process._stt_progress_reader = None  # type: ignore[attr-defined]
-    error_log = getattr(process, "_stt_error_log", None)
-    if error_log is not None:
-        try:
-            error_log.close()
-        except Exception:
-            pass
-        process._stt_error_log = None  # type: ignore[attr-defined]
+    with _error_log_lock(process):
+        error_log = getattr(process, "_stt_error_log", None)
+        if error_log is not None:
+            try:
+                error_log.close()
+            except Exception:
+                pass
+            process._stt_error_log = None  # type: ignore[attr-defined]
 
 
 def _close_progress_reader(process: subprocess.Popen[str]) -> None:

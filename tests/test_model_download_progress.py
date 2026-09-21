@@ -111,6 +111,48 @@ def test_switching_to_the_worker_keeps_what_the_directory_already_showed():
     assert dipped.percent == 99
 
 
+def test_a_restarted_download_moves_with_the_first_new_bytes(tmp_path):
+    """What the user sees once the orphan is removed before the child starts.
+
+    huggingface_hub 1.32.0 downloads to a process-unique
+    `<etag>.<8 hex>.incomplete` and never reads one back, so the bytes a
+    killed download left there are gone whatever the display says. With the
+    orphan still on the disk the first directory sample counted it -- 34 of
+    78 MB -- and the high-water mark then held that number until the restarted
+    transfer had fetched it all over again. Cleared first, both sources start
+    from the files that really are complete, and the line moves with the first
+    new byte.
+    """
+    from stt_app.transcriber.local_faster_whisper import (
+        estimate_cached_model_bytes,
+        remove_orphaned_hub_partials,
+    )
+
+    completed_files = 2_280_516
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "config", completed_files)
+    _write(destination / "blobs" / "model.1a2b3c4d.incomplete", 33_700_000)
+    tracker = ModelDownloadSpeedTracker()
+
+    remove_orphaned_hub_partials("small", str(tmp_path))
+
+    directory = tracker.measure(
+        "small", estimate_cached_model_bytes("small", str(tmp_path)), now=0.0
+    )
+    baseline = completed_download_bytes("small", destination)
+    first_event = tracker.measure("small", baseline, from_downloader=True, now=0.5)
+    growing = [
+        tracker.measure(
+            "small", baseline + step * 4_000_000, from_downloader=True, now=step * 1.0
+        ).percent
+        for step in range(1, 5)
+    ]
+
+    assert first_event.percent == directory.percent
+    assert growing == sorted(growing)
+    assert growing[0] > directory.percent, "the first new bytes did not move it"
+
+
 def test_the_rate_is_measured_inside_one_source_and_never_across_the_switch():
     """The peak carries over; the sample history does not.
 
@@ -308,14 +350,56 @@ def test_the_baseline_skips_partial_blobs(tmp_path):
     assert completed_download_bytes("small", destination) == 3_000_040
 
 
+def test_the_baseline_counts_a_blob_copied_into_the_snapshot_once(tmp_path):
+    """Without symlinks huggingface_hub *copies* a blob it did not just fetch.
+
+    `_create_symlink(..., new_blob=False)` is the branch for a blob that is
+    already in `blobs/` while its snapshot pointer is missing -- the state a
+    download killed between the two leaves behind, and the one a resume then
+    finds. On Windows without the symlink privilege it copies the blob to the
+    snapshot path (`file_download.py` ~1253 and ~1304), so both files are
+    real and the baseline counted the model twice: 3,000,000 bytes on disk,
+    6,000,000 returned. A resume of a model whose weights are half that of
+    the table then starts at 100%.
+
+    A snapshot file whose size equals one already-counted blob's is that
+    blob's copy, and each blob absorbs at most one such file. Two unrelated
+    files of exactly the same size under-count one of them, which is the safe
+    direction.
+    """
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "aaa", 3_000_000)
+    _write(destination / "snapshots" / "rev" / "model.bin", 3_000_000)
+    _write(destination / "snapshots" / "rev" / "config.json", 1_148)
+
+    assert completed_download_bytes("small", destination) == 3_001_148
+
+
+def test_the_baseline_counts_two_blobs_of_one_size_beside_one_copy(tmp_path):
+    """The copy is absorbed once, not once per file of that size.
+
+    Two files of the same size in one repo is ordinary (two small JSON files
+    often are), and skipping every snapshot entry that matches any blob would
+    lose the second file's bytes for good.
+    """
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "aaa", 1_000)
+    _write(destination / "blobs" / "bbb", 1_000)
+    _write(destination / "snapshots" / "rev" / "vocabulary.txt", 1_000)
+
+    assert completed_download_bytes("small", destination) == 2_000
+
+
 def test_the_baseline_does_not_follow_a_snapshot_symlink_into_its_blob(tmp_path):
     """Every snapshot entry points at a blob in the same tree, and `stat()`
     follows it -- counting the model twice.
 
     Skipped where Windows refuses the symlink (no Developer Mode and not an
     administrator, which is this developer's machine): huggingface_hub then
-    *moves* a newly downloaded blob to the snapshot path instead of linking
-    it, so there is one real file and nothing to skip.
+    *moves* a newly fetched blob to the snapshot path instead of linking it
+    (`new_blob=True`), so there is one real file and nothing to skip. A blob
+    it did not just fetch is copied rather than moved, which is the case the
+    test above covers.
     """
     destination = tmp_path / "models--Systran--faster-whisper-small"
     blob = _write(destination / "blobs" / "aaa", 3_000_000)

@@ -290,6 +290,41 @@ def test_download_destination_is_unknown_for_an_unmapped_model():
     assert local_webgpu_asr.webgpu_download_destination("not-a-model") is None
 
 
+def test_an_orphaned_partial_is_gone_before_the_onnx_download_starts(
+    monkeypatch, tmp_path
+):
+    """huggingface_hub 1.32.0 downloads to a process-unique
+    `<etag>.<8 hex>.incomplete` and never reads one back, so a partial left by
+    a killed download is dead weight that only holds the reported percentage
+    at the high-water mark it describes. In this layout hub keeps it under
+    `<local_dir>/.cache/huggingface/download/`.
+    """
+    model_name = "granite-4.0-1b-speech"
+    destination = tmp_path / "granite-4.0-1b-speech-ONNX"
+    downloads = destination / ".cache" / "huggingface" / "download"
+    downloads.mkdir(parents=True)
+    orphan = downloads / "model_q4.onnx.1a2b3c4d.incomplete"
+    orphan.write_bytes(b"x" * 1_000)
+    seen: list[bool] = []
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        seen.append(orphan.exists())
+        _materialise_required_files(
+            repo_id, kwargs["local_dir"], kwargs.get("allow_patterns")
+        )
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    download_webgpu_model_snapshot(model_name, str(tmp_path))
+
+    assert seen == [False]
+
+
 def test_required_file_validation_accepts_granite_4_1_2b_q4_snapshot(tmp_path):
     snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
 
