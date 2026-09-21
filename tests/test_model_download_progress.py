@@ -1,12 +1,18 @@
+from pathlib import Path
+
+import pytest
+
 from stt_app.model_download_progress import (
     DOWNLOAD_PROGRESS_UNKNOWN,
     HUB_SNAPSHOT_PROGRESS_BAR_NAME,
     ModelDownloadSpeedTracker,
+    completed_download_bytes,
     format_download_queue_line,
     format_eta,
     format_model_download_progress,
     hub_progress_tqdm_class,
     measure_model_download_progress,
+    offset_progress_hook,
     report_unknown_download_progress,
 )
 
@@ -84,21 +90,47 @@ def test_the_percentage_never_goes_backwards_within_one_download():
     assert dipped.downloaded_bytes == 240_000_000
 
 
-def test_switching_between_the_two_sources_drops_the_high_water_mark():
-    """The downloader counts this transfer; the directory counts the folder.
+def test_switching_to_the_worker_keeps_what_the_directory_already_showed():
+    """A resume used to read nearly 100% and then 0% at the first event.
 
-    Carried across, the higher of the two would freeze the display until the
-    other caught up -- and both directions happen: the worker's first event
-    replaces a directory reading, and the ModelScope fallback retires the
-    worker's reports.
+    The two sources describe the same bytes now -- the reported ones carry
+    the baseline of files already complete -- so the high-water mark carries
+    across the switch instead of being dropped with the source. Measured
+    before the fix with `granite-speech-5.0-470m-turboctc`, its
+    551,294,349-byte weight file complete and only the 1,148-byte config
+    missing: directory growth said 100%, the worker's first event said 0%.
     """
     tracker = ModelDownloadSpeedTracker()
-    tracker.reset("small", 300_000_000, now=10.0)
-    tracker.measure("small", 300_000_000, now=11.0)
+    tracker.reset("small", 480_000_000, now=10.0)
+    tracker.measure("small", 480_000_000, now=11.0)
 
-    reported = tracker.measure("small", 5_000_000, from_downloader=True, now=12.0)
+    reported = tracker.measure("small", 480_000_000, from_downloader=True, now=12.0)
+    dipped = tracker.measure("small", 1_000, from_downloader=True, now=13.0)
 
-    assert reported.downloaded_bytes == 5_000_000
+    assert reported.percent == 99
+    assert dipped.percent == 99
+
+
+def test_the_rate_is_measured_inside_one_source_and_never_across_the_switch():
+    """The peak carries over; the sample history does not.
+
+    The two sources are read at different moments by different code, so the
+    first pair spanning the switch would time a difference neither of them
+    measured.
+    """
+    tracker = ModelDownloadSpeedTracker(window_seconds=5.0)
+    tracker.reset("small", 0, now=0.0)
+    tracker.measure("small", 10_000_000, now=1.0)
+    before = tracker.measure("small", 20_000_000, now=2.0)
+    assert before.speed_bytes_per_second == 10_000_000
+
+    tracker.measure("small", 20_000_000, from_downloader=True, now=2.5)
+    after = tracker.measure("small", 100_000_000, from_downloader=True, now=3.0)
+
+    # Half a second of the new source is less than `_MIN_RATE_SPAN_SECONDS`,
+    # so the last honest rate stands. Reading across the switch would have
+    # divided 100 MB by the three seconds since the download began: 33 MB/s.
+    assert after.speed_bytes_per_second == 10_000_000
 
 
 def test_a_burst_after_a_flat_stretch_is_not_reported_as_its_own_rate():
@@ -231,6 +263,122 @@ def test_format_download_queue_line_names_what_comes_next():
     )
 
 
+# --- the bytes a resume does not fetch again -----------------------------
+
+
+def _write(path: Path, size: int) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\0" * size)
+    return path
+
+
+def test_the_baseline_counts_the_flat_layout_without_its_partials(tmp_path):
+    """The ONNX models download into a flat `local_dir`.
+
+    Its partials live under `.cache/huggingface/download` and reach the
+    percentage through the per-file bar's `initial=`, so counting them here
+    would count them twice.
+    """
+    destination = tmp_path / "granite-speech-5.0-470m-turboctc-onnx"
+    _write(destination / "config.json", 1_148)
+    _write(destination / "onnx" / "model_int8.onnx", 4_000_000)
+    _write(
+        destination / ".cache" / "huggingface" / "download" / "tok.json.incomplete",
+        900_000,
+    )
+    _write(destination / ".cache" / "huggingface" / "download" / "tok.json.metadata", 80)
+
+    assert completed_download_bytes("granite-speech-5.0-470m-turboctc", destination) == (
+        4_001_148
+    )
+
+
+def test_the_baseline_skips_partial_blobs(tmp_path):
+    """faster-whisper downloads into `models--<repo>`.
+
+    There a partial carries an `.incomplete` suffix beside the finished blob,
+    and huggingface_hub resumes it and reports its bytes through the per-file
+    bar's `initial=`.
+    """
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "aaa", 3_000_000)
+    _write(destination / "blobs" / "bbb.incomplete", 500_000)
+    _write(destination / "refs" / "main", 40)
+
+    assert completed_download_bytes("small", destination) == 3_000_040
+
+
+def test_the_baseline_does_not_follow_a_snapshot_symlink_into_its_blob(tmp_path):
+    """Every snapshot entry points at a blob in the same tree, and `stat()`
+    follows it -- counting the model twice.
+
+    Skipped where Windows refuses the symlink (no Developer Mode and not an
+    administrator, which is this developer's machine): huggingface_hub then
+    *moves* a newly downloaded blob to the snapshot path instead of linking
+    it, so there is one real file and nothing to skip.
+    """
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    blob = _write(destination / "blobs" / "aaa", 3_000_000)
+    snapshot = destination / "snapshots" / "rev"
+    snapshot.mkdir(parents=True)
+    try:
+        (snapshot / "model.bin").symlink_to(blob)
+    except OSError as exc:
+        pytest.skip(f"this machine cannot create symlinks: {exc}")
+
+    assert completed_download_bytes("small", destination) == 3_000_000
+
+
+def test_the_baseline_never_exceeds_the_models_own_size(tmp_path):
+    """A blob cache keeps the blobs of every revision it ever fetched.
+
+    A repo re-uploaded upstream therefore leaves a full model's worth of
+    bytes that the next download neither fetches again nor uses. Uncapped
+    that is a download starting above 100%.
+    """
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "old-revision", _SMALL_TABLE_BYTES)
+    _write(destination / "blobs" / "older-revision", _SMALL_TABLE_BYTES)
+
+    assert completed_download_bytes("small", destination) == _SMALL_TABLE_BYTES
+
+
+def test_the_baseline_of_a_destination_that_is_not_there_yet_is_zero(tmp_path):
+    assert completed_download_bytes("small", None) == 0
+    assert completed_download_bytes("small", tmp_path / "nothing") == 0
+
+
+def test_the_offset_hook_adds_the_baseline_to_both_numbers():
+    report = _Recorder()
+    hook = offset_progress_hook(report, 551_294_349)
+
+    hook(0, 1_148)
+    hook(1_148, 1_148)
+
+    assert report.seen == [
+        (551_294_349, 551_295_497),
+        (551_295_497, 551_295_497),
+    ]
+
+
+def test_the_offset_hook_passes_the_unknown_sentinel_through_untouched():
+    """It means "stop believing me", not a byte count to shift."""
+    report = _Recorder()
+
+    offset_progress_hook(report, 551_294_349)(
+        DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN
+    )
+
+    assert report.seen == [(DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN)]
+
+
+def test_the_offset_hook_is_the_hook_itself_when_there_is_nothing_to_add():
+    report = _Recorder()
+
+    assert offset_progress_hook(report, 0) is report
+    assert offset_progress_hook(None, 42) is None
+
+
 # --- the huggingface_hub seam -------------------------------------------
 
 
@@ -336,6 +484,136 @@ def test_a_resumed_file_starts_at_the_bytes_already_on_disk():
     driver.chunk(100_000)
 
     assert report.seen[-1] == (500_000, 1_000_000)
+
+
+def test_a_resume_of_a_nearly_finished_download_reads_as_nearly_finished():
+    """The whole chain for the case the reviewer reproduced.
+
+    huggingface_hub returns a file that is already complete before it builds
+    any bar, so the weight file reaches the `tqdm_class` neither as `done` nor
+    as `total`: the only bar of this download is the 1,148-byte config. With
+    the baseline added, the first event says 551 of 552 MB instead of 0.
+    """
+    baseline = 551_294_349
+    report = _Recorder()
+    driver = _HubDriver(
+        hub_progress_tqdm_class(offset_progress_hook(report, baseline))
+    )
+
+    driver.start_file(1_148)
+    driver.chunk(1_148)
+
+    first = measure_model_download_progress(
+        "granite-speech-5.0-470m-turboctc",
+        report.seen[0][0],
+        reported_total_bytes=report.seen[0][1],
+    )
+    last = measure_model_download_progress(
+        "granite-speech-5.0-470m-turboctc",
+        report.seen[-1][0],
+        reported_total_bytes=report.seen[-1][1],
+    )
+
+    assert first.downloaded_bytes == baseline
+    assert first.percent >= 99
+    assert last.downloaded_bytes == baseline + 1_148
+
+
+def _snapshot_download_driving_one_file(total: int, initial: int = 0):
+    """Stand in for `snapshot_download`, fetching exactly one file."""
+
+    def fake(_repo_id, **kwargs):
+        tqdm_class = kwargs.get("tqdm_class")
+        assert tqdm_class is not None, "no tqdm_class was installed"
+        driver = _HubDriver(tqdm_class)
+        driver.start_file(total, initial=initial)
+        driver.chunk(total - initial)
+        return "/snapshot"
+
+    return fake
+
+
+def test_download_model_snapshot_counts_the_files_already_on_disk(
+    monkeypatch, tmp_path
+):
+    """The blob layout, through the real `download_model_snapshot`."""
+    import huggingface_hub
+
+    from stt_app.transcriber import local_faster_whisper
+
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "weights", 40_000_000)
+    _write(destination / "blobs" / "tokenizer.incomplete", 7_000)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "snapshot_download",
+        _snapshot_download_driving_one_file(10_000, initial=7_000),
+    )
+    report = _Recorder()
+
+    local_faster_whisper.download_model_snapshot(
+        "small", str(tmp_path), progress_hook=report
+    )
+
+    # The complete blob is the baseline; the partial one is hub's `initial=`
+    # and must not be counted twice.
+    assert report.seen[-1] == (40_010_000, 40_010_000)
+
+
+def test_download_webgpu_model_snapshot_counts_the_files_already_on_disk(
+    monkeypatch, tmp_path
+):
+    """The flat `local_dir` layout, through the real ONNX download."""
+    import huggingface_hub
+
+    from stt_app.transcriber import local_webgpu_asr
+
+    destination = tmp_path / "granite-speech-5.0-470m-turboctc-onnx"
+    _write(destination / "onnx" / "model_int8.onnx", 4_000_000)
+    monkeypatch.setattr(
+        huggingface_hub,
+        "snapshot_download",
+        _snapshot_download_driving_one_file(1_148),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_verify_downloaded_layout", lambda *_args: None
+    )
+    report = _Recorder()
+
+    local_webgpu_asr.download_webgpu_model_snapshot(
+        "granite-speech-5.0-470m-turboctc", str(tmp_path), progress_hook=report
+    )
+
+    assert report.seen[-1] == (4_001_148, 4_001_148)
+
+
+def test_a_download_with_no_hook_installs_nothing_and_scans_nothing(
+    monkeypatch, tmp_path
+):
+    """The transcribers' own load-path downloads and `download_model.py`.
+
+    They pass no hook, so neither the bar nor the baseline scan of the
+    destination may run for them.
+    """
+    import huggingface_hub
+
+    from stt_app.transcriber import local_faster_whisper
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        huggingface_hub,
+        "snapshot_download",
+        lambda _repo_id, **kwargs: (seen.append(kwargs), "/snapshot")[1],
+    )
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "completed_download_bytes",
+        lambda *_args: pytest.fail("scanned the destination with no hook"),
+    )
+
+    local_faster_whisper.download_model_snapshot("small", str(tmp_path))
+
+    assert "tqdm_class" not in seen[0]
 
 
 def test_a_reporting_hook_that_raises_cannot_break_the_download():

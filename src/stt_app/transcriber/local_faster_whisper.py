@@ -40,7 +40,9 @@ from ..config import (
 )
 from ..model_download_progress import (
     ProgressHook,
+    completed_download_bytes,
     hub_progress_tqdm_class,
+    offset_progress_hook,
     report_unknown_download_progress,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
@@ -469,9 +471,19 @@ def download_model_snapshot(
     }
     if model_dir and model_dir.strip():
         kwargs["cache_dir"] = model_dir.strip()
-    tqdm_class = hub_progress_tqdm_class(progress_hook)
-    if tqdm_class is not None:
-        kwargs["tqdm_class"] = tqdm_class
+    if progress_hook is not None:
+        # Files already complete never reach the hook: huggingface_hub returns
+        # them before it builds a bar. See `completed_download_bytes`. Both
+        # the scan and the bar stay behind this check, so a call without a
+        # hook is byte-for-byte the one every earlier build made.
+        kwargs["tqdm_class"] = hub_progress_tqdm_class(
+            offset_progress_hook(
+                progress_hook,
+                completed_download_bytes(
+                    model_name, download_destination_dir(model_name, model_dir)
+                ),
+            )
+        )
 
     try:
         return str(snapshot_download(repo_id, **kwargs))

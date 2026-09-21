@@ -2,6 +2,7 @@ import io
 import json
 import logging
 import subprocess
+import threading
 from types import SimpleNamespace
 
 import stt_app.local_model_download as local_model_download
@@ -125,20 +126,35 @@ def test_a_worker_that_reports_nothing_leaves_the_caller_on_directory_growth(
     assert "model_download_progress_absent" in caplog.text
 
 
+def _malformed_stdout():
+    return _worker_stdout(
+        {"event": "bytes", "done": 5, "total": 9},
+        f"{DOWNLOAD_EVENT_PREFIX}{{not json",
+        f"{DOWNLOAD_EVENT_PREFIX}{{\"event\": \"bytes\", \"done\": \"x\"}}",
+        {"event": "bytes", "done": -7, "total": 9},
+    )
+
+
 def test_a_malformed_event_keeps_the_last_sample_and_is_logged_once(caplog):
-    local_model_download._malformed_logged.discard("small")
     with caplog.at_level(logging.WARNING, logger=local_model_download.__name__):
-        state = _drain(
-            _worker_stdout(
-                {"event": "bytes", "done": 5, "total": 9},
-                f"{DOWNLOAD_EVENT_PREFIX}{{not json",
-                f"{DOWNLOAD_EVENT_PREFIX}{{\"event\": \"bytes\", \"done\": \"x\"}}",
-                {"event": "bytes", "done": -7, "total": 9},
-            )
-        )
+        state = _drain(_malformed_stdout())
 
     assert state.get().downloaded_bytes == 5
     assert caplog.text.count("model_download_progress_event_malformed") == 1
+
+
+def test_the_once_is_once_per_download_and_not_once_per_process(caplog):
+    """The latch belongs to the child being read, not to the module.
+
+    Held in a module-level set keyed by model name, the second download of
+    the same model in one session was silently exempt -- and the only way to
+    test the first one was to reach in and discard the key by hand.
+    """
+    with caplog.at_level(logging.WARNING, logger=local_model_download.__name__):
+        _drain(_malformed_stdout())
+        _drain(_malformed_stdout())
+
+    assert caplog.text.count("model_download_progress_event_malformed") == 2
 
 
 def test_the_unknown_sentinel_drops_the_sample():
@@ -268,6 +284,105 @@ def test_reading_the_error_never_waits_on_the_child_for_ever():
 
     assert local_model_download.model_download_process_error(process) == ""
     assert calls == [5.0, "kill", 5.0], calls
+
+
+class _RecordingStream:
+    def __init__(self) -> None:
+        self.closed_by: list[str] = []
+
+    def close(self) -> None:
+        self.closed_by.append(threading.current_thread().name)
+
+
+def test_a_reader_still_inside_a_read_owns_the_pipe_and_the_caller_leaves_it(
+    monkeypatch, caplog
+):
+    """On Windows, closing a pipe another thread is reading blocks.
+
+    Measured with a real child whose stdout handle a grandchild had
+    inherited (`probe_reader_grandchild_breakdown.py`): after terminate and
+    kill of the child, `reader.join(2.0)` returned with the reader still
+    inside `readline()`, and `process.stdout.close()` then blocked for
+    16.56 s. Without the grandchild both calls return in 0.00 s, which is
+    what says the pipe -- not the dead child -- is what blocks. That close
+    runs on the download queue worker thread, which holds the in-process and
+    the machine-wide download slot; every other wait on that thread is
+    bounded for exactly that reason. The reader closes the stream in its own
+    `finally`, so leaving it alone loses nothing.
+    """
+    monkeypatch.setattr(local_model_download, "_READER_JOIN_TIMEOUT_S", 0.05)
+    stream = _RecordingStream()
+    still_reading = threading.Event()
+
+    def _park() -> None:
+        still_reading.wait(10.0)
+        stream.close()
+
+    reader = threading.Thread(
+        target=_park, name="stt_app_model_download_progress", daemon=True
+    )
+    reader.start()
+    process = SimpleNamespace(stdout=stream, _stt_progress_reader=reader)
+
+    with caplog.at_level(logging.WARNING, logger=local_model_download.__name__):
+        local_model_download._close_progress_reader(process)
+
+    assert stream.closed_by == []
+    assert "model_download_progress_reader_still_reading" in caplog.text
+
+    still_reading.set()
+    reader.join(timeout=5)
+    assert stream.closed_by == ["stt_app_model_download_progress"]
+
+
+def test_a_finished_reader_hands_the_pipe_back_to_the_caller():
+    """The ordinary case: the child exited, the reader saw EOF and went."""
+    stream = _RecordingStream()
+    reader = threading.Thread(target=lambda: None, name="done-reader")
+    reader.start()
+    reader.join()
+    process = SimpleNamespace(stdout=stream, _stt_progress_reader=reader)
+
+    local_model_download._close_progress_reader(process)
+
+    assert stream.closed_by == [threading.current_thread().name]
+
+
+def test_releasing_a_canceled_download_gives_back_the_log_without_waiting():
+    """The preload cancel runs on the Qt thread on five of its six sites.
+
+    Nobody reads the error message of a download the user canceled, so there
+    is nothing to wait for -- but the spooled stderr file and the reader
+    reference are handles this process keeps until the `Popen` is collected.
+    """
+    error_log = local_model_download.tempfile.TemporaryFile(
+        mode="w+t", encoding="utf-8"
+    )
+    never_ends = threading.Event()
+    reader = threading.Thread(
+        target=never_ends.wait, args=(30.0,), name="parked-reader", daemon=True
+    )
+    reader.start()
+    process = SimpleNamespace(
+        stdout=_RecordingStream(),
+        _stt_progress_reader=reader,
+        _stt_error_log=error_log,
+    )
+
+    local_model_download.release_model_download_process(process)
+
+    assert error_log.closed is True
+    assert process._stt_error_log is None
+    assert process._stt_progress_reader is None
+    assert reader.is_alive() is True, "it waited for the reader"
+    never_ends.set()
+
+
+def test_releasing_a_download_twice_is_harmless():
+    process = SimpleNamespace(stdout=None, _stt_progress_reader=None)
+
+    local_model_download.release_model_download_process(process)
+    local_model_download.release_model_download_process(process)
 
 
 def test_reading_the_error_does_not_read_the_pipe_a_second_time():

@@ -38,6 +38,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from .config import MODEL_ESTIMATED_SIZE_MB
 
@@ -74,6 +75,13 @@ DOWNLOAD_EVENT_PREFIX = "@@STTDL@@"
 # is identical in 1.8.0 (one byte bar) and 1.32.0 (two), and the match is
 # exact so the transfer bar's dotted child name does not pass it.
 HUB_SNAPSHOT_PROGRESS_BAR_NAME = "huggingface_hub.snapshot_download"
+
+# What marks a file as still being fetched, in the two layouts the app
+# downloads into: huggingface_hub's own suffix, and the ModelScope mirror's.
+_PARTIAL_DOWNLOAD_SUFFIXES = (".incomplete", ".ms-part")
+# huggingface_hub's bookkeeping folder inside a flat `local_dir`: metadata
+# files and the partials of that layout, none of it model content.
+_HUB_BOOKKEEPING_DIR = ".cache"
 
 ProgressHook = Callable[[int, int], None]
 
@@ -167,22 +175,32 @@ class ModelDownloadSpeedTracker:
         measured_at = time.monotonic() if now is None else float(now)
         reading = max(0, int(downloaded_bytes))
 
-        # The two sources count different things -- the downloader counts this
-        # transfer, the directory counts everything in the destination -- so
-        # the high-water mark may not carry across a switch between them. It
-        # happens in both directions: the worker's first event replaces the
-        # directory reading, and the ModelScope fallback retires the
-        # worker's. Carried across, whichever source read higher would freeze
-        # the display until the other caught up.
-        if model_name != self._model_name or bool(from_downloader) != (
-            self._from_downloader
-        ):
+        if model_name != self._model_name:
             self.reset(
                 model_name,
                 reading,
                 from_downloader=from_downloader,
                 now=measured_at,
             )
+            return self._build(reported_total_bytes, display_name)
+
+        # A switch between the two sources keeps the high-water mark and
+        # discards the sample history. Both halves are measured. The two now
+        # count the same bytes -- the reported ones carry the baseline of
+        # files already complete (`completed_download_bytes`) -- so dropping
+        # the peak was a visible fall: a resumed download read 100% from
+        # directory growth and 0% at the worker's first event. The history is
+        # dropped because the two are read at different moments by different
+        # code, and the first pair spanning the switch would time a
+        # difference neither of them measured. The rate itself stands until
+        # the new source has produced a pair of its own, rather than falling
+        # back to "measuring speed", which is the sentence the field report
+        # was about.
+        if bool(from_downloader) != self._from_downloader:
+            self._from_downloader = bool(from_downloader)
+            self._peak_bytes = max(self._peak_bytes, reading)
+            self._samples.clear()
+            self._samples.append((measured_at, self._peak_bytes))
             return self._build(reported_total_bytes, display_name)
 
         if reading > self._peak_bytes:
@@ -272,6 +290,91 @@ def measure_model_download_progress(
         total_is_reported=reported_total > 0 and reported_total >= table_total,
         eta_seconds=eta,
     )
+
+
+def completed_download_bytes(model_name: str, destination: Path | None) -> int:
+    """Bytes in `destination` that a resumed download will not fetch again.
+
+    huggingface_hub returns a file that is already complete *before* it builds
+    any progress bar -- `file_download.py` resolves the existing pointer or
+    blob and returns it, and the `tqdm_class` is only ever reached by a file
+    that really goes to the network. Those bytes therefore appear in neither
+    the reported `done` nor the reported `total`, so resuming a download that
+    is nearly finished read "551 of 552 MB (approx. 100%)" from directory
+    growth and then "0 of 552 MB (approx. 0%)" the moment the worker's first
+    event landed. Reproduced end to end with
+    `granite-speech-5.0-470m-turboctc`, its 551,294,349-byte weight file
+    complete and only the 1,148-byte config missing. Adding this baseline to
+    both reported numbers is what makes the two sources describe the same
+    thing, which is also what lets the high-water mark carry across the
+    switch between them.
+
+    Each exclusion is there for a reason:
+
+    * A partial (`*.incomplete`, and the ModelScope mirror's `*.ms-part`) is
+      not counted. huggingface_hub resumes it and reports its bytes itself,
+      through the per-file bar's `initial=`, so counting it here would count
+      it twice -- which is the common resume case and the one that already
+      worked.
+    * A symlink is not counted. The blob layout's snapshot entries point at
+      blobs in the same tree and `stat()` follows them.
+    * hub's bookkeeping folder is not counted: in the flat `local_dir` layout
+      the ONNX models use, `<local_dir>/.cache/huggingface/download` holds
+      that layout's partials and their metadata. The check is on the path
+      *below* the destination, because the default cache root is itself
+      `~/.cache/huggingface/hub` and matching the absolute path would exclude
+      every file of every model.
+
+    The result is capped at the model's own size in `MODEL_ESTIMATED_SIZE_MB`.
+    A blob cache keeps the blobs of every revision it ever fetched, so a repo
+    re-uploaded upstream leaves a full model's worth of bytes that the next
+    download neither fetches again nor uses; uncapped, that is a download
+    starting above 100%.
+    """
+    if destination is None:
+        return 0
+    total = 0
+    try:
+        if not destination.is_dir():
+            return 0
+        for path in destination.rglob("*"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            if path.name.endswith(_PARTIAL_DOWNLOAD_SUFFIXES):
+                continue
+            if _HUB_BOOKKEEPING_DIR in path.relative_to(destination).parts:
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        pass
+    table_total = max(0, int(MODEL_ESTIMATED_SIZE_MB.get(model_name, 0) * 1_000_000))
+    return min(total, table_total) if table_total else total
+
+
+def offset_progress_hook(
+    hook: ProgressHook | None,
+    baseline_bytes: int,
+) -> ProgressHook | None:
+    """Add bytes that are already on disk to everything a hook is told.
+
+    See `completed_download_bytes` for what the baseline is and why the
+    downloader does not know about it. The sentinel passes through unshifted:
+    it means "stop believing me", not a byte count.
+    """
+    if hook is None or baseline_bytes <= 0:
+        return hook
+    baseline = int(baseline_bytes)
+
+    def report(done: int, total: int) -> None:
+        if done == DOWNLOAD_PROGRESS_UNKNOWN:
+            hook(DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN)
+            return
+        hook(done + baseline, total + baseline)
+
+    return report
 
 
 def report_unknown_download_progress(hook: ProgressHook | None) -> None:

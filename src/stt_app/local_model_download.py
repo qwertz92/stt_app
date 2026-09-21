@@ -27,7 +27,10 @@ _logger = logging.getLogger(__name__)
 _TERMINATE_GRACE_S = 2.0
 _KILL_GRACE_S = 2.0
 _DRAIN_TIMEOUT_S = 5.0
-# The progress reader ends with the child's stdout, which the exit closes.
+# The progress reader ends with the child's stdout -- normally at the child's
+# exit, but a grandchild that inherited the handle keeps the pipe open past
+# it, and then the reader outlives this wait. `_close_progress_reader` says
+# what happens to the stream in that case.
 _READER_JOIN_TIMEOUT_S = 2.0
 
 
@@ -51,6 +54,10 @@ class _ProgressState:
         self._lock = threading.Lock()
         self._sample: DownloadBytesSample | None = None
         self._ever_reported = False
+        # One warning per download child, not one per process: a module-level
+        # latch keyed by model name exempted the second download of the same
+        # model in a session from ever reporting a damaged event.
+        self.malformed_logged = False
 
     def set(self, sample: DownloadBytesSample | None) -> None:
         with self._lock:
@@ -144,7 +151,9 @@ def _pump_progress(stream, state: _ProgressState, model_name: str) -> None:
             if not text.startswith(DOWNLOAD_EVENT_PREFIX):
                 # Library noise on stdout, or a worker from an older build.
                 continue
-            sample = _sample_from_event(text[len(DOWNLOAD_EVENT_PREFIX) :], model_name)
+            sample = _sample_from_event(
+                text[len(DOWNLOAD_EVENT_PREFIX) :], state, model_name
+            )
             if sample is _MALFORMED:
                 continue
             state.set(sample)  # type: ignore[arg-type]
@@ -168,25 +177,24 @@ class _Malformed:
 
 
 _MALFORMED = _Malformed()
-_malformed_logged: set[str] = set()
 
 
-def _sample_from_event(payload: str, model_name: str):
+def _sample_from_event(payload: str, state: _ProgressState, model_name: str):
     try:
         event = json.loads(payload)
     except ValueError:
-        return _log_malformed(model_name, payload)
+        return _log_malformed(state, model_name, payload)
     if not isinstance(event, dict) or event.get("event") != "bytes":
-        return _log_malformed(model_name, payload)
+        return _log_malformed(state, model_name, payload)
     done = event.get("done")
     total = event.get("total")
     if not isinstance(done, int) or not isinstance(total, int):
-        return _log_malformed(model_name, payload)
+        return _log_malformed(state, model_name, payload)
     if done == DOWNLOAD_PROGRESS_UNKNOWN:
         # The worker handed the download to a path it cannot measure.
         return None
     if done < 0 or total < 0:
-        return _log_malformed(model_name, payload)
+        return _log_malformed(state, model_name, payload)
     return DownloadBytesSample(
         downloaded_bytes=done,
         total_bytes=total,
@@ -194,11 +202,13 @@ def _sample_from_event(payload: str, model_name: str):
     )
 
 
-def _log_malformed(model_name: str, payload: str):
-    # Once per model: this runs per line, and a worker producing garbage
-    # would otherwise fill the log with it.
-    if model_name not in _malformed_logged:
-        _malformed_logged.add(model_name)
+def _log_malformed(state: _ProgressState, model_name: str, payload: str):
+    # Once per download: this runs per line, and a worker producing garbage
+    # would otherwise fill the log with it. The latch is this child's own --
+    # only its reader thread touches it, and the next download of the same
+    # model gets its own line.
+    if not state.malformed_logged:
+        state.malformed_logged = True
         _logger.warning(
             "model_download_progress_event_malformed model=%s payload=%s",
             model_name,
@@ -315,8 +325,55 @@ def model_download_process_error(process: subprocess.Popen[str]) -> str:
     return lines[-1] if lines else ""
 
 
+def release_model_download_process(process: subprocess.Popen[str] | None) -> None:
+    """Give back the pipe and the spooled log of a child nobody will read.
+
+    The cancel paths terminate the child and drop it. Its reader thread, its
+    stdout pipe and its stderr `TemporaryFile` outlive that drop otherwise:
+    the Models tab only avoids it because its own cancel goes on to call
+    `model_download_process_error`, which reaps all three as a side effect of
+    reading the message. The preload's cancel reads no message and left them
+    behind.
+
+    Nothing here waits. Five of the six call sites of
+    `DictationController._terminate_preload_download_process` run on the Qt
+    thread -- shutdown, a settings save, both preload restarts, the finished-
+    preload slot and the cancel hotkey -- and a join there is the frozen UI
+    this project keeps closing. The reader is a daemon thread that owns its
+    stream and closes it when the child's write end goes, so dropping the
+    reference is the whole handover.
+    """
+    if process is None:
+        return
+    reader = getattr(process, "_stt_progress_reader", None)
+    if reader is None:
+        _close_download_stream(process)
+    else:
+        process._stt_progress_reader = None  # type: ignore[attr-defined]
+    error_log = getattr(process, "_stt_error_log", None)
+    if error_log is not None:
+        try:
+            error_log.close()
+        except Exception:
+            pass
+        process._stt_error_log = None  # type: ignore[attr-defined]
+
+
 def _close_progress_reader(process: subprocess.Popen[str]) -> None:
-    """Let the reader see EOF and go, bounded; then drop the pipe either way."""
+    """Let the reader see EOF and go, bounded; the survivor owns the pipe.
+
+    A reader still inside its read when the join runs out keeps the stream,
+    and the caller must not touch it: on Windows, closing a pipe another
+    thread is reading blocks until that read returns. Measured against a real
+    child whose stdout handle a grandchild had inherited -- after terminate
+    and kill of the child, `join(2.0)` returned with the reader still in
+    `readline()` and `process.stdout.close()` then blocked for 16.56 s; with
+    no grandchild both calls returned in 0.00 s. That close runs on the
+    download queue worker thread, which holds the in-process and the
+    machine-wide download slot, so an unbounded wait there is the very hang
+    the bounded `wait()` beside it exists to prevent. Nothing is lost by
+    leaving it: `_pump_progress` closes the stream in its own `finally`.
+    """
     reader = getattr(process, "_stt_progress_reader", None)
     if reader is not None:
         try:
@@ -324,12 +381,23 @@ def _close_progress_reader(process: subprocess.Popen[str]) -> None:
         except Exception:
             pass
         process._stt_progress_reader = None  # type: ignore[attr-defined]
+        if reader.is_alive():
+            _logger.warning(
+                "model_download_progress_reader_still_reading timeout_s=%s",
+                _READER_JOIN_TIMEOUT_S,
+            )
+            return
+    _close_download_stream(process)
+
+
+def _close_download_stream(process: subprocess.Popen[str]) -> None:
     stream = getattr(process, "stdout", None)
-    if stream is not None:
-        try:
-            stream.close()
-        except Exception:
-            pass
+    if stream is None:
+        return
+    try:
+        stream.close()
+    except Exception:
+        pass
 
 
 def _package_source_dir() -> Path:

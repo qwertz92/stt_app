@@ -34,7 +34,9 @@ from ..config import (
 from ..model_download_coordinator import run_coordinated_download
 from ..model_download_progress import (
     ProgressHook,
+    completed_download_bytes,
     hub_progress_tqdm_class,
+    offset_progress_hook,
     report_unknown_download_progress,
 )
 from .base import (
@@ -511,9 +513,16 @@ def download_webgpu_model_snapshot(
         # costs another concurrent writer per download.
         "max_workers": 2,
     }
-    tqdm_class = hub_progress_tqdm_class(progress_hook)
-    if tqdm_class is not None:
-        kwargs["tqdm_class"] = tqdm_class
+    if progress_hook is not None:
+        # Files already complete in the flat destination never reach the hook:
+        # huggingface_hub returns them before it builds a bar. See
+        # `completed_download_bytes`. Both the scan and the bar stay behind
+        # this check, so a call without a hook is unchanged.
+        kwargs["tqdm_class"] = hub_progress_tqdm_class(
+            offset_progress_hook(
+                progress_hook, completed_download_bytes(model_name, local_dir)
+            )
+        )
 
     try:
         path = str(snapshot_download(repo_id, **kwargs))

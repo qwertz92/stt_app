@@ -79,6 +79,7 @@ from .local_model_download import (
     DownloadBytesSample,
     model_download_process_error,
     model_download_process_progress,
+    release_model_download_process,
     start_model_download_process,
     terminate_model_download_process,
 )
@@ -7283,6 +7284,13 @@ class DictationController(QtCore.QObject):
         if process is None:
             return
         terminate_model_download_process(process)
+        # Nobody reads a canceled download's error message, so the reaping the
+        # Models tab gets for free out of `model_download_process_error` never
+        # happened here: the reader thread, the stdout pipe and the spooled
+        # stderr file stayed with this process until the `Popen` was
+        # collected. This releases them and waits for nothing -- five of the
+        # six callers of this method are on the Qt thread.
+        release_model_download_process(process)
 
     def _download_model_for_preload(
         self,

@@ -10,7 +10,7 @@ import threading
 import time
 from dataclasses import replace
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from conftest import (
@@ -3613,6 +3613,37 @@ def test_cancel_current_action_cancels_running_preload():
     assert terminated == [True]
     assert overlay.states[-1][0] == "Processing"
     assert "Canceling model download" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_terminating_the_preload_download_hands_back_its_pipe_and_log():
+    """The Models tab reaps those through `model_download_process_error`.
+
+    This path reads no error message, so nothing reaped them: the reader
+    thread, the stdout pipe and the spooled stderr file stayed with the
+    process for the rest of the session, once per canceled preload download.
+    """
+    controller, app = _make_controller()
+    released: list[object] = []
+    process = SimpleNamespace(
+        stdout=None, _stt_progress_reader=None, _stt_error_log=None
+    )
+    controller._set_preload_download_process(process, "")
+    with (
+        patch.object(
+            controller_module, "terminate_model_download_process", lambda _p: None
+        ),
+        patch.object(
+            controller_module,
+            "release_model_download_process",
+            released.append,
+        ),
+    ):
+        controller._terminate_preload_download_process()
+
+    assert released == [process]
+    assert controller._preload_download_process is None
     controller.shutdown()
     _ = app
 
