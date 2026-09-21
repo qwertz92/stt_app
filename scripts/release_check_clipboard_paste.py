@@ -734,8 +734,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_a_reachable_clipboard() -> None:
+    """Exit with "nothing measured" when this session has no clipboard at all.
+
+    On a locked workstation every `OpenClipboard` is refused with "access is
+    denied" (error 5) while no window holds the clipboard open (measured
+    2026-09-21 with the screen locked: five attempts 0.3 s apart, pywin32 and
+    PowerShell's `Get-Clipboard` refused the same way). That says nothing about
+    the code under test, and the first capture used to report it as a failed
+    run. A clipboard another program is holding for a moment is different: a
+    window is named then, and the retry below outlasts it.
+    """
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.GetOpenClipboardWindow.restype = wintypes.HWND
+    error = 0
+    for _ in range(10):
+        if user32.OpenClipboard(None):
+            user32.CloseClipboard()
+            return
+        error = ctypes.get_last_error()
+        if user32.GetOpenClipboardWindow():
+            error = 0
+        time.sleep(0.3)
+    if error == 5:
+        raise common.MissingPrerequisite(
+            "the clipboard refuses every open with 'access is denied' while no "
+            "window holds it: the workstation is locked, or this session has no "
+            "interactive desktop. Unlock it and run the check again."
+        )
+
+
 def main() -> int:
     args = build_parser().parse_args()
+    _require_a_reachable_clipboard()
     checks = common.Checks(
         "clipboard and paste on the real desktop", report_path=args.report
     )
