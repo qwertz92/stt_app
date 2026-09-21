@@ -5987,6 +5987,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   640 px budget the pin's test bounds the need with -- a change to a
   function that was wrong three times, so recorded (P3, about an hour
   with its tests) rather than slipped in.
+- **A faster-whisper model missing only a small file is fetched by
+  `WhisperModel` itself, past the download slot and its housekeeping.**
+  `_coordinated_download_if_missing` asks `_has_valid_model_snapshot`, which
+  requires `config.json` and `model.bin` only. With those present and
+  `tokenizer.json` or a vocabulary file missing, the gate answers "valid",
+  the app's own `download_model_snapshot` is never called, and the
+  constructor's `faster_whisper.utils.download_model` runs its own
+  `snapshot_download` -- without the orphan removal, without the settled
+  symlink probe (two small files finishing together can still die with
+  WinError 1314; a retry works) and without the slot (review round 3 on
+  `e3619db`, reproduced with the real functions, 2026-09-21). It needs an
+  interrupted download that finished the 75 MB-3 GB weight file before a
+  kilobyte-sized one, which the downloader's order makes rare. Widening
+  the validity check changes what the inventory calls "cached" as well, so
+  it is recorded (P3, an hour with its tests) rather than slipped in.
+- **The partial-file cleanup follows an NTFS junction out of the
+  destination.** `_remove_partials_under` walks with `rglob`, which
+  traverses reparse points, so a user who relocated `blobs/` through a
+  junction gets `*.incomplete` (and, on Cancel, `*.ms-part`) files removed
+  at the junction's target too (review round 3, reproduced with `mklink
+  /J`). Only files with those two suffixes, which nothing reads back;
+  older than the orphan removal, which shares the walk. Recorded (P3).
 - **A benchmark's device decision is per run, and there is no button to
   forget one.** `measured_fastest_devices` reads one finished run; runs are
   never combined. A run that could not measure the stored device (it errored

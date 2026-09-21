@@ -9037,3 +9037,29 @@ negative control.
 - *A test that skips on the developer's machine protects nobody who develops
   there.* The symlink test skipped, and its docstring's reason for why that
   was fine was wrong.
+
+### Review round 3 on the download housekeeping, and the release checks (2026-09-21)
+
+One read-only reviewer over `e3619db`, eight claims. No P1 and no P2, so the
+loop ended after three rounds on this batch. Two P3, both recorded under Known
+limitations: the two-file validity gate lets `WhisperModel` fetch a missing
+small file itself, past the slot and the new housekeeping; and the partial-file
+walk follows an NTFS junction out of the destination. Not broken: the scope of
+the orphan removal over every downloadable model and odd spellings of the Model
+Dir, a destination that is a file or is ACL-denied, 5,000 orphans in 0.74 s;
+hub's source has no path that reads a partial back; the symlink race (88 of 96
+threads died cold, 0 of 96 with the probe settled) and the probe's key for five
+spellings of the path; the baseline can only skip bytes, never add them; the
+error-log lock; the three tests the reviewer reverted in a copy.
+
+Release checks on the final tree: file locks 23/23, live providers 4/4, frozen
+bundle 12/12 with all five local runtimes on the upgraded dependencies. The
+clipboard check could not run: the workstation was locked, where every
+`OpenClipboard` is refused with access denied while no window holds the
+clipboard. The script reported that as a failed run; it now exits 2 ("nothing
+measured") with the reason. The paste path is unchanged since its 19/19 of
+2026-09-18.
+
+**Lesson.** *A check that needs the person's desktop says so when the desktop
+is not there.* "Failed" for a locked screen is the same defect as "passed" for
+a run that measured nothing.
