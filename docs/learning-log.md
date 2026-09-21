@@ -9063,3 +9063,18 @@ measured") with the reason. The paste path is unchanged since its 19/19 of
 **Lesson.** *A check that needs the person's desktop says so when the desktop
 is not there.* "Failed" for a locked screen is the same defect as "passed" for
 a run that measured nothing.
+
+### v0.10.0 published (2026-09-21)
+
+Tag `v0.10.0` (signed) on `5b6faec`, created by `scripts/create_release.py`
+after its own suite run (`3292 passed, 2 skipped`). The dry run of the release
+workflow had passed on `ddd3684`; the release run and the tag's Quality run are
+green. Published: `stt_app-win-x64-setup.exe` (216,689,428 bytes), its
+`.sha256`, whose text equals GitHub's own digest of the installer, and
+`stt_app-win-x64.zip` (328,032,894 bytes). The app's `check_for_updates`
+against the live API answers "update available" from 0.9.0 and "up to date"
+from 0.10.0. Not verified by anyone: running the installer over an installed
+0.9.0, the Azure and OpenAI engines against their live services (no key), the
+Xet path of the reworked download display, and the clipboard check on the
+final tree (the workstation was locked; the paste path is unchanged since its
+last pass).
