@@ -2086,6 +2086,33 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     their space while hidden.** Negative control: without
     `setRetainSizeWhenHidden` on the queue line, Download/Cancel/Delete
     moved 25 px and the model list shrank by 25 px.
+  - **A file already complete is invisible to the download hook.**
+    huggingface_hub returns it before it builds any progress bar, so its bytes
+    are in neither the reported `done` nor the reported `total`: resuming a
+    nearly finished download read 551 of 552 MB from directory growth and then
+    0 of 552 MB at the worker's first event (found by the review, reproduced
+    with the real classes). `completed_download_bytes` measures that baseline
+    before `snapshot_download` starts and `offset_progress_hook` adds it to
+    both numbers -- excluding `*.incomplete` and `*.ms-part` (the Hub reports
+    those itself through `initial=`, so counting them double-counts),
+    symlinks, and `<local_dir>/.cache` matched *below* the destination, since
+    the default cache root is itself `~/.cache/huggingface/hub`. Capped at
+    `MODEL_ESTIMATED_SIZE_MB`, because a blob cache keeps every revision it
+    ever fetched. With both sources counting the same bytes, the speed tracker
+    keeps its high-water mark across a source switch and clears only the
+    sample history, so the rate is never timed across the switch.
+  - **A reader thread that outlives its join owns the pipe.** On Windows,
+    closing a pipe another thread is reading blocks until that read returns:
+    with a grandchild holding the child's stdout handle, `join(2.0)` returned
+    with the reader still in `readline()` and `stdout.close()` then blocked
+    16.56 s on the download queue worker thread, which holds the in-process
+    and the machine-wide download slot (0.00 s with no grandchild; after the
+    fix the whole call takes 2.01 s). `_close_progress_reader` logs
+    `model_download_progress_reader_still_reading` and leaves the stream to
+    the reader's own `finally`. The preload cancel reaps its pipe and spooled
+    log through `release_model_download_process`, which waits for nothing --
+    five of its six call sites are the Qt thread. The malformed-event latch
+    lives on the child's `_ProgressState`, not on the module.
   The overlay's preload line uses the same numbers and the on-screen model
   name. **Not verified: a real network download** -- the hook was driven by
   a test driver that reproduces the construction sequences of 1.8.0 and

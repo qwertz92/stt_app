@@ -8947,3 +8947,46 @@ The owner used the 0.10 candidate for a day and reported what he saw.
   bar is matched by name, not by `unit="B"`, because the next library version
   adds a second bar with that unit.
 - *A helper that walks the widget tree must run after the tree exists.*
+
+### Review round 1 on the pre-0.10 batch (2026-09-21)
+
+Three read-only reviewers with fresh context, one lens each (the download
+rework, the settings and OpenAI changes, the external facts in the docs), given
+the claims and none of the reasoning. Every finding was reproduced before
+anything changed.
+
+- *P1, download:* the bounded `join` of the progress reader was followed by an
+  unbounded `stream.close()`. With a grandchild holding the pipe it blocked
+  16.56 s on the thread that holds both download slots -- the hang the bounded
+  `wait()` beside it exists to prevent. A reader that outlives its join owns
+  the pipe now (2.01 s for the whole call).
+- *P2, download:* a file already complete is returned by huggingface_hub before
+  any progress bar exists, so a nearly finished resume dropped from 100% to 0%
+  at the worker's first event. The worker measures the completed files first
+  and adds them to both numbers. The shipped test named "a resumed file starts
+  at the bytes already on disk" covered only the partial-file case.
+- *P2, settings:* three of seven missing-key errors still named "Remote
+  Provider API Keys". They wrote the arrow as a character, so the search for
+  "->" that renamed the other four never matched; the commit message had
+  claimed all of them. One parametrized test over every remote engine now.
+- *P3/P4, docs, six facts:* the summary of which free tiers renew was the
+  wrong way round (the table above it was right); Granite Speech 4.1 2B's
+  release was given as June where IBM's card says 2026-04-29 and the same
+  sentence said "five weeks after" a March date; an Alibaba page was cited for
+  a claim it does not make; two links were dead; Voxtral Mini 4B Realtime was
+  missing from a survey meant to catch exactly that; one quotation was
+  attributed to two pages of which one words it differently.
+- *Not refuted:* the popup strip for every count of downloaded models from 0 to
+  14 and all 21 combos; no widget moving over 8 engines x 14 models x 5
+  devices at both widths; `supports_custom_vocabulary` against the factory and
+  under fuzzing; the OpenAI request shapes and the schema-25 matrix; the
+  tqdm shim against huggingface_hub 1.32.0's real call sequence; every price
+  and leaderboard figure in the docs against the vendors' pages.
+
+**Lessons.**
+- *A rename is searched by meaning, not by one spelling.* "->" and the arrow
+  character are the same sentence to a reader and different strings to grep.
+- *Bounding one call in a cleanup does not bound the cleanup.* Every blocking
+  call next to it needs the same question.
+- *A summary sentence over a correct table is a second copy of the facts*, and
+  it drifted inside the commit that wrote both.
