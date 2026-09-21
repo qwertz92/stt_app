@@ -1575,6 +1575,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   rob is typically a *preload*, whose interest is implicit and therefore
   invisible to that check -- so cancelling deleted the bytes the preload was
   parked to resume from and it restarted the multi-gigabyte fetch from zero.
+  (Since huggingface_hub 1.32.0 that resume exists for the mirror's
+  `*.ms-part` only; a hub `*.incomplete` is never read back and is removed
+  when the parked download starts. See the download-progress entry.)
   The registration is unconditional and given back in a `finally`:
   incrementing only when the slot looks busy is a race, because `release`
   clears `_active` and notifies, and a caller that slips in before the parked
@@ -2111,12 +2114,80 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `model_download_progress_reader_still_reading` and leaves the stream to
     the reader's own `finally`. The preload cancel reaps its pipe and spooled
     log through `release_model_download_process`, which waits for nothing --
-    five of its six call sites are the Qt thread. The malformed-event latch
-    lives on the child's `_ProgressState`, not on the module.
+    six of its seven call sites are the Qt thread (the first version of
+    this entry and of the docstring said five of six; the second review
+    counted them). The seventh is the preload's own download thread, which
+    is also the one that reads the failure text, so the spooled error log
+    carries a lock held across read-and-close and across the release: a
+    release landing between `seek(0)` and `read()` returned "" for the
+    download's only error message (reproduced with two real threads). The
+    malformed-event latch lives on the child's `_ProgressState`, not on the
+    module.
+  - **huggingface_hub 1.32.0 never resumes a partial file, so an orphan is
+    removed before the next download starts.** Since upstream PR #4228 a
+    file is downloaded to a process-unique `<etag>.<8 hex>.incomplete` that
+    hub deletes in a `finally`; 1.8.0, the version before the 2026-09-21
+    upgrade, resumed `<etag>.incomplete`. The app cancels by killing the
+    child, so the `finally` never runs and nothing ever reads the file
+    again. Measured by driving the real worker against a throttled HTTP
+    stand-in for the Hub on 127.0.0.1: after a kill at 33.7 MB the next run
+    asked for the file with no `Range` header, while the parent's first
+    directory sample still read 34 MB, and the kept high-water mark held
+    the line at "34 of 78 MB (approx. 43%), measuring speed" until the
+    restart had caught up. `remove_orphaned_hub_partials` clears
+    `*.incomplete` -- never `*.ms-part`, which the ModelScope mirror does
+    resume -- under `download_destination_dir` only, without pruning
+    directories, and never raises. It runs in
+    `start_model_download_process` before the child exists (the parent
+    samples the directory before the child's first event) and in both
+    snapshot functions before `snapshot_download` (the transcribers' own
+    load-path download and `scripts/download_model.py` never go through
+    the launcher). After the fix the same probe restarts at 3% (the
+    completed files), moves with the first new bytes and leaves no orphan.
+    Consequences: a cancelled download of one large file starts that file
+    again from zero -- completed files are still skipped -- and the cleanup
+    arms that keep partials for a parked waiter now matter for the
+    mirror's `*.ms-part` only. Stay on the newest hub: pinning below it for
+    the resume would also give up its fixes, and most model repositories
+    are Xet-backed, where a partial file was never resumable.
+  - **hub's symlink probe is settled before the download threads start.**
+    `are_symlinks_supported` writes `True` into its per-directory cache
+    *before* it runs its test. On Windows without the symlink privilege a
+    second download thread that asks inside that window reads `True`, calls
+    `os.symlink` and dies with `OSError [WinError 1314]`, which is not the
+    `PermissionError` `_create_symlink` catches; `snapshot_download` fails
+    and the app falls back to the mirror or reports a failed download.
+    Measured against the zero-latency stand-in, three small files, a fresh
+    cache per run: 11 of 12 runs failed cold, 0 of 12 after one serial call
+    with the storage folder (`_settle_symlink_probe`; the key is the
+    `commonpath` of a blob and its pointer). The rate over a real network
+    is lower and unknown. Only the `models--<repo>` layout is affected; a
+    flat `local_dir` creates no symlinks. The guard is `except Exception`:
+    an upstream rename costs the mitigation, not the download.
+  - **The child runs with `HF_HUB_DISABLE_SYMLINKS_WARNING=1`.** The last
+    stderr line is what a failed download shows as its reason, and hub's
+    once-per-process symlink warning ends in the source line
+    `warnings.warn(message)` -- which is what a child that died without a
+    reason of its own reported.
+  - **The baseline counts a blob hub copied into the snapshot once.** On
+    Windows without symlinks `_create_symlink(..., new_blob=False)` copies
+    (a blob whose pointer is missing, or content two files share), so
+    `blobs/<etag>` and `snapshots/<sha>/<file>` are two real files with the
+    same bytes (the second review: 3,000,000 bytes on disk, 6,000,000
+    returned). A real file under `snapshots/` whose size equals a counted
+    blob's is that blob's copy, each blob absorbing one; a same-size
+    collision under-counts one small file, the safe direction. The test
+    that would have caught it needs a symlink and skips on this machine.
   The overlay's preload line uses the same numbers and the on-screen model
-  name. **Not verified: a real network download** -- the hook was driven by
-  a test driver that reproduces the construction sequences of 1.8.0 and
-  1.32.0 from their source.
+  name. **Verified on 2026-09-21 against a local stand-in, not against the
+  Hub**: the real worker and the real huggingface_hub 1.32.0 over plain HTTP
+  from a server on 127.0.0.1 throttled to 12 MB/s reported 12.7 and
+  11.6 MB/s, a monotonic percentage, a kill at 43% and a restart to exit 0
+  with a complete snapshot. **Not verified: the Xet transfer path and the
+  real Hub**, which need a real download. A probe of this kind must set
+  `STT_APP_DISABLE_MODELSCOPE=1`: the first run's stand-in answered the
+  tree endpoint wrongly, the worker fell back to the real mirror and
+  fetched the real `tiny` model into the sandbox.
 - **Error text must be selectable**: Qt hands a `QMessageBox` only
   `LinksAccessibleByMouse`, so its text could be captured only by retyping it
   or screenshotting it. `dialog_style.install_selectable_message_text` installs
