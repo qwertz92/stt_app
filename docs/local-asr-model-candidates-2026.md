@@ -737,7 +737,7 @@ Transformers.js pipeline. Watch, do not add.
 Mistral's open-weight Voxtral line is Voxtral Small 24B and Voxtral Mini 3B
 (both Apache-2.0, released July 2025), with a Voxtral Small 24B 2507 STT
 update listed August 2026 (per
-[Mistral's model-weights page](https://docs.mistral.ai/getting-started/models/weights)
+[Mistral's models page](https://docs.mistral.ai/models)
 and general web search, checked 2026-09-21 — this session did not fetch
 Mistral's page directly, only searched it, so treat the exact version string
 as approximate). Both sizes are far larger than every local model this app
@@ -783,6 +783,17 @@ ONNX Runtime session) and its own download/cache entry, and nobody has
 measured its added latency or English quality against this app's audio.
 Worth a prototype if Granite Speech 5.0's plain-text output becomes the
 limiting complaint against an otherwise very fast English model.
+
+### Voxtral Mini 4B Realtime: a streaming open-weight model, not evaluated
+
+Missed by the first pass of this check and added after its review:
+Mistral released `mistralai/Voxtral-Mini-4B-Realtime-2602` on 2026-02-04
+under Apache-2.0, built for streaming transcription with a configurable
+delay ([announcement](https://mistral.ai/news/voxtral-transcribe-2/), read
+2026-09-21). It is the closest open-weight counterpart to the app's one
+true-streaming local model (Nemotron). At 4B parameters it is several
+times Nemotron's size, no ONNX or CTranslate2 export was found, and it was
+not run here, so this entry records that it exists, not how it performs.
 
 ### Why Soniox and Voxtral were not added as remote (hosted) providers
 

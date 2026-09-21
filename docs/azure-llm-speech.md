@@ -140,7 +140,9 @@ automatically.
   [quotas and limits page](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/speech-services-quotas-and-limits)
   and the
   [LLM Speech how-to page](https://learn.microsoft.com/en-us/azure/ai-services/speech-service/llm-speech)
-  both say "less than five hours long and less than 500 MB in size". This app
+  give the larger pair: the how-to page says "less than five hours long and
+  less than 500 MB in size", the quotas page lists "< 500 MB" and "< 5 hours
+  per file". This app
   cannot resolve the discrepancy without a live Azure resource to test
   against; plan for the smaller, older figure (250 MB / 2 hours) until it is
   verified which one the service actually enforces.

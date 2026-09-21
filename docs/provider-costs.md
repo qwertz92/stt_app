@@ -18,7 +18,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | AssemblyAI | Batch | Universal-3.5 Pro or Universal-2 (explicit selection; no fallback) | U3.5 Pro: $0.21/hour, U2: $0.15/hour ([pricing](https://www.assemblyai.com/pricing), checked 2026-09-21) | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | Universal-3.5 Pro Realtime | $0.45/hour (same source) | $0.45/hour |
 | OpenAI | Batch | `gpt-transcribe` (new default; replaces `gpt-4o-mini-transcribe`), `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | `gpt-transcribe`: $0.0045/min, `gpt-4o-transcribe`: $0.006/min, `gpt-4o-mini-transcribe`: $0.003/min, `whisper-1`: $0.006/min ([pricing](https://developers.openai.com/api/docs/pricing), checked 2026-09-21) | $0.27/hour, $0.36/hour, $0.18/hour, $0.36/hour |
-| Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour ([pricing](https://console.groq.com/docs/pricing), checked 2026-09-21) | $0.111/hour, $0.040/hour |
+| Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour ([pricing](https://groq.com/pricing), checked 2026-09-21) | $0.111/hour, $0.040/hour |
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min ([pricing](https://deepgram.com/pricing), checked 2026-09-21) | $0.258/hour, $0.312/hour |
 | Deepgram | Streaming | `nova-3` | Mono: $0.0048/min, Multi: $0.0058/min — **limited-time promotional rate**; the regular, non-promotional rate shown alongside it is Mono $0.0077/min, Multi $0.0092/min (same source) | $0.288/hour, $0.348/hour (promo); $0.462/hour, $0.552/hour (regular) |
 | ElevenLabs | Batch | `scribe_v2` | $3.67 per 1,000 minutes on the [Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text) (read 2026-09-21) — consistent with the pay-as-you-go credit cost below | $0.22/hour |
@@ -70,7 +70,7 @@ All figures below were re-read from the vendor's own pricing page on
 | Deepgram | Yes | $200 free credit, no credit card required ([pricing](https://deepgram.com/pricing)) |
 | ElevenLabs | Yes | **Corrected 2026-09-21**: the Free plan gives 10,000 credits/month, and Speech to Text costs 330 credits per minute of audio — about **30 minutes/month**, not the "2 hours 30 minutes" this document said before ([pricing](https://elevenlabs.io/pricing)) |
 | Azure LLM Speech | **No** | **Corrected 2026-09-21**: Microsoft's own quotas page lists "Not applicable" in the Free (F0) column for every LLM-speech and fast-transcription row — the F0 tier does not cover the API this app uses at all. A Standard (S0) resource is required from the start; see [Azure LLM Speech Setup](azure-llm-speech.md#cost-and-free-tier) |
-| Fun-ASR (Alibaba) | Likely yes, amount **not verified** | Alibaba grants a free quota per enabled model, valid 90 days from activation, expanded to all regions on 2026-08-20 ([free-quota page](https://www.alibabacloud.com/help/en/model-studio/new-free-quota)), but that page does not state the amount for Fun-ASR specifically. The "36,000 audio seconds (10 hours)" this document stated before could not be re-confirmed this session; check the Model Studio console for the current figure before relying on it |
+| Fun-ASR (Alibaba) | Likely yes, amount **not verified** | Alibaba grants new users a free quota per model, valid 90 days, and only for models in the Singapore region with the International deployment scope, which is the endpoint this app uses ([free-quota page](https://www.alibabacloud.com/help/en/model-studio/new-free-quota), read 2026-09-21); that page does not state the amount for Fun-ASR specifically. The "36,000 audio seconds (10 hours)" this document stated before could not be re-confirmed this session; check the Model Studio console for the current figure before relying on it |
 
 OpenAI caveat:
 
@@ -98,10 +98,11 @@ before any paid one:
   Deepgram's streaming price above is a promotion too, so re-check before
   budgeting on either past 2026.
 - Free plans, free credits, and promotional prices are the parts of this
-  document most likely to be stale by the time you read it; the AssemblyAI,
-  Deepgram, and Groq free tiers above are recurring/no-expiry as read on
-  2026-09-21, while ElevenLabs' and Azure's general account credits and any
-  "limited-time" price are not.
+  document most likely to be stale by the time you read it. As read on
+  2026-09-21, only two of them renew: Groq's free plan (limits per minute,
+  hour and day) and ElevenLabs' monthly credits. AssemblyAI's $50 and
+  Deepgram's $200 are one-time signup credits, Azure's is a 30-day account
+  credit, and a "limited-time" price ends when the vendor says so.
 
 ---
 
@@ -311,7 +312,7 @@ none of these are wired into `stt_app`:
 - OpenAI prepaid billing help: <https://help.openai.com/en/articles/8264644-how-can-i-set-up-prepaid-billing>
 - Groq speech-to-text docs: <https://console.groq.com/docs/speech-to-text>
 - Groq rate limits: <https://console.groq.com/docs/rate-limits>
-- Groq pricing: <https://console.groq.com/docs/pricing>
+- Groq pricing: <https://groq.com/pricing>
 - Deepgram pricing: <https://deepgram.com/pricing>
 - Deepgram Nova-3 changelog: <https://developers.deepgram.com/changelog/speech-to-text-api-nova-3>
 - ElevenLabs STT overview: <https://elevenlabs.io/speech-to-text/>

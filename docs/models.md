@@ -33,7 +33,7 @@ The app has five local runtime families:
 Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
 Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0.
 It topped the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
-at 5.33% mean WER when IBM shipped it (2026-06), five weeks after Cohere
+at 5.33% mean WER when IBM shipped it (2026-04-29), five weeks after Cohere
 Transcribe had briefly held the top spot at 5.42%. **It is likely no longer
 #1**: a 2026-07-23 survey reports newer models (ARK-ASR-3B at 5.04%,
 MOSS-Transcribe-preview-2B) posting lower WER since, though on a different
@@ -63,7 +63,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `distil-large-v3.5` | CTranslate2 | ~1.52 GB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
-| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy among this app's local models** — led the Open ASR Leaderboard at launch, 2026-06 (q4, WebGPU), batch mode only |
+| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy among this app's local models** — led the Open ASR Leaderboard at launch, 2026-04-29 (q4, WebGPU), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
@@ -143,7 +143,7 @@ Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benc
 Conformer-encoder + LLM-decoder systems and generally beat the older Whisper
 models on the public
 [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard).
-`granite-speech-4.1-2b` led it at launch (2026-06, ~5.33% mean English WER);
+`granite-speech-4.1-2b` led it at launch (2026-04-29, ~5.33% mean English WER);
 see [provider-costs.md](provider-costs.md#3-quality-comparison-published-signals)
 for why that rank should not be quoted as current without checking the live
 page. Real-world and German quality still depend on your microphone and audio, so benchmark on your own
