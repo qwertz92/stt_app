@@ -3,7 +3,8 @@
 ## Purpose
 
 Running project memory for `stt_app`. Agents: read this first before making changes.
-Detailed history is in `docs/learning-log.md`.
+Detailed history is in `docs/learning-log.md`; ideas kept for later are in
+`docs/ROADMAP.md`.
 
 ## Quality principle
 
