@@ -1306,6 +1306,77 @@ def test_nothing_scrolls_sideways_or_hides_a_tab_at_the_minimum_width(
             app.processEvents()
 
 
+def test_the_full_final_checkbox_is_enabled_only_where_it_acts(
+    monkeypatch, tmp_path
+) -> None:
+    """It re-transcribes a local faster-whisper stream at its end, so it is
+    enabled for exactly that: local engine, a faster-whisper model, streaming
+    mode -- and follows each of the three as it changes."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_at(monkeypatch, tmp_path)
+    check = dialog.streaming_full_final_check
+
+    def pick(combo: QtWidgets.QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        assert index >= 0, value
+        combo.setCurrentIndex(index)
+
+    try:
+        pick(dialog.engine_combo, "local")
+        pick(dialog.model_combo, "small")
+        pick(dialog.mode_combo, "batch")
+        assert check.isEnabled() is False
+        pick(dialog.mode_combo, "streaming")
+        assert check.isEnabled() is True
+        pick(dialog.model_combo, "nemotron-3.5-asr-streaming-0.6b-int4")
+        assert check.isEnabled() is False
+        pick(dialog.model_combo, "small")
+        assert check.isEnabled() is True
+        pick(dialog.engine_combo, "deepgram")
+        assert check.isEnabled() is False
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+def test_an_unbroken_word_in_a_status_line_does_not_widen_the_dialog(
+    monkeypatch, tmp_path
+) -> None:
+    """No wrapped label on any page may set the dialog's minimum width.
+
+    A word-wrapped label reports its longest word as its minimum width, the
+    pin reads every page's minimum and only ever raises, so one path in the
+    Import tab's "Selected:" line (1538 px for 346 characters), a URL in a
+    provider's error or a folder in a download failure kept the dialog that
+    wide for the life of the app. Every wrapped label on every page is given
+    such a word here, one page at a time, with that page on screen.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_at(monkeypatch, tmp_path)
+    unbroken = "C:\\" + "\\".join(["averyveryverylongfoldername"] * 12) + "\\a.wav"
+    try:
+        dialog.show()
+        _settle_layout(app)
+        before = dialog.minimumWidth()
+        changed = 0
+        for index in range(dialog.tabs.count()):
+            dialog.tabs.setCurrentIndex(index)
+            page = dialog.tabs.widget(index)
+            for label in page.findChildren(QtWidgets.QLabel):
+                if label.wordWrap():
+                    label.setText(unbroken)
+                    changed += 1
+            _settle_layout(app)
+            dialog._pin_content_minimum_width()
+            assert dialog.minimumWidth() == before, dialog.tabs.tabText(index)
+        assert changed > 20
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_the_dialog_opens_as_wide_as_it_needs_and_does_not_grow_after(
     monkeypatch, tmp_path
 ) -> None:

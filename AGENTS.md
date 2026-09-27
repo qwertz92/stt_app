@@ -1241,7 +1241,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_pin_content_minimum_width` runs at construction for the tab bar and the
   scroll pages, and again 0 ms after every show and every tab switch; it only
   ever raises the minimum, down to the screen. Both roads are needed: a tab
-  made current while the dialog is hidden measures the unpainted page. Four
+  made current while the dialog is hidden measures the unpainted page. Five
   properties, each wrong once:
   - **A `QScrollArea` answers a fixed 58 px as its minimum whatever it
     holds**, so the tab widget's hint never saw the seven scroll pages: at
@@ -1275,6 +1275,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     Windows' "Text size" raises the application font without the DPI:
     measured 720 px at 11.25 pt, 813 at 13.5, 917 at 15.75 and 1025 at 18,
     so off the 9 pt font the test skips and names the need it measured.
+  - **No word-wrapped label may set it** (`_let_wrapped_labels_narrow`,
+    right after `_build_ui`). A wrapped `QLabel` reports its longest word as
+    its minimum width, so once the scroll pages counted, one unbroken token
+    in a status line -- a path in the Import tab's "Selected:" line, a URL
+    in a provider's error, a folder in a download failure -- raised the
+    minimum for the life of the app (1538 px for a 346-character path; the
+    probe found 25 such labels on seven pages, not only on History and
+    Import). Every wrapped label on every page gets an explicit minimum
+    width of 1 px, which replaces the hint in every layout
+    (`qSmartMinSize`), so such a token is cut off at the label's edge
+    instead of moving anything; ordinary words never reach that edge, and
+    the page minimums were measured unchanged at 9 and 13.5 pt. The Import
+    tab's path line carries the path as its tooltip, since its end is the
+    file name. A label built after `_build_ui` is not covered.
   At 9 pt the tab bar now sets the minimum (797 px) above the Benchmark
   page's 611, so opening that tab no longer widens the dialog; the 640 px
   budget in the Benchmark test bounds that page's own need (one label once
@@ -1443,9 +1457,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and the History import that moves the limit spin box is not an edit. It
   is not the baseline a save diffs against, which stays
   `_populated_settings` (the save-merge entries below): the fingerprint
-  decides only the prompt and the Save button. A Discard while
-  dialog-owned work runs keeps the edits in the widgets, because the reload
-  is deferred (next entry), so reopening shows them as unsaved.
+  decides only the prompt and the Save button. Four rules the review of
+  2026-09-27 added, each with a test that fails without it:
+  - **No slider is an input.** None of these pages has one as a setting,
+    and every scroll bar is one -- each page's own and the popup list of
+    every combo box -- so scrolling a page read as an edit.
+  - **A save that writes no settings still moves `_populated_settings`**
+    (the no-change branch and a key-only save). Left behind, a value typed
+    to match another window's write counted as an edit on the next save and
+    was written back over whatever that window wrote in between (measured:
+    800 over the History dialog's 300).
+  - **A Discard while dialog-owned work runs puts the setting widgets back**
+    (`_discard_unsaved_edits_while_busy`). It called `reload_from_store`,
+    which waits while such work runs (next entry), so the edits stayed and
+    the next Save wrote them. `_populate` is now two halves:
+    `_populate_setting_widgets` sets only what the user could set by hand
+    while the work runs, and the busy Discard runs it from
+    `_populated_settings`; `_populate_views` holds what the work owns (the
+    connection-test target and labels, the Import tab's pickers, the local
+    inventory views, both history lists) and runs only in a full reload.
+    The model combo is rebuilt from the inventory already known for the
+    Model Dir, since the busy Discard repaints no inventory view after it.
+  - **Discarding typed keys refreshes the Import tab's credential note**,
+    because the key fields are cleared with their signals blocked.
 - **Settings dialog persists for the app lifetime**: closing Settings hides the
   existing dialog instead of deleting it. The dialog owns background model
   downloads, benchmark work, imports, scans, and connection/update checks, so
@@ -6153,3 +6187,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the app's runtimes change between a measurement and the day it is used; a
   stale entry costs speed, never correctness, because the rest of the chain
   is still tried after the preferred device. Recorded (2026-09-19).
+- **A benchmark model row toggles only on its checkbox.** The Run
+  Benchmark window's model list holds checkable items and takes no
+  selection, so a click on a model's name does nothing -- Qt's default for
+  a checkable item -- while the checkbox and Space on the current row
+  toggle it. Making the whole row the target needs a test of the click
+  position against the style's indicator rectangle, because a click on
+  the indicator already toggles and would toggle twice (P4, about 20
+  minutes with a test). Recorded 2026-09-27.

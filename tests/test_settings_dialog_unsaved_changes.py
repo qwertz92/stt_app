@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ctypes
 import sys
+from dataclasses import replace
 
 import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
@@ -132,12 +133,53 @@ def test_every_settings_page_counts(dialog: SettingsDialog, edit) -> None:
     assert dialog._save_button.isEnabled() is True
 
 
+def test_a_model_chosen_for_a_provider_not_selected_counts(
+    dialog: SettingsDialog,
+) -> None:
+    """Pick a Groq model, go back to the local engine: no widget shows the
+    Groq choice any more, but Save writes it, so it is an unsaved change."""
+    local_index = dialog.engine_combo.currentIndex()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
+    combo = dialog.remote_model_combo
+    chosen = next(
+        index for index in range(combo.count())
+        if combo.itemData(index) != combo.currentData()
+    )
+    combo.setCurrentIndex(chosen)
+    dialog.engine_combo.setCurrentIndex(local_index)
+    _settle(dialog)
+
+    assert dialog.has_unsaved_changes() is True
+
+
 def test_marking_a_key_for_removal_counts(dialog: SettingsDialog) -> None:
     dialog._mark_provider_key_for_clear("openai")
     _settle(dialog)
 
     assert dialog.has_unsaved_changes() is True
     assert dialog._save_button.isEnabled() is True
+
+
+def test_scrolling_a_page_or_a_list_is_not_an_edit(dialog: SettingsDialog) -> None:
+    """A scroll bar is a slider, and sliders were read as settings.
+
+    Every settings page is a scroll area and every combo box owns a popup
+    list, so scrolling a page or a model list turned Save on and put
+    "Unsaved changes" under a dialog whose settings were untouched -- and
+    Close then asked whether to save them.
+    """
+    page_bar = dialog.tabs.widget(0).verticalScrollBar()
+    popup_bar = dialog.model_combo.view().verticalScrollBar()
+    for bar in (page_bar, popup_bar):
+        bar.setRange(0, 500)
+        bar.setValue(200)
+    _settle(dialog)
+
+    assert dialog.has_unsaved_changes() is False
+    assert dialog._save_button.isEnabled() is False
+    assert not any(
+        isinstance(widget, QtWidgets.QScrollBar) for widget in dialog._unsaved_widgets
+    )
 
 
 def test_the_connection_test_target_is_not_a_setting(dialog: SettingsDialog) -> None:
@@ -159,6 +201,40 @@ def test_a_save_leaves_nothing_to_save(dialog: SettingsDialog) -> None:
     assert dialog._save_button.isEnabled() is False
     # The save's own confirmation is what shows, not "Unsaved changes".
     assert "Settings saved" in dialog._save_status_label.text()
+
+
+@pytest.mark.parametrize("with_key", [False, True], ids=["nothing", "key-only"])
+def test_a_save_with_nothing_to_write_settles_what_the_widgets_show(
+    dialog: SettingsDialog, with_key: bool
+) -> None:
+    """A save that finds the file already equal still moves the baseline.
+
+    The History dialog writes the limit straight to the file. Typing the same
+    number here and saving writes no settings -- "No settings changes", or
+    only a key -- and the dialog used to call itself clean without recording
+    that the box now shows that number, so the next save read it as a fresh
+    edit and wrote it back over whatever the History dialog had written since.
+    """
+    store = dialog._settings_store
+    # Replacing a stored key, not adding one: adding flips `has_openai_key`
+    # and so writes settings.
+    dialog._secret_store.set_api_key("openai", "sk-old")
+    store.save(replace(store.load(), history_max_items=800, has_openai_key=True))
+    dialog.history_max_spin.setValue(800)
+    if with_key:
+        dialog.openai_key_edit.setText("sk-new")
+    dialog._save()
+    assert dialog._save_status_label.text() == (
+        "\u2713 API keys saved" if with_key else "No settings changes"
+    )
+    _settle(dialog)
+    assert dialog._save_button.isEnabled() is False
+
+    store.save(replace(store.load(), history_max_items=300))
+    dialog.keep_clipboard_checkbox.toggle()
+    dialog._save()
+
+    assert store.load().history_max_items == 300
 
 
 def test_the_confirmation_gives_way_to_the_state_it_describes(
@@ -297,6 +373,76 @@ def test_discard_from_the_prompt_restores_the_stored_values(
     assert dialog.keep_clipboard_checkbox.isChecked() is stored
     assert dialog.has_unsaved_changes() is False
     assert dialog._settings_store.load().keep_transcript_in_clipboard is stored
+
+
+def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> None:
+    """Discard puts the settings back even while a connection test runs.
+
+    It reloaded from the store, and that reload waits while dialog-owned work
+    runs, so the edits stayed in the widgets behind a dialog that had been
+    told to discard them -- and the next Save wrote them. The widgets go back
+    now, while what the running work shows is left to it.
+    """
+    _answer_prompt(monkeypatch, QtWidgets.QMessageBox.Discard)
+    dialog.show()
+    stored = dialog._settings_store.load()
+    dialog.keep_clipboard_checkbox.toggle()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
+    dialog.openai_key_edit.setText("sk-typed")
+    dialog._mark_provider_key_for_clear("deepgram")
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("openai")
+    )
+    assert "typed but not saved" in dialog.import_engine_note.text()
+    # A known inventory for this Model Dir, as a finished scan leaves it.
+    dialog._cached_local_models = ["tiny"]
+    dialog._cached_local_models_dir = dialog.model_dir_edit.text().strip()
+    dialog._cached_local_models_available = True
+    dialog._active_connection_test_thread = object()
+    running_label = dialog._provider_last_test_labels["groq"]
+    running_label.setText("Testing...")
+    _settle(dialog)
+
+    dialog._request_close()
+
+    assert dialog.isVisible() is False
+    assert dialog.keep_clipboard_checkbox.isChecked() is stored.keep_transcript_in_clipboard
+    assert dialog.engine_combo.currentData() == stored.engine
+    assert dialog.openai_key_edit.text() == ""
+    assert dialog._provider_pending_clear == set()
+    assert dialog.has_unsaved_changes() is False
+    assert running_label.text() == "Testing..."
+    assert "typed but not saved" not in dialog.import_engine_note.text()
+    tiny = dialog.model_combo.findData("tiny")
+    assert dialog.model_combo.itemText(tiny).startswith("\u2713")
+
+    dialog._active_connection_test_thread = None
+    dialog.show()
+    dialog.tray_middle_click_checkbox.toggle()
+    dialog._save()
+    saved = dialog._settings_store.load()
+    assert saved.keep_transcript_in_clipboard is stored.keep_transcript_in_clipboard
+    assert saved.engine == stored.engine
+
+
+def test_a_discarded_typed_key_leaves_no_note_behind(dialog, monkeypatch) -> None:
+    """The key fields are cleared with their signals blocked, so the Import
+    tab's note kept saying a new key was typed but not saved -- a key that
+    had just been discarded -- when nothing else changed to repaint it."""
+    _answer_prompt(monkeypatch, QtWidgets.QMessageBox.Discard)
+    dialog.show()
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("openai")
+    )
+    dialog.openai_key_edit.setText("sk-typed")
+    assert "typed but not saved" in dialog.import_engine_note.text()
+    dialog._active_connection_test_thread = object()
+    _settle(dialog)
+
+    dialog._request_close()
+
+    assert dialog.openai_key_edit.text() == ""
+    assert "typed but not saved" not in dialog.import_engine_note.text()
 
 
 def test_the_close_button_asks(dialog, monkeypatch) -> None:

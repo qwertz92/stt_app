@@ -268,6 +268,9 @@ class _ImportTabMixin:
     def _set_selected_import_file(self, path: str) -> None:
         selected = str(path or "").strip()
         self._selected_import_file_path = selected
+        # A path wider than the page is cut off at the label's edge (see
+        # `_let_wrapped_labels_narrow`), and its end is the file name.
+        self.import_selected_file_label.setToolTip(selected)
         if selected and Path(selected).is_file():
             self.import_selected_file_label.setText(f"Selected: {selected}")
             self.import_selected_file_label.setStyleSheet("color: #1b5e20;")

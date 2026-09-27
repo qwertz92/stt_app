@@ -43,6 +43,19 @@ from .settings_store import AppSettings, normalize_local_onnx_device
 
 class _PersistenceMixin:
     def _populate(self, settings: AppSettings) -> None:
+        self._populate_setting_widgets(settings)
+        self._populate_views(settings)
+        # What the widgets show now is what is stored: nothing is unsaved.
+        self._mark_unsaved_changes_clean()
+
+    def _populate_setting_widgets(self, settings: AppSettings) -> None:
+        """Every setting widget, and the notes and states that follow them.
+
+        This half touches nothing a running job owns -- it sets only what the
+        user could set by hand while the job runs -- so a Discard can run it
+        while dialog-owned work is active, where the whole reload waits
+        (`_discard_unsaved_edits_while_busy`).
+        """
         # The baseline every "did the user edit this?" question is answered
         # against, recorded here because this is the one place that writes all
         # the widgets. `_loaded_settings` cannot serve that: a save assigns it
@@ -78,7 +91,10 @@ class _PersistenceMixin:
         blocker = QtCore.QSignalBlocker(self.model_dir_edit)
         self.model_dir_edit.setText(settings.model_dir or "")
         del blocker
-        self._refresh_model_combo(selected=settings.model_size, cached=[])
+        # The inventory already known for this Model Dir, or none: a Discard
+        # while a download runs repaints no inventory view afterwards, and an
+        # empty list would take every checkmark off the downloaded models.
+        self._refresh_model_combo(selected=settings.model_size)
         self.vad_checkbox.setChecked(settings.vad_enabled)
         self._populate_microphone_combo(
             str(getattr(settings, "input_device_name", "") or "")
@@ -211,6 +227,21 @@ class _PersistenceMixin:
                 ),
             }
         )
+        if hasattr(self, "azure_endpoint_edit"):
+            blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
+            self.azure_endpoint_edit.setText(
+                getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT) or ""
+            )
+            del blocker
+        self._update_remote_model_selector()
+        self._update_engine_indicator()
+        self._refresh_secret_store_options_ui()
+        self._refresh_provider_key_statuses()
+
+    def _populate_views(self, settings: AppSettings) -> None:
+        """What the running jobs own: the connection-test target and labels,
+        the Import tab's pickers, the local inventory views and both history
+        lists. A reload waits while such a job runs (`reload_from_store`)."""
         self._import_model_values.update(
             {
                 "local": settings.model_size,
@@ -243,13 +274,6 @@ class _PersistenceMixin:
                 ),
             }
         )
-        if hasattr(self, "azure_endpoint_edit"):
-            blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
-            self.azure_endpoint_edit.setText(
-                getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT) or ""
-            )
-            del blocker
-        self._update_remote_model_selector()
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
@@ -263,14 +287,9 @@ class _PersistenceMixin:
             self._show_local_model_unverified_state(
                 "Open Models or Benchmark to verify local model availability in the background."
             )
-        self._update_engine_indicator()
         self._refresh_history_list(force=True)
         self._refresh_benchmark_history_list()
-        self._refresh_secret_store_options_ui()
-        self._refresh_provider_key_statuses()
         self._restore_provider_connection_test_labels()
-        # What the widgets show now is what is stored: nothing is unsaved.
-        self._mark_unsaved_changes_clean()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -1009,12 +1028,28 @@ class _PersistenceMixin:
         settings_changed = not self._settings_match_stored_values(
             settings, stored_settings
         )
+        # `language_mode` is put back to what the combo shows, because it is
+        # the one field `_construct_settings_from_widgets` fills from disk
+        # while a widget for it exists: `_language_mode_for_save` defers an
+        # untouched combo to whatever the overlay's Lang button has since
+        # written. Recording that deferred value would make the combo differ
+        # from the baseline on the next save, turning the same untouched combo
+        # into a deliberate choice and reverting the overlay after all. The
+        # key-save path needs no such correction -- it never reads the combo.
+        shown_settings = replace(
+            widget_settings, language_mode=self._language_mode_shown()
+        )
         if not settings_changed and not key_storage_changed:
             if not key_storage_errors:
                 self._set_bottom_status("No settings changes")
                 self._save_status_timer.start()
                 # The widgets agree with the file, so there is nothing left
-                # to save -- say so rather than keep offering Save.
+                # to save -- say so rather than keep offering Save. What they
+                # show is settled as much as after a write: left at the old
+                # baseline, a value typed here to match another window's write
+                # counted as an edit on the next save and was written back over
+                # whatever that window wrote in between.
+                self._advance_populated_settings(shown_settings)
                 self._mark_unsaved_changes_clean()
             return
 
@@ -1031,22 +1066,13 @@ class _PersistenceMixin:
                     self.settings_changed.emit()
                 return
             self._loaded_settings = settings
-            # `language_mode` is put back to what the combo shows, because it
-            # is the one field `_construct_settings_from_widgets` fills from
-            # disk while a widget for it exists: `_language_mode_for_save`
-            # defers an untouched combo to whatever the overlay's Lang button
-            # has since written. Recording that deferred value would make the
-            # combo differ from the baseline on the next save, turning the same
-            # untouched combo into a deliberate choice and reverting the
-            # overlay after all. The key-save path needs no such correction --
-            # it never reads the combo.
-            self._advance_populated_settings(
-                replace(widget_settings, language_mode=self._language_mode_shown())
-            )
             self._refresh_secret_store_options_ui()
             # The bar's "Active" half reads `_loaded_settings`; what was
             # pending until now is what runs.
             self._update_engine_indicator()
+        # Written or already equal, what the widgets show is on disk now; a
+        # save that changed only keys reaches this line too.
+        self._advance_populated_settings(shown_settings)
         # Trim to the limit that was actually saved, not to the spin box, so
         # the write and the trim read one baseline instead of two that can
         # drift -- which is how the revert above went unnoticed. When this was

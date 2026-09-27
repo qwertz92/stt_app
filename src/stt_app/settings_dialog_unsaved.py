@@ -80,6 +80,9 @@ class _UnsavedChangesMixin:
             )
         if isinstance(widget, QtWidgets.QCheckBox):
             return True
+        # No slider: none of these pages has one as a setting, and every
+        # scroll bar is one -- the pages' own and the popup list of every
+        # combo box -- so scrolling read as an edit.
         return isinstance(
             widget,
             (
@@ -87,7 +90,6 @@ class _UnsavedChangesMixin:
                 QtWidgets.QPlainTextEdit,
                 QtWidgets.QAbstractSpinBox,
                 QtWidgets.QKeySequenceEdit,
-                QtWidgets.QAbstractSlider,
             ),
         )
 
@@ -103,8 +105,6 @@ class _UnsavedChangesMixin:
             return widget.valueChanged
         if isinstance(widget, QtWidgets.QKeySequenceEdit):
             return widget.keySequenceChanged
-        if isinstance(widget, QtWidgets.QAbstractSlider):
-            return widget.valueChanged
         return None
 
     @staticmethod
@@ -122,8 +122,6 @@ class _UnsavedChangesMixin:
             return widget.value()
         if isinstance(widget, QtWidgets.QKeySequenceEdit):
             return widget.keySequence().toString(QtGui.QKeySequence.PortableText)
-        if isinstance(widget, QtWidgets.QAbstractSlider):
-            return widget.value()
         return None
 
     def _unsaved_state_values(self) -> dict[int, object]:
@@ -230,12 +228,28 @@ class _UnsavedChangesMixin:
             # edits unsaved, and closing would then lose them after all.
             return not self.has_unsaved_changes()
         if answer == QtWidgets.QMessageBox.Discard:
-            # Deferred while dialog-owned work runs (see `reload_from_store`);
-            # the edits then stay in the widgets, and "Unsaved changes" says so
-            # when the dialog is opened again.
-            self.reload_from_store()
+            if self._background_work_active():
+                self._discard_unsaved_edits_while_busy()
+            else:
+                self.reload_from_store()
             return True
         return False
+
+    def _discard_unsaved_edits_while_busy(self) -> None:
+        """Put the setting widgets back without touching the running job.
+
+        `reload_from_store` waits while dialog-owned work runs, because the
+        views that work owns (a download's rows, the connection test's labels,
+        the Import tab's pickers) must stay as it left them. Calling it here
+        left the edits in the widgets behind a dialog told to discard them,
+        and the next Save wrote them. The widgets go back to the values they
+        were last settled from instead -- what the user could restore by hand
+        -- and the reload at the next open, once nothing runs, catches up with
+        anything written elsewhere meanwhile.
+        """
+        self._discard_unsaved_provider_key_edits()
+        self._populate_setting_widgets(self._populated_settings)
+        self._mark_unsaved_changes_clean()
 
     def _request_close(self) -> None:
         if self._confirm_close_with_unsaved_changes():

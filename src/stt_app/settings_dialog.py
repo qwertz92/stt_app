@@ -368,6 +368,7 @@ class SettingsDialog(
         self.benchmark_finished.connect(self._on_benchmark_finished)
         phase_started_at = time.perf_counter()
         self._build_ui()
+        self._let_wrapped_labels_narrow()
         self._log_settings_timing("build_ui", phase_started_at)
         self.tabs.currentChanged.connect(self._on_settings_tab_changed)
         self._install_unsaved_changes_tracking()
@@ -552,6 +553,26 @@ class SettingsDialog(
             target = min(target, available)
         if target != self.minimumWidth():
             self.setMinimumWidth(target)
+
+    def _let_wrapped_labels_narrow(self) -> None:
+        """No wrapped label may set the dialog's minimum width.
+
+        A word-wrapped `QLabel` reports its longest word as its minimum width,
+        and `_pin_content_minimum_width` reads every page's minimum and only
+        ever raises. So one unbroken token in a status line -- a path in the
+        Import tab's "Selected:" line (1538 px for 346 characters), a URL in a
+        provider's error, a folder in a download failure -- kept the dialog
+        that wide for the life of the app. An explicit minimum width replaces
+        the hint in every layout (`qSmartMinSize`), so one pixel lets such a
+        label narrow past the token, which is then cut off at the label's edge
+        rather than moving anything. Ordinary words never reach that edge: the
+        pages' own controls keep them far wider than any word. A label built
+        after this runs is not covered.
+        """
+        for index in range(self.tabs.count()):
+            for label in self.tabs.widget(index).findChildren(QtWidgets.QLabel):
+                if label.wordWrap() and label.minimumWidth() == 0:
+                    label.setMinimumWidth(1)
 
     def _content_minimum_width(self) -> int:
         """The narrowest the tab widget can be with nothing cut off."""
@@ -1012,6 +1033,9 @@ class SettingsDialog(
             blocker = QtCore.QSignalBlocker(field)
             field.clear()
             del blocker
+        # Cleared with their signals blocked, so the Import tab's credential
+        # note ("a new key is typed but not saved") would keep describing them.
+        self._update_import_engine_note()
 
     def shutdown(self) -> None:
         """Stop dialog-owned child-process work before the application exits."""
