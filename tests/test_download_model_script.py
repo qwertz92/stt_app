@@ -214,6 +214,32 @@ def test_the_manual_download_step_does_not_send_onnx_models_to_the_wrong_guide(
     assert "for how to arrange the files" in whisper
 
 
+def test_the_manual_steps_fetch_the_commit_a_pinned_model_is_pinned_to(capsys):
+    """Parakeet Ultra is downloaded at one commit, and the app's size estimate
+    and measurements describe that commit. A clone or a browser download of
+    the default branch can be other files under the same name, so the two
+    manual workarounds must name the commit; an unpinned model keeps `main`
+    and gets no checkout step."""
+    module = _load_download_model()
+    revision = "dd203225f41c8a7d0323967afa1869cea0907436"
+
+    module._print_ssl_help("parakeet-tdt-0.6b-v3-ultra")
+    pinned = capsys.readouterr().err
+    assert (
+        f"git -C parakeet-tdt-0.6b-v3-ultra-onnx checkout {revision}" in pinned
+    )
+    assert (
+        "https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx/"
+        f"tree/{revision}" in pinned
+    )
+    assert "/tree/main" not in pinned
+
+    module._print_ssl_help("parakeet-tdt-0.6b-v3")
+    unpinned = capsys.readouterr().err
+    assert "checkout" not in unpinned
+    assert "istupakov/parakeet-tdt-0.6b-v3-onnx/tree/main" in unpinned
+
+
 def test_the_model_list_reads_the_english_only_set(capsys, monkeypatch):
     """The list called every ONNX model multilingual and recognised an
     English-only one by the substring "distil" -- so the Granite CTC graph,

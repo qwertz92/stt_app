@@ -90,6 +90,13 @@ DEFAULT_REPASTE_HOTKEY_ID = 4
 # NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime; the rest of
 # their wiring is further down. Declared here because the default names one.
 PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
+# Moondream's post-trained Parakeet TDT 0.6B v3 ("Parakeet Ultra"): the same
+# architecture and the same onnx-asr model type, other weights. See
+# `docs/models.md` for its source, licence and the measurements.
+PARAKEET_ULTRA_MODEL_SIZE = "parakeet-tdt-0.6b-v3-ultra"
+# Every Parakeet TDT variant: they share the language handling (Auto only, no
+# `language=` sent) and the onnx-asr model type.
+PARAKEET_MODEL_SIZES = (PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE)
 CANARY_MODEL_SIZE = "canary-1b-v2"
 
 # What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
@@ -271,9 +278,13 @@ LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
 
 # NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime. They need no
 # Node.js and no new ONNX Runtime: onnx-asr resolves the same `onnxruntime`
-# distribution the app already carries for Nemotron. The two ids are declared
+# distribution the app already carries for Nemotron. The ids are declared
 # further up, next to `DEFAULT_MODEL_SIZE`, which names one of them.
-LOCAL_ONNX_ASR_MODEL_SIZES = (PARAKEET_MODEL_SIZE, CANARY_MODEL_SIZE)
+LOCAL_ONNX_ASR_MODEL_SIZES = (
+    PARAKEET_MODEL_SIZE,
+    PARAKEET_ULTRA_MODEL_SIZE,
+    CANARY_MODEL_SIZE,
+)
 
 # IBM Granite Speech 5.0 470M TurboCTC, a community INT8 ONNX export of IBM's
 # CTC encoder. It runs on the `onnxruntime` CPU provider the app already ships,
@@ -305,11 +316,15 @@ DEVICE_AWARE_LOCAL_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZE
 # -- a proxy denying the whole "Generative AI and ML Applications" category is
 # the common case -- these cannot be fetched at all. Naming them up front beats
 # a download that ends in "check your internet connection", which is exactly the
-# one thing that is not wrong.
+# one thing that is not wrong. Parakeet Ultra is here by design and was not
+# probed: it is fetched at one pinned commit (its layout's `revision`), and a
+# mirror serves a repository by name at whatever it holds now, so the download
+# never falls back to one.
 MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
     {
         "distil-large-v3.5",
         PARAKEET_MODEL_SIZE,
+        PARAKEET_ULTRA_MODEL_SIZE,
         CANARY_MODEL_SIZE,
         GRANITE_CTC_MODEL_SIZE,
     }
@@ -321,6 +336,7 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "granite-speech-4.1-2b": "q4",
     NEMOTRON_MODEL_SIZE: "int4",
     PARAKEET_MODEL_SIZE: "int8",
+    PARAKEET_ULTRA_MODEL_SIZE: "int8",
     CANARY_MODEL_SIZE: "int8",
     GRANITE_CTC_MODEL_SIZE: "int8",
 }
@@ -331,6 +347,7 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b": "ONNX/WebGPU q4",
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
     PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
+    PARAKEET_ULTRA_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
     CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
     GRANITE_CTC_MODEL_SIZE: "ONNX Runtime INT8 CTC, CPU",
 }
@@ -471,6 +488,9 @@ MODEL_REPO_MAP: dict[str, str] = {
         "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"
     ),
     PARAKEET_MODEL_SIZE: "istupakov/parakeet-tdt-0.6b-v3-onnx",
+    # An ONNX export of Moondream's `moondream/parakeet-ultra` by Olicorne,
+    # fetched at one pinned revision (see its layout in `local_webgpu_asr`).
+    PARAKEET_ULTRA_MODEL_SIZE: "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
     CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
     GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
     **GRANITE_4_1_REPO_MAP,
@@ -506,6 +526,9 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     NEMOTRON_MODEL_SIZE: 793,
     # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
     PARAKEET_MODEL_SIZE: 670,
+    # The four files the pinned revision's layout fetches: 667,821,528 bytes
+    # (encoder 649,524,002, decoder/joint 18,203,490, vocab 93,939, config 97).
+    PARAKEET_ULTRA_MODEL_SIZE: 668,
     CANARY_MODEL_SIZE: 1_029,
     # Measured against the repository with this model's allow-patterns applied:
     # 552,442,697 bytes, of which `onnx/model_int8.onnx` is 551,294,349. The
@@ -849,7 +872,8 @@ COHERE_LANGUAGE_MODES = (
 )
 # Parakeet TDT v3 is implicitly multilingual: onnx-asr accepts a `language`
 # argument but the model ignores it (verified: "de" and a bogus code produce
-# byte-identical output), so Auto is the only honest choice.
+# byte-identical output), so Auto is the only honest choice. Parakeet Ultra is
+# the same architecture behind the same onnx-asr model type and gets the same.
 PARAKEET_LANGUAGE_MODES = ("auto",)
 # Canary must NEVER offer Auto. onnx-asr hardcodes the <|en|> source/target
 # token, so without an explicit language it silently *translates* German into
@@ -1229,6 +1253,7 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "granite-speech-4.1-2b"): GRANITE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
+    ("local", PARAKEET_ULTRA_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
     (
         "assemblyai",

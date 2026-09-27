@@ -393,6 +393,14 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # recording. A picker has no room for that qualifier, so it states what
     # is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
+    # No "post-trained by Moondream" here: the retranscribe dialog's model
+    # combo is 476 px wide at its 560 px minimum, and that note made this
+    # label need 572 px, clipped even at the 640 px default (measured
+    # 2026-09-27). docs/models.md carries the attribution.
+    "parakeet-tdt-0.6b-v3-ultra": (
+        "NVIDIA Parakeet TDT 0.6B v3 Ultra",
+        "CPU, multilingual",
+    ),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M",

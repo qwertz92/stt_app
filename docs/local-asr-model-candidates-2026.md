@@ -765,6 +765,16 @@ while the multilingual v3 default already covers English well. No newer
 Canary release was found beyond `nvidia/canary-1b-v2`, which is already the
 model this app ships.
 
+[`moondream/parakeet-ultra`](https://huggingface.co/moondream/parakeet-ultra)
+(released 2026-09-22, CC-BY-4.0) is not an NVIDIA release but a post-training
+of Parakeet TDT 0.6B v3 with the same architecture, and it fits the existing
+`onnx-asr` path unchanged. It was **added on 2026-09-27** as
+`parakeet-tdt-0.6b-v3-ultra`, from Olicorne's ONNX export pinned to one
+commit: on the development machine it measured about 30% faster than v3 on
+the CPU and wrote clearly better German on the owner's dictation. The default
+stays v3 until the owner decides otherwise. Figures and attribution:
+[Models & Offline Setup](models.md#onnx-asr-models-parakeet-canary).
+
 ### An open idea: a punctuation/true-casing companion for Granite Speech 5.0
 
 Granite Speech 5.0's CTC decoder writes lower-case text with no punctuation

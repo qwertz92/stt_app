@@ -23,7 +23,7 @@ from .config import (
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
-    PARAKEET_MODEL_SIZE,
+    PARAKEET_MODEL_SIZES,
     VALID_ENGINES,
     VALID_INSERT_TARGETS,
     VALID_LANGUAGE_MODES,
@@ -626,7 +626,7 @@ class _GeneralTabMixin:
                 "transcribing."
             )
 
-        if engine == "local" and model == PARAKEET_MODEL_SIZE:
+        if engine == "local" and model in PARAKEET_MODEL_SIZES:
             return (
                 "Parakeet is multilingual and detects the language itself; "
                 "there is nothing to choose."

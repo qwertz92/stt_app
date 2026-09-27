@@ -3616,6 +3616,33 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `collect_all('onnx_asr')`, not just a hidden import: the mel/resampler graphs
   are package *data* loaded via `importlib.resources`, and without them every
   model fails while constructing its preprocessor.
+- **Parakeet TDT 0.6B v3 Ultra is a pinned community export on the same
+  runtime (2026-09-27).** Moondream post-trained Parakeet v3 and Olicorne
+  exported it (`Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx`, CC-BY-4.0); onnx-asr
+  runs it as `nemo-parakeet-tdt-0.6b-v3`, Auto only and no language sent, like
+  v3. Three rules:
+  - **The download is pinned** (`_OnnxModelLayout.revision`, commit
+    `dd20322`) because a community upload can replace its files under the
+    same name, and the size and the measurements describe that commit; a
+    pinned layout never asks the ModelScope mirror, which serves whatever it
+    holds now, and `scripts/download_model.py` gives the commit in its manual
+    clone and browser steps.
+  - **The repository keeps each precision in a folder of its own** beside a
+    shared `vocab.txt` and `config.json`, and onnx-asr 0.12.0 looks for all of
+    them in the one folder it is handed. `prepare_onnx_inference_dir` copies
+    the two root files into `int8/` at load, atomically, leaves a matching copy
+    alone and rewrites a missing or changed one; a failed write is accepted
+    only when a re-read finds the same bytes, so a Model Dir the app cannot
+    write fails the load by name. The allow-patterns name the four files
+    exactly, because fnmatch's `*` crosses `/` and the repository also holds
+    `fp32/`, `fp16/`, `w4a8/`, `.zst` copies and a 2.5 GB `.nemo`.
+  - **v3 stays the default.** Measured by the agent that added it: RTF 0.030
+    against 0.044 on the 28.6 s German clip with an identical transcript, and
+    0.031 against 0.042 on LibriSpeech excerpts, where its word error rate was
+    2.9% against 2.2% (13 against 10 errors in 448 words, see
+    `docs/models.md`). The picker label leaves out "post-trained by Moondream"
+    because the retranscribe dialog's model combo would clip it; the
+    attribution is in `docs/models.md`.
 - **Granite Speech 5.0 470M TurboCTC is one INT8 graph on the CPU, in pure
   Python (`transcriber/local_granite_ctc.py`, 2026-09-19)**: a fifth local
   runtime (`LOCAL_MODEL_RUNTIME` value `granite-ctc`) and the only one that

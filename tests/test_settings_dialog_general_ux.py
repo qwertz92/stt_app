@@ -987,6 +987,7 @@ def test_language_note_names_the_selected_model_family(dialog):
     assert "Granite" not in granite_note
 
     assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")
+    assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3-ultra")
 
 
 def test_the_language_hint_never_contradicts_the_language_picker(dialog):

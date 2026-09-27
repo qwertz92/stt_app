@@ -12,11 +12,14 @@ The app has five local runtime families:
   the Whisper models. Batch mode only.
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
-- **onnx-asr models** (Parakeet TDT, Canary) — pure Python, CPU only, no Node.js
-  and no GPU. Parakeet is the fastest local model in this app that
-  transcribed the benchmark recording correctly: RTF 0.043 on a Ryzen 5 7600X,
-  second only to Whisper `tiny` (0.033), which is the weakest of the models
-  that did. Batch mode only.
+- **onnx-asr models** (Parakeet TDT v3, Parakeet TDT v3 Ultra, Canary) — pure
+  Python, CPU only, no Node.js and no GPU. Parakeet is the fastest local model
+  in this app that transcribed the benchmark recording correctly: RTF 0.043 on
+  a Ryzen 5 7600X, second only to Whisper `tiny` (0.033), which is the weakest
+  of the models that did. Parakeet v3 Ultra is Moondream's post-training of
+  the same model: about 30% faster again and better German on the owner's own
+  dictation (see [onnx-asr models](#onnx-asr-models-parakeet-canary)). Batch
+  mode only.
 - **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
   that runs on the CPU provider the app already ships, with numpy features and
   the `tokenizers` package; no Node.js and no GPU. English only, batch only.
@@ -66,6 +69,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy among this app's local models** — led the Open ASR Leaderboard at launch, 2026-04-29 (q4, WebGPU), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
+| `parakeet-tdt-0.6b-v3-ultra` | onnx-asr INT8 (CPU) | ~668 MB | Auto (multilingual, no selection needed) | Moondream's post-trained Parakeet v3 (CC-BY-4.0, ONNX export by Olicorne): about 30% faster than v3 on CPU and better German on the owner's dictation (2026-09-27); a community export pinned to one commit, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
 | `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Fastest local model on English (RTF 0.014 on CPU) and the smallest that is not a Whisper size; writes lower case without punctuation or apostrophes, batch mode only |
 
@@ -399,7 +403,7 @@ for you. See
 
 If a Hugging Face download fails for any reason, the app and the download script
 **automatically retry against the [ModelScope](https://modelscope.cn) mirror**
-(Alibaba's model hub) -- for every model except the four listed below, which
+(Alibaba's model hub) -- for every model except the five listed below, which
 are not mirrored there and have Hugging Face as their only source. ModelScope mirrors the same repository IDs
 (`onnx-community/…`, `Systran/…`, etc.) and serves the large LFS weights from its
 own CDN instead of redirecting back to Hugging Face, so it usually works even
@@ -418,6 +422,7 @@ ML Applications" category rule (see
   |-------|---------------|
   | `distil-large-v3.5` | `distil-whisper/distil-large-v3.5-ct2` |
   | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` |
+  | `parakeet-tdt-0.6b-v3-ultra` | `Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx` (by design, not probed: the app downloads it at one pinned commit, and a mirror serves a repository by name at whatever it holds now) |
   | `canary-1b-v2` | `istupakov/canary-1b-v2-onnx` |
   | `granite-speech-5.0-470m-turboctc` | `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (checked 2026-09-19) |
 
@@ -537,16 +542,17 @@ git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
 git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
 git clone https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX
 git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
+git clone https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx
 git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
 git clone https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4
 git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-onnx
 ```
 
-The two `istupakov` repositories are the onnx-asr models, and
-`parakeet-tdt-0.6b-v3` is the app's
+The two `istupakov` repositories and `Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx`
+are the onnx-asr models, and `parakeet-tdt-0.6b-v3` is the app's
 default. They matter most here: together with `distil-large-v3.5` and
 `granite-speech-5.0-470m-turboctc` they are the
-four models with no ModelScope mirror, so on a network that blocks Hugging
+five models with no ModelScope mirror, so on a network that blocks Hugging
 Face a clone from a machine that can reach it is the only route.
 
 A plain clone fetches every weight file a repository holds, which is far more
@@ -568,6 +574,21 @@ git lfs pull --include "onnx/model_int8.onnx"
 In PowerShell the first line is `$env:GIT_LFS_SKIP_SMUDGE = "1"` followed by
 the `git clone` on its own line. The pointer files of the graphs you did not
 pull stay behind as ~130-byte placeholders; the app never opens them.
+
+`Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx` needs one more step: the app
+downloads it at commit `dd203225f41c8a7d0323967afa1869cea0907436`, and a
+clone of the default branch may hold other files under the same names, so
+check that commit out. The repository also carries `fp32/`, `fp16/` and
+`w4a8/` graphs, `.zst` copies, `nemo128.onnx` and a 2.5 GB `.nemo`
+checkpoint, none of which the app reads, so the same skip-and-pull approach
+keeps it to the four files it runs (about 668 MB):
+
+```bash
+GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx
+cd parakeet-tdt-0.6b-v3-ultra-onnx
+GIT_LFS_SKIP_SMUDGE=1 git checkout dd203225f41c8a7d0323967afa1869cea0907436
+git lfs pull --include "config.json,vocab.txt,int8/encoder-model.int8.onnx,int8/decoder_joint-model.int8.onnx"
+```
 
 A cloned ONNX repository needs no import step (`scripts/import_model.py` is for
 the CTranslate2 models only): move the cloned folder, keeping its name, into
@@ -686,14 +707,47 @@ Useful for: USB transfer, network share, keeping models separate from user profi
 
 ### onnx-asr models (Parakeet, Canary)
 
-`parakeet-tdt-0.6b-v3` and `canary-1b-v2` run through
-[`onnx-asr`](https://github.com/istupakov/onnx-asr), a pure-Python runtime. Unlike
-the Cohere/Granite models they need **no Node.js**, and unlike Nemotron they need
-no extra ONNX Runtime — they reuse the one the app already ships.
+`parakeet-tdt-0.6b-v3`, `parakeet-tdt-0.6b-v3-ultra` and `canary-1b-v2` run
+through [`onnx-asr`](https://github.com/istupakov/onnx-asr), a pure-Python
+runtime. Unlike the Cohere/Granite models they need **no Node.js**, and unlike
+Nemotron they need no extra ONNX Runtime — they reuse the one the app already
+ships.
 
-Both are **CPU only and batch only**. That is not a limitation in practice:
+All three are **CPU only and batch only**. That is not a limitation in practice:
 measured on a Ryzen 5 7600X, Parakeet transcribes a 24.3-second recording in
 about 1.03 s (RTF 0.043), which is faster than any GPU model in this app.
+
+**Parakeet TDT 0.6B v3 Ultra** is
+[`moondream/parakeet-ultra`](https://huggingface.co/moondream/parakeet-ultra),
+Moondream's post-training of Parakeet TDT 0.6B v3 (released 2026-09-22,
+licence CC-BY-4.0), with the same architecture, run from the ONNX export
+[`Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx`](https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx)
+(also CC-BY-4.0 per its model card). The app fetches four files from that
+export, 667,821,528 bytes (~668 MB), at commit
+`dd203225f41c8a7d0323967afa1869cea0907436`: it is a community upload whose
+files could be replaced under the same names, and the size and the
+measurements here describe that commit. The picker says "v3 Ultra" without
+the attribution because the retranscribe dialog's model list is 476 px wide
+at its minimum size and the longer label needed 572 px; the attribution is
+here. Measured on 2026-09-27 on the same Ryzen 5 7600X (CPU, ONNX Runtime
+1.30.0, mean of the runs per clip):
+
+| Recording | v3 RTF | v3 Ultra RTF |
+|-----------|--------|--------------|
+| German dictation, 28.6 s | 0.044 | 0.030 |
+| 20 LibriSpeech clips, 187.7 s | 0.042 | 0.031 |
+
+On the owner's own German dictation Ultra's text was clearly better (for
+example "Falls sie nicht auf der GPU lauffähig sind und auf der CPU um einiges
+langsamer als die derzeitigen Whisper-Modelle ..." where v3 broke the sentence
+after "lauffähig sind."). On the 20 English LibriSpeech clips v3 scored a
+word error rate of 2.2% (10 errors in 448 words) and Ultra 2.9% (13); most of
+Ultra's extra errors are spellings such as "Mr" for "mister" or "up guards"
+for "Up Guards", which a stricter text normalisation would not count, so the
+two are not ranked on English here. On first load the app copies the
+repository's `vocab.txt` and `config.json` (about 94 KB) into its `int8`
+folder beside the graphs, because onnx-asr looks for all four files in one
+folder, so the folder has to be writable once.
 
 The ONNX Device setting does not apply to them and is disabled while one is
 selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
@@ -702,8 +756,8 @@ that engine, so the app deliberately does not ship it.
 
 **Language selection differs between the two, and it matters:**
 
-- **Parakeet** is implicitly multilingual and ignores any language you give it,
-  so it offers only `Auto`.
+- **Parakeet** (v3 and v3 Ultra) is implicitly multilingual and ignores any
+  language you give it, so it offers only `Auto`.
 - **Canary** has no automatic detection. Left to itself it would *translate* into
   English instead of transcribing, so the app requires you to pick one of its 25
   trained languages and never offers `Auto`.

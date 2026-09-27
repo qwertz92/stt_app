@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import gc
 import io
+import re
+import sys
 import threading
 import time
 import wave
 import weakref
+from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -20,6 +24,7 @@ from stt_app.config import (
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     PARAKEET_MODEL_SIZE,
+    PARAKEET_ULTRA_MODEL_SIZE,
     language_modes_for_selection,
     supports_streaming,
 )
@@ -111,6 +116,147 @@ def test_parakeet_sends_no_language_because_the_model_ignores_it():
     transcriber, fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
     transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
     assert "language" not in fake.calls[0]
+
+
+def test_parakeet_ultra_offers_auto_only_and_sends_no_language():
+    """Ultra is the same TDT architecture post-trained further, so it ignores
+    `language=` exactly like v3: offering a language list would fake control,
+    and sending one would be the same illusion one level down."""
+    assert language_modes_for_selection("local", PARAKEET_ULTRA_MODEL_SIZE) == (
+        "auto",
+    )
+
+    transcriber, fake = _transcriber_with_fake_model(PARAKEET_ULTRA_MODEL_SIZE)
+    transcriber.set_language_mode("de")
+    assert transcriber._language_mode == "auto"
+    transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+    assert "language" not in fake.calls[0]
+
+
+def _write_snapshot(root, files: dict[str, bytes]) -> None:
+    for relative, data in files.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+
+
+def _record_onnx_asr_loads(monkeypatch) -> list[dict]:
+    """Stand in for `onnx_asr` and record what each load would have found.
+
+    onnx-asr 0.12 looks for the encoder, the decoder_joint, `vocab.txt` and
+    `config.json` with a non-recursive glob in the one directory it is given,
+    so what matters is the directory's contents at the moment of the call.
+    """
+    loads: list[dict] = []
+
+    def load_model(name, path, quantization=None):
+        directory = Path(path)
+        loads.append(
+            {
+                "name": name,
+                "path": directory,
+                "quantization": quantization,
+                "files": {
+                    item.name: item.read_bytes()
+                    for item in directory.iterdir()
+                    if item.is_file()
+                },
+            }
+        )
+        return SimpleNamespace()
+
+    monkeypatch.setitem(sys.modules, "onnx_asr", SimpleNamespace(load_model=load_model))
+    return loads
+
+
+_ULTRA_SNAPSHOT = {
+    "config.json": b'{"model_type": "nemo-conformer-tdt", "features_size": 128}',
+    "vocab.txt": b"<unk> 0\n<blk> 8192\n",
+    "int8/encoder-model.int8.onnx": b"encoder",
+    "int8/decoder_joint-model.int8.onnx": b"decoder",
+}
+
+
+def test_parakeet_ultra_is_loaded_from_its_int8_folder_with_vocab_and_config(
+    monkeypatch, tmp_path
+):
+    """The export keeps the graphs in `int8/` and the vocabulary and config at
+    the root. Handed the root, onnx-asr finds no encoder; handed `int8/` as it
+    was downloaded, it finds no vocabulary, and without `config.json` it would
+    build an 80-bin front end for a model trained on 128."""
+    from stt_app.transcriber.local_webgpu_asr import webgpu_download_destination
+
+    root = webgpu_download_destination(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
+    _write_snapshot(root, _ULTRA_SNAPSHOT)
+    loads = _record_onnx_asr_loads(monkeypatch)
+
+    transcriber = LocalOnnxAsrTranscriber(
+        PARAKEET_ULTRA_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
+    )
+    transcriber._load_model()
+
+    assert len(loads) == 1
+    load = loads[0]
+    assert load["name"] == "nemo-parakeet-tdt-0.6b-v3"
+    assert load["path"] == root / "int8"
+    assert load["quantization"] == "int8"
+    assert load["files"] == {
+        "encoder-model.int8.onnx": b"encoder",
+        "decoder_joint-model.int8.onnx": b"decoder",
+        "vocab.txt": _ULTRA_SNAPSHOT["vocab.txt"],
+        "config.json": _ULTRA_SNAPSHOT["config.json"],
+    }
+
+
+def test_parakeet_v3_is_still_loaded_from_its_snapshot_root(monkeypatch, tmp_path):
+    from stt_app.transcriber.local_webgpu_asr import (
+        _REQUIRED_FILES,
+        webgpu_download_destination,
+    )
+
+    root = webgpu_download_destination(PARAKEET_MODEL_SIZE, str(tmp_path))
+    _write_snapshot(root, dict.fromkeys(_REQUIRED_FILES[PARAKEET_MODEL_SIZE], b"x"))
+    before = sorted(path.relative_to(root) for path in root.rglob("*"))
+    loads = _record_onnx_asr_loads(monkeypatch)
+
+    LocalOnnxAsrTranscriber(
+        PARAKEET_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
+    )._load_model()
+
+    assert loads[0]["path"] == root
+    assert loads[0]["name"] == "nemo-parakeet-tdt-0.6b-v3"
+    assert sorted(path.relative_to(root) for path in root.rglob("*")) == before
+
+
+def test_a_companion_copy_that_cannot_be_written_fails_the_load_by_name(
+    monkeypatch, tmp_path
+):
+    """A read-only Model Dir, or a scanner holding `int8/vocab.txt`: the load
+    must end in the transcriber's own error naming the model, not in a raw
+    OSError out of the worker, and onnx-asr must not be asked to load a folder
+    that is known to be incomplete."""
+    from stt_app.transcriber import local_webgpu_asr
+
+    root = local_webgpu_asr.webgpu_download_destination(
+        PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)
+    )
+    _write_snapshot(root, _ULTRA_SNAPSHOT)
+    loads = _record_onnx_asr_loads(monkeypatch)
+
+    def refused(path, _data):
+        raise PermissionError(13, "Access is denied", str(path))
+
+    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", refused)
+    transcriber = LocalOnnxAsrTranscriber(
+        PARAKEET_ULTRA_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
+    )
+
+    with pytest.raises(
+        TranscriptionError,
+        match=re.escape("Failed to load local model 'parakeet-tdt-0.6b-v3-ultra'"),
+    ):
+        transcriber._load_model()
+    assert loads == []
 
 
 def test_transcribe_accepts_wav_bytes_raw_pcm_and_a_path(tmp_path):

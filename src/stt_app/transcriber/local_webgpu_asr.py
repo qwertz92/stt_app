@@ -28,6 +28,7 @@ from ..config import (
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
+    PARAKEET_ULTRA_MODEL_SIZE,
     effective_preferred_device,
     language_modes_for_selection,
 )
@@ -39,6 +40,7 @@ from ..model_download_progress import (
     offset_progress_hook,
     report_unknown_download_progress,
 )
+from ..persistence import atomic_write_bytes
 from .base import (
     AudioInput,
     ITranscriber,
@@ -110,6 +112,14 @@ class _OnnxModelLayout:
     precision: str
     allow_patterns: tuple[str, ...]
     required_files: tuple[str, ...]
+    # The commit `snapshot_download` fetches. None is the repository's default
+    # branch at the moment of the download, which is what every layout used
+    # before this field existed; a pinned layout never falls back to the
+    # ModelScope mirror (see `_download_onnx_via_modelscope`).
+    revision: str | None = None
+    # The folder, relative to the snapshot root, that the runtime loads from.
+    # "" is the root itself. See `prepare_onnx_inference_dir`.
+    inference_subdir: str = ""
 
 
 _BASE_DOWNLOAD_ALLOW_PATTERNS = (
@@ -225,6 +235,39 @@ _PARAKEET_INT8_LAYOUT = _OnnxModelLayout(
     ),
 )
 
+# Moondream's post-trained Parakeet TDT 0.6B v3 ("Parakeet Ultra"), exported to
+# ONNX by Olicorne. The repository keeps each precision in its own folder
+# (`int8/`, `w4a8/`, `fp16/`, `fp32/`) beside the shared `vocab.txt` and
+# `config.json`, and carries `.zst` copies and the 2.5 GB `.nemo` checkpoint as
+# well. So every file is named exactly: `*.int8.onnx` would do here, but
+# fnmatch's `*` crosses `/`, and the four names are all this model runs. The
+# commit is pinned because the export is a community upload whose files can be
+# replaced under the same name; `MODEL_ESTIMATED_SIZE_MB` and the measurements
+# in `docs/models.md` describe this commit.
+_PARAKEET_ULTRA_INT8_LAYOUT = _OnnxModelLayout(
+    name="parakeet_tdt_ultra_int8",
+    precision="int8",
+    allow_patterns=(
+        ".gitattributes",
+        "README.md",
+        "config.json",
+        "vocab.txt",
+        "int8/encoder-model.int8.onnx",
+        "int8/decoder_joint-model.int8.onnx",
+    ),
+    required_files=(
+        "config.json",
+        "vocab.txt",
+        "int8/encoder-model.int8.onnx",
+        "int8/decoder_joint-model.int8.onnx",
+    ),
+    revision="dd203225f41c8a7d0323967afa1869cea0907436",
+    # onnx-asr 0.12.0 finds its files with a non-recursive glob in the one
+    # folder it is handed, so the graphs' folder is what it loads from and the
+    # two root files are copied in beside them.
+    inference_subdir="int8",
+)
+
 _CANARY_INT8_LAYOUT = _OnnxModelLayout(
     name="canary_aed_int8",
     precision="int8",
@@ -280,6 +323,7 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "granite-speech-4.1-2b": _GRANITE_4_1_AR_Q4_LAYOUT,
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
+    PARAKEET_ULTRA_MODEL_SIZE: _PARAKEET_ULTRA_INT8_LAYOUT,
     CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
     GRANITE_CTC_MODEL_SIZE: _GRANITE_CTC_INT8_LAYOUT,
 }
@@ -345,6 +389,16 @@ def default_hf_cache_dir() -> str:
 
 def _repo_id_for_model(model_name: str) -> str | None:
     return MODEL_REPO_MAP.get(model_name)
+
+
+def pinned_revision(model_name: str) -> str | None:
+    """Return the commit this model is downloaded at, or None for `main`.
+
+    Public for `scripts/download_model.py`, whose manual workarounds (a git
+    clone, a browser download) have to fetch the same commit the app does.
+    """
+    layout = _MODEL_LAYOUTS.get(model_name)
+    return layout.revision if layout is not None else None
 
 
 def webgpu_download_destination(model_name: str, model_dir: str = "") -> Path | None:
@@ -455,6 +509,56 @@ def resolve_cached_webgpu_model_root(
     return None
 
 
+def prepare_onnx_inference_dir(model_name: str, snapshot: Path) -> Path:
+    """Return the folder the runtime loads `model_name` from, ready to load.
+
+    For a layout without `inference_subdir` that is `snapshot` itself and
+    nothing is touched. Otherwise every required file at the snapshot root is
+    copied into that subfolder beside the graphs, because onnx-asr 0.12.0 looks
+    for `vocab.txt` and `config.json` in the same single folder as the
+    `*.onnx` files and does not search above it.
+
+    The copies are idempotent and atomic: a copy whose bytes already match is
+    left alone, a missing or different one (an earlier interrupted run, a
+    hand-edited file, a changed root file) is written again through
+    `atomic_write_bytes`, and only root files are copied, so the graphs are
+    never opened for writing. They add about 94 KB (`vocab.txt` 93,939 bytes,
+    `config.json` 97), which neither the size estimate, the download progress
+    nor the completed-download baseline notices, and `delete_cached_model`
+    removes them together with the rest of the folder. A write that fails is
+    accepted only when a re-read finds the same bytes -- another process that
+    loaded the model at the same moment may have replaced the file first, and
+    on Windows `os.replace` onto a file held open fails with WinError 5 -- and
+    raised otherwise, so a Model Dir the app cannot write to fails the load
+    with that reason instead of a runtime that cannot find its vocabulary.
+    """
+    layout = _MODEL_LAYOUTS.get(model_name)
+    if layout is None or not layout.inference_subdir:
+        return snapshot
+    target_dir = snapshot / layout.inference_subdir
+    for relative in layout.required_files:
+        if "/" in relative:
+            continue
+        data = (snapshot / relative).read_bytes()
+        target = target_dir / relative
+        if _file_holds(target, data):
+            continue
+        try:
+            atomic_write_bytes(target, data)
+        except OSError:
+            if _file_holds(target, data):
+                continue
+            raise
+    return target_dir
+
+
+def _file_holds(path: Path, data: bytes) -> bool:
+    try:
+        return path.read_bytes() == data
+    except OSError:
+        return False
+
+
 def resolve_cached_webgpu_model_path(
     model_name: str, model_dir: str = ""
 ) -> Path | None:
@@ -523,6 +627,8 @@ def download_webgpu_model_snapshot(
         # costs another concurrent writer per download.
         "max_workers": 2,
     }
+    if layout.revision is not None:
+        kwargs["revision"] = layout.revision
     if progress_hook is not None:
         # Files already complete in the flat destination never reach the hook:
         # huggingface_hub returns them before it builds a bar. See
@@ -548,7 +654,12 @@ def download_webgpu_model_snapshot(
         # exact.
         report_unknown_download_progress(progress_hook)
         path = _download_onnx_via_modelscope(
-            repo_id, local_dir, layout.allow_patterns, hf_error, model_name
+            repo_id,
+            local_dir,
+            layout.allow_patterns,
+            hf_error,
+            model_name,
+            revision=layout.revision,
         )
     _verify_downloaded_layout(model_name or repo_id, repo_id, local_dir, layout)
     return path
@@ -592,10 +703,20 @@ def _download_onnx_via_modelscope(
     allow_patterns: tuple[str, ...],
     hf_error: Exception,
     model_name: str = "",
+    *,
+    revision: str | None = None,
 ) -> str:
     from . import modelscope_mirror as ms
 
-    if not ms.modelscope_fallback_enabled() or not ms.repo_available(repo_id):
+    # A pinned download never falls back, and the mirror is not even asked
+    # whether it has the repository: it serves a repository by name at
+    # whatever it holds now, so a copy there could be another commit -- other
+    # weights under the same name, which is exactly what the pin rules out.
+    if (
+        revision is not None
+        or not ms.modelscope_fallback_enabled()
+        or not ms.repo_available(repo_id)
+    ):
         if model_name in MODELS_WITHOUT_MODELSCOPE_MIRROR:
             from .local_faster_whisper import format_model_download_error
 

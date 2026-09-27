@@ -26,6 +26,7 @@ from stt_app.config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
     PARAKEET_MODEL_SIZE,
+    PARAKEET_ULTRA_MODEL_SIZE,
 )
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -450,6 +451,244 @@ def test_granite_ctc_fetches_the_int8_graph_and_neither_of_the_other_two():
     # The conversion scripts and the parity reports are not part of the model.
     assert not {name for name in fetched if name.startswith(("conversion/", "reports/"))}
     assert set(layout.required_files) <= fetched
+
+
+# --------------------------------------------------------------------------
+# Parakeet TDT 0.6B v3 Ultra
+#
+# A third-party ONNX export (Olicorne) of Moondream's post-trained Parakeet,
+# fetched at one pinned commit. Its repository keeps the int8 graphs in
+# `int8/` and `vocab.txt` / `config.json` at the root, while onnx-asr looks
+# for all four in the one directory it is given.
+
+_ULTRA_REVISION = "dd203225f41c8a7d0323967afa1869cea0907436"
+_ULTRA_FILES = {
+    "config.json": b'{"model_type": "nemo-conformer-tdt", "features_size": 128}',
+    "vocab.txt": b"<unk> 0\n\xe2\x96\x81t 1\n<blk> 8192\n",
+    "int8/encoder-model.int8.onnx": b"encoder graph bytes",
+    "int8/decoder_joint-model.int8.onnx": b"decoder graph bytes",
+}
+
+
+def _write_ultra_download(model_dir: Path) -> Path:
+    """The folder a completed download leaves, at the path it writes to."""
+    root = local_webgpu_asr.webgpu_download_destination(
+        PARAKEET_ULTRA_MODEL_SIZE, str(model_dir)
+    )
+    assert root is not None
+    for relative, data in _ULTRA_FILES.items():
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+    return root
+
+
+def _tree(root: Path) -> dict[str, tuple[bytes, int]]:
+    return {
+        path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mtime_ns)
+        for path in sorted(root.rglob("*"))
+        if path.is_file()
+    }
+
+
+def _record_hub_downloads(monkeypatch, calls: list) -> None:
+    """Replace the real hub's `snapshot_download` only: the progress hook
+    builds its tqdm class from `huggingface_hub.utils`, which a stand-in
+    module in `sys.modules` would not have."""
+    import huggingface_hub
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        _materialise_required_files(
+            repo_id, kwargs["local_dir"], kwargs.get("allow_patterns")
+        )
+        return kwargs["local_dir"]
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+
+
+@pytest.mark.parametrize("with_progress_hook", [False, True])
+def test_parakeet_ultra_is_fetched_at_its_pinned_revision(
+    monkeypatch, tmp_path, with_progress_hook
+):
+    """The export is a day old and third-party: `main` can be replaced by a
+    different export under the same name at any time, and the app would load
+    whatever it found. Every road goes through `download_model_snapshot` --
+    the download worker with a progress hook, the transcriber's own load path
+    and `scripts/download_model.py` without one -- so both calls are checked
+    there."""
+    from stt_app.transcriber.local_faster_whisper import download_model_snapshot
+
+    calls: list = []
+    _record_hub_downloads(monkeypatch, calls)
+
+    download_model_snapshot(
+        PARAKEET_ULTRA_MODEL_SIZE,
+        str(tmp_path),
+        progress_hook=(lambda _done, _total: None) if with_progress_hook else None,
+    )
+
+    repo_id, kwargs = calls[0]
+    assert repo_id == "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx"
+    assert kwargs["revision"] == _ULTRA_REVISION
+    assert kwargs["local_dir"] == str(tmp_path / "parakeet-tdt-0.6b-v3-ultra-onnx")
+    assert ("tqdm_class" in kwargs) is with_progress_hook
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    [name for name in LOCAL_ONNX_MODEL_SIZES if name != PARAKEET_ULTRA_MODEL_SIZE],
+)
+def test_a_model_without_a_pin_sends_no_revision(monkeypatch, tmp_path, model_name):
+    """Absent rather than `None`: every other model's call stays exactly the
+    one it was before revisions existed, so hub keeps resolving its own
+    default branch for them."""
+    calls: list = []
+    _record_hub_downloads(monkeypatch, calls)
+
+    download_webgpu_model_snapshot(model_name, str(tmp_path))
+
+    _, kwargs = calls[0]
+    assert "revision" not in kwargs
+
+
+def test_parakeet_ultra_fetches_the_four_files_it_runs_by_name():
+    """The repository also carries fp32/, fp16/ and w4a8/ graphs, `.zst`
+    copies, `nemo128.onnx` and a 2.5 GB `.nemo`. A wildcard such as the other
+    onnx-asr layouts' `*.int8.onnx` matches across `/` in fnmatch, which is
+    how hub filters, so only exact names keep the download at 668 MB."""
+    layout = local_webgpu_asr._MODEL_LAYOUTS[PARAKEET_ULTRA_MODEL_SIZE]
+
+    assert not [pattern for pattern in layout.allow_patterns if set(pattern) & set("*?[")]
+    assert set(layout.allow_patterns) == set(layout.required_files) | {
+        ".gitattributes",
+        "README.md",
+    }
+    assert set(layout.required_files) == set(_ULTRA_FILES)
+
+
+def test_the_inventory_finds_parakeet_ultra_where_the_download_puts_it(tmp_path):
+    root = _write_ultra_download(tmp_path)
+
+    assert resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) == root
+    assert PARAKEET_ULTRA_MODEL_SIZE in find_cached_webgpu_models(str(tmp_path))
+
+    (root / "int8" / "decoder_joint-model.int8.onnx").unlink()
+
+    assert resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) is None
+    assert PARAKEET_ULTRA_MODEL_SIZE not in find_cached_webgpu_models(str(tmp_path))
+
+
+def test_the_companion_files_are_copied_beside_the_graphs(tmp_path):
+    root = _write_ultra_download(tmp_path)
+    before = _tree(root)
+
+    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
+        PARAKEET_ULTRA_MODEL_SIZE, root
+    )
+
+    assert load_dir == root / "int8"
+    after = _tree(root)
+    # Everything that was there is byte-for-byte and mtime-for-mtime the same:
+    # the graphs are never opened for writing, and the root gains nothing.
+    assert {name: after[name] for name in before} == before
+    assert set(after) - set(before) == {"int8/config.json", "int8/vocab.txt"}
+    assert after["int8/vocab.txt"][0] == _ULTRA_FILES["vocab.txt"]
+    assert after["int8/config.json"][0] == _ULTRA_FILES["config.json"]
+
+
+def test_a_second_preparation_writes_nothing(monkeypatch, tmp_path):
+    root = _write_ultra_download(tmp_path)
+    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
+    writes: list[Path] = []
+    monkeypatch.setattr(
+        local_webgpu_asr, "atomic_write_bytes", lambda path, _data: writes.append(path)
+    )
+
+    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
+        PARAKEET_ULTRA_MODEL_SIZE, root
+    )
+
+    assert load_dir == root / "int8"
+    assert writes == []
+
+
+@pytest.mark.parametrize("damage", ["missing", "changed", "emptied"])
+def test_a_missing_or_stale_copy_is_written_again(tmp_path, damage):
+    """A copy can go missing (a user tidying the folder) or go stale (the root
+    file replaced by a later download of another revision); onnx-asr would
+    then fail to find the vocabulary, or read one that does not match the
+    graphs, and nothing would say why."""
+    root = _write_ultra_download(tmp_path)
+    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
+        PARAKEET_ULTRA_MODEL_SIZE, root
+    )
+    copy = load_dir / "vocab.txt"
+    if damage == "missing":
+        copy.unlink()
+    elif damage == "changed":
+        copy.write_bytes(b"<unk> 0\nan older vocabulary 1\n")
+    else:
+        copy.write_bytes(b"")
+
+    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
+
+    assert copy.read_bytes() == _ULTRA_FILES["vocab.txt"]
+
+
+def test_a_copy_another_process_finished_first_is_accepted(monkeypatch, tmp_path):
+    """The app's preload and a benchmark worker can both load the model for the
+    first time at once. `os.replace` onto a file another process holds open is
+    refused on Windows (measured: WinError 5 against a file held open for
+    reading), so the process that loses finds its write refused while the copy
+    the winner wrote is already the right one."""
+    root = _write_ultra_download(tmp_path)
+    real_write = local_webgpu_asr.atomic_write_bytes
+
+    def the_other_process_won(path, data):
+        real_write(path, data)
+        raise PermissionError(13, "Access is denied", str(path))
+
+    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", the_other_process_won)
+
+    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
+        PARAKEET_ULTRA_MODEL_SIZE, root
+    )
+
+    assert (load_dir / "vocab.txt").read_bytes() == _ULTRA_FILES["vocab.txt"]
+
+
+def test_a_copy_that_cannot_be_written_is_not_hidden(monkeypatch, tmp_path):
+    root = _write_ultra_download(tmp_path)
+
+    def refused(path, _data):
+        raise PermissionError(13, "Access is denied", str(path))
+
+    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", refused)
+
+    with pytest.raises(PermissionError):
+        local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
+
+
+def test_a_layout_without_an_inference_subdir_loads_from_its_root(tmp_path):
+    root = tmp_path / "parakeet-tdt-0.6b-v3-onnx"
+    for relative in local_webgpu_asr._REQUIRED_FILES[PARAKEET_MODEL_SIZE]:
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_bytes(relative.encode())
+    before = _tree(root)
+
+    assert local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_MODEL_SIZE, root) == root
+    assert _tree(root) == before
+
+
+def test_deleting_parakeet_ultra_removes_the_copies_too(tmp_path):
+    from stt_app.transcriber.local_faster_whisper import delete_cached_model
+
+    root = _write_ultra_download(tmp_path)
+    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
+
+    assert delete_cached_model(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) == 1
+    assert not root.exists()
 
 
 def test_explicit_cpu_policy_does_not_report_failed_gpu_fallback():

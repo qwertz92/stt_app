@@ -277,3 +277,55 @@ def test_a_run_that_never_asked_for_a_comparison_is_not_reported():
     assert uncomparable_device_models(compared) == {}
     no_device = [_case("small", "cpu", 0.30), _case("small", "auto", 0.10)]
     assert uncomparable_device_models(no_device) == {}
+
+
+def test_parakeet_ultra_is_benchmarked_once_on_the_cpu_like_parakeet(
+    monkeypatch, tmp_path
+):
+    """Ultra runs on onnx-asr, which takes no execution device, so "all
+    targets" must not turn it into three cases measuring the same CPU run
+    under three names -- and the runner has to hand it to the onnx-asr case,
+    not report an unknown runtime."""
+    from stt_app import local_benchmark
+    from stt_app.config import (
+        DEVICE_AWARE_LOCAL_MODELS,
+        PARAKEET_MODEL_SIZE,
+        PARAKEET_ULTRA_MODEL_SIZE,
+    )
+
+    assert PARAKEET_ULTRA_MODEL_SIZE not in DEVICE_AWARE_LOCAL_MODELS
+    planned = local_benchmark.planned_benchmark_cases(
+        [PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE], "all", "auto", "int8"
+    )
+    assert [
+        (case.model, case.device_target, case.display_compute_type)
+        for case in planned
+    ] == [
+        (PARAKEET_MODEL_SIZE, "auto", "onnx-int8"),
+        (PARAKEET_ULTRA_MODEL_SIZE, "auto", "onnx-int8"),
+    ]
+
+    handed_over: list[str] = []
+
+    def fake_onnx_case(*, model_name, device, **_kwargs):
+        handed_over.append(model_name)
+        return BenchmarkCase(
+            model=model_name,
+            device=device,
+            compute_type="onnx-int8",
+            download_seconds=0.0,
+            load_seconds=1.0,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_onnx_case", fake_onnx_case)
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"")
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio,
+        model_names=[PARAKEET_ULTRA_MODEL_SIZE],
+        webgpu_devices="all",
+    )
+
+    assert handed_over == [PARAKEET_ULTRA_MODEL_SIZE]
+    assert [case.error for case in cases] == [None]
