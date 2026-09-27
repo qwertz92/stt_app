@@ -1489,9 +1489,13 @@ FUNASR_BATCH_MAX_WAIT_S = 1800.0
 #
 # `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` state "2,000 max output
 # tokens" on their model pages, and a forum report shows the transcript cut
-# off silently after about 8-9 minutes at 2,048 output tokens. Five minutes of
-# dense German stays well under it.
-OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS = 300.0
+# off silently after about 8-9 minutes of English at 2,048 output tokens, i.e.
+# about 230-255 tokens per minute. Fast speech (200 against 150 words per
+# minute) in a language that tokenizes denser than English can need 1.7 times
+# that, which reaches 2,000 tokens inside five minutes; three minutes leave a
+# margin of about 2.8 over the English rate. A part costs no more than the
+# minutes it holds, so the shorter bound only adds seams.
+OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS = 180.0
 # OpenAI takes 25 MB per file, about 13 minutes of this WAV. `gpt-transcribe`
 # and `whisper-1` state no token cap, and ten minutes also stays below the
 # 1,400 s duration cap that is reported second-hand only.
@@ -1499,11 +1503,12 @@ OPENAI_MAX_PART_SECONDS = 600.0
 # The speech-to-text guide: "Files can be up to 25 MB." Read as decimal
 # megabytes, the smaller of the two readings.
 OPENAI_MAX_REQUEST_BYTES = 25_000_000
-# Groq takes 25 MB per file on the free tier and 100 MB on the developer
-# tier; the app cannot tell which tier a key belongs to, so the smaller.
+# Groq's speech-to-text page lists "Max File Size: 25 MB (free tier), 100MB
+# (dev tier)" and, separately, "Max Attachment File Size: 25 MB. If you need to
+# process larger files, use the `url` parameter" (read 2026-09-27): an upload,
+# which is what the app sends, is held to 25 MB on every tier.
 GROQ_MAX_PART_SECONDS = 600.0
-# The speech-to-text page: "Max File Size: 25 MB (free tier), 100MB (dev
-# tier)". The free tier's, as decimal megabytes.
+# As decimal megabytes, the smaller of the two readings.
 GROQ_MAX_REQUEST_BYTES = 25_000_000
 # The fast-transcription REST reference: "shorter than 2 hours ... smaller
 # than 250 MB" (the quotas page says 5 h / 500 MB; the smaller is taken).

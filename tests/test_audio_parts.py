@@ -359,7 +359,7 @@ def _three_parts() -> bytes:
 
 
 def test_the_parts_are_sent_in_order_and_their_texts_joined():
-    requests = _Requests(["erster teil", "", "dritter teil"])
+    requests = _Requests(["erster teil", "zweiter teil", "dritter teil"])
 
     text = transcribe_in_parts(
         _three_parts(),
@@ -369,12 +369,66 @@ def test_the_parts_are_sent_in_order_and_their_texts_joined():
         raise_if_canceled=_never_canceled,
     )
 
-    # An empty part (a pause) leaves no double space behind.
-    assert text == "erster teil dritter teil"
+    assert text == "erster teil zweiter teil dritter teil"
     assert len(requests.sources) == 3
     assert requests.progress == [
         f"Transcribing part {index} of 3. {_UPLOAD}" for index in (1, 2, 3)
     ]
+
+
+def _answer_by_level(source, progress_text: str) -> str:
+    """A service that hears nothing in a silent part and words in a loud one."""
+    frames = _read_wav(source)[0]
+    samples = np.frombuffer(frames, dtype="<i2")
+    return "" if not np.any(samples) else f"teil {progress_text.split()[2]}"
+
+
+def test_a_silent_part_that_comes_back_empty_is_skipped():
+    """A long pause in an imported meeting is a part with nothing to say; its
+    empty text leaves no double space and fails nothing."""
+    samples = _noise(50.0)
+    _silence(samples, 16.0, 36.0)
+    parts = split_for_request(_wav_bytes(samples), _LIMIT)
+    silent = [
+        index
+        for index, part in enumerate(parts, start=1)
+        if not np.any(np.frombuffer(_read_wav(part)[0], dtype="<i2"))
+    ]
+    assert silent, "the fixture must produce a part that is all silence"
+
+    text = transcribe_in_parts(
+        _wav_bytes(samples),
+        _answer_by_level,
+        limit=_LIMIT,
+        progress_text=_UPLOAD,
+        raise_if_canceled=_never_canceled,
+    )
+
+    expected = [f"teil {index}" for index in range(1, len(parts) + 1)]
+    expected = [text for index, text in enumerate(expected, 1) if index not in silent]
+    assert text == " ".join(expected)
+
+
+def test_a_part_with_sound_that_comes_back_empty_fails_and_names_itself():
+    """A single request that returns nothing is a failure (AGENTS.md "Empty
+    model text is a failure"), and a part is minutes of speech: dropping it
+    would hand back a transcript with a hole that reads like a complete one."""
+    requests = _Requests(["erster teil", "", "never requested"])
+
+    with pytest.raises(TranscriptionError) as excinfo:
+        transcribe_in_parts(
+            _three_parts(),
+            requests,
+            limit=_LIMIT,
+            progress_text=_UPLOAD,
+            raise_if_canceled=_never_canceled,
+        )
+
+    message = str(excinfo.value)
+    assert "Part 2 of 3" in message
+    assert "empty" in message
+    assert message.endswith(' Received before the failure: "erster teil"')
+    assert len(requests.sources) == 2
 
 
 def test_one_part_is_todays_request_its_message_and_its_error():
@@ -453,6 +507,49 @@ def test_a_cancel_between_parts_sends_no_further_request():
         )
 
     assert len(requests.sources) == 1
+
+
+def test_a_cancel_during_the_split_sends_nothing():
+    """Splitting a large import takes a second; a cancel pressed meanwhile
+    must not still upload (and pay for) the first part."""
+    requests = _Requests(["erster teil", "zweiter teil", "dritter teil"])
+
+    def _canceled() -> None:
+        raise TranscriptionCanceled()
+
+    with pytest.raises(TranscriptionCanceled):
+        transcribe_in_parts(
+            _three_parts(),
+            requests,
+            limit=_LIMIT,
+            progress_text=_UPLOAD,
+            raise_if_canceled=_canceled,
+        )
+
+    assert requests.sources == []
+
+
+def test_a_recording_exactly_at_the_byte_cap_is_the_very_object_it_was_given():
+    source = _wav_bytes(_noise(5.0))
+    at_cap = RemotePartLimit(seconds=30.0, max_bytes=len(source))
+    over_cap = RemotePartLimit(seconds=30.0, max_bytes=len(source) - 1)
+
+    assert split_for_request(source, at_cap)[0] is source
+    assert split_for_request(source, over_cap)[0] is not source
+
+
+def test_a_file_that_is_not_a_wav_and_over_the_cap_is_logged(caplog):
+    """It is sent as it came (the provider answers for it), but a refusal that
+    follows has to be explainable from the log."""
+    mp3_like = b"ID3" + b"\x00" * 2_000
+    limit = RemotePartLimit(seconds=30.0, max_bytes=1_000)
+
+    with caplog.at_level("WARNING", logger="stt_app.transcriber._audio_parts"):
+        parts = split_for_request(mp3_like, limit)
+
+    assert parts[0] is mp3_like
+    assert "remote_audio_not_split" in caplog.text
+    assert "not a WAV" in caplog.text
 
 
 # --------------------------------------------------------------------------

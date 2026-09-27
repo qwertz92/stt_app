@@ -15,7 +15,9 @@ import pytest
 from stt_app.config import (
     DEFAULT_OPENAI_MODEL,
     OPENAI_ARRAY_FIELD_MODELS,
+    OPENAI_MAX_PART_SECONDS,
     OPENAI_MODELS,
+    OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
 )
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.openai_provider import (
@@ -437,10 +439,10 @@ class TestOpenAILongRecordings:
     @pytest.mark.parametrize(
         ("model", "seconds", "requests"),
         [
-            ("gpt-4o-mini-transcribe", 301.0, 2),
-            ("gpt-4o-transcribe", 301.0, 2),
-            ("gpt-transcribe", 301.0, 1),
-            ("whisper-1", 301.0, 1),
+            ("gpt-4o-mini-transcribe", 181.0, 2),
+            ("gpt-4o-transcribe", 181.0, 2),
+            ("gpt-transcribe", 181.0, 1),
+            ("whisper-1", 181.0, 1),
             ("gpt-transcribe", 601.0, 2),
             ("whisper-1", 601.0, 2),
         ],
@@ -449,7 +451,11 @@ class TestOpenAILongRecordings:
     def test_the_bound_is_the_models_own(
         self, mock_urlopen, model, seconds, requests
     ):
-        bound = 300.0 if "gpt-4o" in model else 600.0
+        bound = (
+            OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS
+            if "gpt-4o" in model
+            else OPENAI_MAX_PART_SECONDS
+        )
         mock_urlopen.side_effect = _answers("eins", "zwei")
 
         OpenAITranscriber(api_key="key", model=model).transcribe_batch(

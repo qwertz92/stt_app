@@ -21,7 +21,8 @@ from typing import NamedTuple
 
 import numpy as np
 
-from ..config import RemotePartLimit
+from ..config import DEFAULT_SILENCE_GATE_THRESHOLD, RemotePartLimit
+from ..vad import measure_peak_windowed_rms
 from ._http_utils import recovered_text_suffix
 from ._pcm_audio import pcm16_wav_bytes, split_into_passes
 from .base import AudioInput, TranscriptionError
@@ -101,13 +102,36 @@ def _wav_parts(audio_source: AudioInput, limit: RemotePartLimit) -> list[AudioIn
     )
     parts: list[AudioInput] = []
     for window in windows:
-        # One float32 copy per part, rounded and clipped in place: a part can
-        # be an hour of audio (Azure), and every extra temporary is 230 MB.
+        # One float32 copy per part, rounded in place: a part can be an hour of
+        # audio (Azure), and every extra temporary is 230 MB. No clip is
+        # needed: the reader decodes 16-bit PCM only, so a sample is k / 32768
+        # with k in [-32768, 32767] and a mono mix is a mean of such values,
+        # which scales back inside the same range.
         scaled = window * 32768.0
         np.rint(scaled, out=scaled)
-        np.clip(scaled, -32768, 32767, out=scaled)
         parts.append(pcm16_wav_bytes(scaled.astype("<i2").tobytes(), sample_rate))
     return parts
+
+
+def _size_bytes(audio_source: AudioInput) -> int | None:
+    if isinstance(audio_source, (bytes, bytearray)):
+        return len(audio_source)
+    try:
+        return Path(audio_source).stat().st_size
+    except OSError:
+        return None
+
+
+def _holds_sound(part: AudioInput) -> bool:
+    """Whether a part is louder than the silence gate's default threshold.
+
+    Unmeasurable counts as sound: calling a part silent without having
+    measured it is how a stretch of speech would be dropped.
+    """
+    if not isinstance(part, (bytes, bytearray)):
+        return True
+    level = measure_peak_windowed_rms(bytes(part))
+    return level is None or level >= DEFAULT_SILENCE_GATE_THRESHOLD
 
 
 def split_for_request(
@@ -128,6 +152,17 @@ def split_for_request(
         return [audio_source]
     declared = _declared_wav(audio_source)
     if declared is None:
+        size = _size_bytes(audio_source)
+        if size is not None and size > limit.max_bytes:
+            # An imported MP3 or M4A has no duration this can read and no
+            # splitter here; the provider answers for it, most likely with a
+            # refusal the log should be able to explain.
+            logger.warning(
+                "remote_audio_not_split bytes=%d max_bytes=%d reason=not a WAV "
+                "this can read",
+                size,
+                limit.max_bytes,
+            )
         return [audio_source]
     # The file as it is: its own duration and its own size. Whether its frames
     # would fit a part (`max_part_frames`) need not be asked here: for a 16-bit
@@ -182,12 +217,15 @@ def transcribe_in_parts(
 
     A recording within `limit` is one call with the provider's own message and
     its own errors -- today's request, byte for byte. A longer one is one call
-    per part, in order, with the cancel hook checked between parts (a request
-    in flight runs to its end, as a single request always has, and a cancel
-    discards the parts already transcribed); the texts are joined with one
-    space, skipping empty ones. A part that fails raises a
-    `TranscriptionError` naming it and carrying the text of the parts before
-    it, never a partial transcript that reads like a complete one.
+    per part, in order, with the cancel hook checked before every part (a
+    request in flight runs to its end, as a single request always has, and a
+    cancel discards the parts already transcribed); the texts are joined with
+    one space. A part that fails raises a `TranscriptionError` naming it and
+    carrying the text of the parts before it, never a partial transcript that
+    reads like a complete one -- and so does a part that holds sound and comes
+    back empty, because a single request returning nothing is a failure too
+    (the controller's empty-transcript rule) and a part is minutes of speech.
+    A silent part's empty text is skipped.
     """
     parts = split_for_request(audio_source, limit)
     if len(parts) == 1:
@@ -195,8 +233,9 @@ def transcribe_in_parts(
     count = len(parts)
     texts: list[str] = []
     for index, part in enumerate(parts, start=1):
-        if index > 1:
-            raise_if_canceled()
+        # Before the first part as well: splitting a large import takes a
+        # second, and a cancel pressed meanwhile must not upload a part.
+        raise_if_canceled()
         try:
             text = transcribe_request(
                 part, f"Transcribing part {index} of {count}. {progress_text}"
@@ -208,4 +247,11 @@ def transcribe_in_parts(
             ) from exc
         if text:
             texts.append(text)
+        elif _holds_sound(part):
+            raise TranscriptionError(
+                f"Part {index} of {count} came back empty although it holds "
+                f"sound.{recovered_text_suffix(texts, '')}"
+            )
+        else:
+            logger.info("remote_audio_part_silent index=%d count=%d", index, count)
     return " ".join(texts)

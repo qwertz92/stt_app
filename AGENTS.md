@@ -3163,14 +3163,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   2,000 output tokens, return a transcript cut short that reads like a
   complete one. `config.remote_batch_part_limit(engine, model)` is the single
   answer (a seconds bound and a byte cap per engine, a tighter seconds bound
-  per model, the vendors' figures with their dates beside the constants), and
+  per model, the vendors' figures with their dates beside the constants;
+  180 s for the two token-capped models, because fast speech in a language
+  that tokenizes denser than English reaches 2,000 tokens inside five
+  minutes), and
   `transcriber/_audio_parts.transcribe_in_parts` wraps the provider's own
   single-request method. Rules:
   - **A recording within both limits goes out untouched**: the very object,
     recognised from the WAV header alone, so a dictation of normal length
-    sends the request it always sent. So does anything the shared WAV reader
-    does not decode (an imported MP3, 24-bit PCM); the provider answers for
-    it as before, and a warning is logged when it is over the limit.
+    sends the request it always sent (the byte cap is inclusive; a test pins
+    the exact size). So does anything the shared WAV reader does not decode
+    (an imported MP3, 24-bit PCM); the provider answers for it as before,
+    and a file over the byte cap logs `remote_audio_not_split` with its
+    reason, so a refusal that follows can be explained.
   - **Both bounds hold for every part.** The seconds are chosen for the app's
     16 kHz WAV, which reaches them first (a test pins it); an import at 44.1
     or 48 kHz carries up to three times the bytes per second, and the byte
@@ -3185,8 +3190,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **A failed part names itself and carries what came before it**
     ("Transcribing part i of n failed: ..." plus the earlier parts' text
     through `recovered_text_suffix`, shared with Fun-ASR), never a joined
-    transcript with a hole in it. The texts are joined with one space,
-    skipping empty ones, and the progress line names the running part.
+    transcript with a hole in it. **So does a part that comes back empty
+    while it holds sound** (its loudest window at or above the silence
+    gate's default threshold, or unmeasurable): a single request returning
+    nothing is already a failure ("Empty model text is a failure"), and a
+    part is minutes of speech -- 165-180 s at the smallest bound -- that the
+    joined text would otherwise lose without a word, found by the review.
+    A silent part's empty text is skipped, which is what a long pause in an
+    imported meeting produces. The texts are joined with one space, the
+    progress line names the running part, and the cancel hook is checked
+    before every part, the first included: splitting a large import takes
+    about a second per 265 MB.
   - **Split, not compressed**: an encoder would be a new dependency, and
     OpenAI does not accept FLAC.
   - Engines without an entry are sent whole: Deepgram (2 GB), ElevenLabs
@@ -5931,8 +5945,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   part's text (the custom vocabulary goes with every part). The cut sits at
   the quietest 20 ms frame of its search window, usually a pause. A cancel
   between parts discards the parts already transcribed -- the audio stays
-  reachable for Retry or Import, as for any cancel -- and a request in flight
-  runs to its end, as a single request always has. Recorded.
+  reachable through Import and the recovery prompt, as for any cancel, not
+  through Retry, which holds failures only -- and a request in flight runs
+  to its end, as a single request always has. Recorded.
+- **Splitting a long import holds about five times its file size in
+  memory.** The shared WAV reader (`local_onnx_asr._read_wav_float32`)
+  keeps the raw bytes and two float32 copies of every channel: measured
+  576 MB for a 115 MB 48 kHz stereo file and 1,325 MB for 265 MB, so a
+  two-hour 48 kHz stereo import sent to Azure would need about 7 GB. Only a
+  WAV past its engine's limit is decoded; a `MemoryError` sends the file
+  whole, where the provider refuses it. Decoding block by block into one
+  mono array would bring it to about one file size for stereo (P3, about an
+  hour with tests, and the two local runtimes that share the reader gain
+  the same). Recorded 2026-09-27.
+- **An Azure part of up to an hour is held to a 120 s socket timeout.** The
+  factory passes no `request_timeout_s`, so the constructor's default of
+  120 s applies to every socket read, and a service that stays silent for
+  longer while it transcribes an hour of audio fails the part; the same
+  held before the split for a whole recording of up to two hours. Not
+  observed (no Azure resource here). Recorded 2026-09-27.
 - **A WAV that is not 16 kHz is resampled by linear interpolation** in the
   Nemotron and Granite CTC runtimes (`_pcm_audio.resample_linear`), which has
   no anti-aliasing filter: content above 8 kHz in a 44.1 or 48 kHz file folds
