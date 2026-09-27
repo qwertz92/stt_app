@@ -1288,7 +1288,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     instead of moving anything; ordinary words never reach that edge, and
     the page minimums were measured unchanged at 9 and 13.5 pt. The Import
     tab's path line carries the path as its tooltip, since its end is the
-    file name. A label built after `_build_ui` is not covered.
+    file name, and so do the three status lines that report paths and
+    provider errors (`WrappedStatusLabel`: the Models tab's action line,
+    the key-storage line and the connection-test result). A label built
+    after `_build_ui` is not covered.
   At 9 pt the tab bar now sets the minimum (797 px) above the Benchmark
   page's 611, so opening that tab no longer widens the dialog; the 640 px
   budget in the Benchmark test bounds that page's own need (one label once
@@ -1477,7 +1480,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     connection-test target and labels, the Import tab's pickers, the local
     inventory views, both history lists) and runs only in a full reload.
     The model combo is rebuilt from the inventory already known for the
-    Model Dir, since the busy Discard repaints no inventory view after it.
+    Model Dir. A Model Dir that the Discard put back is restored with its
+    signals blocked, so `_on_model_dir_changed` then runs as typing the
+    folder back would; without it the Models tab went on describing the
+    discarded folder.
   - **Discarding typed keys refreshes the Import tab's credential note**,
     because the key fields are cleared with their signals blocked.
 - **Settings dialog persists for the app lifetime**: closing Settings hides the

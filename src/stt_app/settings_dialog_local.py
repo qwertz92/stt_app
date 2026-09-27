@@ -38,6 +38,7 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     ElidingLabel,
+    WrappedStatusLabel,
     _emit_background_signal,
     _WheelPassthroughComboBox,
     hint_font,
@@ -407,7 +408,7 @@ class _LocalModelsMixin:
         manage_buttons.addWidget(self.delete_selected_model_button)
         local_models_layout.addLayout(manage_buttons)
 
-        self.local_models_action_label = QtWidgets.QLabel("")
+        self.local_models_action_label = WrappedStatusLabel("")
         make_label_selectable(self.local_models_action_label)
         self.local_models_action_label.setWordWrap(True)
         # Reserve the space: this label sits below the stretching model list,

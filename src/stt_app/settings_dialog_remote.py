@@ -13,6 +13,7 @@ from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_GRID_SPACING_PX,
     _REMOTE_PROVIDERS,
+    WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
     _WheelPassthroughComboBox,
@@ -286,7 +287,7 @@ class _RemoteProvidersMixin:
         provider_grid.addWidget(self.insecure_key_storage_checkbox, grid_row, 1, 1, 3)
         grid_row += 1
 
-        self.key_storage_status_label = QtWidgets.QLabel("")
+        self.key_storage_status_label = WrappedStatusLabel("")
         make_label_selectable(self.key_storage_status_label)
         self.key_storage_status_label.setWordWrap(True)
         self._style_note_label(self.key_storage_status_label)
@@ -338,7 +339,7 @@ class _RemoteProvidersMixin:
             "Typed key input is preferred over stored key."
         )
         self.test_conn_button.clicked.connect(self._test_connection)
-        self.test_conn_result = QtWidgets.QLabel("")
+        self.test_conn_result = WrappedStatusLabel("")
         self.test_conn_result.setWordWrap(True)
         make_label_selectable(self.test_conn_result)
         provider_grid.addWidget(

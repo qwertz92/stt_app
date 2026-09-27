@@ -425,6 +425,31 @@ def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> N
     assert saved.engine == stored.engine
 
 
+def test_a_busy_discard_of_a_model_dir_repaints_the_models_tab(
+    dialog, monkeypatch, tmp_path
+) -> None:
+    """The Model Dir is restored with its signals blocked, so the Models tab
+    went on describing the folder that had just been discarded -- "not
+    verified yet" and an empty list -- beside a field naming the stored one."""
+    import stt_app.settings_dialog_helpers as helpers
+
+    _answer_prompt(monkeypatch, QtWidgets.QMessageBox.Discard)
+    monkeypatch.setitem(helpers._LOCAL_MODEL_SCAN_SESSION_CACHE, "", ["tiny"])
+    dialog.show()
+    dialog._on_model_dir_changed()
+    assert dialog.local_models_list.count() > 0
+    dialog.model_dir_edit.setText(str(tmp_path / "somewhere-else"))
+    assert "not been verified" in dialog.local_models_label.text()
+    dialog._active_connection_test_thread = object()
+    _settle(dialog)
+
+    dialog._request_close()
+
+    assert dialog.model_dir_edit.text() == ""
+    assert "not been verified" not in dialog.local_models_label.text()
+    assert dialog.local_models_list.count() > 0
+
+
 def test_a_discarded_typed_key_leaves_no_note_behind(dialog, monkeypatch) -> None:
     """The key fields are cleared with their signals blocked, so the Import
     tab's note kept saying a new key was typed but not saved -- a key that

@@ -1378,6 +1378,31 @@ def test_an_unbroken_word_in_a_status_line_does_not_widen_the_dialog(
         app.processEvents()
 
 
+def test_a_status_line_that_can_cut_off_a_path_shows_it_whole_on_hover(
+    monkeypatch, tmp_path
+) -> None:
+    """The three status lines that report paths and provider errors are cut
+    at the label's edge like every wrapped label; their tooltip holds the whole
+    message."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_at(monkeypatch, tmp_path)
+    message = "Could not write C:\\" + "\\".join(["averyveryverylongfoldername"] * 5)
+    try:
+        for label in (
+            dialog.local_models_action_label,
+            dialog.key_storage_status_label,
+            dialog.test_conn_result,
+        ):
+            label.setText(message)
+            assert label.toolTip() == message
+            label.setText("")
+            assert label.toolTip() == ""
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
 def test_the_dialog_opens_as_wide_as_it_needs_and_does_not_grow_after(
     monkeypatch, tmp_path
 ) -> None:

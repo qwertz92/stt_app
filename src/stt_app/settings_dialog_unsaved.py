@@ -247,8 +247,15 @@ class _UnsavedChangesMixin:
         -- and the reload at the next open, once nothing runs, catches up with
         anything written elsewhere meanwhile.
         """
+        model_dir_before = self.model_dir_edit.text()
         self._discard_unsaved_provider_key_edits()
         self._populate_setting_widgets(self._populated_settings)
+        # The field is restored with its signals blocked, so the inventory
+        # views would otherwise go on describing the discarded folder. This is
+        # the call typing the folder back would make; a download disables the
+        # field, so the folder cannot have changed under one.
+        if self.model_dir_edit.text() != model_dir_before:
+            self._on_model_dir_changed()
         self._mark_unsaved_changes_clean()
 
     def _request_close(self) -> None:

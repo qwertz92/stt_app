@@ -142,6 +142,21 @@ class ElidingLabel(QtWidgets.QLabel):
         )
 
 
+class WrappedStatusLabel(QtWidgets.QLabel):
+    """A word-wrapped status line whose whole text is also its tooltip.
+
+    No wrapped label may widen the dialog (`_let_wrapped_labels_narrow`), so
+    one unbroken token in a status line -- a cache path, a URL in a
+    provider's error -- is cut off at the label's edge: 110-140 px of a
+    120-character path at the default width (measured). The tooltip is where
+    the rest can be read.
+    """
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setToolTip(text)
+
+
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         view = self.view()
