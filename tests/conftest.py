@@ -738,6 +738,29 @@ def _reset_the_transcription_shutdown_flag():
 
 
 @pytest.fixture(autouse=True)
+def _empty_local_model_scan_session_cache():
+    """The settings dialog keeps every finished inventory scan in two
+    module-level containers for the life of the process, so a dialog built
+    later paints its model lists from them at once. In the suite that is
+    another test's scan: one that patched the scan to answer `["small"]` left
+    it for the Model Dir every test uses, and a later dialog's deferred
+    inventory render replaced the model list a test had just set up with that
+    one model. Ten `test_benchmark_run_progress.py` tests failed whenever
+    `test_settings_dialog_thread_start.py` ran first -- not in the full suite,
+    whose alphabetical order runs them the other way round."""
+    from stt_app.settings_dialog_helpers import (
+        _LOCAL_MODEL_SCAN_SESSION_CACHE,
+        _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
+    )
+
+    _LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
+    yield
+    _LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
+
+
+@pytest.fixture(autouse=True)
 def _no_benchmark_worker_outlives_its_test():
     """The dialog's benchmark worker (`stt_app_local_benchmark`) collects the
     environment first -- 2-4 s of PowerShell -- and only then calls the

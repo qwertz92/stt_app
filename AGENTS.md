@@ -5814,6 +5814,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   ids here, because `addopts = "-q"` makes it `-qq`; use
   `-o addopts="" --collect-only -q` -- a bisect loop over an empty id list
   ran zero tests and looked like "no single test reproduces it".
+- A seventh, `_empty_local_model_scan_session_cache`, empties the two
+  module-level containers in which the settings dialog keeps every
+  finished inventory scan for the life of the process
+  (`_LOCAL_MODEL_SCAN_SESSION_CACHE` and its verified-dirs set). A test that
+  patched the scan to answer `["small"]` left that for the Model Dir every
+  test uses, and a later dialog's deferred inventory render replaced the
+  model list a test had just set up: ten `test_benchmark_run_progress.py`
+  tests failed whenever `test_settings_dialog_thread_start.py` ran first,
+  which the alphabetical full suite never does (found 2026-09-27, present
+  before that day's UX commits).
 - **Read the suite's count before anything that publishes.** A shell chain
   that commits and pushes after a background suite has *started* publishes
   before the result exists; on 2026-09-04 four green per-file runs and one
