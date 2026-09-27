@@ -425,11 +425,16 @@ def report_unknown_download_progress(hook: ProgressHook | None) -> None:
 
 
 def format_transfer_rate(bytes_per_second: float) -> str:
-    """Both units, because the user reads one of them off Task Manager."""
-    return (
-        f"{bytes_per_second / 1_000_000.0:.1f} MB/s "
-        f"({bytes_per_second * 8 / 1_000_000.0:.1f} Mbit/s)"
-    )
+    """Both units, because the user reads one of them off Task Manager.
+
+    Below a megabyte per second the first one is kilobytes: "0.0 MB/s" for a
+    slow tail read as a stalled download while bytes were still arriving.
+    """
+    mbit = f"({bytes_per_second * 8 / 1_000_000.0:.1f} Mbit/s)"
+    kilobytes = round(bytes_per_second / 1_000.0)
+    if kilobytes < 1_000:
+        return f"{kilobytes} kB/s {mbit}"
+    return f"{bytes_per_second / 1_000_000.0:.1f} MB/s {mbit}"
 
 
 def format_eta(seconds: float | None) -> str:

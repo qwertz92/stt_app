@@ -10,6 +10,7 @@ from stt_app.model_download_progress import (
     format_download_queue_line,
     format_eta,
     format_model_download_progress,
+    format_transfer_rate,
     hub_progress_tqdm_class,
     measure_model_download_progress,
     offset_progress_hook,
@@ -721,3 +722,11 @@ def test_report_unknown_download_progress_is_silent_and_optional():
     assert report.seen == [
         (DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN)
     ]
+
+
+def test_a_slow_transfer_rate_reads_in_kilobytes_not_as_zero_megabytes():
+    # A download's slow tail (or a throttled proxy) used to read
+    # "0.0 MB/s (0.3 Mbit/s)" -- a stalled download to the eye while it moves.
+    assert format_transfer_rate(40_000) == "40 kB/s (0.3 Mbit/s)"
+    assert format_transfer_rate(999_499) == "999 kB/s (8.0 Mbit/s)"
+    assert format_transfer_rate(12_500_000) == "12.5 MB/s (100.0 Mbit/s)"
