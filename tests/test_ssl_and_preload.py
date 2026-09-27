@@ -1058,6 +1058,37 @@ class TestOrphanedHubPartials:
         assert tuple(outcome) == (2, 1_500, 0)
         assert list(blobs.iterdir()) == []
 
+    def test_a_junction_out_of_the_destination_is_not_followed(self, tmp_path):
+        """A user who relocated `blobs/` elsewhere through an NTFS junction
+        must not lose partials outside the folder being downloaded into --
+        `rglob` walked through the junction (review round 3, 2026-09-21)."""
+        if os.name != "nt":
+            pytest.skip("NTFS junctions exist on Windows only")
+        import subprocess
+
+        outside = tmp_path / "elsewhere"
+        outside.mkdir()
+        foreign = outside / "other.incomplete"
+        foreign.write_bytes(b"x" * 100)
+        destination = tmp_path / "cache" / "models--Systran--faster-whisper-small"
+        destination.mkdir(parents=True)
+        own = destination / "own.incomplete"
+        own.write_bytes(b"y" * 10)
+        link = destination / "blobs"
+        made = subprocess.run(
+            ["cmd", "/c", "mklink", "/J", str(link), str(outside)],
+            capture_output=True,
+            timeout=30,
+        )
+        if made.returncode != 0 or not link.exists():
+            pytest.skip("mklink /J is not available here")
+
+        outcome = remove_orphaned_hub_partials("small", str(tmp_path / "cache"))
+
+        assert foreign.exists()
+        assert not own.exists()
+        assert tuple(outcome) == (1, 10, 0)
+
     def test_the_flat_onnx_layout_is_cleared_too(self, tmp_path):
         """There huggingface_hub keeps its partials in its own bookkeeping
         folder under the `local_dir` it downloads into."""

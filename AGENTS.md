@@ -2138,7 +2138,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     restart had caught up. `remove_orphaned_hub_partials` clears
     `*.incomplete` -- never `*.ms-part`, which the ModelScope mirror does
     resume -- under `download_destination_dir` only, without pruning
-    directories, and never raises. It runs in
+    directories and without walking through a junction or a symbolic link
+    (`_partials_below`; `rglob` followed a junction out of the folder,
+    review round 3), and never raises. It runs in
     `start_model_download_process` before the child exists (the parent
     samples the directory before the child's first event) and in both
     snapshot functions before `snapshot_download` (the transcribers' own
@@ -6005,13 +6007,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   kilobyte-sized one, which the downloader's order makes rare. Widening
   the validity check changes what the inventory calls "cached" as well, so
   it is recorded (P3, an hour with its tests) rather than slipped in.
-- **The partial-file cleanup follows an NTFS junction out of the
-  destination.** `_remove_partials_under` walks with `rglob`, which
-  traverses reparse points, so a user who relocated `blobs/` through a
-  junction gets `*.incomplete` (and, on Cancel, `*.ms-part`) files removed
-  at the junction's target too (review round 3, reproduced with `mklink
-  /J`). Only files with those two suffixes, which nothing reads back;
-  older than the orphan removal, which shares the walk. Recorded (P3).
 - **A benchmark's device decision is per run, and there is no button to
   forget one.** `measured_fastest_devices` reads one finished run; runs are
   never combined. A run that could not measure the stored device (it errored

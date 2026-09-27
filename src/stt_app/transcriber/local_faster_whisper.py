@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import io
 import logging
 import os
@@ -360,6 +361,31 @@ def _unlink_partial(path: Path) -> str:
         return _PARTIAL_LEFT if path.exists() else _PARTIAL_GONE
 
 
+def _partials_below(root: Path, patterns: tuple[str, ...]) -> list[Path]:
+    """Files matching `patterns` below `root`, never through a link.
+
+    `Path.rglob` walks through an NTFS junction, so a user who relocated
+    `blobs/` with one had partials removed in the folder it points to -- a
+    place this cleanup was never asked about (review round 3, 2026-09-21).
+    The walk prunes junctions and symbolic links before descending; a
+    directory it cannot list is skipped rather than aborting the sweep.
+    """
+    found: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [
+            name
+            for name in dirnames
+            if not os.path.isjunction(os.path.join(dirpath, name))
+            and not os.path.islink(os.path.join(dirpath, name))
+        ]
+        found.extend(
+            Path(dirpath, name)
+            for name in filenames
+            if any(fnmatch.fnmatch(name, pattern) for pattern in patterns)
+        )
+    return found
+
+
 def _remove_partials_under(root: Path, patterns: tuple[str, ...]) -> IncompleteCleanup:
     """Remove every partial matching `patterns` below one directory.
 
@@ -373,11 +399,7 @@ def _remove_partials_under(root: Path, patterns: tuple[str, ...]) -> IncompleteC
     left_files = 0
     if not root.is_dir():
         return IncompleteCleanup()
-    try:
-        partials = [path for pattern in patterns for path in root.rglob(pattern)]
-    except OSError:
-        return IncompleteCleanup()
-    for path in partials:
+    for path in _partials_below(root, patterns):
         if not path.is_file():
             continue
         try:
