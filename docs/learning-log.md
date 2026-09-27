@@ -9078,3 +9078,7 @@ from 0.10.0. Not verified by anyone: running the installer over an installed
 Xet path of the reworked download display, and the clipboard check on the
 final tree (the workstation was locked; the paste path is unchanged since its
 last pass).
+
+The owner ran the clipboard check on that tree on 2026-09-27 after
+unlocking: 19/19, and the user's clipboard came back with the same six
+formats it held before.

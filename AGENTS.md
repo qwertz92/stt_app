@@ -5576,7 +5576,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `KeyringSecretStore` only and never printed or written to a report; the
   user's clipboard captured first, restored in a `finally` and compared at
   the end, with format ids and sizes in the report and never content. All
-  four passed on 2026-09-18 on HomeBase (23/23, 19/19, 7/7, 11/11). The
+  four passed on 2026-09-18 on HomeBase (23/23, 19/19, 7/7, 11/11), and the
+  clipboard check again on v0.10.0's tree on 2026-09-27 (19/19, run by the
+  owner after unlocking; the user's six clipboard formats came back). The
   commands and what each needs are in `docs/windows-distribution.md`. They do
   not cover running the installer or an upgrade over an installed version.
 - Two autouse fixtures in `tests/conftest.py` make desktop side effects
