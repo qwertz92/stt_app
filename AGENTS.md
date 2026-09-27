@@ -6025,6 +6025,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   reachable through Import and the recovery prompt, as for any cancel, not
   through Retry, which holds failures only -- and a request in flight runs
   to its end, as a single request always has. Recorded.
+- **An empty part fails the recording when it holds sound, and "sound" is
+  a level, not speech.** `_audio_parts._holds_sound` compares a part's
+  loudest 100 ms window with the silence gate's *default* threshold
+  (0.004), not the one the user set. Two shapes in which a recording
+  fails for a stretch that holds no words (found by the review of
+  2026-09-27; not observed in the field, and whether a provider answers
+  such a part with nothing rather than an invented word is unverified):
+  the remainder after the last cut can be as short as 20 ms, so a
+  `gpt-4o-transcribe` dictation of 180.4 s whose last 0.5 s holds only the
+  hotkey's click fails on every Retry if the provider returns nothing for
+  that tail; and a user who raised the threshold for a noisy room gets a
+  failure for a stretch the gate would call silent. Fixing it is a choice
+  between losing a short word silently and failing visibly: judge the part
+  by its longest speech run (`vad.measure_longest_speech_run_s`, 20 ms
+  buckets) against the configured threshold -- which needs the threshold
+  passed through the factory to OpenAI, Groq and Azure and added to their
+  runtime identity -- or keep the splitter from leaving a last part
+  shorter than a few seconds, which Granite CTC's passes would share. P3,
+  one to two hours with tests; waits for the owner's choice.
 - **Splitting a long import holds about five times its file size in
   memory.** The shared WAV reader (`local_onnx_asr._read_wav_float32`)
   keeps the raw bytes and two float32 copies of every channel: measured

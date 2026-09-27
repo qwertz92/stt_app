@@ -229,6 +229,10 @@ def transcribe_in_parts(
     """
     parts = split_for_request(audio_source, limit)
     if len(parts) == 1:
+        if parts[0] is not audio_source:
+            # Re-encoded (a stereo import over the byte cap goes out as its
+            # mono mix): the split took its time, as before a part below.
+            raise_if_canceled()
         return transcribe_request(parts[0], progress_text)
     count = len(parts)
     texts: list[str] = []

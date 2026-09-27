@@ -130,7 +130,7 @@ def split_into_passes(
     # quietest frame and the window was cut 20 ms in, again and again: a 25 s
     # recording with a 2 s pause at its start became 103 windows at a 10 s
     # bound, 99 of them 20 ms long. Granite's 180 s passes and every remote
-    # bound (300 s and up) are far above twice the 15 s search, so this
+    # bound (180 s and up) are far above twice the 15 s search, so this
     # changes nothing for them.
     search_samples = min(search_samples, max_samples // 2)
     if max_samples < _SPLIT_FRAME_SAMPLES or samples.size <= max_samples:

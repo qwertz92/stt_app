@@ -529,6 +529,29 @@ def test_a_cancel_during_the_split_sends_nothing():
     assert requests.sources == []
 
 
+def test_a_cancel_during_the_split_into_one_part_sends_nothing():
+    """A stereo import over the cap is decoded and re-encoded as one mono
+    part, which takes as long as a split into several; the single-part road
+    skipped the cancel check the loop makes."""
+    channel = _noise(20.0)
+    source = _stereo_wav_bytes(channel, channel, AUDIO_SAMPLE_RATE)
+    requests = _Requests(["ganzer text"])
+
+    def _canceled() -> None:
+        raise TranscriptionCanceled()
+
+    with pytest.raises(TranscriptionCanceled):
+        transcribe_in_parts(
+            source,
+            requests,
+            limit=RemotePartLimit(seconds=30.0, max_bytes=1_000_000),
+            progress_text=_UPLOAD,
+            raise_if_canceled=_canceled,
+        )
+
+    assert requests.sources == []
+
+
 def test_a_recording_exactly_at_the_byte_cap_is_the_very_object_it_was_given():
     source = _wav_bytes(_noise(5.0))
     at_cap = RemotePartLimit(seconds=30.0, max_bytes=len(source))
