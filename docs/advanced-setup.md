@@ -358,7 +358,7 @@ Manual equivalent, if you prefer:
 ```powershell
 :: 1. download+extract node-v<ver>-win-x64.zip from https://nodejs.org/dist/
 :: 2. point the app at it (no admin, works under ConstrainedLanguage):
-setx STT_APP_NODE_PATH "C:\Users\<you>\programs\node-v24.18.0-win-x64\node.exe"
+setx STT_APP_NODE_PATH "C:\Users\<you>\programs\node-v24.21.0-win-x64\node.exe"
 ```
 
 Then **restart the app**. On the first GPU/ONNX transcription it runs

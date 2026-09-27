@@ -23,7 +23,7 @@ Run it with the *Windows* Python interpreter (it writes Windows paths and the
 Windows user registry), not inside WSL:
 
     python scripts\setup_node_windows.py                 # auto: download + configure
-    python scripts\setup_node_windows.py --version 24.18.0
+    python scripts\setup_node_windows.py --version 24.21.0
     python scripts\setup_node_windows.py --target-dir "D:\tools\node"
     python scripts\setup_node_windows.py --check         # only report current state
 
@@ -48,7 +48,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-DEFAULT_VERSION = "24.18.0"
+DEFAULT_VERSION = "24.21.0"
 _VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 # Download roots, tried in order. Only the first is nodejs.org, and only
