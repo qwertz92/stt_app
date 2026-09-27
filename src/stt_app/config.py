@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 # Global configuration values. Keep defaults and tunables centralized here.
 
@@ -1465,6 +1466,97 @@ FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
 # socket timeout, so a service that pings but never sends `task-finished`
 # parked the app's single transcription worker forever.
 FUNASR_BATCH_MAX_WAIT_S = 1800.0
+
+# --- How much audio one remote batch request carries ----------------------
+#
+# The app records 16 kHz mono 16-bit WAV, 1.92 MB per minute, and sends the
+# recording as it is. A recording longer than its engine's bound, or larger
+# than its byte cap, goes out in consecutive parts cut at quiet points
+# (`transcriber/_audio_parts.py`), because past these limits the provider
+# refuses the request -- or, for the two token-capped OpenAI models, returns a
+# transcript cut short that reads like a complete one. The parts are split,
+# not compressed: compressing would need an encoder dependency, and OpenAI
+# does not even accept FLAC. The vendors' own pages were read on 2026-09-27.
+#
+# Each engine has both a seconds bound and a byte cap. The seconds are chosen
+# for the app's 16 kHz WAV, which reaches them well before the cap; an
+# imported WAV at 44.1 or 48 kHz is encoded at its own rate and carries up to
+# three times the bytes per second, so the cap is what bounds its parts.
+#
+# An engine without an entry is sent whole: Deepgram takes 2 GB, ElevenLabs
+# 3 GB / 10 h and AssemblyAI 2.2 GB / 10 h, past any dictation, and Fun-ASR
+# streams the recording over a WebSocket.
+#
+# `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` state "2,000 max output
+# tokens" on their model pages, and a forum report shows the transcript cut
+# off silently after about 8-9 minutes at 2,048 output tokens. Five minutes of
+# dense German stays well under it.
+OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS = 300.0
+# OpenAI takes 25 MB per file, about 13 minutes of this WAV. `gpt-transcribe`
+# and `whisper-1` state no token cap, and ten minutes also stays below the
+# 1,400 s duration cap that is reported second-hand only.
+OPENAI_MAX_PART_SECONDS = 600.0
+# The speech-to-text guide: "Files can be up to 25 MB." Read as decimal
+# megabytes, the smaller of the two readings.
+OPENAI_MAX_REQUEST_BYTES = 25_000_000
+# Groq takes 25 MB per file on the free tier and 100 MB on the developer
+# tier; the app cannot tell which tier a key belongs to, so the smaller.
+GROQ_MAX_PART_SECONDS = 600.0
+# The speech-to-text page: "Max File Size: 25 MB (free tier), 100MB (dev
+# tier)". The free tier's, as decimal megabytes.
+GROQ_MAX_REQUEST_BYTES = 25_000_000
+# The fast-transcription REST reference: "shorter than 2 hours ... smaller
+# than 250 MB" (the quotas page says 5 h / 500 MB; the smaller is taken).
+# 250 MB is about 130 minutes of this WAV, so an hour stays under both.
+AZURE_MAX_PART_SECONDS = 3600.0
+# The same REST reference (2025-10-15): "shorter than 2 hours in audio
+# duration and smaller than 250 MB in size."
+AZURE_MAX_REQUEST_BYTES = 250_000_000
+REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
+    "openai": OPENAI_MAX_PART_SECONDS,
+    "groq": GROQ_MAX_PART_SECONDS,
+    "azure": AZURE_MAX_PART_SECONDS,
+}
+REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
+    "openai": OPENAI_MAX_REQUEST_BYTES,
+    "groq": GROQ_MAX_REQUEST_BYTES,
+    "azure": AZURE_MAX_REQUEST_BYTES,
+}
+# A model whose own limit is tighter than its engine's.
+REMOTE_BATCH_MODEL_MAX_PART_SECONDS: dict[tuple[str, str], float] = {
+    ("openai", "gpt-4o-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
+    ("openai", "gpt-4o-mini-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
+}
+
+
+class RemotePartLimit(NamedTuple):
+    """How much audio one batch request of an engine carries: at most
+    `seconds` of it, in a file of at most `max_bytes`."""
+
+    seconds: float
+    max_bytes: int
+
+
+def remote_batch_part_limit(engine: str, model: str = "") -> RemotePartLimit | None:
+    """The limit one batch request of this engine and model is held to, or
+    None when the recording is always sent whole.
+
+    The single answer every provider asks: a new one adds its entries above
+    and passes this to `transcribe_in_parts` (`transcriber/_audio_parts.py`).
+    The byte cap is read strictly, so an engine given a seconds bound without
+    a cap fails loudly instead of being sent with no cap at all.
+    """
+    normalized_engine = str(engine or "").strip().lower()
+    model_key = (normalized_engine, str(model or "").strip())
+    seconds = REMOTE_BATCH_MODEL_MAX_PART_SECONDS.get(
+        model_key, REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)
+    )
+    if seconds is None:
+        return None
+    return RemotePartLimit(
+        seconds=seconds,
+        max_bytes=REMOTE_BATCH_MAX_REQUEST_BYTES[normalized_engine],
+    )
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

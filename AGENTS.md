@@ -77,7 +77,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |
 | `transcriber/local_granite_ctc.py` | Batch-only IBM Granite Speech 5.0 470M TurboCTC: numpy log-mel features, the INT8 CTC graph on ONNX Runtime's CPU provider, greedy CTC and `tokenizers` decode; English only, passes of at most 180 s, mid-run cancel via `RunOptions.terminate` |
-| `transcriber/_pcm_audio.py` | Linear resampling shared by the Nemotron and Granite CTC runtimes |
+| `transcriber/_pcm_audio.py` | Linear resampling (Nemotron, Granite CTC), the quiet-point splitter (Granite CTC passes, remote batch parts) and the 16-bit mono WAV encoder |
+| `transcriber/_audio_parts.py` | Sends a remote batch recording past its engine's limit (`config.remote_batch_part_limit`) as consecutive WAV parts through the provider's own single-request code (OpenAI, Groq, Azure) |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
@@ -3104,6 +3105,42 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   recurring free quota among the integrated providers that covers daily
   dictation, and Azure's F0 tier does not cover LLM Speech ("Not applicable"
   on Microsoft's quotas page), which the docs had claimed.
+- **A remote batch recording past its engine's limit goes out in parts, cut
+  at quiet points (2026-09-27).** OpenAI, Groq and Azure LLM Speech take the
+  whole recording in one request and refuse one past their limits -- OpenAI
+  and Groq at 25 MB, about 13 minutes of the app's 16 kHz WAV -- or, for
+  `gpt-4o-transcribe` and `gpt-4o-mini-transcribe`, whose model pages state
+  2,000 output tokens, return a transcript cut short that reads like a
+  complete one. `config.remote_batch_part_limit(engine, model)` is the single
+  answer (a seconds bound and a byte cap per engine, a tighter seconds bound
+  per model, the vendors' figures with their dates beside the constants), and
+  `transcriber/_audio_parts.transcribe_in_parts` wraps the provider's own
+  single-request method. Rules:
+  - **A recording within both limits goes out untouched**: the very object,
+    recognised from the WAV header alone, so a dictation of normal length
+    sends the request it always sent. So does anything the shared WAV reader
+    does not decode (an imported MP3, 24-bit PCM); the provider answers for
+    it as before, and a warning is logged when it is over the limit.
+  - **Both bounds hold for every part.** The seconds are chosen for the app's
+    16 kHz WAV, which reaches them first (a test pins it); an import at 44.1
+    or 48 kHz carries up to three times the bytes per second, and the byte
+    cap (`max_part_frames`) is what bounds its parts. A part is re-encoded as
+    16-bit mono at the input's own rate, so a stereo import goes out as its
+    mono mix.
+  - **The cut is Granite CTC's splitter**, moved to
+    `_pcm_audio.split_into_passes` with a `max_samples` bound beside
+    `max_seconds`: the quietest 20 ms frame in the last 15 s of each window
+    (at most half the window); the parts share no audio and concatenate back
+    to a mono input exactly.
+  - **A failed part names itself and carries what came before it**
+    ("Transcribing part i of n failed: ..." plus the earlier parts' text
+    through `recovered_text_suffix`, shared with Fun-ASR), never a joined
+    transcript with a hole in it. The texts are joined with one space,
+    skipping empty ones, and the progress line names the running part.
+  - **Split, not compressed**: an encoder would be a new dependency, and
+    OpenAI does not accept FLAC.
+  - Engines without an entry are sent whole: Deepgram (2 GB), ElevenLabs
+    (3 GB / 10 h), AssemblyAI (2.2 GB / 10 h), and Fun-ASR, which streams.
 - **AssemblyAI Universal-3.5 Pro realtime**: the legacy v2 realtime and earlier
   Universal-Streaming model are retired paths and must not be reintroduced.
   Streaming uses `assemblyai.streaming.v3.StreamingClient` with the
@@ -5811,6 +5848,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   parameters as if they were speech statistics. Separating a knock from a
   short word needs spectral features (a real VAD); until then, do not move
   the threshold on synthetic evidence alone.
+- **A long remote batch recording is transcribed part by part, and a part
+  knows nothing of the one before it.** Each request is independent: a
+  sentence running across a cut is transcribed in two halves, automatic
+  language detection runs per part, and no prompt carries the previous
+  part's text (the custom vocabulary goes with every part). The cut sits at
+  the quietest 20 ms frame of its search window, usually a pause. A cancel
+  between parts discards the parts already transcribed -- the audio stays
+  reachable for Retry or Import, as for any cancel -- and a request in flight
+  runs to its end, as a single request always has. Recorded.
 - **A WAV that is not 16 kHz is resampled by linear interpolation** in the
   Nemotron and Granite CTC runtimes (`_pcm_audio.resample_linear`), which has
   no anti-aliasing filter: content above 8 kHz in a 44.1 or 48 kHz file folds

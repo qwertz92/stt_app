@@ -210,3 +210,18 @@ def test_a_detail_object_without_a_message_still_shows_something_readable():
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():
     assert read_http_error_detail(_http_error(b'{"detail": "Not Found"}')) == "Not Found"
+
+
+def test_the_recovered_text_suffix_lives_here_once_for_every_caller():
+    """Fun-ASR's recovered-text convention (what a failure leaves behind goes
+    into the error, bounded) is shared with the loop over a long recording's
+    parts. One definition, imported by both, so the two cannot drift apart:
+    Fun-ASR's own tests hold its behaviour, the parts tests the loop's."""
+    from stt_app.transcriber import _audio_parts, _http_utils, funasr_provider
+
+    shared = _http_utils.recovered_text_suffix
+    assert funasr_provider.recovered_text_suffix is shared
+    assert _audio_parts.recovered_text_suffix is shared
+    assert not hasattr(funasr_provider.FunAsrTranscriber, "_recovered_suffix")
+    assert not hasattr(funasr_provider, "_RECOVERED_TEXT_MAX_CHARS")
+    assert _http_utils.RECOVERED_TEXT_MAX_CHARS == 2000

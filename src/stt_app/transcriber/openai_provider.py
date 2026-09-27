@@ -18,9 +18,11 @@ from ..config import (
     OPENAI_MODELS,
     language_modes_for_selection,
     parse_custom_vocabulary,
+    remote_batch_part_limit,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
@@ -39,6 +41,7 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 OPENAI_API_BASE = "https://api.openai.com/v1"
+_UPLOAD_PROGRESS = "Uploading audio to OpenAI and waiting for transcription..."
 
 
 class OpenAITranscriber(ProgressReporter, ITranscriber):
@@ -147,6 +150,17 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         return fields
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
+        return transcribe_in_parts(
+            audio_source,
+            self._transcribe_request,
+            limit=remote_batch_part_limit("openai", self._model),
+            progress_text=_UPLOAD_PROGRESS,
+            raise_if_canceled=self._raise_if_canceled,
+        )
+
+    def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
+        """One request to the transcription endpoint, for a whole recording or
+        one part of it."""
         try:
             if isinstance(audio_source, bytes):
                 audio_bytes = bytes(audio_source)
@@ -177,9 +191,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             req.add_header("Content-Type", content_type)
 
             ssl_ctx = create_ssl_context()
-            self._emit_progress(
-                "Uploading audio to OpenAI and waiting for transcription..."
-            )
+            self._emit_progress(progress_text)
             with urllib.request.urlopen(
                 req, timeout=self._request_timeout_s, context=ssl_ctx
             ) as resp:

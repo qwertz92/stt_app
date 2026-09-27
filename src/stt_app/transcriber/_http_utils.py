@@ -95,6 +95,38 @@ def normalize_transcript_text(value: object) -> str:
     return " ".join(str(value or "").strip().split()).strip()
 
 
+# The recovered text goes into a user-facing error, and the overlay's error
+# detail is selectable, so it can be copied out of the failure. Bounded so a
+# very long dictation cannot fill the overlay end to end; the audio is kept
+# for Retry either way.
+RECOVERED_TEXT_MAX_CHARS = 2000
+
+
+def recovered_text_suffix(finalized: list[str], current: str) -> str:
+    """Name what the service had already delivered, if anything.
+
+    Every exit of a Fun-ASR request other than `task-finished` used to discard
+    the sentences already received -- measured: two finished sentences lost to
+    a server close, to a read timeout, and to a `task-failed`. The WAV is kept
+    for Retry, so nothing is unrecoverable, but a re-run costs the whole
+    upload and transcription again and this text is often the entire
+    dictation minus its last words. It is reported rather than returned:
+    returning it would hand back a silently truncated transcript that reads
+    exactly like a complete one. The loop over a long recording's parts
+    (`_audio_parts.transcribe_in_parts`) reports the parts before a failed one
+    the same way.
+    """
+    parts = [part for part in [*finalized, current] if part]
+    # One guard, not two: an empty `parts` joins to "" and so does a list
+    # of nothing but whitespace, and both reach the same answer here.
+    text = normalize_transcript_text(" ".join(parts))
+    if not text:
+        return ""
+    if len(text) > RECOVERED_TEXT_MAX_CHARS:
+        text = text[:RECOVERED_TEXT_MAX_CHARS].rstrip() + "..."
+    return f' Received before the failure: "{text}"'
+
+
 # What is read off the socket, as opposed to what survives into the message.
 # The 300-character cap below is applied to the extracted text and says
 # nothing about how much reached memory first: `exc.read()` is unbounded, and

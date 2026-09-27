@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import urllib.error
+import wave
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from stt_app.config import (
@@ -14,7 +17,7 @@ from stt_app.config import (
     OPENAI_ARRAY_FIELD_MODELS,
     OPENAI_MODELS,
 )
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.openai_provider import (
     OPENAI_API_BASE,
     OpenAITranscriber,
@@ -389,6 +392,145 @@ class TestLegacyOpenAIRequestFields:
         transcriber.transcribe_batch(b"RIFF fake")
 
         assert ("prompt", "<div>") in _sent_fields(mock_urlopen.call_args[0][0])
+
+
+def _wav_seconds(seconds: float) -> bytes:
+    """A 16 kHz mono 16-bit WAV, the format the app records."""
+    count = int(seconds * 16_000)
+    tone = (np.sin(np.arange(count) / 12.0) * 6000.0).astype("<i2")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16_000)
+        handle.writeframes(tone.tobytes())
+    return buffer.getvalue()
+
+
+def _sent_audio(request) -> bytes:
+    """The file part of a request, exactly as it went out."""
+    boundary = request.get_header("Content-type").split("boundary=", 1)[1]
+    for part in request.data.split(f"--{boundary}".encode())[1:-1]:
+        head, _, body = part.partition(b"\r\n\r\n")
+        if b"filename=" in head:
+            return body[: -len(b"\r\n")]
+    raise AssertionError("the request carried no file")
+
+
+def _seconds_of(wav: bytes) -> float:
+    with wave.open(io.BytesIO(wav), "rb") as handle:
+        return handle.getnframes() / handle.getframerate()
+
+
+def _answers(*texts: str):
+    return [_fake_response(json.dumps({"text": text})) for text in texts]
+
+
+class TestOpenAILongRecordings:
+    """Past OpenAI's limits the recording goes out in parts.
+
+    25 MB per file is about 13 minutes of the app's WAV, and
+    `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` stop at "2,000 max output
+    tokens" -- silently, with a transcript that reads like a complete one.
+    """
+
+    @pytest.mark.parametrize(
+        ("model", "seconds", "requests"),
+        [
+            ("gpt-4o-mini-transcribe", 301.0, 2),
+            ("gpt-4o-transcribe", 301.0, 2),
+            ("gpt-transcribe", 301.0, 1),
+            ("whisper-1", 301.0, 1),
+            ("gpt-transcribe", 601.0, 2),
+            ("whisper-1", 601.0, 2),
+        ],
+    )
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_the_bound_is_the_models_own(
+        self, mock_urlopen, model, seconds, requests
+    ):
+        bound = 300.0 if "gpt-4o" in model else 600.0
+        mock_urlopen.side_effect = _answers("eins", "zwei")
+
+        OpenAITranscriber(api_key="key", model=model).transcribe_batch(
+            _wav_seconds(seconds)
+        )
+
+        sent = [_sent_audio(call.args[0]) for call in mock_urlopen.call_args_list]
+        assert len(sent) == requests
+        assert all(_seconds_of(part) <= bound for part in sent)
+        assert sum(_seconds_of(part) for part in sent) == pytest.approx(seconds)
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_every_part_carries_the_language_and_the_vocabulary(self, mock_urlopen):
+        mock_urlopen.side_effect = _answers("erster teil", "zweiter teil")
+        progress: list[str] = []
+        transcriber = OpenAITranscriber(
+            api_key="key",
+            model="gpt-4o-mini-transcribe",
+            language_mode="de",
+            custom_vocabulary="Kubernetes, Splunk SOAR",
+        )
+        transcriber.set_progress_callback(progress.append)
+
+        text = transcriber.transcribe_batch(_wav_seconds(301.0))
+
+        assert text == "erster teil zweiter teil"
+        for call in mock_urlopen.call_args_list:
+            assert _sent_fields(call.args[0]) == [
+                ("model", "gpt-4o-mini-transcribe"),
+                ("language", "de"),
+                ("prompt", "Kubernetes, Splunk SOAR"),
+                ("response_format", "json"),
+            ]
+        assert progress == [
+            f"Transcribing part {index} of 2. Uploading audio to OpenAI and "
+            "waiting for transcription..."
+            for index in (1, 2)
+        ]
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_a_short_recording_is_sent_byte_identical_in_one_request(
+        self, mock_urlopen
+    ):
+        mock_urlopen.side_effect = _answers("kurz")
+        recording = _wav_seconds(5.0)
+
+        assert OpenAITranscriber(api_key="key").transcribe_batch(recording) == "kurz"
+
+        assert mock_urlopen.call_count == 1
+        assert _sent_audio(mock_urlopen.call_args.args[0]) == recording
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_a_failed_part_names_itself_and_carries_the_text_before_it(
+        self, mock_urlopen
+    ):
+        mock_urlopen.side_effect = [
+            *_answers("erster teil"),
+            urllib.error.HTTPError(
+                url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
+            ),
+        ]
+        transcriber = OpenAITranscriber(api_key="key", model="gpt-4o-transcribe")
+
+        with pytest.raises(TranscriptionError) as excinfo:
+            transcriber.transcribe_batch(_wav_seconds(301.0))
+
+        message = str(excinfo.value)
+        assert "part 2 of 2" in message
+        assert "Rate limit exceeded (HTTP 429)" in message
+        assert 'Received before the failure: "erster teil"' in message
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_a_cancel_between_parts_sends_no_further_request(self, mock_urlopen):
+        mock_urlopen.side_effect = _answers("erster teil", "zweiter teil")
+        transcriber = OpenAITranscriber(api_key="key", model="gpt-4o-transcribe")
+        transcriber.set_cancel_check(lambda: mock_urlopen.call_count >= 1)
+
+        with pytest.raises(TranscriptionCanceled):
+            transcriber.transcribe_batch(_wav_seconds(301.0))
+
+        assert mock_urlopen.call_count == 1
 
 
 class TestOpenAIConnectionTest:

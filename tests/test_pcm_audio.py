@@ -9,6 +9,7 @@ import pytest
 from stt_app.transcriber._pcm_audio import (
     MIN_SOURCE_SAMPLE_RATE_HZ,
     resample_linear,
+    split_into_passes,
 )
 from stt_app.transcriber.base import TranscriptionError
 
@@ -51,3 +52,48 @@ def test_audio_already_at_the_target_rate_is_returned_as_it_is():
 
     assert resampled.dtype == np.float32
     assert np.array_equal(resampled, samples)
+
+
+def test_one_splitter_serves_the_granite_runtime_and_the_remote_parts():
+    """Granite CTC's passes and the remote providers' parts are the same
+    problem -- consecutive windows cut at a quiet point -- so they share one
+    implementation; `test_local_granite_ctc.py` pins its behaviour."""
+    from stt_app.transcriber import _audio_parts, _pcm_audio, local_granite_ctc
+
+    assert local_granite_ctc.split_into_passes is _pcm_audio.split_into_passes
+    assert _audio_parts.split_into_passes is _pcm_audio.split_into_passes
+
+
+def _noise_with_silence(seconds: float, *silent: tuple[float, float]) -> np.ndarray:
+    rng = np.random.default_rng(3)
+    samples = rng.uniform(-0.5, 0.5, int(seconds * 16_000)).astype(np.float32)
+    for start_s, stop_s in silent:
+        samples[int(start_s * 16_000) : int(stop_s * 16_000)] = 0.0
+    return samples
+
+
+def test_a_bound_within_the_search_window_does_not_cut_twenty_ms_parts():
+    """The cut is looked for in the last 15 s before the bound. At a bound of
+    15 s or less that stretch reaches back to the window's own start, so a
+    pause at the start of a window was its quietest frame: the window was cut
+    20 ms in, the next one 20 ms later, and a 25 s recording with a 2 s pause
+    at its start came back as 103 windows, 99 of them 20 ms long (measured
+    before the fix). The search is at most half the bound, so every window
+    but the last carries at least that half."""
+    samples = _noise_with_silence(25.0, (0.0, 2.0))
+
+    windows = split_into_passes(samples, 16_000, max_seconds=10.0)
+
+    assert np.array_equal(np.concatenate(windows), samples)
+    assert all(window.size <= 10 * 16_000 for window in windows)
+    assert all(window.size >= 5 * 16_000 for window in windows[:-1]), [
+        window.size for window in windows
+    ]
+
+
+def test_a_short_bound_still_cuts_at_the_pause_in_its_second_half():
+    samples = _noise_with_silence(25.0, (7.0, 7.4))
+
+    windows = split_into_passes(samples, 16_000, max_seconds=10.0)
+
+    assert 7.0 * 16_000 <= windows[0].size <= 7.4 * 16_000

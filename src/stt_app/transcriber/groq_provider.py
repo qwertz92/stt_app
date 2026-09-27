@@ -19,9 +19,11 @@ from ..config import (
     DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
     parse_custom_vocabulary,
+    remote_batch_part_limit,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ._audio_parts import transcribe_in_parts
 from .base import (
     AudioInput,
     ITranscriber,
@@ -29,6 +31,8 @@ from .base import (
     StreamingCallback,
     TranscriptionError,
 )
+
+_UPLOAD_PROGRESS = "Uploading audio to Groq and waiting for transcription..."
 
 
 def _default_groq():
@@ -131,8 +135,19 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via Groq batch API.
 
-        Accepts WAV bytes, a file path, or a Path object.
+        Accepts WAV bytes, a file path, or a Path object. A recording past the
+        per-file limit goes out in parts (`transcribe_in_parts`).
         """
+        return transcribe_in_parts(
+            audio_source,
+            self._transcribe_request,
+            limit=remote_batch_part_limit("groq", self._model),
+            progress_text=_UPLOAD_PROGRESS,
+            raise_if_canceled=self._raise_if_canceled,
+        )
+
+    def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
+        """One transcription call, for a whole recording or one part of it."""
         client = self._get_client()
 
         temp_path: Path | None = None
@@ -168,9 +183,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
 
             with open(file_path, "rb") as audio_file:
                 kwargs["file"] = (Path(file_path).name, audio_file)
-                self._emit_progress(
-                    "Uploading audio to Groq and waiting for transcription..."
-                )
+                self._emit_progress(progress_text)
                 transcription = client.audio.transcriptions.create(**kwargs)
 
             # response_format="text" returns a string directly.

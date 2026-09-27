@@ -39,7 +39,7 @@ from ..config import (
     LOCAL_GRANITE_CTC_MODEL_SIZES,
     language_modes_for_selection,
 )
-from ._pcm_audio import resample_linear
+from ._pcm_audio import resample_linear, split_into_passes
 from .base import (
     AudioInput,
     ITranscriber,
@@ -98,13 +98,8 @@ _MIN_GRAPH_FRAMES = 4
 # One pass allocates activations for the whole recording. Peak working set
 # measured on the prototype of this runtime: 1.0 GB after the load, 1.4 GB for
 # 188 s and 2.4 GB for 563 s, so a long recording is transcribed in consecutive
-# windows instead.
+# windows instead, cut at quiet points by the shared `split_into_passes`.
 _MAX_PASS_SECONDS = 180.0
-# How far back from the end of a window the split point is looked for. The cut
-# is the quietest 20 ms frame in that stretch, because the two passes share no
-# audio and a cut inside a word loses it.
-_SPLIT_SEARCH_SECONDS = 15.0
-_SPLIT_FRAME_SAMPLES = 320
 # Frames per STFT block. At 512 samples per frame this is an 8 MB float32 slice,
 # which keeps a nine-minute recording from materialising one `frames x 512`
 # matrix.
@@ -199,56 +194,6 @@ def ctc_greedy_token_ids(logits: np.ndarray) -> list[int]:
     keep = np.ones(best.shape[0], dtype=bool)
     keep[1:] = best[1:] != best[:-1]
     return [int(token) for token in best[keep] if token != BLANK_ID]
-
-
-def _quietest_cut(
-    samples: np.ndarray,
-    start: int,
-    limit: int,
-    search_samples: int,
-) -> int:
-    """Index of the quietest 20 ms frame in the last stretch before `limit`.
-
-    Always strictly between `start` and `limit`, so the caller makes progress
-    and no window exceeds its bound. Falls back to `limit` when the searched
-    stretch does not hold a whole frame.
-    """
-    search_start = max(start + _SPLIT_FRAME_SAMPLES, limit - search_samples)
-    usable = (limit - search_start) // _SPLIT_FRAME_SAMPLES * _SPLIT_FRAME_SAMPLES
-    if usable < _SPLIT_FRAME_SAMPLES:
-        return limit
-    region = samples[search_start : search_start + usable]
-    energies = (region.reshape(-1, _SPLIT_FRAME_SAMPLES) ** 2).mean(axis=1)
-    return search_start + int(energies.argmin()) * _SPLIT_FRAME_SAMPLES
-
-
-def split_into_passes(
-    samples: np.ndarray,
-    sample_rate: int = AUDIO_SAMPLE_RATE,
-    *,
-    max_seconds: float = _MAX_PASS_SECONDS,
-    search_seconds: float = _SPLIT_SEARCH_SECONDS,
-) -> list[np.ndarray]:
-    """Cut a waveform into consecutive windows of at most `max_seconds`.
-
-    The windows concatenate back to the input exactly -- nothing is dropped and
-    nothing overlaps -- and a recording at or below the bound is returned
-    unsplit. `max_seconds` and `search_seconds` are arguments so a test can
-    drive the split on a short signal.
-    """
-    max_samples = int(max_seconds * sample_rate)
-    search_samples = max(_SPLIT_FRAME_SAMPLES, int(search_seconds * sample_rate))
-    if max_samples < _SPLIT_FRAME_SAMPLES or samples.size <= max_samples:
-        return [samples]
-
-    windows: list[np.ndarray] = []
-    start = 0
-    while samples.size - start > max_samples:
-        cut = _quietest_cut(samples, start, start + max_samples, search_samples)
-        windows.append(samples[start:cut])
-        start = cut
-    windows.append(samples[start:])
-    return windows
 
 
 class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
@@ -470,7 +415,9 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
             watchdog.start()
             try:
                 pieces: list[str] = []
-                for window in split_into_passes(waveform):
+                for window in split_into_passes(
+                    waveform, max_seconds=_MAX_PASS_SECONDS
+                ):
                     # Between windows, because each one is a fresh graph call
                     # that would otherwise run to its end.
                     self._raise_if_canceled()

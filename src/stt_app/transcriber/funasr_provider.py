@@ -43,6 +43,7 @@ from ._http_utils import (
     format_ssl_error_message,
     nested_error_text,
     normalize_transcript_text,
+    recovered_text_suffix,
 )
 from .base import (
     AudioInput,
@@ -123,11 +124,6 @@ class _FunAsrInterrupted(Exception):
     """
 
 
-# The recovered text goes into a user-facing error, and the overlay's error
-# detail is selectable, so it can be copied out of the failure. Bounded so a
-# very long dictation cannot fill the overlay end to end; the audio is kept
-# for Retry either way.
-_RECOVERED_TEXT_MAX_CHARS = 2000
 # Consecutive frames that are not events (binary, non-JSON, non-object)
 # before the receive loop gives up. A real socket blocks in `recv`, so
 # the loop cannot spin on its own; a peer that floods unusable frames
@@ -541,29 +537,6 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             except Exception:
                 pass
 
-    @staticmethod
-    def _recovered_suffix(finalized: list[str], current: str) -> str:
-        """Name what the service had already delivered, if anything.
-
-        Every exit other than `task-finished` used to discard the sentences
-        already received -- measured: two finished sentences lost to a server
-        close, to a read timeout, and to a `task-failed`. The WAV is kept for
-        Retry, so nothing is unrecoverable, but a re-run costs the whole
-        upload and transcription again and this text is often the entire
-        dictation minus its last words. It is reported rather than returned:
-        returning it would hand back a silently truncated transcript that
-        reads exactly like a complete one.
-        """
-        parts = [part for part in [*finalized, current] if part]
-        # One guard, not two: an empty `parts` joins to "" and so does a list
-        # of nothing but whitespace, and both reach the same answer here.
-        text = normalize_transcript_text(" ".join(parts))
-        if not text:
-            return ""
-        if len(text) > _RECOVERED_TEXT_MAX_CHARS:
-            text = text[:_RECOVERED_TEXT_MAX_CHARS].rstrip() + "..."
-        return f' Received before the failure: "{text}"'
-
     def _collect_transcript(self, ws, deadline: float) -> str:
         finalized: list[str] = []
         # Kept as a running total rather than summed per frame: summing the
@@ -643,14 +616,14 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                             "Fun-ASR sent more transcript text than a "
                             "recording can hold "
                             f"({_MAX_TRANSCRIPT_CHARS:,} characters)."
-                            + self._recovered_suffix(finalized, current)
+                            + recovered_text_suffix(finalized, current)
                         )
                 elif event == "task-finished":
                     break
                 elif event == "task-failed":
                     raise TranscriptionError(
                         self._fail_message(message)
-                        + self._recovered_suffix(finalized, current)
+                        + recovered_text_suffix(finalized, current)
                     )
                 else:
                     # `{}`, or an event name this loop does not act on: an
@@ -661,14 +634,14 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             raise
         except _FunAsrInterrupted as exc:
             raise TranscriptionError(
-                f"{exc}{self._recovered_suffix(finalized, current)}"
+                f"{exc}{recovered_text_suffix(finalized, current)}"
             ) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
                 raise TranscriptionError(format_ssl_error_message("Fun-ASR")) from exc
             raise TranscriptionError(
                 "Fun-ASR transcription failed: "
-                f"{exc}{self._recovered_suffix(finalized, current)}"
+                f"{exc}{recovered_text_suffix(finalized, current)}"
             ) from exc
         if current:
             finalized.append(current)

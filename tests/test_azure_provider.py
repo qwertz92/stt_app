@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import wave
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
 from stt_app.transcriber.azure_provider import (
@@ -16,7 +18,7 @@ from stt_app.transcriber.azure_provider import (
     build_transcribe_url,
     normalize_azure_endpoint,
 )
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 
 _ENDPOINT = "https://my-res.cognitiveservices.azure.com"
 
@@ -343,6 +345,104 @@ class TestAzureBatchTranscription:
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
         with pytest.raises(TranscriptionError, match="missing file path"):
             t.transcribe_batch("missing.wav")
+
+
+def _wav_seconds(seconds: float) -> bytes:
+    """A 16 kHz mono 16-bit WAV, the format the app records."""
+    count = int(seconds * 16_000)
+    tone = (np.sin(np.arange(count) / 12.0) * 6000.0).astype("<i2")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16_000)
+        handle.writeframes(tone.tobytes())
+    return buffer.getvalue()
+
+
+def _sent_parts(request) -> tuple[dict, bytes]:
+    """The `definition` object and the audio of a request, as they went out."""
+    boundary = request.get_header("Content-type").split("boundary=", 1)[1]
+    definition: dict = {}
+    audio = b""
+    for part in request.data.split(f"--{boundary}".encode())[1:-1]:
+        head, _, body = part.partition(b"\r\n\r\n")
+        body = body[: -len(b"\r\n")]
+        if b"filename=" in head:
+            audio = body
+        elif b'name="definition"' in head:
+            definition = json.loads(body)
+    return definition, audio
+
+
+def _phrases(*texts: str):
+    return [
+        _fake_response(json.dumps({"combinedPhrases": [{"text": text}]}))
+        for text in texts
+    ]
+
+
+class TestAzureLongRecordings:
+    """The fast-transcription reference takes audio "shorter than 2 hours ...
+    smaller than 250 MB". The bound is lowered here so the recording can be
+    short; `test_audio_parts.py` pins the real one."""
+
+    @pytest.fixture(autouse=True)
+    def _short_bound(self, monkeypatch):
+        from stt_app import config
+
+        monkeypatch.setitem(config.REMOTE_BATCH_MAX_PART_SECONDS, "azure", 20.0)
+
+    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    def test_every_part_is_sent_with_the_same_definition(self, mock_urlopen):
+        mock_urlopen.side_effect = _phrases("eins", "zwei")
+        progress: list[str] = []
+        t = AzureLlmSpeechTranscriber(
+            api_key="k", endpoint=_ENDPOINT, language_mode="de"
+        )
+        t.set_progress_callback(progress.append)
+
+        text = t.transcribe_batch(_wav_seconds(25.0))
+
+        assert text == "eins zwei"
+        assert mock_urlopen.call_count == 2
+        for call in mock_urlopen.call_args_list:
+            definition, audio = _sent_parts(call.args[0])
+            assert definition == {
+                "enhancedMode": {"enabled": True, "model": "MAI-Transcribe-2"},
+                "locales": ["de"],
+            }
+            with wave.open(io.BytesIO(audio), "rb") as handle:
+                assert handle.getnframes() <= 20 * 16_000
+        assert progress == [
+            f"Transcribing part {index} of 2. Uploading audio to Azure LLM "
+            "Speech and waiting for transcription..."
+            for index in (1, 2)
+        ]
+
+    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    def test_a_short_recording_is_sent_byte_identical_in_one_request(
+        self, mock_urlopen
+    ):
+        mock_urlopen.side_effect = _phrases("kurz")
+        recording = _wav_seconds(1.5)
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+
+        assert t.transcribe_batch(recording) == "kurz"
+
+        assert mock_urlopen.call_count == 1
+        assert _sent_parts(mock_urlopen.call_args.args[0])[1] == recording
+
+    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    def test_a_cancel_between_parts_sends_no_further_request(self, mock_urlopen):
+        mock_urlopen.side_effect = _phrases("eins", "zwei")
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+        t.set_cancel_check(lambda: mock_urlopen.call_count >= 1)
+
+        with pytest.raises(TranscriptionCanceled):
+            t.transcribe_batch(_wav_seconds(25.0))
+
+        assert mock_urlopen.call_count == 1
 
 
 class TestAzureConnectionTest:

@@ -145,7 +145,10 @@ automatically.
   per file". This app
   cannot resolve the discrepancy without a live Azure resource to test
   against; plan for the smaller, older figure (250 MB / 2 hours) until it is
-  verified which one the service actually enforces.
+  verified which one the service actually enforces. The app holds every
+  request to one hour and 250 MB and sends a longer recording in
+  consecutive parts cut at quiet points, so the discrepancy decides only
+  how many requests a very long import takes (2026-09-27).
 - Data leaves your machine and is processed in Azure. For fully offline use,
   pick a local engine instead.
 

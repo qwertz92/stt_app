@@ -18,16 +18,13 @@ Docs: https://learn.microsoft.com/azure/ai-services/speech-service/llm-speech
 
 from __future__ import annotations
 
-import io
 import json
 import urllib.error
 import urllib.parse
 import urllib.request
-import wave
 from pathlib import Path
 
 from ..config import (
-    AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
     AZURE_API_MODEL_NAMES,
     AZURE_LOCALE_OVERRIDES,
@@ -36,9 +33,11 @@ from ..config import (
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_LANGUAGE_MODE,
     language_modes_for_selection,
+    remote_batch_part_limit,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
@@ -46,6 +45,7 @@ from ._http_utils import (
     normalize_transcript_text,
     read_http_error_detail,
 )
+from ._pcm_audio import pcm16_wav_bytes
 from .base import (
     AudioInput,
     ITranscriber,
@@ -55,6 +55,9 @@ from .base import (
 )
 
 _TRANSCRIBE_PATH = "/speechtotext/transcriptions:transcribe"
+_UPLOAD_PROGRESS = (
+    "Uploading audio to Azure LLM Speech and waiting for transcription..."
+)
 _AZURE_SPEECH_HOST_SUFFIXES = (
     ".cognitiveservices.azure.com",
     ".api.cognitive.microsoft.com",
@@ -141,13 +144,7 @@ def _silent_wav_bytes(duration_s: float = 1.0) -> bytes:
     still consuming a negligible amount of quota.
     """
     frame_count = max(1, int(AUDIO_SAMPLE_RATE * duration_s))
-    buffer = io.BytesIO()
-    with wave.open(buffer, "wb") as wav:
-        wav.setnchannels(AUDIO_CHANNELS)
-        wav.setsampwidth(2)  # PCM16
-        wav.setframerate(AUDIO_SAMPLE_RATE)
-        wav.writeframes(b"\x00\x00" * frame_count)
-    return buffer.getvalue()
+    return pcm16_wav_bytes(b"\x00\x00" * frame_count, AUDIO_SAMPLE_RATE)
 
 
 class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
@@ -236,6 +233,16 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
     # -- Batch transcription ----------------------------------------------------
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
+        return transcribe_in_parts(
+            audio_source,
+            self._transcribe_request,
+            limit=remote_batch_part_limit("azure", self._model),
+            progress_text=_UPLOAD_PROGRESS,
+            raise_if_canceled=self._raise_if_canceled,
+        )
+
+    def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
+        """One `:transcribe` request, for a whole recording or one part of it."""
         try:
             if isinstance(audio_source, bytes):
                 audio_bytes = bytes(audio_source)
@@ -247,9 +254,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
 
             req = self._build_request(audio_bytes, filename)
             ssl_ctx = create_ssl_context()
-            self._emit_progress(
-                "Uploading audio to Azure LLM Speech and waiting for transcription..."
-            )
+            self._emit_progress(progress_text)
             with urllib.request.urlopen(
                 req, timeout=self._request_timeout_s, context=ssl_ctx
             ) as resp:

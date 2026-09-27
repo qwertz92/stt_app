@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import fnmatch
-import io
 import logging
 import os
 import queue
@@ -10,7 +9,6 @@ import stat
 import tempfile
 import threading
 import time
-import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -49,6 +47,7 @@ from ..model_download_progress import (
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import merge_rolling_window, merge_rolling_window_transcript
 from ..vad import measure_longest_speech_run_s, measure_peak_windowed_rms_pcm
+from ._pcm_audio import pcm16_wav_bytes
 from .base import (
     AudioInput,
     ITranscriber,
@@ -1693,7 +1692,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 max_bytes = int(max_window_seconds * self.stream_sample_rate * 2)
                 if max_bytes > 0 and len(snapshot) > max_bytes:
                     snapshot = snapshot[-max_bytes:]
-            return self.transcribe_batch(self._pcm16_to_wav_bytes(snapshot))
+            return self.transcribe_batch(
+                pcm16_wav_bytes(snapshot, self.stream_sample_rate)
+            )
         snapshot, window_start, window_end = self._trailing_window(
             session, max_window_seconds
         )
@@ -1705,13 +1706,6 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # overlap where there is none.
         session.result.last_window_start = window_start
         session.result.last_window_end = window_end
-        return self.transcribe_batch(self._pcm16_to_wav_bytes(snapshot))
-
-    def _pcm16_to_wav_bytes(self, pcm_bytes: bytes) -> bytes:
-        buffer = io.BytesIO()
-        with wave.open(buffer, "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)
-            wav_file.setframerate(self.stream_sample_rate)
-            wav_file.writeframes(pcm_bytes)
-        return buffer.getvalue()
+        return self.transcribe_batch(
+            pcm16_wav_bytes(snapshot, self.stream_sample_rate)
+        )

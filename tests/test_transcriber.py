@@ -627,6 +627,45 @@ def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
     assert observed["seconds"] == pytest.approx(2.0, rel=0.03)
 
 
+@pytest.mark.parametrize("stream_sample_rate", [16_000, 22_050])
+@pytest.mark.parametrize("through_session", [False, True])
+def test_the_stream_window_is_wrapped_in_the_wav_it_always_was(
+    monkeypatch, stream_sample_rate, through_session
+):
+    """Both roads wrap the window with the shared `pcm16_wav_bytes`, which
+    replaced a private copy of the same `wave` calls. The bytes handed to
+    `transcribe_batch` are compared with what that copy wrote -- mono, 16-bit,
+    the stream's own rate, the PCM as it is -- at the default rate and at
+    another, so a wrapper that took the app's 16 kHz instead fails here."""
+    pcm = _build_pcm16_chunk(sample_count=4_000)
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_sample_rate=stream_sample_rate,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    sent: list[bytes] = []
+    monkeypatch.setattr(
+        transcriber, "transcribe_batch", lambda wav: sent.append(wav) or "ok"
+    )
+
+    if through_session:
+        session = types.SimpleNamespace(
+            pcm_buffer=bytearray(pcm), result=types.SimpleNamespace()
+        )
+        transcriber._transcribe_current_stream_buffer(session=session)
+    else:
+        transcriber._stream_pcm_buffer = bytearray(pcm)
+        transcriber._transcribe_current_stream_buffer()
+
+    reference = io.BytesIO()
+    with wave.open(reference, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(stream_sample_rate)
+        wav_file.writeframes(pcm)
+    assert sent == [reference.getvalue()]
+
+
 class HubOfflineModel:
     def transcribe(
         self, audio_source, language=None, vad_filter=True, initial_prompt=None

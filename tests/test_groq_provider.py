@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import io
+import wave
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.groq_provider import GroqTranscriber
 
 # ---------------------------------------------------------------------------
@@ -197,7 +200,9 @@ class TestGroqTranscribeBatch:
         assert result == "trimmed text"
 
     def test_model_passed_to_api(self, tmp_path):
-        """The selected model name is forwarded to the API call."""
+        """The selected model name is forwarded to the API call -- a model
+        other than the default, so a request that fell back to the default
+        fails here as well."""
         cls = _make_fake_groq_class(text="ok")
         t = GroqTranscriber(
             api_key="key",
@@ -208,21 +213,27 @@ class TestGroqTranscribeBatch:
         wav.write_bytes(b"RIFF fake")
         t.transcribe_batch(str(wav))
 
-        client = t._build_client()
-        # Verify we can build a client (basic sanity).
-        assert client.api_key == "key"
+        calls = t._get_client().audio.transcriptions.calls
+        assert len(calls) == 1
+        assert calls[0]["model"] == "whisper-large-v3"
 
     def test_language_passed_when_not_auto(self, tmp_path):
-        """Explicit language mode forwards language parameter."""
-        cls = _make_fake_groq_class(text="ok")
-        t = GroqTranscriber(
-            api_key="key", language_mode="de", groq_client_class=cls
-        )
+        """Explicit language mode forwards language parameter; Auto sends
+        none and leaves the detection to the service."""
         wav = tmp_path / "test.wav"
         wav.write_bytes(b"RIFF fake")
-        t.transcribe_batch(str(wav))
-        # No assertion on internal API call args because we can't easily
-        # inspect them through the class wrapping. Core logic test: no crash.
+        sent: dict[str, dict] = {}
+        for mode in ("de", "auto"):
+            t = GroqTranscriber(
+                api_key="key",
+                language_mode=mode,
+                groq_client_class=_make_fake_groq_class(text="ok"),
+            )
+            t.transcribe_batch(str(wav))
+            sent[mode] = t._get_client().audio.transcriptions.calls[-1]
+
+        assert sent["de"]["language"] == "de"
+        assert "language" not in sent["auto"]
 
     def test_custom_vocabulary_passed_as_prompt(self, tmp_path):
         """custom_vocabulary is forwarded as the Whisper-compatible prompt."""
@@ -250,6 +261,110 @@ class TestGroqTranscribeBatch:
 
         client = t._get_client()
         assert "prompt" not in client.audio.transcriptions.calls[-1]
+
+
+# ---------------------------------------------------------------------------
+# Tests: a recording past the per-file limit goes out in parts
+# ---------------------------------------------------------------------------
+
+
+def _wav_seconds(seconds: float) -> bytes:
+    """A 16 kHz mono 16-bit WAV, the format the app records."""
+    count = int(seconds * 16_000)
+    tone = (np.sin(np.arange(count) / 12.0) * 6000.0).astype("<i2")
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(16_000)
+        handle.writeframes(tone.tobytes())
+    return buffer.getvalue()
+
+
+class _RecordingTranscriptions:
+    """Reads each uploaded file while the SDK call is still holding it open."""
+
+    def __init__(self, answers: list[str]):
+        self._answers = answers
+        self.calls: list[dict] = []
+        self.files: list[bytes] = []
+
+    def create(self, **kwargs):
+        _name, handle = kwargs["file"]
+        self.files.append(handle.read())
+        self.calls.append({key: value for key, value in kwargs.items() if key != "file"})
+        return self._answers[len(self.calls) - 1]
+
+
+def _recording_groq_class(transcriptions: _RecordingTranscriptions):
+    class _Client(FakeGroqClient):
+        def __init__(self, api_key: str = "", **kwargs):
+            super().__init__(api_key=api_key)
+            self.audio = type("Audio", (), {"transcriptions": transcriptions})()
+
+    return _Client
+
+
+class TestGroqLongRecordings:
+    """Groq's free tier takes 25 MB per file (the developer tier 100 MB, and
+    the app cannot tell which tier a key has). The bound is lowered here so
+    the recording can be short; `test_audio_parts.py` pins the real one."""
+
+    @pytest.fixture(autouse=True)
+    def _short_bound(self, monkeypatch):
+        from stt_app import config
+
+        monkeypatch.setitem(config.REMOTE_BATCH_MAX_PART_SECONDS, "groq", 20.0)
+
+    def test_every_part_is_sent_with_the_language_and_the_vocabulary(self):
+        transcriptions = _RecordingTranscriptions(["eins", "zwei"])
+        progress: list[str] = []
+        t = GroqTranscriber(
+            api_key="key",
+            language_mode="de",
+            groq_client_class=_recording_groq_class(transcriptions),
+            custom_vocabulary="Kubernetes, Splunk SOAR",
+        )
+        t.set_progress_callback(progress.append)
+
+        text = t.transcribe_batch(_wav_seconds(25.0))
+
+        assert text == "eins zwei"
+        assert len(transcriptions.files) == 2
+        for part in transcriptions.files:
+            with wave.open(io.BytesIO(part), "rb") as handle:
+                assert handle.getnframes() <= 20 * 16_000
+        for call in transcriptions.calls:
+            assert call["language"] == "de"
+            assert call["prompt"] == "Kubernetes, Splunk SOAR"
+        assert progress == [
+            f"Transcribing part {index} of 2. Uploading audio to Groq and "
+            "waiting for transcription..."
+            for index in (1, 2)
+        ]
+
+    def test_a_short_recording_is_sent_byte_identical_in_one_request(self):
+        transcriptions = _RecordingTranscriptions(["kurz"])
+        recording = _wav_seconds(1.5)
+        t = GroqTranscriber(
+            api_key="key", groq_client_class=_recording_groq_class(transcriptions)
+        )
+
+        assert t.transcribe_batch(recording) == "kurz"
+
+        assert transcriptions.files == [recording]
+
+    def test_a_cancel_between_parts_sends_no_further_request(self):
+        transcriptions = _RecordingTranscriptions(["eins", "zwei"])
+        t = GroqTranscriber(
+            api_key="key", groq_client_class=_recording_groq_class(transcriptions)
+        )
+        t.set_cancel_check(lambda: bool(transcriptions.calls))
+
+        with pytest.raises(TranscriptionCanceled):
+            t.transcribe_batch(_wav_seconds(25.0))
+
+        assert len(transcriptions.calls) == 1
 
 
 # ---------------------------------------------------------------------------
