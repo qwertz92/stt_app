@@ -39,6 +39,40 @@ than the base model; see
 the measurements. There is now exactly one ONNX inference path, and the Node
 helper needs no `onnxruntime-node` dependency of its own.
 
+### Which ONNX Runtime Node runs, and why it is 1.29.0
+
+Transformers.js 4.3.0 pins `onnxruntime-node` 1.30.0. `package.json` replaces
+that copy with 1.29.0 through one npm `overrides` entry (2026-09-27), because
+1.29.0 was measured faster on WebGPU with identical transcripts. The version
+that actually runs is in
+`node_modules/@huggingface/transformers/node_modules/onnxruntime-node/package.json`
+(and under the same path in `package-lock.json`); the benchmark environment
+records that one.
+
+Measured on an Intel Arc A750 with a Ryzen 5 7600X and Node 24.21.0, through
+the app's own transcriber, against two installs of Transformers.js 4.3.0 that
+differed only in the override. The runs were interleaved and repeated in
+reverse order; each figure is the fastest of three warm runs, in seconds, for
+a 28.6 s German and a 29.4 s English clip (two orders where two are given):
+
+| Model, target | German, 1.29.0 | German, 1.30.0 | English, 1.29.0 | English, 1.30.0 |
+|---------------|----------------|----------------|-----------------|-----------------|
+| Cohere, WebGPU | 1.03 / 1.17 | 1.67 / 1.73 | 1.22 / 1.22 | 1.92 / 1.94 |
+| Granite 4.1 2B, WebGPU | 1.69 / 1.72 | 3.01 / 3.04 | 2.26 / 2.24 | 3.58 / 3.69 |
+| Granite 4.0 1B, WebGPU | 1.55 | 2.83 | 2.36 | 3.74 |
+| Granite 4.0 1B, CPU | 8.8 | 9.6 | 10.9 | 12.0 |
+
+Every transcript was byte-identical between the two versions. The CPU
+difference is within run-to-run noise, DirectML fails for Cohere on both
+versions (see below), and `npm audit` reports nothing for either. The cause of
+the WebGPU difference is not identified: 1.30.0's release notes change the
+subgroup size of the WebGPU subgroup-matrix MatMul/Gemm, which is a candidate,
+not a verified cause. npm publishes no 1.28; 1.27.0 was left out because it
+declares `adm-zip ^0.5.16`, a range with a known vulnerability
+(GHSA-vwc7-r8mq-g2x9), and would need a second override. The pin is re-measured
+whenever Transformers.js pins a newer ONNX Runtime or `onnxruntime-node` 1.31
+appears, and removed as soon as the newer version is not slower.
+
 ## Runtime Formats
 
 ONNX is not a GPU-only format. ONNX is a portable model graph format, and ONNX

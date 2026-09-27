@@ -64,6 +64,49 @@ def test_node_package_version_prefers_installed_package(monkeypatch, tmp_path):
     assert benchmark_environment._node_package_version("onnxruntime-node") == "1.24.3"
 
 
+def _write_version(package_dir, version: str) -> None:
+    package_dir.mkdir(parents=True)
+    (package_dir / "package.json").write_text(
+        json.dumps({"version": version}), encoding="utf-8"
+    )
+
+
+def test_node_package_version_reads_the_copy_transformers_js_loads(
+    monkeypatch, tmp_path
+):
+    # An npm `overrides` pin can nest onnxruntime-node under Transformers.js,
+    # and Node resolves that copy before a root one: the version recorded is
+    # the one that runs, not a stale root copy or nothing at all.
+    nested = tmp_path / "node_modules" / "@huggingface" / "transformers"
+    _write_version(nested / "node_modules" / "onnxruntime-node", "1.29.0")
+    monkeypatch.setattr(benchmark_environment, "_project_root", lambda: tmp_path)
+
+    assert benchmark_environment._node_package_version("onnxruntime-node") == "1.29.0"
+
+    _write_version(tmp_path / "node_modules" / "onnxruntime-node", "1.30.0")
+
+    assert benchmark_environment._node_package_version("onnxruntime-node") == "1.29.0"
+
+
+def test_node_package_version_reads_a_nested_lock_entry(monkeypatch, tmp_path):
+    lock = {
+        "packages": {
+            "node_modules/@huggingface/transformers": {"version": "4.3.0"},
+            "node_modules/@huggingface/transformers/node_modules/onnxruntime-node": {
+                "version": "1.29.0"
+            },
+        }
+    }
+    (tmp_path / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    monkeypatch.setattr(benchmark_environment, "_project_root", lambda: tmp_path)
+
+    assert benchmark_environment._node_package_version("onnxruntime-node") == "1.29.0"
+    assert (
+        benchmark_environment._node_package_version("@huggingface/transformers")
+        == "4.3.0"
+    )
+
+
 def test_cuda_versions_reports_when_cuda_is_not_detected(monkeypatch):
     monkeypatch.setattr(benchmark_environment, "_command_lines", lambda *_args: [])
 

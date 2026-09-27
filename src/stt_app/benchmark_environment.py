@@ -516,10 +516,31 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+_TRANSFORMERS_JS_PACKAGE = "@huggingface/transformers"
+
+
+def _node_package_locations(package_name: str) -> list[str]:
+    """Where Node finds `package_name` for the app, nearest first.
+
+    Every Node package the app records other than Transformers.js itself is
+    loaded *by* Transformers.js, and Node resolves a dependency from the
+    importing package's own `node_modules` before the root one. An npm
+    `overrides` pin can nest the pinned copy there, so reading the root alone
+    reported nothing -- or a stale root copy -- for the runtime that runs.
+    """
+    root_location = f"node_modules/{package_name}"
+    if package_name == _TRANSFORMERS_JS_PACKAGE:
+        return [root_location]
+    return [f"node_modules/{_TRANSFORMERS_JS_PACKAGE}/{root_location}", root_location]
+
+
 def _node_package_version(package_name: str) -> str:
     root = _project_root()
-    installed_path = root / "node_modules" / Path(package_name) / "package.json"
-    if installed_path.exists():
+    locations = _node_package_locations(package_name)
+    for location in locations:
+        installed_path = root / Path(location) / "package.json"
+        if not installed_path.exists():
+            continue
         try:
             payload = json.loads(installed_path.read_text(encoding="utf-8"))
             version = str(payload.get("version", "")).strip()
@@ -534,11 +555,12 @@ def _node_package_version(package_name: str) -> str:
             payload = json.loads(lock_path.read_text(encoding="utf-8"))
             packages = payload.get("packages", {})
             if isinstance(packages, dict):
-                package = packages.get(f"node_modules/{package_name}", {})
-                if isinstance(package, dict):
-                    version = str(package.get("version", "")).strip()
-                    if version:
-                        return version
+                for location in locations:
+                    package = packages.get(location, {})
+                    if isinstance(package, dict):
+                        version = str(package.get("version", "")).strip()
+                        if version:
+                            return version
         except (OSError, ValueError):
             pass
 

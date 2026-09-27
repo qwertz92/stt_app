@@ -3362,9 +3362,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **`onnxruntime-node` is no longer a direct dependency**: it was only ever
   needed by the raw Granite 4.1 Plus/NAR graph sessions, which were retired on
   2026-08-26. The pipeline models run on the copy Transformers.js pins itself
-  (exactly 1.24.3 across 4.0-4.2, exactly 1.30.0 in 4.3.0), so
-  `npm ls onnxruntime-node` must show one nested entry and nothing at the top
-  level. **Do not add it back.** Declaring
+  (exactly 1.24.3 across 4.0-4.2, exactly 1.30.0 in 4.3.0), which an
+  `overrides` entry replaces with 1.29.0 since 2026-09-27 (next entry), so
+  `npm ls onnxruntime-node` must show exactly one entry, under
+  `@huggingface/transformers` and marked `overridden`. An override replaces
+  that one copy; a dependency adds a second. **Do not add it back.** Declaring
   a newer version alongside makes npm install two different native ORT runtimes
   into one Node process (observed API-version mismatch warnings), and nothing
   in the app would use the newer copy. A 2026-07-21 benchmark found Transformers.js
@@ -3377,8 +3379,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (re-checked for 1.30.0 on 2026-09-18: `bin/napi-v6/win32/x64` holds
   `onnxruntime.dll`, `DirectML.dll`, `dxil.dll`, `dxcompiler.dll` and the
   binding, and `listSupportedBackends()` answers all three as bundled).
-- **Transformers.js is 4.3.0 and `package.json` carries no `overrides`**
-  (2026-09-18). 4.2.0 declared `sharp: ^0.34.5` and pinned an
+- **Transformers.js is 4.3.0, and `package.json`'s one `overrides` entry
+  pins `onnxruntime-node` to 1.29.0 because it is faster** (2026-09-18, pin
+  2026-09-27). 4.2.0 declared `sharp: ^0.34.5` and pinned an
   `onnxruntime-node` whose `adm-zip` range stopped at the vulnerable 0.6.0, so
   the tree needed two `overrides` (`sharp: ^0.35.0` against GHSA-f88m-g3jw-g9cj,
   `adm-zip: ^0.6.0`) and the audit job still went red again when the advisory
@@ -3405,6 +3408,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   touched by a lockfile change: a source-tree app that is running keeps the
   native binaries of its Node child loaded, so `npm ci` has to wait until the
   app is closed.
+  **Why 1.29.0 rather than 4.3.0's own 1.30.0** (2026-09-27, Arc A750, Ryzen 5
+  7600X, Node 24.21.0): measured through `LocalOnnxWebGpuTranscriber` against
+  two throwaway 4.3.0 installs that differ only in the override, interleaved
+  and repeated in reverse order, three warm runs per clip after a warm-up, on
+  a 28.6 s German and a 29.4 s English clip. On WebGPU 1.29.0 was faster for
+  every model, clip and order; fastest run, German clip: Cohere 1.03 and
+  1.17 s against 1.67 and 1.73 s, Granite 4.1 2B 1.69 and 1.72 s against 3.01
+  and 3.04 s, Granite 4.0 1B 1.55 s against 2.83 s; the English clip alike.
+  The transcripts were byte-identical between the versions for every model
+  and clip, the CPU target was within noise (Granite 4.0: 8.8 against 9.6 s),
+  DirectML fails for Cohere on both (the known `MultiHeadAttention` failure),
+  and `npm audit` reports nothing for either tree. The cause is not
+  identified; 1.30's release notes change the WebGPU subgroup-matrix
+  MatMul/Gemm subgroup size, which is a candidate, unverified. npm publishes
+  no 1.28, and 1.27.0 was not measured: it declares `adm-zip ^0.5.16`, inside
+  the vulnerable range above, so it would need a second override. Re-measure,
+  and drop the override when it stops winning, whenever Transformers.js pins
+  a newer ORT or `onnxruntime-node` 1.31 is published. With the override npm
+  nests the package under `node_modules/@huggingface/transformers/node_modules/`,
+  where Node resolves it first, so `benchmark_environment._node_package_version`
+  reads that location before the root one; the version that runs is in that
+  folder's `package.json` and in the lock entry of the same path.
 - **Every Python dependency was brought to its newest release on 2026-09-21,
   and each was measured through the code that uses it.** Direct pins: PySide6
   6.11.2, sounddevice 0.5.6, numpy 2.5.3, onnxruntime-genai 0.16.0, assemblyai

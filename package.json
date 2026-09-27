@@ -8,5 +8,8 @@
   },
   "dependencies": {
     "@huggingface/transformers": "^4.3.0"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.29.0"
   }
 }
