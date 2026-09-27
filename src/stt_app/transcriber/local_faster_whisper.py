@@ -689,17 +689,46 @@ def _download_faster_whisper_via_modelscope(
     return path
 
 
-def _directory_has_required_files(directory: Path, required_files: set[str]) -> bool:
+# What `WhisperModel` reads from a snapshot (faster_whisper/transcribe.py,
+# 1.2.1). Without `tokenizer.json` it fetches openai/whisper-tiny's tokenizer
+# from the Hub, without a `vocabulary.*` file CTranslate2 cannot load the
+# model, and without `preprocessor_config.json` the feature extractor keeps
+# its 80-mel default where large-v3 and its descendants expect 128. A snapshot
+# holding only `config.json` and `model.bin` -- an interrupted download that
+# finished the weights before a small file -- was counted as installed, and
+# the constructor then fetched the rest itself, past the download slot, the
+# orphan removal and the settled symlink probe (review round 3, 2026-09-21).
+_SNAPSHOT_REQUIRED_FILES = frozenset({"config.json", "model.bin", "tokenizer.json"})
+_SNAPSHOT_VOCABULARY_PREFIX = "vocabulary."
+# The repositories that ship `preprocessor_config.json` (their Hugging Face
+# file listings, read 2026-09-27); tiny to medium ship none and need none.
+# `scripts/import_model.py` validates an import against the same set.
+PREPROCESSOR_CONFIG_MODELS = frozenset(
+    {"large-v3", "large-v3-turbo", "distil-large-v3.5"}
+)
+
+
+def _snapshot_is_complete(directory: Path, model_name: str) -> bool:
     if not directory.is_dir():
         return False
     try:
         files = {entry.name for entry in directory.iterdir() if entry.is_file()}
     except OSError:
         return False
-    return required_files.issubset(files)
+    required = set(_SNAPSHOT_REQUIRED_FILES)
+    if model_name in PREPROCESSOR_CONFIG_MODELS:
+        required.add("preprocessor_config.json")
+    return required.issubset(files) and any(
+        name.startswith(_SNAPSHOT_VOCABULARY_PREFIX) for name in files
+    )
 
 
-def _has_valid_model_snapshot(cache_dir: Path, required_files: set[str]) -> bool:
+def _has_valid_model_snapshot(cache_dir: Path, model_name: str) -> bool:
+    """Whether `cache_dir` holds a snapshot `WhisperModel` loads without a fetch.
+
+    The one rule for the inventory and the load path's pre-fetch, so the Models
+    tab's "installed" and the next dictation's "must download" cannot disagree.
+    """
     snapshots_dir = cache_dir / "snapshots"
     if not snapshots_dir.is_dir():
         return False
@@ -707,7 +736,7 @@ def _has_valid_model_snapshot(cache_dir: Path, required_files: set[str]) -> bool
         for snapshot in snapshots_dir.iterdir():
             if not snapshot.is_dir():
                 continue
-            if _directory_has_required_files(snapshot, required_files):
+            if _snapshot_is_complete(snapshot, model_name):
                 return True
     except OSError:
         return False
@@ -738,12 +767,10 @@ def find_cached_models(model_dir: str = "") -> list[str]:
     """
     found: set[str] = set()
 
-    required_files = {"config.json", "model.bin"}
-
     for short_name in FASTER_WHISPER_MODEL_SIZES:
         destination = download_destination_dir(short_name, model_dir)
         if destination is not None and _has_valid_model_snapshot(
-            destination, required_files
+            destination, short_name
         ):
             found.add(short_name)
 
@@ -867,7 +894,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # the constructor would still download — uncoordinated.
         destination = download_destination_dir(self.model_size, self._model_dir)
         if destination is not None and _has_valid_model_snapshot(
-            destination, {"config.json", "model.bin"}
+            destination, self.model_size
         ):
             return
         from ..model_download_coordinator import run_coordinated_download

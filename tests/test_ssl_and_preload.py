@@ -298,6 +298,41 @@ class TestFindCachedModels:
             result = find_cached_models(str(tmp_path))
         assert "tiny" in result
 
+    def test_a_snapshot_missing_a_loader_file_is_not_cached(self, tmp_path):
+        """`config.json` and `model.bin` alone are not a loadable model.
+
+        Without `tokenizer.json` or a vocabulary file `WhisperModel` fetched
+        the rest itself, past the download slot and its housekeeping, and
+        offline it could not load at all (review round 3, 2026-09-21).
+        """
+        snapshot = self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
+        (snapshot / "tokenizer.json").unlink()
+        with patch(
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            assert "small" not in find_cached_models()
+            (snapshot / "tokenizer.json").write_text("{}")
+            (snapshot / "vocabulary.txt").unlink()
+            assert "small" not in find_cached_models()
+
+    def test_a_128_mel_model_needs_its_preprocessor_config(self, tmp_path):
+        """large-v3 and its descendants ship `preprocessor_config.json` with
+        128 mel bins; loaded without it, faster-whisper keeps its 80-mel
+        default. The 80-mel repositories ship none."""
+        snapshot = self._make_hf_cache(
+            tmp_path, "large-v3", "Systran/faster-whisper-large-v3"
+        )
+        (snapshot / "vocabulary.txt").unlink()
+        (snapshot / "vocabulary.json").write_text("[]")
+        with patch(
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            assert "large-v3" not in find_cached_models()
+            (snapshot / "preprocessor_config.json").write_text("{}")
+            assert "large-v3" in find_cached_models()
+
     def test_a_flat_folder_is_not_a_cached_faster_whisper_model(self, tmp_path):
         """The app always passes a size name, never a path.
 
@@ -408,9 +443,7 @@ class TestFindCachedModels:
         for model in ("tiny", "small"):
             destination = download_destination_dir(model, str(custom_dir))
             assert destination is not None
-            assert (model in reported) is _has_valid_model_snapshot(
-                destination, {"config.json", "model.bin"}
-            )
+            assert (model in reported) is _has_valid_model_snapshot(destination, model)
 
     def test_does_not_iterate_entire_cache_root(self, tmp_path, monkeypatch):
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")

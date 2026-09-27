@@ -82,6 +82,20 @@ class TestValidateModelFiles:
         assert "model.bin" in found
         assert "config.json" in found
 
+    def test_a_128_mel_model_needs_its_preprocessor_config(self, tmp_path):
+        """The app counts large-v3 as installed only with this file, so an
+        import without it would land as a model the Models tab calls missing."""
+        module = _load_import_module()
+        model_dir = self._create_valid_model_dir(tmp_path / "model")
+        assert module.validate_model_files(model_dir, "small")[0] is True
+        is_valid, _found, missing = module.validate_model_files(
+            model_dir, "large-v3"
+        )
+        assert is_valid is False
+        assert missing == ["preprocessor_config.json"]
+        (model_dir / "preprocessor_config.json").write_text("{}")
+        assert module.validate_model_files(model_dir, "large-v3")[0] is True
+
     def test_missing_model_bin_fails(self, tmp_path):
         module = _load_import_module()
         model_dir = tmp_path / "model"

@@ -467,7 +467,9 @@ def test_a_model_present_in_the_custom_dir_is_not_refetched(
     repo = MODEL_REPO_MAP["small"].replace("/", "--")
     snapshot = tmp_path / f"models--{repo}" / "snapshots" / "abc123"
     snapshot.mkdir(parents=True)
-    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    # Every file `WhisperModel` reads; see `_SNAPSHOT_REQUIRED_FILES`.
+    for name in ("config.json", "tokenizer.json", "vocabulary.txt"):
+        (snapshot / name).write_text("{}", encoding="utf-8")
     (snapshot / "model.bin").write_bytes(b"x")
 
     downloaded: list[str] = []

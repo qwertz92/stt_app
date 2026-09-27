@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP
 from stt_app.persistence import atomic_write_text
 from stt_app.transcriber import local_webgpu_asr
+from stt_app.transcriber.local_faster_whisper import PREPROCESSOR_CONFIG_MODELS
 
 IMPORTABLE_MODEL_REPO_MAP = {
     name: MODEL_REPO_MAP[name] for name in FASTER_WHISPER_MODEL_SIZES
@@ -101,7 +102,9 @@ def _print_missing_file_advice(missing_files: list[str]) -> None:
     _warn(
         f"\nMISSING FILES: {', '.join(missing_files)}",
         "\nEach model requires: config.json, model.bin, tokenizer.json, "
-        "and vocabulary.txt (or vocabulary.json).",
+        "and vocabulary.txt (or vocabulary.json); "
+        f"{', '.join(sorted(PREPROCESSOR_CONFIG_MODELS))} "
+        "also need preprocessor_config.json.",
         "Download the missing files from the model's HuggingFace page.",
     )
 
@@ -178,11 +181,17 @@ def is_lfs_pointer(file_path: Path) -> bool:
         return False
 
 
-def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
+def validate_model_files(
+    source_dir: Path, model_name: str | None = None
+) -> tuple[bool, list[str], list[str]]:
     """Validate that a directory contains all required model files.
 
     Returns (is_valid, found_files, missing_files).
     Checks for Git LFS pointer files and suspiciously small model.bin.
+    With a model name, a model whose repository ships
+    `preprocessor_config.json` needs it too: the app counts such a model as
+    installed only with that file, because without it faster-whisper keeps
+    its 80-mel default where the model expects 128.
     """
     found: list[str] = []
     missing: list[str] = []
@@ -206,6 +215,11 @@ def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
     found.extend(
         optional for optional in OPTIONAL_FILES if (source_dir / optional).is_file()
     )
+    if (
+        model_name in PREPROCESSOR_CONFIG_MODELS
+        and not (source_dir / "preprocessor_config.json").is_file()
+    ):
+        missing.append("preprocessor_config.json")
 
     # Check for Git LFS pointers (common when git-lfs is not installed)
     model_bin = source_dir / "model.bin"
@@ -335,7 +349,9 @@ def import_model(
         snapshot_hash = compute_fake_hash(staging_dir)
         snapshot_dir = snapshots_dir / snapshot_hash
         if snapshot_dir.exists():
-            is_valid, _found, _missing = validate_model_files(snapshot_dir)
+            is_valid, _found, _missing = validate_model_files(
+                snapshot_dir, model_name
+            )
             existing_hash = compute_fake_hash(snapshot_dir)
             if is_valid and existing_hash == snapshot_hash:
                 shutil.rmtree(staging_dir)
@@ -461,22 +477,27 @@ def main() -> None:
         print(f"ERROR: Source path is not a directory: {source_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # The file diagnostic runs first so `--validate-only` always reports what
-    # it found, and the name gate runs before the *missing-file* advice.
+    # The file diagnostic runs before any gate so `--validate-only` always
+    # reports what it found, and the name gate runs before the *missing-file*
+    # advice.
     # `validate_model_files` looks for the CTranslate2 layout, so a folder
     # holding any other runtime's model -- the default model included -- used
     # to be reported as "MISSING FILES: model.bin, tokenizer.json,
     # vocabulary.txt" with advice to download those files from a repository
     # that does not contain them.
-    is_valid, found_files, missing_files = validate_model_files(source_dir)
-
+    #
     # Resolving the name only reads the folder name, so it is done before
     # anything is printed and the report reads top-down: which folder, which
-    # model, what is wrong with it, verdict.
+    # model, what is wrong with it, verdict. It also comes before the file
+    # check, which needs it for the one file some models require beyond the
+    # rest.
     model_name: str | None = args.model
     detected = model_name is None
     if model_name is None:
         model_name = detect_model_name(source_dir)
+    is_valid, found_files, missing_files = validate_model_files(
+        source_dir, model_name
+    )
 
     print(f"Source: {source_dir}")
     print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")
