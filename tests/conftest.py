@@ -517,6 +517,27 @@ def _keep_download_locks_out_of_the_real_appdata(
     )
 
 
+@pytest.fixture(autouse=True)
+def _a_fresh_download_coordinator_per_test(monkeypatch):
+    """Give every test its own download slot.
+
+    The coordinator is one object for the life of the process, and a test
+    that patches out the step which gives an explicit interest back
+    (`_download_local_model_in_subprocess`) left `('large-v3', '')`
+    registered for every later test -- whose cleanup would then keep partial
+    files it should remove. Every production caller asks
+    `model_download_coordinator()` at the moment it needs the slot, so
+    replacing the object reaches them all.
+    """
+    from stt_app import model_download_coordinator
+
+    monkeypatch.setattr(
+        model_download_coordinator,
+        "_COORDINATOR",
+        model_download_coordinator.ModelDownloadCoordinator(),
+    )
+
+
 def _isolate_the_hugging_face_environment() -> None:
     """Point Hugging Face at a throwaway cache, before anything reads it.
 

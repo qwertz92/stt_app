@@ -5857,6 +5857,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   tests failed whenever `test_settings_dialog_thread_start.py` ran first,
   which the alphabetical full suite never does (found 2026-09-27, present
   before that day's UX commits).
+- An eighth, `_a_fresh_download_coordinator_per_test`, replaces the
+  download slot's process-wide `_COORDINATOR` for every test: a test that
+  patched out the step which gives an explicit interest back left
+  `('large-v3', '')` registered for the rest of the run.
 - **Read the suite's count before anything that publishes.** A shell chain
   that commits and pushes after a background suite has *started* publishes
   before the result exists; on 2026-09-04 four green per-file runs and one
