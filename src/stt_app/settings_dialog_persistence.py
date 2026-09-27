@@ -162,6 +162,12 @@ class _PersistenceMixin:
             concurrent_mode = _CONCURRENT_MODE_IMMEDIATE_UI_VALUE
         self._select_combo_data(self.concurrent_mode_combo, concurrent_mode)
         self._update_mode_availability()
+        # Nothing above is guaranteed to reach it: the model combo is refilled
+        # with its signals blocked, and selecting the value a combo already
+        # shows emits nothing -- so the checkbox that only acts in local
+        # streaming kept the enabled state of the build (enabled) until the
+        # user touched engine, model or mode.
+        self._update_streaming_full_final_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self.custom_vocabulary_edit.setPlainText(
             str(getattr(settings, "custom_vocabulary", DEFAULT_CUSTOM_VOCABULARY))
@@ -263,6 +269,8 @@ class _PersistenceMixin:
         self._refresh_secret_store_options_ui()
         self._refresh_provider_key_statuses()
         self._restore_provider_connection_test_labels()
+        # What the widgets show now is what is stored: nothing is unsaved.
+        self._mark_unsaved_changes_clean()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -559,6 +567,16 @@ class _PersistenceMixin:
         self._loaded_settings = updated
         self._advance_populated_settings(widget_settings)
         self._refresh_secret_store_options_ui()
+        # Only what this path wrote is settled; an edit elsewhere in the
+        # dialog is still unsaved and must stay marked as such.
+        self._mark_widgets_clean(
+            (
+                *self._provider_key_edits.values(),
+                self._provider_pending_clear,
+                self.insecure_key_storage_checkbox,
+                self.azure_endpoint_edit,
+            )
+        )
         if changed or settings_changed:
             self.settings_changed.emit()
 
@@ -995,6 +1013,9 @@ class _PersistenceMixin:
             if not key_storage_errors:
                 self._set_bottom_status("No settings changes")
                 self._save_status_timer.start()
+                # The widgets agree with the file, so there is nothing left
+                # to save -- say so rather than keep offering Save.
+                self._mark_unsaved_changes_clean()
             return
 
         if settings_changed:
@@ -1023,6 +1044,9 @@ class _PersistenceMixin:
                 replace(widget_settings, language_mode=self._language_mode_shown())
             )
             self._refresh_secret_store_options_ui()
+            # The bar's "Active" half reads `_loaded_settings`; what was
+            # pending until now is what runs.
+            self._update_engine_indicator()
         # Trim to the limit that was actually saved, not to the spin box, so
         # the write and the trim read one baseline instead of two that can
         # drift -- which is how the revert above went unnoticed. When this was
@@ -1048,10 +1072,12 @@ class _PersistenceMixin:
                     f"Settings saved, but history cleanup failed: {exc}"
                 )
                 self._save_status_timer.start()
+                self._mark_unsaved_changes_clean()
                 self.settings_changed.emit()
                 return
         self._set_bottom_status(
             "\u2713 Settings saved" if settings_changed else "\u2713 API keys saved"
         )
         self._save_status_timer.start()
+        self._mark_unsaved_changes_clean()
         self.settings_changed.emit()

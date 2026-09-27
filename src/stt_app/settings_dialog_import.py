@@ -16,10 +16,10 @@ from .config import (
 )
 from .dialog_style import styled_message_box
 from .settings_dialog_helpers import (
-    _ENGINE_LABELS,
     _emit_background_signal,
     _set_transcriber_progress_callback,
     _WheelPassthroughComboBox,
+    fill_engine_combo,
 )
 from .settings_store import AppSettings
 from .ui_feedback import set_button_feedback_state
@@ -54,11 +54,7 @@ class _ImportTabMixin:
         import_controls_layout.addWidget(import_hint)
 
         self.import_engine_combo = _WheelPassthroughComboBox()
-        for value in VALID_ENGINES:
-            self.import_engine_combo.addItem(
-                _ENGINE_LABELS.get(value, value),
-                value,
-            )
+        fill_engine_combo(self.import_engine_combo, VALID_ENGINES)
         self.import_engine_note = QtWidgets.QLabel("")
         self.import_engine_note.setWordWrap(True)
         self._style_note_label(self.import_engine_note)

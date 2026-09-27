@@ -26,9 +26,10 @@ from .config import (
 )
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
-    _ENGINE_LABELS,
     _REMOTE_MODEL_DEFAULTS,
     LOCAL_MODEL_LABELS,
+    fill_engine_combo,
+    hint_font,
     local_model_short_label,
     model_choices_for_engine,
 )
@@ -118,8 +119,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         form.addRow("Audio", self._audio_label)
 
         self._engine_combo = QtWidgets.QComboBox()
-        for value in VALID_ENGINES:
-            self._engine_combo.addItem(_ENGINE_LABELS.get(value, value), value)
+        fill_engine_combo(self._engine_combo, VALID_ENGINES)
         self._select_data(
             self._engine_combo,
             self._entry_engine or str(base_settings.engine or DEFAULT_ENGINE),
@@ -134,7 +134,10 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_combo = QtWidgets.QComboBox()
         self._language_note = QtWidgets.QLabel("")
         self._language_note.setWordWrap(True)
-        self._language_note.setStyleSheet("color: #b71c1c; font-size: 11px;")
+        # A font, not a stylesheet pixel size, so it grows with the system
+        # text size (see `hint_font`).
+        self._language_note.setFont(hint_font())
+        self._language_note.setStyleSheet("color: #b71c1c;")
         # Reserved height so showing or hiding the note never moves the widgets
         # below it, but a *minimum* rather than a fixed one: the dialog is
         # deliberately resizable, and at its narrowest a too-small reservation

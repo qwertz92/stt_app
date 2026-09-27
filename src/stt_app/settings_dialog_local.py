@@ -13,6 +13,8 @@ from .config import (
     DOC_MODELS_PATH,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
+    LOCAL_WEBGPU_DEVICE_POLICIES,
+    MODEL_ESTIMATED_SIZE_MB,
     VALID_MODEL_SIZES,
     supports_streaming,
 )
@@ -37,7 +39,10 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     ElidingLabel,
     _emit_background_signal,
+    _WheelPassthroughComboBox,
+    hint_font,
     local_model_short_label,
+    unlabelled_row_label,
 )
 from .ui_feedback import restore_vertical_scrollbar
 
@@ -56,7 +61,6 @@ QProgressBar {
     border-radius: 4px;
     background: #f0f0f0;
     color: #0d47a1;
-    font-size: 11px;
     text-align: center;
 }
 QProgressBar::chunk {
@@ -64,6 +68,17 @@ QProgressBar::chunk {
     background: #1a73e8;
 }
 """
+
+
+# Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
+# benchmark can be selected for daily dictation with the same wording.
+_LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
+    ("GPU only (WebGPU -> DirectML)", "gpu"),
+    ("WebGPU only", "webgpu"),
+    ("DirectML only", "dml"),
+    ("CPU only", "cpu"),
+)
 
 
 def _facade():
@@ -192,13 +207,15 @@ class _LocalModelsMixin:
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        active_model_note = QtWidgets.QLabel(
+        # One "&": a QLabel without a buddy shows "&&" as two characters (the
+        # doubling is for group-box titles and buttons, which take mnemonics).
+        self.local_active_model_note = QtWidgets.QLabel(
             "This tab downloads and removes local models. The one that runs is "
-            "selected on the Transcription tab (Engine && Mode)."
+            "selected on the Transcription tab (Engine & Mode)."
         )
-        active_model_note.setWordWrap(True)
-        self._style_note_label(active_model_note)
-        layout.addWidget(active_model_note)
+        self.local_active_model_note.setWordWrap(True)
+        self._style_note_label(self.local_active_model_note)
+        layout.addWidget(self.local_active_model_note)
 
         form = QtWidgets.QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
@@ -216,7 +233,9 @@ class _LocalModelsMixin:
             "Use the download script: python scripts/download_model.py"
         )
         self.model_dir_browse = QtWidgets.QPushButton("Browse...")
-        self.model_dir_browse.setFixedWidth(80)
+        # A minimum, not a fixed width: at 13.5 pt the caption needs 91 px and
+        # a fixed 80 cut it off.
+        self.model_dir_browse.setMinimumWidth(80)
         self.model_dir_browse.clicked.connect(self._browse_model_dir)
         self.model_dir_edit.textChanged.connect(self._on_model_dir_changed)
         self._match_field_button_height(self.model_dir_edit, self.model_dir_browse)
@@ -238,7 +257,44 @@ class _LocalModelsMixin:
             "the cache only. The selected model must already be present (see "
             "README for offline setup instructions)."
         )
-        form.addRow("", self.offline_mode_checkbox)
+        form.addRow(unlabelled_row_label(), self.offline_mode_checkbox)
+
+        layout.addLayout(form)
+
+        # --- Local runtime: how a local model runs, not which one ---
+        # The ONNX Device row used to sit on the Transcription tab between
+        # Model and Language, where it is disabled for every Whisper model and
+        # every cloud engine; it is a set-and-forget choice about the machine,
+        # which is what this tab is about.
+        self.local_runtime_box = QtWidgets.QGroupBox("Local runtime")
+        runtime_form = QtWidgets.QFormLayout(self.local_runtime_box)
+        runtime_form.setHorizontalSpacing(10)
+        runtime_form.setVerticalSpacing(10)
+
+        self.local_onnx_device_combo = _WheelPassthroughComboBox()
+        for label, value in _LOCAL_ONNX_DEVICE_CHOICES:
+            if value in LOCAL_WEBGPU_DEVICE_POLICIES:
+                self.local_onnx_device_combo.addItem(label, value)
+        self.local_onnx_device_combo.currentIndexChanged.connect(
+            self._on_local_onnx_device_changed
+        )
+        self.local_onnx_device_note_label = QtWidgets.QLabel("")
+        self.local_onnx_device_note_label.setWordWrap(True)
+        self._style_field_hint_label(self.local_onnx_device_note_label)
+        # Two lines, though every note now starts with the model's name (the
+        # model is picked on another tab): measured over all 23 notes the row
+        # can show, the longest needs two lines at the dialog's minimum width
+        # at 9, 11.25 and 13.5 pt, because that minimum now covers the tab bar.
+        self._reserve_dynamic_hint_height(self.local_onnx_device_note_label)
+        # The row stays present and only changes enabled state, so selecting a
+        # model that ignores it never shifts the fields below.
+        runtime_form.addRow(
+            "ONNX Device",
+            self._field_with_hint(
+                self.local_onnx_device_combo,
+                self.local_onnx_device_note_label,
+            ),
+        )
 
         self.keep_onnx_model_loaded_checkbox = QtWidgets.QCheckBox(
             "Keep Cohere/Granite ONNX model loaded after dictation"
@@ -255,16 +311,18 @@ class _LocalModelsMixin:
             "Benchmarks always close each case after measuring it."
         )
         keep_onnx_note.setWordWrap(True)
-        self._style_note_label(keep_onnx_note)
-        form.addRow(
-            "",
+        self._style_field_hint_label(keep_onnx_note)
+        runtime_form.addRow(
+            unlabelled_row_label(),
             self._field_with_hint(
                 self.keep_onnx_model_loaded_checkbox,
                 keep_onnx_note,
             ),
         )
-
-        layout.addLayout(form)
+        layout.addWidget(self.local_runtime_box)
+        # One label column for both forms, as on the three form tabs: the
+        # offline and keep-loaded checkboxes then line up, 30 px apart before.
+        self._apply_shared_form_label_width((form, runtime_form))
 
         # Unified local models section
         self.local_models_box = QtWidgets.QGroupBox("Local Models")
@@ -316,14 +374,17 @@ class _LocalModelsMixin:
         self.refresh_local_models_button.clicked.connect(
             self._refresh_local_model_views
         )
+        # "/ Queue" is what a download does while another one runs, which
+        # the hint above says. With it this row set the tab's minimum width:
+        # 709 px at 9 pt against 617 px now (measured on the page).
         self.download_selected_models_button = QtWidgets.QPushButton(
-            "Download / Queue Selected"
+            "Download Selected"
         )
         self.download_selected_models_button.clicked.connect(
             self._download_selected_local_models
         )
         self.download_all_missing_models_button = QtWidgets.QPushButton(
-            "Download / Queue All Missing"
+            "Download All Missing"
         )
         self.download_all_missing_models_button.clicked.connect(
             self._download_all_missing_local_models
@@ -359,6 +420,9 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar.setRange(0, 100)
         self.local_model_download_progress_bar.setTextVisible(True)
         self.local_model_download_progress_bar.setAlignment(QtCore.Qt.AlignCenter)
+        # The hint size, as a font rather than a stylesheet pixel size, so it
+        # grows with the system text size like the rest (see `hint_font`).
+        self.local_model_download_progress_bar.setFont(hint_font())
         # Pinned, so the digit count of the percentage ("9%" to "100%") cannot
         # resize it -- but measured from the font rather than written as a
         # constant: Windows' "Text size" raises the application font without
@@ -594,21 +658,22 @@ class _LocalModelsMixin:
         self.model_combo.blockSignals(False)
 
     def _refresh_local_models_label(self, cached: list[str] | None = None) -> None:
-        """Update the label for locally cached models with tag-style badges."""
+        """Name the downloaded models in one plain sentence.
+
+        It used to be rich text with "tag badges", but Qt's rich-text engine
+        supports neither `border-radius` nor `padding` on a span, so the badges
+        rendered as bare settings ids run together ("tinyparakeet-tdt-0.6b-v3").
+        The names are the ones the list rows show.
+        """
         cached = self._known_cached_models(cached)
 
         if cached:
-            tags = "".join(
-                f'<span style="background-color: #f5f5f5; color: #333;'
-                f" border: 1px solid #d0d0d0; border-radius: 10px;"
-                f' padding: 2px 10px; margin-right: 4px;">{name}</span>&nbsp;'
-                for name in cached
-            )
-            self.local_models_label.setTextFormat(QtCore.Qt.RichText)
+            names = ", ".join(local_model_short_label(name) for name in cached)
+            self.local_models_label.setTextFormat(QtCore.Qt.PlainText)
             self.local_models_label.setText(
-                f'<span style="color: #1b5e20;">Available locally:</span><br>{tags}'
+                f"Downloaded ({len(cached)} of {len(VALID_MODEL_SIZES)}): {names}"
             )
-            self.local_models_label.setStyleSheet("")
+            self.local_models_label.setStyleSheet("color: #1b5e20;")
         else:
             self.local_models_label.setTextFormat(QtCore.Qt.PlainText)
             self.local_models_label.setText(
@@ -736,8 +801,9 @@ class _LocalModelsMixin:
         if not hasattr(self, "local_models_scan_status_label"):
             return
         self.local_models_scan_status_label.setText(text)
+        self.local_models_scan_status_label.setFont(hint_font())
         self.local_models_scan_status_label.setStyleSheet(
-            f"color: {color}; font-size: 11px; padding: 0 0 4px 0;"
+            f"color: {color}; padding: 0 0 4px 0;"
         )
 
     def _show_local_model_unverified_state(self, status_text: str) -> None:
@@ -1163,6 +1229,22 @@ class _LocalModelsMixin:
             self.local_models_action_label.setText(
                 "All available local models are already downloaded or queued."
             )
+            return
+        # One click queues every model the list offers -- tens of gigabytes on
+        # a fresh install -- so it says how much before it starts. Decimal
+        # gigabytes, the unit `MODEL_ESTIMATED_SIZE_MB` is written in.
+        total_gb = sum(MODEL_ESTIMATED_SIZE_MB.get(name, 0) for name in missing) / 1000
+        count = len(missing)
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Download all missing models",
+            f"Download {count} model{'s' if count != 1 else ''}, about "
+            f"{total_gb:.1f} GB in total?\n\nThey download one at a time, and "
+            "Cancel Downloads stops them at any point.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
             return
         self._start_local_model_download(missing)
 

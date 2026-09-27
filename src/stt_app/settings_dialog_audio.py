@@ -24,6 +24,7 @@ from .config import (
     SILENCE_GATE_THRESHOLD_MIN,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
+    VAD_MAX_SILENCE_MS,
     VALID_START_BEEP_TONES,
 )
 from .settings_dialog_helpers import (
@@ -32,6 +33,7 @@ from .settings_dialog_helpers import (
     _WheelPassthroughComboBox,
     _WheelPassthroughDoubleSpinBox,
     _WheelPassthroughSpinBox,
+    unlabelled_row_label,
 )
 
 
@@ -111,7 +113,7 @@ class _AudioTabMixin:
         self.keep_microphone_warm_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.keep_microphone_warm_hint_label)
         audio_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(
                 self.keep_microphone_warm_checkbox,
                 self.keep_microphone_warm_hint_label,
@@ -119,13 +121,18 @@ class _AudioTabMixin:
         )
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
-        vad_hint = QtWidgets.QLabel(
-            "After speech starts, recording stops automatically when the "
-            "configured silence period is reached."
+        # The pause is a constant, not a setting: "the configured silence
+        # period" sent the user looking for a field that does not exist.
+        self.vad_hint_label = QtWidgets.QLabel(
+            "After speech starts, recording stops automatically after "
+            f"{VAD_MAX_SILENCE_MS / 1000:g} s of silence."
         )
-        vad_hint.setWordWrap(True)
-        self._style_field_hint_label(vad_hint)
-        audio_form.addRow("", self._field_with_hint(self.vad_checkbox, vad_hint))
+        self.vad_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.vad_hint_label)
+        audio_form.addRow(
+            unlabelled_row_label(),
+            self._field_with_hint(self.vad_checkbox, self.vad_hint_label),
+        )
 
         self.vad_threshold_spin = _WheelPassthroughDoubleSpinBox()
         self.vad_threshold_spin.setDecimals(3)
@@ -166,7 +173,7 @@ class _AudioTabMixin:
         silence_gate_hint.setWordWrap(True)
         self._style_field_hint_label(silence_gate_hint)
         audio_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(self.silence_gate_checkbox, silence_gate_hint),
         )
 
@@ -196,7 +203,7 @@ class _AudioTabMixin:
         )
 
         self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
-        audio_form.addRow("", self.start_beep_checkbox)
+        audio_form.addRow(unlabelled_row_label(), self.start_beep_checkbox)
 
         self.start_beep_tone_combo = _WheelPassthroughComboBox()
         for value in VALID_START_BEEP_TONES:
@@ -220,7 +227,7 @@ class _AudioTabMixin:
         completion_beep_hint.setWordWrap(True)
         self._style_field_hint_label(completion_beep_hint)
         audio_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(
                 self.completion_beep_checkbox,
                 completion_beep_hint,
@@ -259,7 +266,7 @@ class _AudioTabMixin:
         self.save_wav_path_label.setWordWrap(True)
         self._style_field_hint_label(self.save_wav_path_label)
         recordings_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(self.save_wav_checkbox, self.save_wav_path_label),
         )
 
@@ -273,7 +280,7 @@ class _AudioTabMixin:
         archive_recordings_hint.setWordWrap(True)
         self._style_field_hint_label(archive_recordings_hint)
         recordings_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(
                 self.save_all_recordings_checkbox,
                 archive_recordings_hint,
@@ -285,7 +292,8 @@ class _AudioTabMixin:
             f"Leave empty for default ({recordings_dir()})"
         )
         self.recordings_dir_browse = QtWidgets.QPushButton("Browse...")
-        self.recordings_dir_browse.setFixedWidth(80)
+        # A minimum, not a fixed width: the caption needs 91 px at 13.5 pt.
+        self.recordings_dir_browse.setMinimumWidth(80)
         self.recordings_dir_browse.clicked.connect(self._browse_recordings_dir)
         self.recordings_open_button = QtWidgets.QPushButton("Open Folder")
         self.recordings_open_button.clicked.connect(self._open_recordings_dir)
@@ -366,7 +374,15 @@ class _AudioTabMixin:
         combo = self.microphone_combo
         blocker = QtCore.QSignalBlocker(combo)
         combo.clear()
-        combo.addItem("System default (follow Windows)", "")
+        # Which device "System default" is today: without the name the picker
+        # did not say which microphone would record.
+        default_name = audio_devices.system_default_input_name()
+        combo.addItem(
+            f"System default: {default_name}"
+            if default_name
+            else "System default (follow Windows)",
+            "",
+        )
         try:
             devices, answered = audio_devices.query_input_devices()
         except Exception:

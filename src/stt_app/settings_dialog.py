@@ -75,6 +75,7 @@ from .settings_dialog_helpers import (
     _qt_hotkey_sequence_to_app_hotkey,
     _qt_hotkey_text_to_app_hotkey,
     configure_button_row,
+    hint_font,
 )
 from .settings_dialog_history import _HistoryTabMixin
 from .settings_dialog_hotkeys import _HotkeysTabMixin
@@ -82,6 +83,7 @@ from .settings_dialog_import import _ImportTabMixin
 from .settings_dialog_local import _LocalModelsMixin
 from .settings_dialog_persistence import _PersistenceMixin
 from .settings_dialog_remote import _RemoteProvidersMixin
+from .settings_dialog_unsaved import _UnsavedChangesMixin
 from .settings_store import SettingsStore
 from .transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
@@ -134,6 +136,7 @@ class SettingsDialog(
     _HistoryTabMixin,
     _ImportTabMixin,
     _PersistenceMixin,
+    _UnsavedChangesMixin,
     QtWidgets.QDialog,
 ):
     connection_test_finished = QtCore.Signal(int, bool, str)
@@ -367,10 +370,15 @@ class SettingsDialog(
         self._build_ui()
         self._log_settings_timing("build_ui", phase_started_at)
         self.tabs.currentChanged.connect(self._on_settings_tab_changed)
+        self._install_unsaved_changes_tracking()
         phase_started_at = time.perf_counter()
         self._populate(self._loaded_settings)
         self._log_settings_timing("populate", phase_started_at)
         phase_started_at = time.perf_counter()
+        # Before the initial size, not only after the first show: the size
+        # follows the minimum, so the window opens as wide as it needs instead
+        # of opening narrower and widening a moment later.
+        self._pin_content_minimum_width()
         self._apply_initial_dialog_size()
         self._log_settings_timing("initial_size", phase_started_at)
         self._log_settings_timing("dialog_init", self._settings_perf_started_at)
@@ -379,7 +387,10 @@ class SettingsDialog(
         self.setStyleSheet(self._dialog_scrollbar_stylesheet())
         self._disable_combo_popup_effects()
         # --- Engine indicator bar (always visible) ---
-        self.engine_indicator = QtWidgets.QLabel()
+        # Elided rather than grown: it names the active selection and, while
+        # one is pending, the one Save would switch to -- two model names
+        # that together can outgrow the dialog's minimum width.
+        self.engine_indicator = ElidingLabel()
         self.engine_indicator.setAlignment(QtCore.Qt.AlignCenter)
         self.engine_indicator.setStyleSheet(
             "font-weight: bold; padding: 4px; border-radius: 4px;"
@@ -431,8 +442,11 @@ class SettingsDialog(
         save_button = QtWidgets.QPushButton("Save")
         self._save_button = save_button
         close_button = QtWidgets.QPushButton("Close")
+        self._close_button = close_button
         save_button.clicked.connect(self._save)
-        close_button.clicked.connect(self.reject)
+        # Through the unsaved-changes prompt; `reject()` itself stays silent,
+        # because every programmatic dismissal goes through it.
+        close_button.clicked.connect(self._request_close)
 
         # Elided, never clipped or grown: a failed save writes its whole
         # exception message here, which as a plain label raised the dialog's
@@ -447,7 +461,9 @@ class SettingsDialog(
         self._save_status_timer = QtCore.QTimer(self)
         self._save_status_timer.setSingleShot(True)
         self._save_status_timer.setInterval(3000)
-        self._save_status_timer.timeout.connect(lambda: self._set_bottom_status(""))
+        # Cleared, then "Unsaved changes" again if an edit is still pending:
+        # a save's confirmation must not hide an edit made right after it.
+        self._save_status_timer.timeout.connect(self._on_save_status_timeout)
 
         buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(buttons)
@@ -493,34 +509,73 @@ class SettingsDialog(
         self._pin_benchmark_header_row_height()
 
     def _pin_content_minimum_width(self) -> None:
-        """Never let the dialog be dragged narrower than the widest tab shown.
+        """Never let the dialog be narrower than its widest content.
 
-        The explicit minimum (520 px) predates the Benchmark tab's third
-        History action button, which took that tab's minimum to 611 px; at
-        520 every caption in that row was clipped. The tab
-        widget's hint is the widest of all its pages, and the Benchmark page
-        reports its full width only once it has been painted on screen
-        (see AGENTS.md for the numbers), so this runs after every show and
-        every tab switch, and it only ever raises the minimum.
+        Three things decide the width at which nothing is clipped, elided or
+        scrolls sideways, and the pin covers all three:
 
-        It measures the tab widget, not the dialog: the root layout also
-        holds the bottom status line, whose text after a failed save is the
-        whole exception message, and reading the dialog's own hint while
-        such a message showed pinned 3077 px for the life of the app. And
-        it stops at the screen -- a minimum the screen cannot host puts
-        Save and Close past its edge with no way back. A test bounds the
-        result so a later widget cannot raise it unnoticed.
+        - **The tab bar.** Its titles need 771 px at 9 pt; below that
+          `usesScrollButtons` hides tabs behind two arrows, and the tab a
+          note sends the user to ("set the key on the API Keys tab") is then
+          not on screen.
+        - **The widest settings page.** The seven settings tabs are
+          `QScrollArea`s, and a scroll area answers a fixed 58 px as its own
+          minimum whatever it holds -- so the tab widget's hint, which this
+          used to read alone, never saw them, and at the old 611 px minimum
+          Transcription scrolled sideways by 38 px, Hotkeys & Display and
+          Audio by 36 px and Models by 124 px (measured at 9 pt). The
+          content's own minimum plus a vertical scrollbar is what a page
+          needs.
+        - **The Benchmark page**, the one page that is not a scroll area. It
+          reports its full width only once it has been painted (see
+          AGENTS.md), so this also runs after every show and tab switch.
+
+        It measures the tab widget and its pages, never the dialog: the root
+        layout also holds the bottom status line, whose text after a failed
+        save is the whole exception message, and reading the dialog's own
+        hint while such a message showed pinned 3077 px for the life of the
+        app. It only ever raises the minimum, and it stops at the screen -- a
+        minimum the screen cannot host puts Save and Close past its edge. That
+        includes a minimum an earlier, wider screen allowed: the dialog lives
+        as long as the app and can be opened on another monitor, and since
+        the pin now also runs at construction, the screen it was built on is
+        not necessarily the one it shows on.
         """
-        needed = self.tabs.minimumSizeHint().width()
+        needed = self._content_minimum_width()
         root_layout = self.layout()
         if root_layout is not None:
             margins = root_layout.contentsMargins()
             needed += margins.left() + margins.right()
+        target = max(needed, self.minimumWidth())
         available = self._available_dialog_size().width()
         if available > 0:
-            needed = min(needed, available)
-        if needed > self.minimumWidth():
-            self.setMinimumWidth(needed)
+            target = min(target, available)
+        if target != self.minimumWidth():
+            self.setMinimumWidth(target)
+
+    def _content_minimum_width(self) -> int:
+        """The narrowest the tab widget can be with nothing cut off."""
+        tabs = self.tabs
+        current = tabs.currentWidget()
+        stack = current.parentWidget() if current is not None else None
+        stack_minimum = stack.minimumSizeHint().width() if stack is not None else 0
+        # What the tab widget adds around its pages (its pane frame): Qt's own
+        # minimum is the page stack's minimum passed through the style, and
+        # the tab bar, which scrolls, asks for less than any page.
+        frame = max(0, tabs.minimumSizeHint().width() - stack_minimum)
+        pages = stack_minimum
+        for index in range(tabs.count()):
+            page = tabs.widget(index)
+            if isinstance(page, QtWidgets.QScrollArea) and page.widget() is not None:
+                scrollbar = page.verticalScrollBar().sizeHint().width()
+                pages = max(
+                    pages,
+                    page.widget().minimumSizeHint().width()
+                    + scrollbar
+                    + 2 * page.frameWidth(),
+                )
+        tab_bar = tabs.tabBar().sizeHint().width()
+        return max(pages + frame, tab_bar + frame)
 
     def _restore_default_dialog_size(self) -> None:
         target_size = self._refresh_default_dialog_size()
@@ -633,10 +688,13 @@ class SettingsDialog(
         *,
         color: str = "#555",
     ) -> None:
-        label.setStyleSheet(f"color: {color}; font-size: 11px; padding: 0 0 6px 0;")
+        label.setFont(hint_font())
+        label.setStyleSheet(f"color: {color}; padding: 0 0 6px 0;")
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
-        style = "color: #555; font-size: 11px; padding: 0 0 6px 0;"
+        # The size is the font's, not the stylesheet's: see `hint_font`.
+        label.setFont(hint_font())
+        style = "color: #555; padding: 0 0 6px 0;"
         if bold:
             style += " font-weight: bold;"
         label.setStyleSheet(style)
@@ -656,7 +714,8 @@ class SettingsDialog(
         # from reserving phantom lines that appear as unrelated blank space.
         label.setMinimumWidth(_FIELD_HINT_MIN_WIDTH_PX)
         label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-        label.setStyleSheet("color: #555; font-size: 11px; padding: 0;")
+        label.setFont(hint_font())
+        label.setStyleSheet("color: #555; padding: 0;")
 
     # The shared helper, reachable as `self._configure_button_row(...)` from
     # every mixin exactly as before; the free function is what the benchmark
@@ -1112,6 +1171,12 @@ class SettingsDialog(
         super().hideEvent(event)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        # Spontaneous is the title bar's X (a WM_CLOSE from Windows). An
+        # application quit sends a close event that is not, and must not be
+        # held up: Qt 6 cancels the quit when a window refuses it.
+        if event.spontaneous() and not self._confirm_close_with_unsaved_changes():
+            event.ignore()
+            return
         self._hide_benchmark_window()
         super().closeEvent(event)
 

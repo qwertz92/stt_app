@@ -95,12 +95,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_general.py` | Transcription tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
 | `settings_dialog_hotkeys.py` | Hotkeys & Display tab: the four global hotkeys, overlay corner, and tray middle-click toggle mixin (split from the Transcription tab) |
 | `settings_dialog_audio.py` | Audio tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the Transcription tab) |
-| `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the Transcription tab) |
+| `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete; model selection lives on the Transcription tab) plus the "Local runtime" group (ONNX Device, Keep ONNX model loaded) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
 | `settings_dialog_remote.py` | API Keys tab: provider API keys and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
+| `settings_dialog_unsaved.py` | Unsaved-changes tracking: a fingerprint of the settings inputs, the Save button's enabled state and the Save / Discard / Cancel prompt on close |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `persistence.py` | Atomic file writes, strict JSON booleans, recovery helpers, and shared path-scoped locks |
 | `csv_safety.py` | Spreadsheet-formula neutralization for user-controlled CSV cells |
@@ -173,7 +174,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Display therefore moved to a Hotkeys && Display tab
   directly after it (`settings_dialog_hotkeys.py`), which left the tab
   at 781 px: Engine && Mode and Text Insertion, what actually changes during
-  daily dictation. "History Time" left the Display group for the History
+  daily dictation. On 2026-09-27 the ONNX Device row and "Keep ONNX model
+  loaded" moved to a "Local runtime" group on the Models tab and the static
+  hints under several fields became tooltips or placeholders, which took the
+  content to 654 px at 9 pt (738 at 11.25 pt, 819 at 13.5 pt). "History Time" left the Display group for the History
   tab's top row ("Time Zone"), because it changes nothing but how that list
   prints its timestamps; the entry count beside it became an `ElidingLabel`,
   since as a plain label its full text width put the row at 689 px against
@@ -210,9 +214,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   worst case 30 px at the minimum width), amber when the model ignores the
   vocabulary and names it the way the screen does; the field stays
   editable, because the user may switch models later. Cost, measured: the
-  Transcription tab's content is 960 px at the default width (916 px
-  without the note), so it scrolls on a screen whose available height is
-  below about 1139 px.
+  Transcription tab's content was 960 px at the default width (916 px
+  without the note), so it scrolled on a screen whose available height is
+  below about 1139 px; 654 px since the 2026-09-27 move described above.
 - **`_configure_combo_popups` runs after the root layout is built.**
   `findChildren` walks the parent tree, and before `self.tabs` was parented
   it reached 3 of the 21 combos, none of them `model_combo`. With Qt's
@@ -471,7 +475,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   suspends them); an in-progress recording start/stop always blocks.
   Deferral is decided per job in the flush
   (`_can_insert_during_active_recording`). In the UI this is folded into the
-  "While transcribing" combo as a fourth choice (`insert_immediate` UI value in
+  "While busy" combo ("While transcribing" until 2026-09-27) as a fourth
+  choice (`insert_immediate` UI value in
   `_CONCURRENT_MODE_UI_CHOICES`); the stored settings stay
   `concurrent_transcription_mode` + `immediate_background_insert`.
 - **`insert_target` setting**: `recording_window` (default) pastes into the
@@ -749,6 +754,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `Thread(...).start()`, so a start that raised latched auto-stop off for the
   rest of the recording; the flag is reset on that failure and the next block
   tries again.
+- **The microphone picker's system-default entry names the device Windows
+  uses** (`audio_devices.system_default_input_name`, 2026-09-27), e.g.
+  "System default: Microphone (HyperX QuadCast S)", and reads "System
+  default (follow Windows)" when that name cannot be read.
 - **The microphone picker says "(device list unavailable)" when PortAudio
   did not answer, and "(not connected)" only when it did.** The refresh
   worker holds `portaudio_guard` across terminate/initialize, which can take
@@ -1203,8 +1212,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   reported a clean cancel over a worker still running. The reader threads
   are daemon threads and end with the pipe; what the child computes after
   that is gone by design.
-- **The settings dialog's minimum width is pinned to the widest tab it has
-  shown -- measured on the tab widget alone, and never past the screen.**
+- **The settings dialog's minimum width is the widest of the tab bar, every
+  settings page and the Benchmark page -- measured on the tab widget and its
+  pages, never on the dialog, and never past the screen.**
   The explicit 520 px minimum predates the Benchmark tab's third History
   action button, which took that tab's minimum to 611 px; at 520 every
   caption in that row was clipped, and the last one clears only at 611.
@@ -1226,11 +1236,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   arrives only through the `LayoutRequest` Qt posts to a *visible* parent
   -- which is why the show moves the number. "A splitter counts visible
   children only" was this entry's guess for one round: it does, and none
-  is ever hidden here (measured `isHidden()` False in both states). So
-  `_pin_content_minimum_width` cannot run at construction; it
-  runs 0 ms after every show and every tab switch and only ever raises the
-  minimum. Both roads are needed: a tab made current while the dialog is
-  hidden measures the unpainted page. Three properties, each wrong once:
+  is ever hidden here (measured `isHidden()` False in both states). So the
+  Benchmark page's share cannot be measured at construction:
+  `_pin_content_minimum_width` runs at construction for the tab bar and the
+  scroll pages, and again 0 ms after every show and every tab switch; it only
+  ever raises the minimum, down to the screen. Both roads are needed: a tab
+  made current while the dialog is hidden measures the unpainted page. Four
+  properties, each wrong once:
+  - **A `QScrollArea` answers a fixed 58 px as its minimum whatever it
+    holds**, so the tab widget's hint never saw the seven scroll pages: at
+    the old 611 px minimum Transcription scrolled sideways by 38 px, Hotkeys
+    && Display and Audio by 36 and Models by 124 (9 pt).
+    `_content_minimum_width` takes each page's content minimum plus its
+    vertical scrollbar and frame, and the tab bar's size hint, because below
+    771 px at 9 pt the bar hides tabs behind scroll arrows and the tab a note
+    sends the user to may be the hidden one. Measured after (2026-09-27): a
+    minimum of 797 px at 9 pt, 907 at 11.25 and 1020 at 13.5, with no page
+    scrolling sideways at any of them; at the two larger sizes the default
+    width follows the minimum.
   - **It measures `self.tabs.minimumSizeHint()` plus the root layout's
     margins, never the dialog's own hint.** The root layout also holds the
     bottom status line, whose text after a failed save is the whole
@@ -1245,14 +1268,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **It stops at `_available_dialog_size().width()`.** A minimum the
     screen cannot host puts Save and Close past its edge with no way back
     short of restarting the app, and `setMinimumWidth` holds whatever
-    `_apply_initial_dialog_size` fitted before it.
+    `_apply_initial_dialog_size` fitted before it. That includes a minimum
+    an earlier, wider screen allowed, which it lowers: the dialog lives as
+    long as the app and may be shown on another monitor.
   - **The 640 px budget the test bounds the need with is a 9 pt number.**
     Windows' "Text size" raises the application font without the DPI:
     measured 720 px at 11.25 pt, 813 at 13.5, 917 at 15.75 and 1025 at 18,
     so off the 9 pt font the test skips and names the need it measured.
-  Consequence kept: a dialog dragged narrower than 611 px on another tab
-  widens to 611 when the Benchmark tab is opened -- once, as part of a tab
-  switch the user made, which beats the clipped captions (one label once
+  At 9 pt the tab bar now sets the minimum (797 px) above the Benchmark
+  page's 611, so opening that tab no longer widens the dialog; the 640 px
+  budget in the Benchmark test bounds that page's own need (one label once
   took the layout's minimum to 1109 px, which is what the budget is for).
 - **The Benchmark tab's status label and progress bar take their height
   from the button as it renders.** The build measured
@@ -1406,6 +1431,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     styled dialog and reports 109 px against the 115 px it renders at, so the
     reservation would be too small and the caption swap would move the button
     and the status label beside it.
+- **Unsaved changes are tracked by a fingerprint, and a close asks**
+  (2026-09-27, `settings_dialog_unsaved.py`). The fingerprint covers every
+  input on the settings pages, two pending states (remote models chosen for
+  other providers, keys marked for removal) and two History inputs. Save is
+  enabled only while it differs from the clean state, and the bottom line
+  then reads "Unsaved changes" in amber. Close, Esc and the title-bar X ask
+  Save / Discard / Cancel; a programmatic close and quitting the app never
+  ask. The clean state is recorded after `_populate` and after every
+  successful or no-change save, a key-only save cleans only what it saved,
+  and the History import that moves the limit spin box is not an edit. It
+  is not the baseline a save diffs against, which stays
+  `_populated_settings` (the save-merge entries below): the fingerprint
+  decides only the prompt and the Save button. A Discard while
+  dialog-owned work runs keeps the edits in the widgets, because the reload
+  is deferred (next entry), so reopening shows them as unsaved.
 - **Settings dialog persists for the app lifetime**: closing Settings hides the
   existing dialog instead of deleting it. The dialog owns background model
   downloads, benchmark work, imports, scans, and connection/update checks, so
@@ -1439,6 +1479,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_start_local_model_download` already did, and `_on_update_check_finished`
   shows no dialog then. Both roads were opened by the delivery itself
   (`6cf8cbd`, wave 9).
+- **No stylesheet in the settings dialog sets `font-size`** (2026-09-27): a
+  pixel size ignores Windows' "Text size", which raises the application
+  font without the DPI, so the hints stayed at 11 px while everything else
+  grew. Hints and notes use `settings_dialog_helpers.hint_font()`, 0.92 of
+  the application font (the same 15 px line at 9 pt).
 - **Transcription/Audio-tab field hints have explicit visual ownership**: a control
   and its descriptive hint use `_field_with_hint` with a 2 px internal gap;
   these forms use a 10 px row gap before the next setting. Changing model/language
@@ -1677,6 +1722,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   recomputed from the screen every time.
 - **Multi-select lists use ExtendedSelection**: Shift selects ranges, Ctrl
   toggles, matching the file explorer. Do not reintroduce `MultiSelection`.
+  The Run Benchmark window's model list is the one exception (2026-09-27): a
+  checkbox per model and no selection, since a plan of cases needs a set
+  that survives a click elsewhere; Space toggles the current row, and a
+  rebuild keeps each model's check state (on the first fill every model is
+  checked, a model that appears later starts unchecked).
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
   they are diagnostic UI state rather than configuration. The API Keys tab should
@@ -3663,8 +3713,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   plan), and a recording that is not English.
 - **Local ONNX execution device (`local_onnx_device`, default `auto`, schema
   23)**: the Benchmark tab could always pin a device, but daily dictation
-  always ran on `auto` because `factory.py` never passed one. The Transcription tab's
-  "ONNX Device" row now feeds the same policy (`LOCAL_WEBGPU_DEVICE_POLICIES`)
+  always ran on `auto` because `factory.py` never passed one. The "ONNX Device"
+  row (on the Transcription tab until 2026-09-27, now in the Models tab's
+  "Local runtime" group) feeds the same policy (`LOCAL_WEBGPU_DEVICE_POLICIES`)
   into `LocalOnnxWebGpuTranscriber`, with the same wording as the benchmark
   choices so a device proven faster there can be selected for real use.
   `auto` keeps every existing behaviour. (A per-model CPU preference,
@@ -3680,8 +3731,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the factory and the benchmark, and because ORT GenAI has no WebGPU provider
   every GPU-flavoured policy resolves to DirectML for it, which its note says. The row is always present and only toggles enabled state
   and note text — hiding it for faster-whisper or a remote engine would shift
-  every field below it, which a test pins by asserting the Language row's
-  y-position is identical across all four cases.
+  every field below it, which a test pins by asserting the checkbox under it
+  keeps its y-position across all four cases.
 - **`auto` starts with the device a benchmark measured as fastest
   (`onnx_auto_preferred_devices`, no schema bump)** (2026-09-18). Which device
   is quicker depends on the machine, and until now the only way to act on a
@@ -6058,23 +6109,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   identical audio cross-retire, as every pair did before wave 16. It needs
   two refused store writes in one session and byte-identical recordings;
   recorded.
-- **Four Settings tabs scroll sideways at the dialog's minimum width.**
-  The minimum is pinned from `self.tabs.minimumSizeHint()`, and a
-  `QScrollArea` answers a fixed 58x58 whatever it holds, so the pin sees
-  the one page that is not a scroll area (Benchmark, 585 px) and none of
-  the others. Measured at 9 pt on 2026-09-18: at the 611 px minimum the
-  viewport is 585 px while Transcription, Hotkeys && Display and Audio need
-  621 px and Models 709 px, so those four show a horizontal scrollbar (36
-  and 124 px of travel); API Keys 578, History 560 and Import
-  Audio 532 fit. Older than the tab split: the tree at `6bfa47b` shows the
-  same bar on those three and on Models. Only reached by dragging the
-  dialog narrower than about 735 px; the 860 px default is unaffected and
-  nothing is unreachable. Closing it means raising the minimum width to
-  the widest scroll page plus the 26 px of chrome (about 735 px, more at a
-  larger text size, still capped by the screen) and re-deriving the
-  640 px budget the pin's test bounds the need with -- a change to a
-  function that was wrong three times, so recorded (P3, about an hour
-  with its tests) rather than slipped in.
 - **A benchmark's device decision is per run, and there is no button to
   forget one.** `measured_fastest_devices` reads one finished run; runs are
   never combined. A run that could not measure the stored device (it errored

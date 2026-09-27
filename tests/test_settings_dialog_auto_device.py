@@ -635,9 +635,9 @@ def test_the_benchmark_device_note_says_what_a_comparison_also_decides(tmp_path)
     ]
 
     assert notes, "the benchmark ONNX Device note was not found"
-    # The note points at the tab by its visible title, which is
-    # "Transcription" since the rename.
-    assert "Settings > Transcription" in notes[0]
+    # The note points at the tab by its visible title: the ONNX Device row
+    # moved to the Models tab's "Local runtime" group.
+    assert "Settings > Models" in notes[0]
     dialog.benchmark_window.close()
     dialog.deleteLater()
     _ = app

@@ -176,8 +176,9 @@ class _RemoteProvidersMixin:
             )
             clear_button = QtWidgets.QPushButton("Clear saved")
             clear_button.setToolTip("Delete the stored key for this provider on Save.")
+            # A minimum, not a range: the 88 px cap cut the caption off once
+            # the text size grew (it needs 98 px at 11.25 pt, 112 at 13.5).
             clear_button.setMinimumWidth(78)
-            clear_button.setMaximumWidth(88)
             self._match_field_button_height(key_field, clear_button)
             clear_button.clicked.connect(
                 lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
@@ -497,6 +498,9 @@ class _RemoteProvidersMixin:
         self._provider_pending_clear.add(provider)
         self._refresh_provider_key_status(provider)
         self._update_import_engine_note()
+        # A pending removal is an unsaved change that no widget value shows
+        # (the field is empty before and after), so ask for the refresh here.
+        self._schedule_unsaved_changes_refresh()
 
     def _import_engine_credential_issue(self, engine: str) -> str | None:
         """Explain why an import cannot safely use this provider credential."""

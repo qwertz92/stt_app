@@ -324,6 +324,8 @@ class _HistoryTabMixin:
         self._populated_settings = replace(
             self._populated_settings, history_max_items=value
         )
+        # And the unsaved-changes fingerprint, for the same reason.
+        self._mark_widgets_clean((self.history_max_spin,))
 
     def _on_history_imported(self, imported_count: int, _active_limit: int) -> None:
         self._set_history_status(

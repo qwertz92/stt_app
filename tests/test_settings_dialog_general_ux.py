@@ -70,16 +70,19 @@ def _switch_to_tab(dialog: SettingsDialog, title: str) -> None:
 
 
 def test_vocabulary_hint_explains_parsing_only(dialog: SettingsDialog) -> None:
-    """Which models use the terms is the job of the changing note above this
-    hint. It used to be a list of eleven names here, which meant finding the
-    selected model in a sentence, and which went stale whenever a model was
-    added."""
-    hint = dialog.vocabulary_hint_label.text()
+    """Which models use the terms is the job of the changing note under the
+    field. The parsing rules used to be a static hint of their own, a third
+    block of text under one field; they are the field's tooltip now, and the
+    placeholder says the short version."""
+    hint = dialog.custom_vocabulary_edit.toolTip()
+    placeholder = dialog.custom_vocabulary_edit.placeholderText()
 
     assert "commas, semicolons, or new lines" in hint
     assert "Spaces inside a phrase are kept" in hint
     assert "Splunk SOAR" in hint
-    assert "Splunk SOAR" in dialog.custom_vocabulary_edit.placeholderText()
+    assert "Splunk SOAR" in placeholder
+    assert "comma or new line" in placeholder
+    assert not hasattr(dialog, "vocabulary_hint_label")
     for name in ("faster-whisper", "Nemotron", "Cohere", "Granite", "ignore"):
         assert name not in hint, name
 
@@ -156,7 +159,7 @@ def test_every_engine_that_uses_the_vocabulary_has_a_sentence() -> None:
 def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> None:
     """It changes on every engine and model switch, so it is reserved rather
     than sized to its text -- one model's two-line sentence would otherwise
-    push Mode, New Recording and the whole Text Insertion group down."""
+    push Mode, While busy and the whole Text Insertion group down."""
     from stt_app.config import VALID_ENGINES
 
     app = QtWidgets.QApplication.instance()
@@ -177,7 +180,7 @@ def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> N
 
     watched = {
         "mode": dialog.mode_combo,
-        "new recording": dialog.concurrent_mode_combo,
+        "while busy": dialog.concurrent_mode_combo,
         "paste mode": dialog.paste_mode_combo,
     }
     baseline: dict[str, int] | None = None
@@ -210,14 +213,11 @@ def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> N
         assert required <= label.height(), (engine, model, label.text())
 
 
-def test_new_recording_choice_explains_the_previous_job(
+def test_while_busy_choice_explains_the_previous_job(
     dialog: SettingsDialog,
 ) -> None:
-    general_tab = dialog.tabs.widget(0)
-    labels = {
-        label.text()
-        for label in general_tab.findChildren(QtWidgets.QLabel)
-    }
+    """The hint that sat under the combo moved into its tooltip, which already
+    carried one line per choice."""
     values = [
         dialog.concurrent_mode_combo.itemData(index)
         for index in range(dialog.concurrent_mode_combo.count())
@@ -226,17 +226,13 @@ def test_new_recording_choice_explains_the_previous_job(
         dialog.concurrent_mode_combo.itemText(index)
         for index in range(dialog.concurrent_mode_combo.count())
     ]
+    tooltip = dialog.concurrent_mode_combo.toolTip()
 
-    assert "New Recording" in labels
-    assert "While transcribing" not in labels
     assert values == ["insert", "insert_immediate", "history", "cancel"]
     assert all("previous" in choice.lower() for choice in choices)
-    assert "press the recording hotkey again" in (
-        dialog.concurrent_mode_combo.toolTip()
-    )
-    assert "previous transcription finishes" in (
-        dialog.concurrent_mode_hint_label.text()
-    )
+    assert "press the recording hotkey again" in tooltip
+    assert "previous transcription finishes" in tooltip
+    assert not hasattr(dialog, "concurrent_mode_hint_label")
 
 
 def test_field_hints_are_closer_to_their_control_than_the_next_field(
@@ -933,8 +929,10 @@ def test_bottom_status_does_not_move_the_save_and_close_buttons(
 def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
     """The picker only applies to the local ONNX models, but hiding the row for
     the others would shift every field beneath it. It stays present and only
-    changes enabled state and note text."""
+    changes enabled state and note text. It sits in the Models tab's Local
+    runtime group now, so what must not move is the checkbox under it."""
     dialog.show()
+    _switch_to_tab(dialog, "Models")
 
     def probe(engine: str, model: str | None) -> tuple[bool, int]:
         index = dialog.engine_combo.findData(engine)
@@ -945,12 +943,12 @@ def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
             assert model_index >= 0, model
             dialog.model_combo.setCurrentIndex(model_index)
         QtWidgets.QApplication.processEvents()
-        language_y = _position_in_dialog(
-            dialog.language_combo,
-            dialog.language_combo.rect().topLeft(),
+        below_y = _position_in_dialog(
+            dialog.keep_onnx_model_loaded_checkbox,
+            dialog.keep_onnx_model_loaded_checkbox.rect().topLeft(),
             dialog,
         ).y()
-        return dialog.local_onnx_device_combo.isEnabled(), language_y
+        return dialog.local_onnx_device_combo.isEnabled(), below_y
 
     faster_whisper_enabled, y_faster_whisper = probe("local", "small")
     granite_enabled, y_granite = probe("local", "granite-speech-4.1-2b")
@@ -1197,4 +1195,415 @@ def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
         )
     finally:
         combo.hidePopup()
+        app.processEvents()
+
+
+# --- Phase 1 of the 2026-09-27 UX review ------------------------------------
+
+
+class _AppFont:
+    """Raise the application font the way Windows' "Text size" does."""
+
+    def __init__(self, point_size: float) -> None:
+        self._point_size = point_size
+        self._previous: QtGui.QFont | None = None
+
+    def __enter__(self) -> QtWidgets.QApplication:
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        self._previous = QtGui.QFont(app.font())
+        font = QtGui.QFont(app.font())
+        font.setPointSizeF(self._point_size)
+        app.setFont(font)
+        return app
+
+    def __exit__(self, *_exc: object) -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is not None and self._previous is not None:
+            app.setFont(self._previous)
+
+
+def _dialog_at(monkeypatch, tmp_path) -> SettingsDialog:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models", lambda _model_dir: []
+    )
+    return SettingsDialog(
+        settings_store=_SettingsStore(),
+        secret_store=_SecretStore(),
+        app_logger=_Logger(),
+    )
+
+
+def _settle_layout(app: QtWidgets.QApplication) -> None:
+    for _ in range(3):
+        QtTest.QTest.qWait(30)
+        app.processEvents()
+
+
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_nothing_scrolls_sideways_or_hides_a_tab_at_the_minimum_width(
+    point_size: float, monkeypatch, tmp_path
+) -> None:
+    """The minimum width covers the tab bar and the widest settings page.
+
+    It used to follow the tab widget's own hint, which a `QScrollArea` answers
+    with a fixed 58 px whatever it holds, so at the 611 px minimum four tabs
+    scrolled sideways (Models by 124 px at 9 pt) and the tab bar, which needs
+    771 px at 9 pt, hid tabs behind its scroll arrows. And a fixed-width
+    Browse or Clear button cut its own caption off at larger text sizes.
+    """
+    with _AppFont(point_size) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            dialog.show()
+            _settle_layout(app)
+            available = dialog._available_dialog_size().width()
+            if dialog.minimumWidth() >= available:
+                pytest.skip(
+                    f"this screen is {available} px wide, and the dialog needs "
+                    f"{dialog.minimumWidth()} px at {point_size} pt"
+                )
+            dialog.resize(dialog.minimumWidth(), dialog.height())
+            _settle_layout(app)
+            assert dialog.width() == dialog.minimumWidth()
+
+            bar = dialog.tabs.tabBar()
+            arrows = [
+                button
+                for button in bar.findChildren(QtWidgets.QToolButton)
+                if button.isVisible()
+            ]
+            assert arrows == [], "the tab bar scrolls at the minimum width"
+            for index in range(bar.count()):
+                assert bar.tabRect(index).width() >= bar.tabSizeHint(index).width(), (
+                    bar.tabText(index)
+                )
+
+            for index in range(dialog.tabs.count()):
+                dialog.tabs.setCurrentIndex(index)
+                _settle_layout(app)
+                page = dialog.tabs.widget(index)
+                title = dialog.tabs.tabText(index)
+                if isinstance(page, QtWidgets.QScrollArea):
+                    assert page.horizontalScrollBar().maximum() == 0, (
+                        title,
+                        page.horizontalScrollBar().maximum(),
+                    )
+                else:
+                    assert page.minimumSizeHint().width() <= page.width(), title
+                for button in page.findChildren(QtWidgets.QPushButton):
+                    if not button.isVisible() or not button.text():
+                        continue
+                    assert button.width() >= button.sizeHint().width(), (
+                        title,
+                        button.text(),
+                        button.width(),
+                        button.sizeHint().width(),
+                    )
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            app.processEvents()
+
+
+def test_the_dialog_opens_as_wide_as_it_needs_and_does_not_grow_after(
+    monkeypatch, tmp_path
+) -> None:
+    """The pin runs before the first show, so the window does not open at one
+    width and jump to another a moment later."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_at(monkeypatch, tmp_path)
+    try:
+        minimum_before_show = dialog.minimumWidth()
+        width_before_show = dialog.width()
+        assert width_before_show >= minimum_before_show
+        dialog.show()
+        _settle_layout(app)
+        for index in range(dialog.tabs.count()):
+            dialog.tabs.setCurrentIndex(index)
+            _settle_layout(app)
+        assert dialog.minimumWidth() == minimum_before_show
+        assert dialog.width() == width_before_show
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
+def test_unlabelled_form_rows_carry_no_blank_line(dialog: SettingsDialog) -> None:
+    """A checkbox row added with an empty label string kept the height its
+    hint needs at 460 px, whatever width the hint really had: a
+    `QFormLayout` row without a label widget does not honour height-for-width.
+    Measured on the Transcription and Audio tabs: 15 px of blank line under
+    four hints."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    _settle_layout(app)
+    for title in ("Transcription", "Hotkeys && Display", "Audio", "Models"):
+        _switch_to_tab(dialog, title)
+        _settle_layout(app)
+        page = dialog.tabs.currentWidget()
+        for label in page.findChildren(QtWidgets.QLabel):
+            if not label.property("fieldHint") or not label.isVisible():
+                continue
+            if label.minimumHeight() == label.maximumHeight():
+                continue  # a reserved note: its height is chosen, not wrapped
+            needed = label.heightForWidth(label.width())
+            assert label.height() <= needed, (
+                title,
+                label.text()[:50],
+                label.height(),
+                needed,
+            )
+
+
+def test_hint_text_follows_the_system_text_size(monkeypatch, tmp_path) -> None:
+    """Hints were `font-size: 11px`, a pixel size: at 13.5 pt every control
+    grew by half and the hints did not grow at all."""
+    with _AppFont(13.5) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            expected = 13.5 * 0.92
+            widgets = [dialog, *dialog.findChildren(QtWidgets.QWidget)]
+            for widget in widgets:
+                assert "font-size" not in widget.styleSheet(), (
+                    type(widget).__name__,
+                    widget.styleSheet(),
+                )
+            for label in (
+                dialog.language_note_label,
+                dialog.local_model_runtime_warning_label,
+                dialog.vocabulary_support_label,
+                dialog.local_onnx_device_note_label,
+                dialog._provider_last_test_labels["openai"],
+                dialog.local_models_scan_status_label,
+            ):
+                assert label.font().pointSizeF() == pytest.approx(expected), (
+                    label.text()[:40]
+                )
+            # And the reservation grew with the font, so two lines still fit.
+            label = dialog.language_note_label
+            assert label.minimumHeight() >= label.fontMetrics().lineSpacing() * 2
+        finally:
+            dialog.close()
+            app.processEvents()
+
+
+def test_the_onnx_device_lives_with_the_local_runtime_on_the_models_tab(
+    dialog: SettingsDialog,
+) -> None:
+    models_page = dialog.tabs.widget(dialog._local_tab_index)
+    general_page = dialog.tabs.widget(0)
+    assert models_page.isAncestorOf(dialog.local_onnx_device_combo)
+    assert not general_page.isAncestorOf(dialog.local_onnx_device_combo)
+    group = dialog.local_runtime_box
+    assert group.title() == "Local runtime"
+    assert group.isAncestorOf(dialog.local_onnx_device_combo)
+    assert group.isAncestorOf(dialog.keep_onnx_model_loaded_checkbox)
+
+
+def test_the_onnx_device_note_names_what_decides_for_a_cloud_engine(
+    dialog: SettingsDialog,
+) -> None:
+    """For a remote engine the note used to depend on whichever local model
+    the hidden combo still held -- "This model always runs on the CPU" about
+    a model that was not going to run at all."""
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    dialog.model_combo.setCurrentIndex(
+        dialog.model_combo.findData("parakeet-tdt-0.6b-v3")
+    )
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("openai"))
+
+    assert dialog.local_onnx_device_note_label.text() == "Only used by local models."
+    assert dialog.local_onnx_device_combo.isEnabled() is False
+
+
+def test_the_onnx_device_note_names_the_selected_model(dialog: SettingsDialog) -> None:
+    """The row now sits on another tab than the model picker, so its note says
+    which model it is talking about."""
+    from stt_app.settings_dialog_helpers import local_model_short_label
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    checked = 0
+    for model in ("small", "parakeet-tdt-0.6b-v3", "granite-speech-4.1-2b"):
+        index = dialog.model_combo.findData(model)
+        if index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(index)
+        note = dialog.local_onnx_device_note_label.text()
+        assert local_model_short_label(model) in note, (model, note)
+        checked += 1
+    assert checked == 3
+
+
+def test_the_concurrency_choice_is_called_while_busy_everywhere(
+    dialog: SettingsDialog,
+) -> None:
+    general_tab = dialog.tabs.widget(0)
+    labels = {label.text() for label in general_tab.findChildren(QtWidgets.QLabel)}
+
+    assert "While busy" in labels
+    assert "New Recording" not in labels
+    assert "While transcribing" not in labels
+    assert dialog.concurrent_mode_combo.toolTip().startswith("While busy:")
+
+
+def test_the_models_note_shows_one_ampersand(dialog: SettingsDialog) -> None:
+    """A QLabel without a buddy shows "&&" as two characters."""
+    text = dialog.local_active_model_note.text()
+    assert "Engine & Mode" in text
+    assert "&&" not in text
+
+
+def test_the_downloaded_models_line_is_plain_text(
+    dialog: SettingsDialog,
+) -> None:
+    """Qt's rich text has no border-radius or padding on a span, so the "tag
+    badges" rendered as bare settings ids run together."""
+    dialog._refresh_local_models_label(cached=["tiny", "parakeet-tdt-0.6b-v3"])
+    label = dialog.local_models_label
+
+    assert label.textFormat() == QtCore.Qt.PlainText
+    assert "<span" not in label.text()
+    assert "tiny" in label.text()
+    assert "NVIDIA Parakeet TDT 0.6B v3" in label.text()
+
+
+def test_the_auto_stop_hint_names_the_silence_it_waits_for(
+    dialog: SettingsDialog,
+) -> None:
+    from stt_app.config import VAD_MAX_SILENCE_MS
+
+    seconds = f"{VAD_MAX_SILENCE_MS / 1000:g} s"
+    assert seconds in dialog.vad_hint_label.text()
+    assert "configured silence period" not in dialog.vad_hint_label.text()
+
+
+@pytest.mark.parametrize("answer", ["yes", "no"])
+def test_download_all_missing_asks_first_and_names_the_size(
+    dialog: SettingsDialog, monkeypatch, answer: str
+) -> None:
+    from stt_app.config import MODEL_ESTIMATED_SIZE_MB
+
+    missing = ["small", "medium"]
+    monkeypatch.setattr(dialog, "_missing_downloadable_models", lambda: list(missing))
+    started: list[list[str]] = []
+    monkeypatch.setattr(
+        dialog,
+        "_start_local_model_download",
+        lambda models, *args, **kwargs: started.append(list(models)),
+    )
+    asked: list[str] = []
+
+    def _question(_parent, _title, text, *_args, **_kwargs):
+        asked.append(text)
+        return (
+            QtWidgets.QMessageBox.Yes if answer == "yes" else QtWidgets.QMessageBox.No
+        )
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", _question)
+
+    dialog._download_all_missing_local_models()
+
+    total_gb = sum(MODEL_ESTIMATED_SIZE_MB[name] for name in missing) / 1000
+    assert len(asked) == 1
+    assert "2 models" in asked[0]
+    assert f"{total_gb:.1f} GB" in asked[0]
+    assert started == ([missing] if answer == "yes" else [])
+
+
+def test_the_microphone_picker_names_the_device_system_default_means(
+    dialog: SettingsDialog, monkeypatch
+) -> None:
+    from stt_app.audio_devices import InputDeviceInfo
+
+    monkeypatch.setattr(
+        "stt_app.audio_devices.query_input_devices",
+        lambda: ([InputDeviceInfo(name="USB Mic", index=3)], True),
+    )
+    monkeypatch.setattr(
+        "stt_app.audio_devices.system_default_input_name", lambda: "USB Mic"
+    )
+    dialog._populate_microphone_combo("")
+    assert dialog.microphone_combo.itemText(0) == "System default: USB Mic"
+    assert dialog.microphone_combo.itemData(0) == ""
+
+    monkeypatch.setattr("stt_app.audio_devices.system_default_input_name", lambda: "")
+    dialog._populate_microphone_combo("")
+    assert dialog.microphone_combo.itemText(0) == "System default (follow Windows)"
+
+
+def test_the_engine_picker_groups_local_and_cloud(dialog: SettingsDialog) -> None:
+    from stt_app.config import VALID_ENGINES
+
+    combo = dialog.engine_combo
+    texts = [combo.itemText(index) for index in range(combo.count())]
+    assert texts[0] == "Local (on this PC)"
+    header_index = texts.index("Cloud")
+    header = combo.model().item(header_index)
+    assert not header.isEnabled()
+    assert not (header.flags() & QtCore.Qt.ItemIsSelectable)
+    for engine in VALID_ENGINES:
+        assert combo.findData(engine) >= 0, engine
+    assert all(not text.startswith("Remote (") for text in texts)
+    # The same list on the Import Audio tab.
+    import_texts = [
+        dialog.import_engine_combo.itemText(index)
+        for index in range(dialog.import_engine_combo.count())
+    ]
+    assert import_texts == texts
+
+
+def test_hotkey_fields_are_as_wide_as_a_hotkey(dialog: SettingsDialog) -> None:
+    """A single chord stretched across 500 px reads as a text field."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    _switch_to_tab(dialog, "Hotkeys && Display")
+    _settle_layout(app)
+    longest = dialog.hotkey_edit.fontMetrics().horizontalAdvance(
+        "Ctrl+Shift+Alt+Win+F12"
+    )
+    for edit in (
+        dialog.hotkey_edit,
+        dialog.cancel_hotkey_edit,
+        dialog.show_overlay_hotkey_edit,
+        dialog.repaste_hotkey_edit,
+    ):
+        assert longest < edit.width() <= longest + 120, edit.width()
+
+
+@pytest.mark.parametrize(
+    ("engine", "model", "mode", "enabled"),
+    [
+        ("local", "small", "streaming", True),
+        ("local", "small", "batch", False),
+        ("local", "parakeet-tdt-0.6b-v3", "batch", False),
+        ("groq", "small", "batch", False),
+    ],
+)
+def test_the_full_final_checkbox_opens_enabled_only_where_it_acts(
+    monkeypatch, tmp_path, engine: str, model: str, mode: str, enabled: bool
+) -> None:
+    """Its hint moved into the tooltip on the promise that the box is disabled
+    wherever it does nothing -- which has to hold from the first paint, not
+    only after the user touches engine, model or mode: the model combo is
+    refilled with its signals blocked, and selecting the value a combo already
+    shows emits nothing."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models", lambda _model_dir: []
+    )
+    stored = AppSettings(engine=engine, model_size=model, mode=mode)
+    dialog = SettingsDialog(
+        settings_store=_SettingsStore(stored),
+        secret_store=_SecretStore(),
+        app_logger=_Logger(),
+    )
+    try:
+        assert dialog.mode_combo.currentData() == mode
+        assert dialog.streaming_full_final_check.isEnabled() is enabled
+    finally:
+        dialog.close()
         app.processEvents()

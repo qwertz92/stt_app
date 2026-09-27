@@ -49,6 +49,7 @@ from .settings_dialog_helpers import (
     configure_button_row,
     local_model_short_label,
     onnx_device_label,
+    unlabelled_row_label,
 )
 from .settings_store import auto_first_onnx_device
 from .ui_feedback import restore_vertical_scrollbar
@@ -451,6 +452,16 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
     def clear(self) -> None:
         self._plain_text = ""
         self.overview_table.setRowCount(0)
+        self._set_transcript_rows([])
+
+    def show_empty_state(self, text: str) -> None:
+        """Say what to do on a tab that has nothing to show yet.
+
+        A placeholder, not a result: `toPlainText()` stays empty, so nothing
+        that reads the loaded summary mistakes it for one.
+        """
+        self._plain_text = ""
+        self._set_overview_rows([("Status", text)])
         self._set_transcript_rows([])
 
     def set_entry(self, entry: BenchmarkHistoryEntry) -> None:
@@ -1228,18 +1239,20 @@ class _BenchmarkMixin:
         )
         models_layout = QtWidgets.QVBoxLayout(models_box)
         self.benchmark_models_list = QtWidgets.QListWidget()
-        # Explorer-style selection (Shift for ranges, Ctrl for toggles), like
-        # every other multi-select list in the app.
+        # Checkboxes rather than a selection: a plain click on one row of the
+        # old ExtendedSelection list dropped every other choice, and nothing
+        # on screen said that a highlighted row meant "will be measured". No
+        # selection at all, so a highlight cannot read as a second state.
         self.benchmark_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.NoSelection
         )
         self._configure_compact_list_widget(
             self.benchmark_models_list,
             expand=True,
             adjust_to_contents=True,
         )
-        self.benchmark_models_list.itemSelectionChanged.connect(
-            self._update_benchmark_actions
+        self.benchmark_models_list.itemChanged.connect(
+            lambda _item: self._update_benchmark_actions()
         )
         models_layout.addWidget(self.benchmark_models_list, 1)
 
@@ -1251,11 +1264,11 @@ class _BenchmarkMixin:
         self._configure_button_row(select_buttons_row)
         self.benchmark_select_all_button = QtWidgets.QPushButton("Select all")
         self.benchmark_select_all_button.clicked.connect(
-            self.benchmark_models_list.selectAll
+            lambda: self._set_all_benchmark_models_checked(True)
         )
         self.benchmark_deselect_all_button = QtWidgets.QPushButton("Deselect all")
         self.benchmark_deselect_all_button.clicked.connect(
-            self.benchmark_models_list.clearSelection
+            lambda: self._set_all_benchmark_models_checked(False)
         )
         self.refresh_benchmark_models_button = QtWidgets.QPushButton("Refresh")
         self.refresh_benchmark_models_button.clicked.connect(
@@ -1354,7 +1367,7 @@ class _BenchmarkMixin:
             "their device themselves (CUDA if present, otherwise CPU); Parakeet, "
             "Canary and Granite Speech 5.0 always run on the CPU. A run that "
             "measures a model on more than one device also decides which one "
-            "Auto starts with in Settings > Transcription."
+            "Auto starts with in Settings > Models."
         )
         webgpu_device_note.setWordWrap(True)
         self._style_note_label(webgpu_device_note)
@@ -1430,7 +1443,7 @@ class _BenchmarkMixin:
         warmup_note.setWordWrap(True)
         self._style_note_label(warmup_note)
         options_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(self.benchmark_warmup_checkbox, warmup_note),
         )
 
@@ -1446,7 +1459,7 @@ class _BenchmarkMixin:
         vad_note.setWordWrap(True)
         self._style_note_label(vad_note)
         options_form.addRow(
-            "",
+            unlabelled_row_label(),
             self._field_with_hint(self.benchmark_vad_checkbox, vad_note),
         )
         setup_layout.addWidget(self.benchmark_options_box)
@@ -1534,8 +1547,8 @@ class _BenchmarkMixin:
         # The three controls the plan is computed from. The model list is also
         # connected to `_update_benchmark_actions`; these are separate
         # connections so the plan has exactly one writer of its own.
-        self.benchmark_models_list.itemSelectionChanged.connect(
-            self._refresh_benchmark_plan_from_widgets
+        self.benchmark_models_list.itemChanged.connect(
+            lambda _item: self._refresh_benchmark_plan_from_widgets()
         )
         self.benchmark_webgpu_device_combo.currentIndexChanged.connect(
             lambda _index: self._refresh_benchmark_plan_from_widgets()
@@ -1594,7 +1607,9 @@ class _BenchmarkMixin:
         for row, planned_case in enumerate(planned):
             values = [
                 str(row + 1),
-                planned_case.model,
+                # The name the model list above shows, not the settings id
+                # ("Cohere Transcribe 03-2026", not "cohere-transcribe-03-2026").
+                local_model_short_label(planned_case.model),
                 planned_case.device_target,
                 planned_case.display_compute_type,
                 _BENCHMARK_PLAN_STATUS_PENDING,
@@ -1694,10 +1709,16 @@ class _BenchmarkMixin:
             return
         cached = self._known_cached_models(cached)
 
-        selected = {
-            str(item.data(QtCore.Qt.UserRole) or "")
-            for item in self.benchmark_models_list.selectedItems()
-        }
+        # A model the list already showed keeps its check state. On the first
+        # fill every model starts checked; one that appears later (a download
+        # finishing) starts unchecked, so a rebuild during or after a run
+        # leaves the plan -- and the case states on screen -- as they were.
+        previous_states: dict[str, bool] = {}
+        for row in range(self.benchmark_models_list.count()):
+            item = self.benchmark_models_list.item(row)
+            previous_states[str(item.data(QtCore.Qt.UserRole) or "")] = (
+                item.checkState() == QtCore.Qt.Checked
+            )
         current_item = self.benchmark_models_list.currentItem()
         current_model = (
             str(current_item.data(QtCore.Qt.UserRole) or "")
@@ -1721,12 +1742,14 @@ class _BenchmarkMixin:
                     f"{self._model_label(model_name)}{suffix}"
                 )
                 item.setData(QtCore.Qt.UserRole, model_name)
+                item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+                item.setCheckState(
+                    QtCore.Qt.Checked
+                    if previous_states.get(model_name, not previous_states)
+                    else QtCore.Qt.Unchecked
+                )
                 self._apply_compact_list_item_size(self.benchmark_models_list, item)
                 self.benchmark_models_list.addItem(item)
-                if selected:
-                    item.setSelected(model_name in selected)
-                else:
-                    item.setSelected(True)
                 if model_name == current_model:
                     restored_current_item = item
         finally:
@@ -1740,7 +1763,7 @@ class _BenchmarkMixin:
             )
         restore_vertical_scrollbar(self.benchmark_models_list, scroll_value)
         # The rebuild above runs with the list's signals blocked, so the plan
-        # would otherwise not learn that the selection changed with it.
+        # would otherwise not learn that the checked models changed with it.
         self._refresh_benchmark_plan_from_widgets()
 
         visible_rows = min(max(self.benchmark_models_list.count(), 1), 4)
@@ -1753,13 +1776,31 @@ class _BenchmarkMixin:
         self._update_benchmark_actions()
 
     def _selected_benchmark_model_names(self) -> list[str]:
+        """The checked models, in list order."""
         if not hasattr(self, "benchmark_models_list"):
             return []
-        return [
-            str(item.data(QtCore.Qt.UserRole) or "").strip()
-            for item in self.benchmark_models_list.selectedItems()
-            if str(item.data(QtCore.Qt.UserRole) or "").strip()
-        ]
+        names: list[str] = []
+        for row in range(self.benchmark_models_list.count()):
+            item = self.benchmark_models_list.item(row)
+            name = str(item.data(QtCore.Qt.UserRole) or "").strip()
+            if name and item.checkState() == QtCore.Qt.Checked:
+                names.append(name)
+        return names
+
+    def _set_all_benchmark_models_checked(self, checked: bool) -> None:
+        """Check or uncheck every model, then refresh the plan once."""
+        models = self.benchmark_models_list
+        state = QtCore.Qt.Checked if checked else QtCore.Qt.Unchecked
+        # Blocked, or every row's `itemChanged` would recompute the plan.
+        models.blockSignals(True)
+        try:
+            for row in range(models.count()):
+                models.item(row).setCheckState(state)
+        finally:
+            models.blockSignals(False)
+        models.viewport().update()
+        self._update_benchmark_actions()
+        self._refresh_benchmark_plan_from_widgets()
 
     def _set_benchmark_audio_path(self, path: str) -> None:
         selected = str(path or "").strip()
@@ -1890,6 +1931,26 @@ class _BenchmarkMixin:
         self.benchmark_results_panel.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
+        self._show_benchmark_empty_state_if_idle()
+
+    def _show_benchmark_empty_state_if_idle(self) -> None:
+        """On a first visit the tab was two empty tables; say how to start.
+
+        Only while there is no history, nothing is loaded and no run is
+        active: a loaded result or a running benchmark owns the view.
+        """
+        if not hasattr(self, "benchmark_history_list"):
+            return
+        if self.benchmark_history_list.rowCount() > 0:
+            return
+        if getattr(self, "_current_benchmark_cases", None):
+            return
+        if getattr(self, "_active_benchmark_thread", None) is not None:
+            return
+        self.benchmark_summary_text.show_empty_state(
+            "No benchmark yet. Click Run Benchmark... to measure your "
+            "downloaded models on one recording."
+        )
 
     def _benchmark_summary(
         self,
@@ -2552,6 +2613,7 @@ class _BenchmarkMixin:
             self.benchmark_history_list.setCurrentRow(selected_row)
         restore_vertical_scrollbar(self.benchmark_history_list, previous_scroll)
         self._update_benchmark_history_actions()
+        self._show_benchmark_empty_state_if_idle()
 
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
         if not hasattr(self, "benchmark_history_list"):

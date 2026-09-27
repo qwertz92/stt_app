@@ -22,7 +22,6 @@ from .config import (
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
-    LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     PARAKEET_MODEL_SIZE,
     VALID_ENGINES,
@@ -38,7 +37,6 @@ from .config import (
 )
 from .settings_dialog_helpers import (
     _CONCURRENT_MODE_UI_CHOICES,
-    _ENGINE_LABELS,
     _INSERT_TARGET_LABELS,
     _MODE_LABELS,
     _PASTE_MODE_LABELS,
@@ -47,14 +45,21 @@ from .settings_dialog_helpers import (
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     LOCAL_MODEL_LABELS,
     _WheelPassthroughComboBox,
+    fill_engine_combo,
+    hint_font,
     local_model_label,
     local_model_precision_label,
     local_model_short_label,
     model_choices_for_engine,
     onnx_device_label,
     onnx_device_order_text,
+    unlabelled_row_label,
 )
-from .settings_store import AppSettings, apply_engine_model_selection
+from .settings_store import (
+    _REMOTE_MODEL_FIELDS,
+    AppSettings,
+    apply_engine_model_selection,
+)
 
 # How each engine that reads the custom vocabulary passes it on, named after
 # the request field it ends up in. `{name}` is the model or provider as the
@@ -97,17 +102,6 @@ _LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models t
 # width, and "this provider" repeats what the row already shows.
 _REMOTE_MODEL_KEY_POINTER = "The API key is set on the API Keys tab."
 
-# Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
-# benchmark can be selected for daily dictation with the same wording.
-_LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
-    ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
-    ("GPU only (WebGPU -> DirectML)", "gpu"),
-    ("WebGPU only", "webgpu"),
-    ("DirectML only", "dml"),
-    ("CPU only", "cpu"),
-)
-
-
 class _GeneralTabMixin:
     _GENERAL_FORM_ROW_SPACING_PX = 10
     _DYNAMIC_HINT_LINE_COUNT = 2
@@ -127,18 +121,27 @@ class _GeneralTabMixin:
         return box, form
 
     @classmethod
-    def _dynamic_hint_height(cls, label: QtWidgets.QLabel) -> int:
-        """Height of the compact two-line area used for changing hint text."""
+    def _dynamic_hint_height(
+        cls, label: QtWidgets.QLabel, lines: int | None = None
+    ) -> int:
+        """Height of the compact area used for changing hint text."""
         # Windows' offscreen/high-DPI font backend can need several pixels more
         # than two nominal line spacings for the same wrapped glyph bounds.
         # Keep that platform padding inside the reserved area so text never
         # clips while all following rows still remain stationary.
-        return label.fontMetrics().lineSpacing() * cls._DYNAMIC_HINT_LINE_COUNT + 10
+        count = cls._DYNAMIC_HINT_LINE_COUNT if lines is None else lines
+        return label.fontMetrics().lineSpacing() * count + 10
 
     @classmethod
-    def _reserve_dynamic_hint_height(cls, label: QtWidgets.QLabel) -> None:
-        """Reserve a compact, stable two-line area for changing hint text."""
-        label.setFixedHeight(cls._dynamic_hint_height(label))
+    def _reserve_dynamic_hint_height(
+        cls, label: QtWidgets.QLabel, lines: int | None = None
+    ) -> None:
+        """Reserve a stable area (two lines unless told) for changing text.
+
+        Measured with the label's own font, so call it after the font is set:
+        the hints use `hint_font`, which grows with the system text size.
+        """
+        label.setFixedHeight(cls._dynamic_hint_height(label, lines))
         label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
 
     def _build_general_tab(self) -> None:
@@ -151,13 +154,11 @@ class _GeneralTabMixin:
         engine_box, engine_form = self._general_form_box("Engine && Mode")
 
         self.engine_combo = _WheelPassthroughComboBox()
-        for value in VALID_ENGINES:
-            self.engine_combo.addItem(_ENGINE_LABELS.get(value, value), value)
+        fill_engine_combo(self.engine_combo, VALID_ENGINES)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_hint = QtWidgets.QLabel(
-            "Local keeps audio on this computer and uses faster-whisper, "
-            "ONNX/WebGPU, or ONNX Runtime GenAI. Remote engines upload audio "
-            "to the selected provider."
+            "Local runs on this PC. Cloud engines upload the audio to the "
+            "provider you pick."
         )
         engine_hint.setWordWrap(True)
         self._style_field_hint_label(engine_hint)
@@ -181,9 +182,8 @@ class _GeneralTabMixin:
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         self.local_model_runtime_warning_label = QtWidgets.QLabel(" ")
         self.local_model_runtime_warning_label.setWordWrap(True)
-        self.local_model_runtime_warning_label.setStyleSheet(
-            "color: #b71c1c; font-size: 11px;"
-        )
+        self.local_model_runtime_warning_label.setFont(hint_font())
+        self.local_model_runtime_warning_label.setStyleSheet("color: #b71c1c;")
         # Reserve a stable two-line note area so switching between models with
         # and without runtime notes never shifts the widgets below.
         self._reserve_dynamic_hint_height(self.local_model_runtime_warning_label)
@@ -209,26 +209,10 @@ class _GeneralTabMixin:
 
         engine_form.addRow("Model", self.model_selector_stack)
 
-        self.local_onnx_device_combo = _WheelPassthroughComboBox()
-        for label, value in _LOCAL_ONNX_DEVICE_CHOICES:
-            if value in LOCAL_WEBGPU_DEVICE_POLICIES:
-                self.local_onnx_device_combo.addItem(label, value)
-        self.local_onnx_device_combo.currentIndexChanged.connect(
-            self._on_local_onnx_device_changed
-        )
-        self.local_onnx_device_note_label = QtWidgets.QLabel("")
-        self.local_onnx_device_note_label.setWordWrap(True)
-        self._style_field_hint_label(self.local_onnx_device_note_label)
-        self._reserve_dynamic_hint_height(self.local_onnx_device_note_label)
-        # The row stays present and only changes enabled state, so selecting a
-        # model that ignores it never shifts the fields below.
-        engine_form.addRow(
-            "ONNX Device",
-            self._field_with_hint(
-                self.local_onnx_device_combo,
-                self.local_onnx_device_note_label,
-            ),
-        )
+        # The ONNX Device picker lives in the Models tab's "Local runtime"
+        # group (`_build_local_tab`): it is set once per machine, and on this
+        # tab it cost two rows of height for most users' models, which ignore
+        # it.
 
         self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
@@ -250,31 +234,30 @@ class _GeneralTabMixin:
         self.custom_vocabulary_edit.setFixedHeight(
             self.custom_vocabulary_edit.fontMetrics().height() * 3 + 12
         )
+        # The parsing rules were a static hint of their own under the field --
+        # a third block of text for one row. The placeholder says the short
+        # version while the field is empty, the tooltip the whole of it.
         self.custom_vocabulary_edit.setPlaceholderText(
-            "e.g. Kubernetes, Splunk SOAR"
+            "Names and terms to spell correctly, e.g. Kubernetes, Splunk SOAR "
+            "(comma or new line)"
         )
-        # Whether the *selected* model is sent these terms. The static hint
-        # below used to carry both lists, which meant reading eleven model
-        # names to find out what the one selected model does -- and the list
-        # went stale every time a model was added. The field stays editable
-        # either way: the terms are stored for whatever model is picked next.
-        self.vocabulary_support_label = QtWidgets.QLabel("")
-        self.vocabulary_support_label.setWordWrap(True)
-        self._style_field_hint_label(self.vocabulary_support_label)
-        self._reserve_dynamic_hint_height(self.vocabulary_support_label)
-        self.vocabulary_hint_label = QtWidgets.QLabel(
+        self.custom_vocabulary_edit.setToolTip(
             "Enter up to 100 terms or phrases, separated by commas, semicolons, "
             "or new lines. Spaces inside a phrase are kept (for example, "
             "Splunk SOAR)."
         )
-        self.vocabulary_hint_label.setWordWrap(True)
-        self._style_field_hint_label(self.vocabulary_hint_label)
+        # Whether the *selected* model is sent these terms. The field stays
+        # editable either way: the terms are stored for whatever model is
+        # picked next.
+        self.vocabulary_support_label = QtWidgets.QLabel("")
+        self.vocabulary_support_label.setWordWrap(True)
+        self._style_field_hint_label(self.vocabulary_support_label)
+        self._reserve_dynamic_hint_height(self.vocabulary_support_label)
         engine_form.addRow(
             "Vocabulary",
             self._field_with_hint(
                 self.custom_vocabulary_edit,
                 self.vocabulary_support_label,
-                self.vocabulary_hint_label,
             ),
         )
 
@@ -287,44 +270,40 @@ class _GeneralTabMixin:
         )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_hint = QtWidgets.QLabel(
-            "Batch inserts text after recording stops. Streaming can append stable "
-            "text while you speak, but it never rewrites already inserted text."
+            "Batch inserts the text when you stop. Streaming types stable text "
+            "while you speak."
         )
         mode_hint.setWordWrap(True)
         self._style_field_hint_label(mode_hint)
         engine_form.addRow("Mode", self._field_with_hint(self.mode_combo, mode_hint))
 
         self.streaming_full_final_check = QtWidgets.QCheckBox(
-            "Re-transcribe full recording after streaming"
+            "Re-transcribe the whole recording after streaming (faster-whisper)"
         )
+        # Enabled only where it does something (`_update_streaming_full_final
+        # _availability`); the hint that explained that moved in here.
         self.streaming_full_final_check.setToolTip(
             "After a local faster-whisper streaming session ends, transcribe "
             "the whole recording once more so the saved history entry uses "
             "the highest-quality pass. Stopping takes noticeably longer on "
-            "long dictations. Inserted text is unaffected either way."
+            "long dictations. Inserted text is unaffected either way.\n"
+            "Applies to local faster-whisper streaming only. When off, the "
+            "history entry uses the live streaming text and stopping finishes "
+            "faster."
         )
-        streaming_full_final_hint = QtWidgets.QLabel(
-            "Applies to local faster-whisper streaming only. When disabled, "
-            "the history entry uses the live streaming text and stopping "
-            "finishes faster."
-        )
-        streaming_full_final_hint.setWordWrap(True)
-        self._style_field_hint_label(streaming_full_final_hint)
-        engine_form.addRow(
-            "",
-            self._field_with_hint(
-                self.streaming_full_final_check,
-                streaming_full_final_hint,
-            ),
-        )
+        engine_form.addRow(unlabelled_row_label(), self.streaming_full_final_check)
 
         self.concurrent_mode_combo = _WheelPassthroughComboBox()
         for value, label in _CONCURRENT_MODE_UI_CHOICES:
             self.concurrent_mode_combo.addItem(label, value)
+        # The hint that sat under this combo is the tooltip's first paragraph
+        # now; the combo's own choices already say "previous" four times.
         self.concurrent_mode_combo.setToolTip(
-            "What happens to the previous transcription when you press the "
-            "recording hotkey again, and when finished results are inserted. "
-            "A finished transcription is never discarded.\n"
+            "While busy: what happens when you press the recording hotkey "
+            "again before the previous transcription finishes, and when "
+            "finished results are inserted. Jobs run one at a time, finished "
+            "results keep their recording order, and a finished transcription "
+            "is never discarded.\n"
             "- Insert when idle: results are inserted once no transcription "
             "is running anymore.\n"
             "- Insert immediately: each result is inserted the moment it is "
@@ -333,20 +312,7 @@ class _GeneralTabMixin:
             "- Cancel: stop the older transcription (a result that still "
             "finishes is kept in history)."
         )
-        self.concurrent_mode_hint_label = QtWidgets.QLabel(
-            "If you press the recording hotkey again before the previous "
-            "transcription finishes, this controls the previous job. Jobs run "
-            "one at a time and finished results keep their recording order."
-        )
-        self.concurrent_mode_hint_label.setWordWrap(True)
-        self._style_field_hint_label(self.concurrent_mode_hint_label)
-        engine_form.addRow(
-            "New Recording",
-            self._field_with_hint(
-                self.concurrent_mode_combo,
-                self.concurrent_mode_hint_label,
-            ),
-        )
+        engine_form.addRow("While busy", self.concurrent_mode_combo)
         layout.addWidget(engine_box)
 
         # --- Text Insertion section ---
@@ -364,9 +330,7 @@ class _GeneralTabMixin:
             "some modern apps ignore it."
         )
         self.paste_mode_hint_label = QtWidgets.QLabel(
-            "SendInput behaves like pressing Ctrl+V; WM_PASTE bypasses keyboard "
-            "simulation, but some modern apps ignore it. Auto tries SendInput "
-            "first, then WM_PASTE."
+            "Auto works for almost every app; change it only if nothing is pasted."
         )
         self.paste_mode_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.paste_mode_hint_label)
@@ -385,36 +349,22 @@ class _GeneralTabMixin:
             "- Window focused when the recording started: a queued result "
             "follows its own recording even after you moved on (default).\n"
             "- Window focused when the transcript is ready: the text goes to "
-            "wherever you are working at that moment."
-        )
-        insert_target_hint = QtWidgets.QLabel(
+            "wherever you are working at that moment.\n"
             "The caret position inside the target is always the position at "
             "insert time; Windows cannot paste at a remembered caret offset."
         )
-        insert_target_hint.setWordWrap(True)
-        self._style_field_hint_label(insert_target_hint)
-        paste_form.addRow(
-            "Insert Into",
-            self._field_with_hint(self.insert_target_combo, insert_target_hint),
-        )
+        paste_form.addRow("Insert Into", self.insert_target_combo)
 
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
-            "Keep transcript in clipboard after insertion"
+            "Leave the transcript in the clipboard after inserting it"
         )
         self.keep_clipboard_checkbox.setToolTip(
             "When enabled, the transcript remains in the clipboard after insertion. "
-            "When disabled, the previous clipboard contents are restored."
+            "When disabled, the previous clipboard contents are restored. This "
+            "only decides whether the finished transcript replaces your "
+            "previous clipboard contents."
         )
-        keep_clipboard_hint = QtWidgets.QLabel(
-            "This only controls whether the finished transcript replaces your "
-            "previous clipboard contents after insertion."
-        )
-        keep_clipboard_hint.setWordWrap(True)
-        self._style_field_hint_label(keep_clipboard_hint)
-        paste_form.addRow(
-            "",
-            self._field_with_hint(self.keep_clipboard_checkbox, keep_clipboard_hint),
-        )
+        paste_form.addRow(unlabelled_row_label(), self.keep_clipboard_checkbox)
         layout.addWidget(paste_box)
 
         # The shared label column spanning Transcription, Hotkeys & Display
@@ -772,9 +722,9 @@ class _GeneralTabMixin:
         self._update_local_onnx_device_row()
 
     def _set_local_onnx_device_note(self, text: str) -> None:
-        # Two reserved lines are not much room at the dialog's minimum width,
-        # so the whole sentence goes into the tooltip as well -- the same
-        # answer every other changing note in this dialog uses.
+        # Two reserved lines are not much room at a larger text size, so the
+        # whole sentence goes into the tooltip as well -- the same answer
+        # every other changing note in this dialog uses.
         self.local_onnx_device_note_label.setText(text)
         self.local_onnx_device_note_label.setToolTip(text)
 
@@ -798,7 +748,9 @@ class _GeneralTabMixin:
         """Enable the device picker only where it has an effect.
 
         The row stays present and only changes enabled state and note text, so
-        switching models never shifts the fields below it.
+        switching models never shifts the fields below it. It sits on the
+        Models tab while the model is picked on the Transcription tab, so the
+        note names the model it is talking about.
         """
         if not hasattr(self, "local_onnx_device_combo"):
             return
@@ -811,12 +763,18 @@ class _GeneralTabMixin:
         applies = engine == "local" and model_name in DEVICE_AWARE_LOCAL_MODELS
         self.local_onnx_device_combo.setEnabled(applies)
 
+        if engine != "local":
+            # Not a sentence about the local model the hidden combo still
+            # holds: with a cloud engine selected no local model runs at all.
+            self._set_local_onnx_device_note("Only used by local models.")
+            return
+        name = local_model_short_label(model_name) if model_name else "This model"
         if not applies:
             if model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
                 # Not "the fastest local option": `tiny` is quicker, and the
                 # claim was never true for Canary at all.
                 self._set_local_onnx_device_note(
-                    "This model always runs on the CPU through onnx-asr and "
+                    f"{name} always runs on the CPU through onnx-asr and "
                     "ignores this setting."
                 )
                 return
@@ -824,37 +782,41 @@ class _GeneralTabMixin:
                 # Also CPU-only, but a different runtime: naming onnx-asr here
                 # would point at a package this model never loads.
                 self._set_local_onnx_device_note(
-                    "This model always runs on the CPU through ONNX Runtime "
-                    "and ignores this setting."
+                    f"{name} always runs on the CPU through ONNX Runtime and "
+                    "ignores this setting."
                 )
                 return
             # Names what decides instead. "faster-whisper uses its own device
             # setting" pointed at a setting this app does not have.
             self._set_local_onnx_device_note(
-                "Only applies to Cohere, Granite and Nemotron. Whisper models "
-                "pick their device themselves (CUDA if present, otherwise CPU)."
+                f"{name} ignores this setting: only Cohere, Granite and Nemotron "
+                "use it. Whisper models pick their device themselves (CUDA if "
+                "present, otherwise CPU)."
             )
             return
 
         device = str(self.local_onnx_device_combo.currentData() or "auto")
         if device == "auto":
-            self._set_local_onnx_device_note(self._auto_device_note(model_name))
+            self._set_local_onnx_device_note(
+                f"{name}: {self._auto_device_note(model_name)}"
+            )
             return
         if device == "cpu":
             self._set_local_onnx_device_note(
-                "Forces CPU and never tries the GPU. Faster for models whose "
-                "encoder the GPU cannot run; slower for the rest."
+                f"{name}: forced to the CPU, the GPU is never tried. Faster for "
+                "models whose encoder the GPU cannot run; slower for the rest."
             )
             return
         if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self._set_local_onnx_device_note(
-                "This model runs on ONNX Runtime GenAI, which has DirectML and "
-                "CPU only: every GPU choice here means DirectML."
+                f"{name} runs on ONNX Runtime GenAI, which has DirectML and CPU "
+                "only: every GPU choice here means DirectML."
             )
             return
         self._set_local_onnx_device_note(
-            "Forces this device and fails instead of falling back to CPU, so a "
-            "model the GPU cannot run will error rather than transcribe slowly."
+            f"{name}: forced to this device, failing instead of falling back to "
+            "CPU, so a model the GPU cannot run errors rather than transcribes "
+            "slowly."
         )
 
     def _auto_device_note(self, model_name: str) -> str:
@@ -879,9 +841,12 @@ class _GeneralTabMixin:
                 "for this model."
             )
         if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            # Shorter than it was: the note starts with the model's name now,
+            # and with it the sentence needed a third line at the label's
+            # 460 px minimum. That every GPU choice means DirectML is said by
+            # the note of each GPU choice itself.
             return (
-                "This model has DirectML and CPU only (every GPU choice means "
-                f"DirectML). Run a benchmark with "
+                "DirectML and CPU only. Run a benchmark with "
                 f'"{BENCHMARK_GPU_CPU_COMPARISON_LABEL}" and Auto will start '
                 "with the faster one."
             )
@@ -902,16 +867,16 @@ class _GeneralTabMixin:
         )
         # The label stays visible with reserved space either way; only its
         # text and color change, so model switches never shift the layout.
-        warning_style = "color: #b71c1c; font-size: 11px;"
-        note_style = "color: #666666; font-size: 11px;"
+        warning_style = "color: #b71c1c;"
+        note_style = "color: #666666;"
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             style = warning_style
             # The order Auto tries is no longer fixed -- a benchmark can put
-            # CPU first -- and the ONNX Device row below owns it either way, so
-            # restating it here could only ever contradict it.
+            # CPU first -- and the ONNX Device row on the Models tab owns it
+            # either way, so restating it here could only ever contradict it.
             text = (
-                "Batch mode only. Runs on the device chosen under ONNX Device "
-                "(the active one is shown in the overlay)."
+                "Batch mode only. Runs on the ONNX Device set on the Models "
+                "tab (the overlay shows the active one)."
             )
         elif engine == "local" and model_name == CANARY_MODEL_SIZE:
             style = note_style
@@ -939,8 +904,8 @@ class _GeneralTabMixin:
         elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             style = warning_style
             text = (
-                "Streams with a fixed 560 ms ONNX chunk. Runs on the device "
-                "chosen under ONNX Device."
+                "Streams with a fixed 560 ms ONNX chunk. Runs on the ONNX "
+                "Device set on the Models tab."
             )
         elif engine == "local" and model_name:
             style = note_style
@@ -997,7 +962,7 @@ class _GeneralTabMixin:
             # Amber, not the #b71c1c of a real failure: nothing is broken and
             # the terms stay stored for the next model.
             self.vocabulary_support_label.setStyleSheet(
-                "color: #b26a00; font-size: 11px; padding: 0;"
+                "color: #b26a00; padding: 0;"
             )
             text = (
                 f"{name} ignores the custom vocabulary. Models that use it: "
@@ -1005,7 +970,7 @@ class _GeneralTabMixin:
             )
         else:
             self.vocabulary_support_label.setStyleSheet(
-                "color: #555; font-size: 11px; padding: 0;"
+                "color: #555; padding: 0;"
             )
             text = _VOCABULARY_SUPPORTED_NOTES.get(engine, "").format(name=name)
 
@@ -1015,33 +980,68 @@ class _GeneralTabMixin:
         # changing note in this dialog does.
         self.vocabulary_support_label.setToolTip(text)
 
-    def _update_engine_indicator(self) -> None:
-        """Update the always-visible engine indicator bar."""
-        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        if engine == "local":
-            model = (
-                str(self.model_combo.currentData() or "")
-                if hasattr(self, "model_combo")
-                else ""
-            )
+    def _engine_selection_text(self, engine: str, model: str) -> str:
+        """One engine/model pair the way the engine bar names it."""
+        if engine == DEFAULT_ENGINE:
             runtime = (
                 LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(model, "ONNX")
                 if model in LOCAL_ONNX_MODEL_SIZES
                 else "faster-whisper"
             )
-            label = f"Engine: LOCAL ({runtime})"
-            self.engine_indicator.setText(label)
-            self.engine_indicator.setStyleSheet(
-                "font-weight: bold; padding: 4px; border-radius: 4px; "
-                "background-color: #e8f5e9; color: #1b5e20;"
+            name = local_model_short_label(model) if model else "local model"
+            return f"{name} (on this PC, {runtime})"
+        model_text = f" {model}" if model else ""
+        return f"{self._provider_label(engine)}{model_text} (cloud)"
+
+    def _pending_engine_selection(self) -> tuple[str, str]:
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        if engine == DEFAULT_ENGINE:
+            model = (
+                str(self.model_combo.currentData() or "")
+                if hasattr(self, "model_combo")
+                else ""
             )
         else:
-            label = self._provider_label(engine)
-            self.engine_indicator.setText(f"Engine: REMOTE ({label})")
-            self.engine_indicator.setStyleSheet(
-                "font-weight: bold; padding: 4px; border-radius: 4px; "
-                "background-color: #e3f2fd; color: #0d47a1;"
+            model = self._remote_model_value_for_provider(engine)
+        return engine, model
+
+    def _active_engine_selection(self) -> tuple[str, str]:
+        """What the running app uses: the settings as last saved or loaded."""
+        settings = self._loaded_settings
+        engine = str(getattr(settings, "engine", "") or DEFAULT_ENGINE)
+        if engine == DEFAULT_ENGINE:
+            return engine, str(getattr(settings, "model_size", "") or "")
+        field = _REMOTE_MODEL_FIELDS.get(engine, "")
+        return engine, str(getattr(settings, field, "") or "") if field else ""
+
+    def _update_engine_indicator(self) -> None:
+        """The always-visible bar: what runs now, and what Save changes it to.
+
+        It used to show the combo's selection alone, labelled "Engine:", so
+        after picking another model it named something that was not running
+        and would not run until Save.
+        """
+        if not hasattr(self, "engine_indicator"):
+            return
+        active_engine, active_model = self._active_engine_selection()
+        pending_engine, pending_model = self._pending_engine_selection()
+        text = f"Active: {self._engine_selection_text(active_engine, active_model)}"
+        pending = (pending_engine, pending_model) != (active_engine, active_model)
+        if pending:
+            text += (
+                "  \u2192  after Save: "
+                f"{self._engine_selection_text(pending_engine, pending_model)}"
             )
+        self.engine_indicator.setText(text)
+        if pending:
+            colors = "background-color: #fff3e0; color: #8a4b00;"
+        elif pending_engine == DEFAULT_ENGINE:
+            colors = "background-color: #e8f5e9; color: #1b5e20;"
+        else:
+            colors = "background-color: #e3f2fd; color: #0d47a1;"
+        self.engine_indicator.setStyleSheet(
+            "font-weight: bold; padding: 4px; border-radius: 4px; " + colors
+        )
 
     def _update_mode_availability(self) -> None:
         """Enable/disable streaming option based on the selected engine."""
@@ -1094,9 +1094,28 @@ class _GeneralTabMixin:
             if batch_idx >= 0:
                 self.mode_combo.setCurrentIndex(batch_idx)
 
+    def _update_streaming_full_final_availability(self) -> None:
+        """Enabled only for local faster-whisper streaming, where it acts."""
+        if not hasattr(self, "streaming_full_final_check"):
+            return
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        model_name = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+        applies = (
+            engine == DEFAULT_ENGINE
+            and bool(model_name)
+            and model_name not in LOCAL_ONNX_MODEL_SIZES
+            and self.mode_combo.currentData() == "streaming"
+        )
+        self.streaming_full_final_check.setEnabled(applies)
+
     def _on_engine_changed(self, _index: int = 0) -> None:
         self._update_engine_indicator()
         self._update_mode_availability()
+        self._update_streaming_full_final_availability()
         self._update_language_availability()
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
@@ -1107,10 +1126,12 @@ class _GeneralTabMixin:
     def _on_mode_changed(self, _index: int = 0) -> None:
         self._update_language_availability()
         self._update_remote_model_selector()
+        self._update_streaming_full_final_availability()
 
     def _on_model_changed(self, _index: int = 0) -> None:
         self._update_engine_indicator()
         self._update_mode_availability()
+        self._update_streaming_full_final_availability()
         self._update_language_availability()
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
@@ -1140,6 +1161,7 @@ class _GeneralTabMixin:
             value = _REMOTE_MODEL_DEFAULTS.get(provider, "")
         self._remote_model_values[provider] = value
         self._update_language_availability()
+        self._update_engine_indicator()
 
     def _on_import_engine_changed(self, _index: int = 0) -> None:
         self._update_import_model_selector()

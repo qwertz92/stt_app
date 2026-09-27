@@ -292,3 +292,35 @@ def test_a_query_that_answers_with_nothing_still_blames_windows(monkeypatch):
 
     with pytest.raises(audio_devices.NoInputDeviceError):
         resolve_input_device("")
+
+
+def test_system_default_input_name_reads_the_preferred_host_apis_default(
+    monkeypatch,
+):
+    """The label "System default" said nothing about which microphone that
+    is. The name comes from the same host API the picker lists (WASAPI,
+    whose default input is the Windows default recording device)."""
+    fake = _fake_sd_with_wasapi()
+    fake._hostapis = (
+        {"name": "MME", "default_input_device": 0},
+        {"name": "Windows WASAPI", "default_input_device": 4},
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert audio_devices.system_default_input_name() == "USB Microphone"
+
+
+def test_system_default_input_name_is_empty_when_nothing_answers(monkeypatch):
+    fake = _fake_sd_with_wasapi()
+    fake._hostapis = (
+        {"name": "MME", "default_input_device": -1},
+        {"name": "Windows WASAPI", "default_input_device": -1},
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+    assert audio_devices.system_default_input_name() == ""
+
+    def _silent(*_args, **_kwargs):
+        raise RuntimeError("PortAudio not initialized")
+
+    monkeypatch.setattr(fake, "query_hostapis", _silent)
+    assert audio_devices.system_default_input_name() == ""

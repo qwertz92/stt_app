@@ -212,16 +212,48 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+# The provider names alone: the engine pickers group them under a "Cloud"
+# header (`fill_engine_combo`), so "Remote (...)" around every name repeated
+# what the header says. The local entry names where the audio stays rather
+# than two runtime names a user does not choose between here.
 _ENGINE_LABELS: dict[str, str] = {
-    "local": "Local (faster-whisper / ONNX)",
-    "assemblyai": "Remote (AssemblyAI)",
-    "groq": "Remote (Groq)",
-    "openai": "Remote (OpenAI)",
-    "deepgram": "Remote (Deepgram)",
-    "elevenlabs": "Remote (ElevenLabs)",
-    "azure": "Remote (Azure LLM Speech)",
-    "funasr": "Remote (Fun-ASR / Alibaba)",
+    "local": "Local (on this PC)",
+    "assemblyai": "AssemblyAI",
+    "groq": "Groq",
+    "openai": "OpenAI",
+    "deepgram": "Deepgram",
+    "elevenlabs": "ElevenLabs",
+    "azure": "Azure LLM Speech",
+    "funasr": "Fun-ASR / Alibaba",
 }
+
+
+_ENGINE_CLOUD_HEADER = "Cloud"
+
+
+def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> None:
+    """The local engine, a separator, a "Cloud" header, then the providers.
+
+    One filler for the three engine pickers (Transcription, Import Audio and
+    the retranscribe dialog), so they list the engines identically. The
+    header is disabled and not selectable: `QComboBox` skips such an item on
+    the arrow keys and the wheel, and it carries no data, so `findData` and
+    `currentData` only ever see engine ids.
+    """
+    remote = [engine for engine in engines if engine != DEFAULT_ENGINE]
+    if DEFAULT_ENGINE in engines:
+        combo.addItem(_ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE)
+        if remote:
+            combo.insertSeparator(combo.count())
+    if remote:
+        combo.addItem(_ENGINE_CLOUD_HEADER)
+        model = combo.model()
+        header = model.item(combo.count() - 1) if hasattr(model, "item") else None
+        if header is not None:
+            header.setEnabled(False)
+            header.setSelectable(False)
+    for engine in remote:
+        combo.addItem(_ENGINE_LABELS.get(engine, engine), engine)
 
 
 _HISTORY_TIMEZONE_LABELS: dict[str, str] = {
@@ -244,7 +276,7 @@ _MODE_LABELS: dict[str, str] = {
 }
 
 
-# UI choices for the "New Recording" combo. The first element is the
+# UI choices for the "While busy" combo. The first element is the
 # stored value: "insert"/"history"/"cancel" map to concurrent_transcription_mode
 # directly; "insert_immediate" is Insert mode with immediate_background_insert.
 _CONCURRENT_MODE_UI_CHOICES: tuple[tuple[str, str], ...] = (
@@ -480,6 +512,40 @@ _GENERAL_FORM_LABEL_EXTRA_PX = 12
 
 
 _FIELD_HINT_MIN_WIDTH_PX = 460
+
+
+# Hint and note text is drawn a little smaller than the dialog's own font. It
+# was a stylesheet `font-size: 11px`, a pixel size, which stays 11 px when
+# Windows' "Text size" raises the application font: at 13.5 pt every control
+# grew by half and the hints did not grow at all. 0.92 is the ratio that size
+# had at the default 9 pt (11 px against 12 px), so the default rendering is
+# unchanged: both measure a 15 px line.
+_HINT_FONT_SCALE = 0.92
+
+
+def hint_font() -> QtGui.QFont:
+    """The application font scaled down for hints and notes."""
+    font = QtGui.QFont(QtWidgets.QApplication.font())
+    point_size = font.pointSizeF()
+    if point_size > 0:
+        font.setPointSizeF(point_size * _HINT_FONT_SCALE)
+    elif font.pixelSize() > 0:
+        font.setPixelSize(max(1, round(font.pixelSize() * _HINT_FONT_SCALE)))
+    return font
+
+
+def unlabelled_row_label() -> QtWidgets.QLabel:
+    """An empty label widget for a form row that has no label text.
+
+    `QFormLayout.addRow("", field)` creates no label widget at all, and a row
+    without one does not honour height-for-width: the row keeps the height its
+    word-wrapped hint needs at the hint's minimum width. Measured on the
+    Transcription and Audio tabs, that was a 15 px blank line under four
+    checkbox hints at every dialog width. An empty `QLabel` in the label column
+    makes the row wrap like every labelled one (verified with a probe: 30 px
+    against 15 px for the same one-line hint).
+    """
+    return QtWidgets.QLabel("")
 
 
 _ACTION_ROW_SPACING_PX = 8

@@ -734,13 +734,18 @@ def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
 def test_a_dialog_opened_on_the_benchmark_tab_is_pinned_by_the_show():
     """A tab made current while the dialog is hidden pins nothing usable:
     the page reports its full width only once painted. The show has to
-    measure again, or the minimum stays the tab bar's until the next tab
-    switch."""
+    measure again, or the minimum stays what the hidden page reported until
+    the next tab switch.
+
+    The constructor pins as well now (so the window opens at its final
+    width), and at 9 pt the tab bar's need is above the painted Benchmark
+    page's; the test clears that first pin, so the minimum it then reads can
+    only have come from the show."""
     dialog, app = _dialog()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     QtTest.QTest.qWait(50)
     app.processEvents()
-    hidden_minimum = dialog.minimumWidth()
+    dialog.setMinimumWidth(0)
 
     dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
     dialog.show()
@@ -748,7 +753,7 @@ def test_a_dialog_opened_on_the_benchmark_tab_is_pinned_by_the_show():
     app.processEvents()
     needed = dialog.minimumSizeHint().width()
 
-    assert needed > hidden_minimum
+    assert needed > 0
     assert dialog.minimumWidth() >= needed
     dialog.hide()
     _ = app

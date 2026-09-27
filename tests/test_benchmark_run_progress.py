@@ -102,7 +102,7 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
     ] == _PLAN_HEADERS
     assert _plan(dialog) == [
         ("1", "small", "auto", "int8", "Pending"),
-        ("2", "cohere-transcribe-03-2026", "auto", "onnx-q4", "Pending"),
+        ("2", "Cohere Transcribe 03-2026", "auto", "onnx-q4", "Pending"),
     ]
     assert dialog.benchmark_plan_caption_label.text() == "2 cases will run"
 
@@ -115,9 +115,9 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
     # once per target; faster-whisper keeps the standard device.
     assert [row[1:3] for row in _plan(dialog)] == [
         ("small", "auto"),
-        ("cohere-transcribe-03-2026", "webgpu"),
-        ("cohere-transcribe-03-2026", "dml"),
-        ("cohere-transcribe-03-2026", "cpu"),
+        ("Cohere Transcribe 03-2026", "webgpu"),
+        ("Cohere Transcribe 03-2026", "dml"),
+        ("Cohere Transcribe 03-2026", "cpu"),
     ]
     assert dialog.benchmark_plan_caption_label.text() == "4 cases will run"
 
@@ -133,7 +133,7 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
         "onnx-q4",
     ]
 
-    dialog.benchmark_models_list.clearSelection()
+    dialog.benchmark_deselect_all_button.click()
     app.processEvents()
 
     assert _plan(dialog) == []
@@ -272,7 +272,7 @@ def test_a_finished_run_leaves_the_case_list_alone_until_the_selection_changes(
 
     assert _statuses(dialog) == ["Done (RTF 0.043)"]
 
-    dialog.benchmark_models_list.clearSelection()
+    dialog.benchmark_deselect_all_button.click()
     app.processEvents()
 
     assert _statuses(dialog) == []
@@ -305,7 +305,7 @@ def test_a_model_list_refresh_during_a_run_does_not_redraw_the_plan(tmp_path):
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
     assert [row[1] for row in _plan(dialog)] == ["small", "tiny"]
 
-    dialog.benchmark_models_list.selectAll()
+    dialog.benchmark_select_all_button.click()
     app.processEvents()
 
     assert [row[1] for row in _plan(dialog)] == ["small", "tiny", "base"]
@@ -529,7 +529,7 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
 
     # A changed selection is a new plan and does redraw.
-    dialog.benchmark_models_list.selectAll()
+    dialog.benchmark_select_all_button.click()
     app.processEvents()
 
     assert _statuses(dialog) == ["Pending", "Pending", "Pending"]
@@ -642,4 +642,69 @@ def test_a_dropped_case_event_does_not_shift_the_done_marks(tmp_path):
         "Skipped",
         "Done (RTF 0.043)",
     ]
+    _ = app
+
+
+def test_the_model_list_is_a_list_of_checkboxes(tmp_path):
+    """A plain selection list lost every choice to one click without Ctrl,
+    and nothing on screen said a highlighted row meant "will run"."""
+    from PySide6 import QtCore
+
+    dialog, app = _dialog(tmp_path, ["small", "cohere-transcribe-03-2026"])
+    models = dialog.benchmark_models_list
+
+    for row in range(models.count()):
+        item = models.item(row)
+        assert item.flags() & QtCore.Qt.ItemIsUserCheckable
+        assert item.checkState() == QtCore.Qt.Checked
+    assert dialog._selected_benchmark_model_names() == [
+        "small",
+        "cohere-transcribe-03-2026",
+    ]
+
+    models.item(0).setCheckState(QtCore.Qt.Unchecked)
+    app.processEvents()
+
+    assert dialog._selected_benchmark_model_names() == ["cohere-transcribe-03-2026"]
+    assert [row[1] for row in _plan(dialog)] == ["Cohere Transcribe 03-2026"]
+
+    # A rebuild of the list keeps the choice.
+    dialog._refresh_benchmark_model_list(cached=["small", "cohere-transcribe-03-2026"])
+    assert dialog._selected_benchmark_model_names() == ["cohere-transcribe-03-2026"]
+
+    # Space on the current row toggles it: the list takes no selection, so
+    # the keyboard has to reach the checkboxes this way.
+    from PySide6 import QtTest
+
+    models.setCurrentRow(0)
+    QtTest.QTest.keyClick(models, QtCore.Qt.Key_Space)
+    app.processEvents()
+    assert dialog._selected_benchmark_model_names() == [
+        "small",
+        "cohere-transcribe-03-2026",
+    ]
+    assert len(_plan(dialog)) == 2
+
+    dialog.benchmark_select_all_button.click()
+    assert len(dialog._selected_benchmark_model_names()) == 2
+    dialog.benchmark_deselect_all_button.click()
+    assert dialog._selected_benchmark_model_names() == []
+    assert dialog.run_benchmark_button.isEnabled() is False
+    _ = app
+
+
+def test_an_empty_benchmark_history_says_how_to_start(tmp_path):
+    dialog, app = _dialog(tmp_path, ["small"])
+    dialog._refresh_benchmark_history_list()
+
+    overview = dialog.benchmark_summary_text.overview_table
+    values = [
+        overview.item(row, 1).text()
+        for row in range(overview.rowCount())
+        if overview.item(row, 1) is not None
+    ]
+    assert any(value.startswith("No benchmark yet.") for value in values), values
+    assert any("Run Benchmark..." in value for value in values), values
+    # It is a placeholder, not a loaded summary.
+    assert dialog.benchmark_summary_text.toPlainText() == ""
     _ = app

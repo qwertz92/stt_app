@@ -128,6 +128,31 @@ def _input_host_api_index() -> int | None:
     return 0 if host_apis else None
 
 
+def system_default_input_name() -> str:
+    """The name of the microphone "System default" records from, or "".
+
+    Read from the host API the picker lists, WASAPI where present, whose
+    default input is the Windows default recording device -- the device the
+    MME sound mapper behind the system-default path resolves to as well. ""
+    when PortAudio does not answer or names no default, and the caller then
+    says "System default" without a name rather than guess one. Like every
+    PortAudio answer the name is the one at the last (re-)initialization, so
+    a default changed in Windows shows after the next re-enumeration.
+    """
+    host_api_index = _input_host_api_index()
+    if host_api_index is None:
+        return ""
+    try:
+        host_api = sd.query_hostapis(host_api_index)
+        device_index = int(host_api.get("default_input_device", -1))
+        if device_index < 0:
+            return ""
+        device = sd.query_devices(device_index)
+        return str(device.get("name", "")).strip()
+    except Exception:
+        return ""
+
+
 def query_input_devices() -> tuple[list[InputDeviceInfo], bool]:
     """``(devices, answered)`` -- whether PortAudio answered at all.
 
