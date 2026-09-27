@@ -132,7 +132,9 @@ def create_release(
             # No -q: pyproject already sets addopts = "-q", and a second one is
             # -qq, which suppresses the final "N passed" line -- so a run that
             # collected three tests looked exactly like the whole suite.
-            _run([sys.executable, "-m", "pytest"], root=root)
+            # No cache plugin: a release run needs no cache, and a checkout that
+            # cannot create `.pytest_cache` printed a PytestCacheWarning into it.
+            _run([sys.executable, "-m", "pytest", "-p", "no:cacheprovider"], root=root)
     except BaseException:
         _restore_release_metadata(metadata_before, root=root)
         raise
