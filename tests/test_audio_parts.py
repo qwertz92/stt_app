@@ -410,9 +410,10 @@ def test_a_silent_part_that_comes_back_empty_is_skipped():
 
 
 def test_a_part_with_sound_that_comes_back_empty_fails_and_names_itself():
-    """A single request that returns nothing is a failure (AGENTS.md "Empty
-    model text is a failure"), and a part is minutes of speech: dropping it
-    would hand back a transcript with a hole that reads like a complete one."""
+    """A single request that returns nothing is a failure
+    (docs/agents/controller-and-jobs.md, "Empty model text is a failure"), and
+    a part is minutes of speech: dropping it would hand back a transcript with
+    a hole that reads like a complete one."""
     requests = _Requests(["erster teil", "", "never requested"])
 
     with pytest.raises(TranscriptionError) as excinfo:

@@ -612,7 +612,7 @@ def test_the_runtime_note_no_longer_restates_a_device_order_that_can_move(
     assert "Auto tries" not in nemotron
     assert "ONNX Device" in nemotron
 
-    # AGENTS.md: never "fastest" flat -- `tiny` is quicker than Parakeet.
+    # docs/agents/benchmark.md: never "fastest" flat -- `tiny` is quicker than Parakeet.
     parakeet = runtime_note("parakeet-tdt-0.6b-v3")
     assert "fastest" not in parakeet
     assert "recommended default" in parakeet

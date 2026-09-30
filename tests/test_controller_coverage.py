@@ -8076,7 +8076,8 @@ def test_a_batch_job_that_cannot_be_scheduled_is_reported():
 
 
 def test_a_failed_replacement_never_leaves_the_closed_runtime_cached(monkeypatch):
-    """Evict before closing -- the rule AGENTS.md states, at its third site.
+    """Evict before closing -- the rule docs/agents/controller-and-jobs.md states,
+    at its third site.
 
     `create_transcriber` raises for a missing API key or an absent model, and
     the old runtime had already been closed by then while still installed as

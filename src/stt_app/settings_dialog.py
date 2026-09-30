@@ -529,7 +529,8 @@ class SettingsDialog(
           needs.
         - **The Benchmark page**, the one page that is not a scroll area. It
           reports its full width only once it has been painted (see
-          AGENTS.md), so this also runs after every show and tab switch.
+          docs/agents/settings-dialog.md), so this also runs after every
+          show and tab switch.
 
         It measures the tab widget and its pages, never the dialog: the root
         layout also holds the bottom status line, whose text after a failed

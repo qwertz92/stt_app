@@ -1,6 +1,6 @@
 # Learning Log
 
-Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
+Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
 ## 2026-08-30 (rounds thirteen to sixteen)

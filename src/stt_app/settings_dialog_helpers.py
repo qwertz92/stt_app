@@ -404,9 +404,9 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     ),
     # Not "fastest": `tiny` measured 0.033 RTF against Parakeet's 0.043 in
     # the same run, and the supportable claim is the narrower one recorded
-    # in AGENTS.md -- the fastest local model that transcribed the
-    # recording. A picker has no room for that qualifier, so it states what
-    # is unambiguous instead.
+    # in docs/agents/benchmark.md -- the fastest local model that transcribed
+    # the recording. A picker has no room for that qualifier, so it states
+    # what is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
     # No "post-trained by Moondream" here: the retranscribe dialog's model
     # combo is 476 px wide at its 560 px minimum, and that note made this

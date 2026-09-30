@@ -1,7 +1,7 @@
 # Roadmap
 
-Ideas kept for later. Open defects do not belong here: they are in `AGENTS.md` under
-"Known limitations". Every entry carries the date it was written.
+Ideas kept for later. Open defects do not belong here: they are in
+`docs/agents/known-limitations.md`. Every entry carries the date it was written.
 
 ## Future ideas (not planned)
 
