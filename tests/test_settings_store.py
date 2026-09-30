@@ -1647,3 +1647,42 @@ def test_the_preferred_device_survives_settings_without_the_field():
         SimpleNamespace(engine="local", model_size=_A_WEBGPU_MODEL)
     ) == ""
     assert preferred_onnx_device(SimpleNamespace()) == ""
+
+
+def test_the_custom_endpoint_settings_round_trip_and_default(tmp_path):
+    from stt_app.settings_store import apply_engine_model_selection
+
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="custom",
+        custom_endpoint="https://llm-gateway.example.com/v1",
+        custom_model="gemini-2.5-flash",
+        custom_api_mode="chat",
+        custom_key_command="token-helper --print",
+        has_custom_key=True,
+    )
+    store.save(saved)
+    assert store.load() == saved
+    assert "custom_api_key" not in json.loads(
+        (tmp_path / "settings.json").read_text(encoding="utf-8")
+    )
+
+    defaults = AppSettings.from_dict({})
+    assert (
+        defaults.custom_endpoint,
+        defaults.custom_model,
+        defaults.custom_api_mode,
+        defaults.custom_key_command,
+        defaults.has_custom_key,
+    ) == ("", "", "transcriptions", "", False)
+
+    damaged = AppSettings.from_dict(
+        {"custom_api_mode": "grpc", "custom_endpoint": None, "custom_model": ["x"]}
+    )
+    assert damaged.custom_api_mode == "transcriptions"
+    assert damaged.custom_endpoint == ""
+    assert damaged.custom_model == ""
+
+    # Free text: any model id is taken, it is not checked against a list.
+    picked = apply_engine_model_selection(defaults, "custom", " my/model ")
+    assert picked.custom_model == "my/model"

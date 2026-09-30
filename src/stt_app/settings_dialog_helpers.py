@@ -240,6 +240,7 @@ _ENGINE_LABELS: dict[str, str] = {
     "elevenlabs": "ElevenLabs",
     "azure": "Azure LLM Speech",
     "funasr": "Fun-ASR / Alibaba",
+    "custom": "Custom endpoint",
 }
 
 
@@ -473,13 +474,25 @@ def local_model_short_label(model_name: str) -> str:
     return label.split(" (", 1)[0].strip() or label
 
 
-def model_choices_for_engine(engine: str) -> tuple[tuple[str, str], ...]:
-    """``(value, label)`` pairs of the models ``engine`` can transcribe with."""
+def model_choices_for_engine(
+    engine: str, custom_models: tuple[str, ...] = ()
+) -> tuple[tuple[str, str], ...]:
+    """``(value, label)`` pairs of the models ``engine`` can transcribe with.
+
+    The custom endpoint has no roster: the endpoint decides what it offers,
+    so its choices are ``custom_models`` -- the stored model and whatever was
+    fetched from the endpoint -- in order, blanks and repeats dropped.
+    """
     normalized = str(engine or "").strip().lower()
     if normalized == DEFAULT_ENGINE:
         return tuple(
             (value, local_model_label(value)) for value in VALID_MODEL_SIZES
         )
+    if normalized == "custom":
+        values = dict.fromkeys(
+            str(model or "").strip() for model in custom_models
+        )
+        return tuple((value, value) for value in values if value)
     return _REMOTE_MODEL_CHOICES.get(normalized, ())
 
 
@@ -600,6 +613,9 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
     "azure": DEFAULT_AZURE_SPEECH_MODEL,
     "funasr": DEFAULT_FUNASR_MODEL,
+    # Free text: there is no default model for an endpoint the app does not
+    # know.
+    "custom": "",
 }
 
 
@@ -618,7 +634,7 @@ class _RemoteProviderInfo:
     label: str
 
 
-# Single source of truth for the 7 remote providers and their UI order.
+# Single source of truth for the remote providers and their UI order.
 # Every other provider-name list/order in the settings dialog derives from
 # this tuple instead of repeating it.
 _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
@@ -629,6 +645,7 @@ _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
     _RemoteProviderInfo("elevenlabs", "ElevenLabs", "ElevenLabs"),
     _RemoteProviderInfo("azure", "Azure", "Azure LLM Speech"),
     _RemoteProviderInfo("funasr", "Fun-ASR", "Fun-ASR (Alibaba)"),
+    _RemoteProviderInfo("custom", "Custom", "Custom endpoint"),
 )
 
 

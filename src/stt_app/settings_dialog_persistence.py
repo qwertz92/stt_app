@@ -14,6 +14,7 @@ from .config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_CUSTOM_API_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DISPLAY_TIMEZONE,
@@ -225,12 +226,26 @@ class _PersistenceMixin:
                     "funasr_model",
                     DEFAULT_FUNASR_MODEL,
                 ),
+                "custom": str(getattr(settings, "custom_model", "") or ""),
             }
         )
         if hasattr(self, "azure_endpoint_edit"):
             blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
             self.azure_endpoint_edit.setText(
                 getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT) or ""
+            )
+            del blocker
+        if hasattr(self, "custom_endpoint_edit"):
+            for field, value in (
+                (self.custom_endpoint_edit, settings.custom_endpoint),
+                (self.custom_key_command_edit, settings.custom_key_command),
+            ):
+                blocker = QtCore.QSignalBlocker(field)
+                field.setText(value or "")
+                del blocker
+            blocker = QtCore.QSignalBlocker(self.custom_api_mode_combo)
+            self._select_combo_data(
+                self.custom_api_mode_combo, settings.custom_api_mode
             )
             del blocker
         self._update_remote_model_selector()
@@ -272,6 +287,7 @@ class _PersistenceMixin:
                     "funasr_model",
                     DEFAULT_FUNASR_MODEL,
                 ),
+                "custom": str(getattr(settings, "custom_model", "") or ""),
             }
         )
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
@@ -546,7 +562,11 @@ class _PersistenceMixin:
             has_elevenlabs_key=key_states["elevenlabs"],
             has_azure_key=key_states["azure"],
             has_funasr_key=key_states["funasr"],
+            has_custom_key=key_states["custom"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
+            custom_endpoint=self.custom_endpoint_edit.text().strip(),
+            custom_api_mode=self._custom_api_mode_shown(),
+            custom_key_command=self.custom_key_command_edit.text().strip(),
         )
         updated = replace(
             widget_settings,
@@ -594,6 +614,9 @@ class _PersistenceMixin:
                 self._provider_pending_clear,
                 self.insecure_key_storage_checkbox,
                 self.azure_endpoint_edit,
+                self.custom_endpoint_edit,
+                self.custom_key_command_edit,
+                self.custom_api_mode_combo,
             )
         )
         if changed or settings_changed:
@@ -716,6 +739,7 @@ class _PersistenceMixin:
             )
             has_azure_key = getattr(self._loaded_settings, "has_azure_key", False)
             has_funasr_key = getattr(self._loaded_settings, "has_funasr_key", False)
+            has_custom_key = getattr(self._loaded_settings, "has_custom_key", False)
         else:
             has_openai_key = key_states["openai"]
             has_deepgram_key = key_states["deepgram"]
@@ -724,6 +748,7 @@ class _PersistenceMixin:
             has_elevenlabs_key = key_states["elevenlabs"]
             has_azure_key = key_states["azure"]
             has_funasr_key = key_states["funasr"]
+            has_custom_key = key_states["custom"]
         return AppSettings(
             # Carried, not stamped. This is the one field with no widget that
             # was never read back, and its dataclass default is *this build's*
@@ -852,6 +877,7 @@ class _PersistenceMixin:
             has_elevenlabs_key=has_elevenlabs_key,
             has_azure_key=has_azure_key,
             has_funasr_key=has_funasr_key,
+            has_custom_key=has_custom_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -860,7 +886,17 @@ class _PersistenceMixin:
             azure_speech_model=self._remote_model_value_for_provider("azure"),
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
             funasr_model=self._remote_model_value_for_provider("funasr"),
+            custom_model=self._remote_model_value_for_provider("custom"),
+            custom_endpoint=self.custom_endpoint_edit.text().strip(),
+            custom_api_mode=self._custom_api_mode_shown(),
+            custom_key_command=self.custom_key_command_edit.text().strip(),
         )
+
+    def _custom_api_mode_shown(self) -> str:
+        return str(
+            self.custom_api_mode_combo.currentData() or DEFAULT_CUSTOM_API_MODE
+        )
+
 
     def _build_current_settings(
         self,

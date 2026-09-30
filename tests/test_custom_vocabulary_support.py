@@ -40,6 +40,7 @@ _TRANSCRIBER_NAMES = (
     "ElevenLabsTranscriber",
     "AzureLlmSpeechTranscriber",
     "FunAsrTranscriber",
+    "CustomEndpointTranscriber",
 )
 
 
@@ -67,7 +68,11 @@ def factory_kwargs(monkeypatch):
             return "test-key"
 
     def build(engine: str, model: str = "") -> dict[str, object]:
-        settings = AppSettings(engine=engine, custom_vocabulary="Kubernetes")
+        settings = AppSettings(
+            engine=engine,
+            custom_vocabulary="Kubernetes",
+            custom_endpoint="https://llm-gateway.example.com/v1",
+        )
         if engine == DEFAULT_ENGINE and model:
             settings = AppSettings(
                 engine=engine,
@@ -161,6 +166,7 @@ def test_the_sentence_that_names_the_supported_set_names_every_engine() -> None:
         "groq": "Groq",
         "openai": "OpenAI",
         "deepgram": "Deepgram",
+        "custom": "custom endpoint",
     }
 
     assert set(labels) == set(CUSTOM_VOCABULARY_ENGINES)

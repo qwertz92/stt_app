@@ -2248,6 +2248,8 @@ def _assert_reload_outcome(controller, reloads, *, preloads, closed, cached):
         # so changing one must not close the loaded local model.
         {"groq_model": "whisper-large-v3"},
         {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
+        {"custom_endpoint": "https://llm-gateway.example.com/v1"},
+        {"custom_key_command": "token-helper --print"},
         # The base settings select faster-whisper, which reads neither of
         # these -- they belong to the ONNX runtimes.
         {"local_onnx_device": "cpu"},
@@ -2719,6 +2721,13 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         # ElevenLabs exposes no biasing input, so the term list never reaches it.
         ("elevenlabs", {"custom_vocabulary": "Kubernetes"}, False),
         ("elevenlabs", {"model_size": "medium"}, False),
+        ("custom", {"custom_endpoint": "http://localhost:8000/v1"}, True),
+        ("custom", {"custom_api_mode": "chat"}, True),
+        ("custom", {"custom_key_command": "token-helper --print"}, True),
+        ("custom", {"custom_model": "gemini-2.5-flash"}, True),
+        ("custom", {"custom_vocabulary": "Kubernetes"}, True),
+        ("custom", {"azure_endpoint": "https://other.cognitiveservices.azure.com"}, False),
+        ("groq", {"custom_key_command": "token-helper --print"}, False),
     ],
     ids=lambda value: value if isinstance(value, str) else str(value),
 )
@@ -4033,3 +4042,22 @@ def test_the_measured_map_growing_only_reloads_when_the_selected_model_moves():
     assert preloads == [True]
     controller.shutdown()
     _ = app
+
+
+def test_a_key_command_counts_as_a_custom_endpoint_key():
+    """With a key command set, the engine can run without a stored key, so the
+    identity says it has one either way."""
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        replace(_RUNTIME_BASE_SETTINGS, engine="custom")
+    )
+    no_key = replace(_RUNTIME_BASE_SETTINGS, engine="custom", has_custom_key=False)
+    command = replace(no_key, custom_key_command="token-helper --print")
+
+    assert controller._transcriber_identity(no_key).has_api_key is False
+    assert controller._transcriber_identity(command).has_api_key is True
+    assert controller._selected_model_name(
+        replace(command, custom_model="whisper-1")
+    ) == "whisper-1"
+    controller.shutdown()
+    _ = app
+

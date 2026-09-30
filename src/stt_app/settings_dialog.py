@@ -140,6 +140,8 @@ class SettingsDialog(
     QtWidgets.QDialog,
 ):
     connection_test_finished = QtCore.Signal(int, bool, str)
+    # fetch id, ok, model ids (tuple) or the error text
+    custom_models_fetch_finished = QtCore.Signal(int, bool, object)
     import_transcription_finished = QtCore.Signal(bool, str)
     import_transcription_progress = QtCore.Signal(str)
     local_model_scan_finished = QtCore.Signal(int, str, object)
@@ -288,7 +290,15 @@ class SettingsDialog(
                 "funasr_model",
                 DEFAULT_FUNASR_MODEL,
             ),
+            "custom": str(getattr(self._loaded_settings, "custom_model", "") or ""),
         }
+        # What the last "Fetch models" returned; never persisted -- only the
+        # chosen model is.
+        self._custom_fetched_models: tuple[str, ...] = ()
+        self._custom_model_note = ""
+        self._custom_model_note_error = False
+        self._custom_models_fetch_id = 0
+        self._active_custom_models_fetch_thread: threading.Thread | None = None
         self._import_model_values: dict[str, str] = {
             "local": self._loaded_settings.model_size,
             "groq": self._remote_model_values["groq"],
@@ -298,6 +308,7 @@ class SettingsDialog(
             "elevenlabs": self._remote_model_values["elevenlabs"],
             "azure": self._remote_model_values["azure"],
             "funasr": self._remote_model_values["funasr"],
+            "custom": self._remote_model_values["custom"],
         }
         self._import_language_values: dict[tuple[str, str], str] = {}
         self._active_connection_test_thread: threading.Thread | None = None
@@ -351,6 +362,7 @@ class SettingsDialog(
         self.resize(self._default_dialog_size)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
+        self.custom_models_fetch_finished.connect(self._on_custom_models_fetched)
         self.import_transcription_progress.connect(
             self._on_import_transcription_progress
         )
@@ -676,6 +688,9 @@ class SettingsDialog(
         candidates.extend(
             (
                 "Azure Endpoint",
+                "Custom Endpoint",
+                "Key Command",
+                "API Style",
                 "Connection Target",
             )
         )
@@ -1024,6 +1039,7 @@ class SettingsDialog(
             or self._local_model_download_is_running()
             or self._active_benchmark_thread is not None
             or self._active_connection_test_thread is not None
+            or self._active_custom_models_fetch_thread is not None
             or self._active_update_check_thread is not None
             or self._import_progress_started_at is not None
         )

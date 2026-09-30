@@ -321,6 +321,7 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "elevenlabs": "has_elevenlabs_key",
     "azure": "has_azure_key",
     "funasr": "has_funasr_key",
+    "custom": "has_custom_key",
 }
 
 # Which ``AppSettings`` field carries the model name each remote engine sends.
@@ -334,12 +335,13 @@ _ENGINE_MODEL_FIELDS: dict[str, str] = {
     "elevenlabs": "elevenlabs_model",
     "azure": "azure_speech_model",
     "funasr": "funasr_model",
+    "custom": "custom_model",
 }
 
 # Remote engines that pass the biasing prompt through to their provider. The
 # rest expose no such input, so the setting cannot change their runtime.
 _ENGINES_USING_CUSTOM_VOCABULARY = frozenset(
-    {DEFAULT_ENGINE, "assemblyai", "openai", "groq", "deepgram"}
+    {DEFAULT_ENGINE, "assemblyai", "openai", "groq", "deepgram", "custom"}
 )
 
 
@@ -377,6 +379,10 @@ class _TranscriberIdentity(NamedTuple):
     # read for a given engine.
     remote_model: str = ""
     azure_endpoint: str = ""
+    # The custom endpoint's constructor arguments besides its model and key.
+    custom_endpoint: str = ""
+    custom_api_mode: str = ""
+    custom_key_command: str = ""
     # Not the key itself -- keys never enter ``AppSettings``. This is whether
     # the engine has one *at all*: losing or gaining a key changes what the
     # runtime can do, while replacing one with a different value is invisible
@@ -2935,6 +2941,8 @@ class DictationController(QtCore.QObject):
             return getattr(settings, "azure_speech_model", "")
         if settings.engine == "funasr":
             return getattr(settings, "funasr_model", "")
+        if settings.engine == "custom":
+            return getattr(settings, "custom_model", "")
         return settings.model_size
 
     def _current_last_recording_id(self) -> str:
@@ -5060,6 +5068,17 @@ class DictationController(QtCore.QObject):
                     )
                 ),
             )
+        custom_fields = (
+            {
+                "custom_endpoint": str(getattr(settings, "custom_endpoint", "") or ""),
+                "custom_api_mode": str(getattr(settings, "custom_api_mode", "") or ""),
+                "custom_key_command": str(
+                    getattr(settings, "custom_key_command", "") or ""
+                ),
+            }
+            if engine == "custom"
+            else {}
+        )
         return _TranscriberIdentity(
             engine=engine,
             custom_vocabulary=vocabulary,
@@ -5069,7 +5088,11 @@ class DictationController(QtCore.QObject):
             azure_endpoint=(
                 getattr(settings, "azure_endpoint", "") if engine == "azure" else ""
             ),
-            has_api_key=bool(getattr(settings, _ENGINE_KEY_FLAGS[engine], False)),
+            **custom_fields,
+            # A key command is a credential source of its own: with one set,
+            # the engine can run without a stored key.
+            has_api_key=bool(getattr(settings, _ENGINE_KEY_FLAGS[engine], False))
+            or bool(custom_fields.get("custom_key_command")),
             allow_insecure_key_storage=bool(
                 getattr(settings, "allow_insecure_key_storage", False)
             ),

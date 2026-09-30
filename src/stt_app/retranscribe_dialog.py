@@ -391,7 +391,11 @@ class RetranscribeDialog(QtWidgets.QDialog):
         engine = self.selected_engine()
         blocker = QtCore.QSignalBlocker(self._model_combo)
         self._model_combo.clear()
-        for value, label in model_choices_for_engine(engine):
+        custom_models = (
+            self._entry_model if self._entry_engine == "custom" else "",
+            str(getattr(self._base_settings, "custom_model", "") or ""),
+        )
+        for value, label in model_choices_for_engine(engine, custom_models):
             self._model_combo.addItem(label, value)
         del blocker
         fallback = (

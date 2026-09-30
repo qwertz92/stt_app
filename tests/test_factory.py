@@ -175,6 +175,8 @@ def test_every_engine_can_change_its_language_without_being_recreated():
             language_mode="auto",
             # Azure refuses to build without a resource endpoint.
             azure_endpoint="https://example.cognitiveservices.azure.com",
+            # So does the custom endpoint without a base URL.
+            custom_endpoint="https://llm-gateway.example.com/v1",
         )
         transcriber = create_transcriber(settings, secret_store=FakeSecretStore())
 
@@ -341,7 +343,9 @@ def test_a_missing_key_points_at_the_api_keys_tab(engine):
     longer shows.
     """
     settings = AppSettings(
-        engine=engine, azure_endpoint="https://example.cognitiveservices.azure.com"
+        engine=engine,
+        azure_endpoint="https://example.cognitiveservices.azure.com",
+        custom_endpoint="https://llm-gateway.example.com/v1",
     )
     with pytest.raises(TranscriptionError) as raised:
         create_transcriber(settings, secret_store=None)

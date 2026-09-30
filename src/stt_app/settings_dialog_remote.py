@@ -8,7 +8,14 @@ from datetime import datetime
 
 from PySide6 import QtCore, QtWidgets
 
-from .config import DEFAULT_ENGINE, DEFAULT_LANGUAGE_MODE
+from .config import (
+    CUSTOM_API_MODE_CHAT,
+    CUSTOM_API_MODE_TRANSCRIPTIONS,
+    CUSTOM_KEY_COMMAND_TTL_S,
+    DEFAULT_CUSTOM_API_MODE,
+    DEFAULT_ENGINE,
+    DEFAULT_LANGUAGE_MODE,
+)
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_GRID_SPACING_PX,
@@ -33,6 +40,9 @@ class _ConnectionTestSnapshot:
     model: str
     language_mode: str
     azure_endpoint: str = ""
+    custom_endpoint: str = ""
+    custom_api_mode: str = DEFAULT_CUSTOM_API_MODE
+    custom_key_command: str = ""
 
 
 def _assemblyai_transcriber_factory(**kwargs: object) -> object:
@@ -71,6 +81,12 @@ def _azure_transcriber_factory(**kwargs: object) -> object:
     return AzureLlmSpeechTranscriber(**kwargs)
 
 
+def _custom_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.custom_endpoint_provider import CustomEndpointTranscriber
+
+    return CustomEndpointTranscriber(**kwargs)
+
+
 def _funasr_transcriber_factory(**kwargs: object) -> object:
     from .transcriber.funasr_provider import FunAsrTranscriber
 
@@ -90,6 +106,7 @@ _CONNECTION_TESTER_FACTORIES: dict[
     "elevenlabs": (_elevenlabs_transcriber_factory, ("language_mode",)),
     "azure": (_azure_transcriber_factory, ("language_mode", "endpoint")),
     "funasr": (_funasr_transcriber_factory, ("language_mode",)),
+    "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
 
@@ -107,9 +124,11 @@ def _build_connection_tester(
     factory_entry = _CONNECTION_TESTER_FACTORIES.get(provider)
     if factory_entry is None:
         return None, None
-    if not snapshot.api_key:
-        return None, "No API key entered. Enter a key above first."
     factory, extra_fields = factory_entry
+    if not snapshot.api_key and not (
+        "custom" in extra_fields and snapshot.custom_key_command
+    ):
+        return None, "No API key entered. Enter a key above first."
     kwargs: dict[str, object] = {
         "api_key": snapshot.api_key,
         "model": snapshot.model,
@@ -124,6 +143,12 @@ def _build_connection_tester(
                  "Enter the resource endpoint above first."),
             )
         kwargs["endpoint"] = snapshot.azure_endpoint
+    if "custom" in extra_fields:
+        if not snapshot.custom_endpoint:
+            return None, "No custom endpoint URL entered. Enter it above first."
+        kwargs["endpoint"] = snapshot.custom_endpoint
+        kwargs["api_mode"] = snapshot.custom_api_mode
+        kwargs["key_command"] = snapshot.custom_key_command
     try:
         transcriber = factory(**kwargs)
     except Exception as exc:
@@ -237,6 +262,7 @@ class _RemoteProvidersMixin:
         self.elevenlabs_key_edit = self._provider_key_edits["elevenlabs"]
         self.azure_key_edit = self._provider_key_edits["azure"]
         self.funasr_key_edit = self._provider_key_edits["funasr"]
+        self.custom_key_edit = self._provider_key_edits["custom"]
 
         # Azure additionally needs a per-resource endpoint (no other provider
         # does), so it gets a dedicated, non-secret text field here.
@@ -266,6 +292,78 @@ class _RemoteProvidersMixin:
         provider_grid.addWidget(self.azure_endpoint_edit, grid_row, 1, 1, 3)
         provider_grid.addWidget(azure_endpoint_hint, grid_row + 1, 1, 1, 3)
         grid_row += 2
+
+        # The custom endpoint's non-secret settings, below its key row's
+        # neighbours like Azure's endpoint.
+        self.custom_endpoint_edit = QtWidgets.QLineEdit()
+        self.custom_endpoint_edit.setPlaceholderText(
+            "https://llm-gateway.example.com/v1"
+        )
+        self.custom_endpoint_edit.setMinimumWidth(180)
+        self.custom_endpoint_edit.setToolTip(
+            "Base URL of an OpenAI-compatible API, used as given (nothing is "
+            "appended), e.g. https://llm-gateway.example.com/v1 or "
+            "http://localhost:8000/v1."
+        )
+        self.custom_key_command_edit = QtWidgets.QLineEdit()
+        self.custom_key_command_edit.setPlaceholderText(
+            "Optional, e.g. token-helper --print"
+        )
+        self.custom_key_command_edit.setMinimumWidth(180)
+        self.custom_key_command_edit.setToolTip(
+            "Runs when a request needs a key; its output is used as the Bearer "
+            f"token for {CUSTOM_KEY_COMMAND_TTL_S / 60:.0f} minutes and "
+            "overrides the stored key. Run without a shell, e.g. "
+            "wsl.exe -e /path/to/token-helper."
+        )
+        self.custom_key_command_edit.textChanged.connect(
+            lambda _text: self._update_import_engine_note()
+        )
+        self.custom_api_mode_combo = _WheelPassthroughComboBox()
+        self.custom_api_mode_combo.addItem(
+            "OpenAI transcription API (/audio/transcriptions)",
+            CUSTOM_API_MODE_TRANSCRIPTIONS,
+        )
+        self.custom_api_mode_combo.addItem(
+            "Chat completions with audio input (multimodal LLM)",
+            CUSTOM_API_MODE_CHAT,
+        )
+        # Sized by a minimum content length, not by its longest caption: the
+        # dialog's minimum width follows every page's minimum and only grows.
+        self.custom_api_mode_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.custom_api_mode_combo.setMinimumContentsLength(24)
+        self.custom_api_mode_combo.setToolTip(
+            "Speech servers and speech models answer the transcription API. "
+            "A gateway that routes audio only to a multimodal LLM needs the "
+            "chat style, whose transcript is less deterministic and may "
+            "paraphrase."
+        )
+        custom_endpoint_hint = QtWidgets.QLabel(
+            "For the Custom endpoint: any OpenAI-compatible server, such as a "
+            "LiteLLM or vLLM gateway or a local speech server."
+        )
+        custom_endpoint_hint.setWordWrap(True)
+        self._style_note_label(custom_endpoint_hint)
+        for text, field in (
+            ("Custom Endpoint", self.custom_endpoint_edit),
+            ("Key Command", self.custom_key_command_edit),
+            ("API Style", self.custom_api_mode_combo),
+        ):
+            row_label = QtWidgets.QLabel(text)
+            row_label.setFixedWidth(provider_label_width)
+            row_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            provider_grid.addWidget(
+                row_label,
+                grid_row,
+                0,
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+            )
+            provider_grid.addWidget(field, grid_row, 1, 1, 3)
+            grid_row += 1
+        provider_grid.addWidget(custom_endpoint_hint, grid_row, 1, 1, 3)
+        grid_row += 1
 
         provider_note = QtWidgets.QLabel(
             "Status badges show where each key is currently sourced from."
@@ -511,6 +609,13 @@ class _RemoteProvidersMixin:
         key_field = self._provider_key_edits.get(engine_name)
         if key_field is None:
             return f"No API key configured for {self._provider_label(engine_name)}."
+        if (
+            engine_name == "custom"
+            and not key_field.text().strip()
+            and engine_name not in self._provider_pending_clear
+            and self.custom_key_command_edit.text().strip()
+        ):
+            return None
         if key_field.text().strip():
             return (
                 f"A new {self._provider_label(engine_name)} API key is typed but "
@@ -580,7 +685,7 @@ class _RemoteProvidersMixin:
                 )
                 return
             snapshot = self._connection_test_snapshot(provider, key_field)
-            if not snapshot.api_key:
+            if not snapshot.api_key and not snapshot.custom_key_command:
                 self._set_test_connection_feedback(
                     f"No API key entered for {self._provider_label(provider)}.",
                     "#b71c1c",
@@ -635,7 +740,10 @@ class _RemoteProvidersMixin:
                 key_field = self._provider_key_edits.get(provider)
                 if key_field is None:
                     continue
-                if self._resolve_api_key(provider, key_field):
+                if self._resolve_api_key(provider, key_field) or (
+                    provider == "custom"
+                    and self.custom_key_command_edit.text().strip()
+                ):
                     configured.append(provider)
             return configured
         if normalized in remote_providers:
@@ -656,6 +764,20 @@ class _RemoteProvidersMixin:
             ),
             azure_endpoint=(
                 self._resolve_azure_endpoint() if provider == "azure" else ""
+            ),
+            **(
+                {
+                    "custom_endpoint": self.custom_endpoint_edit.text().strip(),
+                    "custom_api_mode": str(
+                        self.custom_api_mode_combo.currentData()
+                        or DEFAULT_CUSTOM_API_MODE
+                    ),
+                    "custom_key_command": (
+                        self.custom_key_command_edit.text().strip()
+                    ),
+                }
+                if provider == "custom"
+                else {}
             ),
         )
 

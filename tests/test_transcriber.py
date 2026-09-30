@@ -1336,6 +1336,7 @@ def test_importing_one_transcriber_does_not_pull_in_every_provider_sdk():
     providers = {
         "stt_app.transcriber.assemblyai_provider",
         "stt_app.transcriber.azure_provider",
+        "stt_app.transcriber.custom_endpoint_provider",
         "stt_app.transcriber.deepgram_provider",
         "stt_app.transcriber.elevenlabs_provider",
         "stt_app.transcriber.factory",
@@ -1356,6 +1357,7 @@ def test_importing_one_transcriber_does_not_pull_in_every_provider_sdk():
 _TRANSCRIBER_PACKAGE_EXPORTS = {
     "AssemblyAITranscriber",
     "AzureLlmSpeechTranscriber",
+    "CustomEndpointTranscriber",
     "DeepgramTranscriber",
     "ElevenLabsTranscriber",
     "FunAsrTranscriber",

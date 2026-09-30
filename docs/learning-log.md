@@ -9082,3 +9082,36 @@ last pass).
 The owner ran the clipboard check on that tree on 2026-09-27 after
 unlocking: 19/19, and the user's clipboard came back with the same six
 formats it held before.
+
+## 2026-09-30: a bring-your-own OpenAI-compatible endpoint
+
+The owner's company gateway (a LiteLLM proxy) exposes the OpenAI routes, but
+the key it issues has no transcription model: `POST /audio/transcriptions`
+exists and has nothing to route to. The one working audio path is chat
+completions with an `input_audio` part answered by a multimodal model, which
+returned the German transcript of a 25 s clip. Measured by hand against that
+gateway: without `reasoning_effort` the model spent roughly 600-750 reasoning
+tokens and answered in 8-9 s; with `"low"` in 2.5-3.3 s; `"minimal"` and
+`"none"` were rejected with HTTP 400, and chat models without audio input
+reject the part with HTTP 400 as well. The gateway's token is a JWT valid for
+two hours, printed by a helper command in 1.5-2.2 s.
+
+Hence the `custom` engine: base URL, free-text model, two API styles, a key
+command whose token is cached for five minutes and refreshed on a 401, and a
+"Fetch models" button that reads `GET /models` (LiteLLM adds a `mode` per
+entry, used to drop embedding/image/rerank models and sort transcription and
+chat models first). The same engine serves local speech servers and hosted
+OpenAI-compatible APIs through the transcription style. The chat style's
+transcript comes from a general LLM and may paraphrase; the user docs say so.
+Decisions are in `docs/agents/remote-providers.md`.
+
+
+Found only by the live run against that gateway, after all unit tests passed:
+the key command's output went through the helper that also trims error
+lines, so the 861-character JWT was cut to 200 characters and every request
+answered HTTP 401. The fakes printed short tokens. The token now keeps its
+whole last line (`_last_line`), error text is capped separately
+(`_error_tail`), and `test_a_long_token_is_sent_whole` fails with the old cap.
+Live afterwards: model list (19 entries), connection test, and a German 25 s
+clip transcribed in chat mode in 4.3 s; transcription mode fails on that
+gateway with the backend's own HTTP 403, reported verbatim.

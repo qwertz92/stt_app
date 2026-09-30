@@ -1227,6 +1227,7 @@ VALID_ENGINES = (
     "elevenlabs",
     "azure",
     "funasr",
+    "custom",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1237,6 +1238,9 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "elevenlabs": ELEVENLABS_LANGUAGE_MODES,
     "azure": AZURE_LANGUAGE_MODES,
     "funasr": FUNASR_LANGUAGE_MODES,
+    # A bring-your-own endpoint: which languages work is the served model's
+    # business, so every code the app knows is offered and sent as a hint.
+    "custom": VALID_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
 LOCAL_BATCH_ONLY_MODELS = (
@@ -1316,13 +1320,15 @@ def language_modes_for_selection(
 # `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields
 # (`gpt-transcribe`) or as `prompt` (the three older models), Groq as
 # `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
-# query parameters. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing
-# input at all.
+# query parameters, a custom endpoint as `prompt` (transcription API) or as a
+# sentence of its chat instruction. ElevenLabs, Azure LLM Speech and Fun-ASR
+# expose no biasing input at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
     "groq",
     "openai",
     "deepgram",
+    "custom",
 )
 # Local runtimes with a biasing input: faster-whisper takes the terms as its
 # `initial_prompt`. The onnx-asr (Parakeet, Canary), ONNX Runtime GenAI
@@ -1334,7 +1340,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # faster-whisper entries, and a generated list would have to name all seven.
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
-    "Whisper models, OpenAI, Groq, AssemblyAI, and Deepgram"
+    "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, and a custom endpoint"
 )
 
 
@@ -1492,6 +1498,27 @@ FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
 # parked the app's single transcription worker forever.
 FUNASR_BATCH_MAX_WAIT_S = 1800.0
 
+# A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
+# local speech server, or any host that speaks the OpenAI REST shapes. The
+# base URL, the model and the API style are the user's; nothing is validated
+# against a list, because the endpoint decides what it offers.
+DEFAULT_CUSTOM_ENDPOINT = ""
+DEFAULT_CUSTOM_MODEL = ""
+# `transcriptions`: `POST {base}/audio/transcriptions`, the OpenAI speech API.
+# `chat`: `POST {base}/chat/completions` with an `input_audio` content part,
+# for gateways that route audio only to a multimodal LLM.
+CUSTOM_API_MODE_TRANSCRIPTIONS = "transcriptions"
+CUSTOM_API_MODE_CHAT = "chat"
+CUSTOM_API_MODES = (CUSTOM_API_MODE_TRANSCRIPTIONS, CUSTOM_API_MODE_CHAT)
+DEFAULT_CUSTOM_API_MODE = CUSTOM_API_MODE_TRANSCRIPTIONS
+DEFAULT_CUSTOM_KEY_COMMAND = ""
+# How long a token printed by the key command is reused. Short-lived gateway
+# tokens typically live an hour or two; five minutes keeps the command (which
+# can take a couple of seconds) off most dictations without holding a token
+# near its expiry. A 401 re-runs the command once regardless.
+CUSTOM_KEY_COMMAND_TTL_S = 300.0
+CUSTOM_KEY_COMMAND_TIMEOUT_S = 30.0
+
 # --- How much audio one remote batch request carries ----------------------
 #
 # The app records 16 kHz mono 16-bit WAV, 1.92 MB per minute, and sends the
@@ -1542,15 +1569,36 @@ AZURE_MAX_PART_SECONDS = 3600.0
 # The same REST reference (2025-10-15): "shorter than 2 hours in audio
 # duration and smaller than 250 MB in size."
 AZURE_MAX_REQUEST_BYTES = 250_000_000
+# A custom endpoint in its transcription-API style is held to OpenAI's
+# limits, the API it imitates; a server that accepts more loses nothing but a
+# seam every ten minutes.
+CUSTOM_MAX_PART_SECONDS = OPENAI_MAX_PART_SECONDS
+CUSTOM_MAX_REQUEST_BYTES = OPENAI_MAX_REQUEST_BYTES
+# Its chat style sends the WAV base64-encoded inside a JSON body, which grows
+# it by a third, and a multimodal LLM writes the transcript as output tokens:
+# five minutes and 15 MB of raw WAV (about 20 MB of request) stay inside what
+# gateways and model output limits commonly allow.
+CUSTOM_CHAT_MAX_PART_SECONDS = 300.0
+CUSTOM_CHAT_MAX_REQUEST_BYTES = 15_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
     "azure": AZURE_MAX_PART_SECONDS,
+    "custom": CUSTOM_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
     "groq": GROQ_MAX_REQUEST_BYTES,
     "azure": AZURE_MAX_REQUEST_BYTES,
+    "custom": CUSTOM_MAX_REQUEST_BYTES,
+}
+# An API style whose limit differs from its engine's: (engine, api_mode) ->
+# (seconds, bytes). Only the custom endpoint has more than one style.
+REMOTE_BATCH_API_MODE_LIMITS: dict[tuple[str, str], tuple[float, int]] = {
+    ("custom", CUSTOM_API_MODE_CHAT): (
+        CUSTOM_CHAT_MAX_PART_SECONDS,
+        CUSTOM_CHAT_MAX_REQUEST_BYTES,
+    ),
 }
 # A model whose own limit is tighter than its engine's.
 REMOTE_BATCH_MODEL_MAX_PART_SECONDS: dict[tuple[str, str], float] = {
@@ -1567,7 +1615,9 @@ class RemotePartLimit(NamedTuple):
     max_bytes: int
 
 
-def remote_batch_part_limit(engine: str, model: str = "") -> RemotePartLimit | None:
+def remote_batch_part_limit(
+    engine: str, model: str = "", api_mode: str = ""
+) -> RemotePartLimit | None:
     """The limit one batch request of this engine and model is held to, or
     None when the recording is always sent whole.
 
@@ -1577,6 +1627,11 @@ def remote_batch_part_limit(engine: str, model: str = "") -> RemotePartLimit | N
     a cap fails loudly instead of being sent with no cap at all.
     """
     normalized_engine = str(engine or "").strip().lower()
+    api_mode_limit = REMOTE_BATCH_API_MODE_LIMITS.get(
+        (normalized_engine, str(api_mode or "").strip().lower())
+    )
+    if api_mode_limit is not None:
+        return RemotePartLimit(seconds=api_mode_limit[0], max_bytes=api_mode_limit[1])
     model_key = (normalized_engine, str(model or "").strip())
     seconds = REMOTE_BATCH_MODEL_MAX_PART_SECONDS.get(
         model_key, REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)

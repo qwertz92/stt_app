@@ -24,6 +24,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | ElevenLabs | Batch | `scribe_v2` | $3.67 per 1,000 minutes on the [Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text) (read 2026-09-21) — consistent with the pay-as-you-go credit cost below | $0.22/hour |
 | Azure LLM Speech | Batch | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" ([announcement](https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/), 2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.000047/second, Beijing region rate — the only region this model's own pricing page lists ([fun-asr-realtime pricing](https://www.alibabacloud.com/help/en/model-studio/fun-asr-realtime), checked 2026-09-21) | ~$0.169/hour |
+| Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
 

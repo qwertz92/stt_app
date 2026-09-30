@@ -1,6 +1,7 @@
 """Settings dialog: general mixin (split from settings_dialog.py)."""
 from __future__ import annotations
 
+import threading
 from typing import ClassVar
 
 from PySide6 import QtCore, QtWidgets
@@ -8,6 +9,7 @@ from PySide6 import QtCore, QtWidgets
 from .config import (
     CANARY_MODEL_SIZE,
     CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
+    DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
@@ -37,6 +39,7 @@ from .config import (
 )
 from .settings_dialog_helpers import (
     _CONCURRENT_MODE_UI_CHOICES,
+    _INLINE_FIELD_BUTTON_SPACING_PX,
     _INSERT_TARGET_LABELS,
     _MODE_LABELS,
     _PASTE_MODE_LABELS,
@@ -44,6 +47,7 @@ from .settings_dialog_helpers import (
     _REMOTE_MODEL_DEFAULTS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     LOCAL_MODEL_LABELS,
+    _emit_background_signal,
     _WheelPassthroughComboBox,
     fill_engine_combo,
     hint_font,
@@ -89,6 +93,10 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "the request prompt (older models), batch only."
     ),
     "groq": "{name} uses the custom vocabulary as the request prompt (batch only).",
+    "custom": (
+        "{name} uses the custom vocabulary as the request prompt, or as a "
+        "spelling instruction in the chat style (batch only)."
+    ),
 }
 
 # Where the two things the Model row does not do are done. The tabs are named
@@ -199,11 +207,31 @@ class _GeneralTabMixin:
         self.remote_model_combo.currentIndexChanged.connect(
             self._on_remote_model_changed
         )
+        # Only the custom endpoint has a button here: its models are whatever
+        # the endpoint offers, fetched on request with the API Keys tab's
+        # typed (unsaved) URL and credentials. It sits beside the combo it
+        # fills rather than on the API Keys tab, because the result is read
+        # and picked here.
+        self.custom_fetch_models_button = QtWidgets.QPushButton("Fetch models")
+        self.custom_fetch_models_button.setToolTip(
+            "Ask the custom endpoint which models it offers (GET /models), "
+            "using the URL and key entered on the API Keys tab."
+        )
+        self.custom_fetch_models_button.clicked.connect(self._fetch_custom_models)
+        self._match_field_button_height(
+            self.remote_model_combo, self.custom_fetch_models_button
+        )
+        self.custom_fetch_models_button.setVisible(False)
+        remote_model_row = QtWidgets.QHBoxLayout()
+        remote_model_row.setContentsMargins(0, 0, 0, 0)
+        remote_model_row.setSpacing(_INLINE_FIELD_BUTTON_SPACING_PX)
+        remote_model_row.addWidget(self.remote_model_combo, 1)
+        remote_model_row.addWidget(self.custom_fetch_models_button)
         self.remote_model_note_label = QtWidgets.QLabel("")
         self.remote_model_note_label.setWordWrap(True)
         self._style_field_hint_label(self.remote_model_note_label)
         self._reserve_dynamic_hint_height(self.remote_model_note_label)
-        remote_model_layout.addWidget(self.remote_model_combo)
+        remote_model_layout.addLayout(remote_model_row)
         remote_model_layout.addWidget(self.remote_model_note_label)
         self.model_selector_stack.addWidget(remote_model_widget)
 
@@ -392,16 +420,33 @@ class _GeneralTabMixin:
         normalized = str(provider or "").strip().lower()
         fallback = _REMOTE_MODEL_DEFAULTS.get(normalized, "")
         value = str(self._remote_model_values.get(normalized, fallback) or fallback)
+        if normalized == "custom":
+            # Free text: the endpoint, not a roster, decides what is valid.
+            return value.strip()
         valid_values = {item_value for item_value, _label in _REMOTE_MODEL_CHOICES.get(normalized, ())}
         if value not in valid_values:
             return fallback
         return value
 
+    def _custom_model_candidates(self, *extra: str) -> tuple[str, ...]:
+        """The custom endpoint's known models: the given ones, the chosen one
+        and whatever the last fetch returned."""
+        return (
+            *extra,
+            self._remote_model_value_for_provider("custom"),
+            *self._custom_fetched_models,
+        )
+
     def _import_model_choices(
         self,
         engine: str,
     ) -> tuple[tuple[str, str], ...]:
-        return model_choices_for_engine(engine)
+        return model_choices_for_engine(
+            engine,
+            self._custom_model_candidates(
+                str(self._import_model_values.get("custom", "") or "")
+            ),
+        )
 
     def _import_model_value_for_engine(self, engine: str) -> str:
         normalized = str(engine or "").strip().lower()
@@ -519,10 +564,17 @@ class _GeneralTabMixin:
 
         self._update_model_selector_page()
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        choices = _REMOTE_MODEL_CHOICES.get(provider, ())
+        is_custom = provider == "custom"
+        choices = (
+            model_choices_for_engine(provider, self._custom_model_candidates())
+            if is_custom
+            else _REMOTE_MODEL_CHOICES.get(provider, ())
+        )
 
         self.remote_model_combo.blockSignals(True)
         self.remote_model_combo.clear()
+        self._set_remote_model_combo_editable(is_custom)
+        self.custom_fetch_models_button.setVisible(is_custom)
 
         if provider == DEFAULT_ENGINE:
             self.remote_model_combo.addItem("Not applicable for local engine", "")
@@ -540,6 +592,10 @@ class _GeneralTabMixin:
             self.remote_model_combo,
             self._remote_model_value_for_provider(provider),
         )
+        if is_custom:
+            self.remote_model_combo.setEditText(
+                self._remote_model_value_for_provider(provider)
+            )
         self.remote_model_combo.setEnabled(True)
 
         note = (
@@ -572,13 +628,24 @@ class _GeneralTabMixin:
                 "Cloud, batch-only, with 31 languages focused on Chinese and "
                 "East/Southeast Asia, but no German. Use Azure or local for German."
             )
+        elif is_custom:
+            note = self._custom_model_note or (
+                "Batch-only. Type the model id, or fetch the list the "
+                "endpoint offers; its URL is set on the API Keys tab."
+            )
 
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
         # longest of these notes plus this sentence needs 30 px of the 42.
-        note = f"{note} {_REMOTE_MODEL_KEY_POINTER}"
+        if not is_custom:
+            note = f"{note} {_REMOTE_MODEL_KEY_POINTER}"
         self.remote_model_note_label.setText(note)
         self.remote_model_note_label.setToolTip(note)
+        self.remote_model_note_label.setStyleSheet(
+            "color: #b71c1c; padding: 0;"
+            if is_custom and self._custom_model_note_error
+            else "color: #555; padding: 0;"
+        )
         self.remote_model_combo.blockSignals(False)
 
     def _language_modes_for_current_selection(self) -> tuple[str, ...]:
@@ -676,6 +743,12 @@ class _GeneralTabMixin:
                 "Azure MAI-Transcribe is multilingual. 'Auto' detects the "
                 "language; selecting one sends a locale hint. The list follows "
                 "the selected model."
+            )
+
+        if engine == "custom":
+            return (
+                "Which languages work depends on the endpoint's model. 'Auto' "
+                "sends no language; selecting one sends it as a hint."
             )
 
         if engine == "funasr":
@@ -1151,6 +1224,128 @@ class _GeneralTabMixin:
             self._show_local_model_unverified_state(status)
         if self._inventory_tab_is_visible():
             self._schedule_local_model_auto_refresh(delay_ms=250)
+
+    def _set_remote_model_combo_editable(self, editable: bool) -> None:
+        """Only the custom endpoint takes a typed model id."""
+        combo = self.remote_model_combo
+        if combo.isEditable() == editable:
+            return
+        combo.setEditable(editable)
+        # A fetched model id can be long, and the dialog's minimum width
+        # follows every page's minimum and never shrinks back; the other
+        # providers' fixed rosters keep sizing to their captions.
+        combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
+            if editable
+            else QtWidgets.QComboBox.AdjustToContentsOnFirstShow
+        )
+        combo.setMinimumContentsLength(24 if editable else 0)
+        if editable:
+            combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
+            combo.lineEdit().setPlaceholderText("Model id, e.g. whisper-1")
+            combo.lineEdit().textEdited.connect(self._on_custom_model_text_edited)
+
+    def _on_custom_model_text_edited(self, text: str) -> None:
+        if str(self.engine_combo.currentData() or "") != "custom":
+            return
+        self._remote_model_values["custom"] = str(text or "").strip()
+        self._update_engine_indicator()
+        self._schedule_unsaved_changes_refresh()
+
+    def _custom_models_fetch_snapshot(self) -> dict[str, str]:
+        """What a model fetch needs, read on the GUI thread."""
+        key_field = self._provider_key_edits.get("custom")
+        return {
+            "api_key": (
+                self._resolve_api_key("custom", key_field) if key_field else ""
+            ),
+            "endpoint": self.custom_endpoint_edit.text().strip(),
+            "api_mode": str(
+                self.custom_api_mode_combo.currentData() or DEFAULT_CUSTOM_API_MODE
+            ),
+            "key_command": self.custom_key_command_edit.text().strip(),
+        }
+
+    def _fetch_custom_models(self) -> None:
+        """List the endpoint's models on a worker thread and fill the combo."""
+        if self._active_custom_models_fetch_thread is not None:
+            return
+        snapshot = self._custom_models_fetch_snapshot()
+        self._custom_models_fetch_id += 1
+        fetch_id = self._custom_models_fetch_id
+        self.custom_fetch_models_button.setEnabled(False)
+        self._set_custom_model_note("Fetching the endpoint's models...")
+        worker = threading.Thread(
+            target=self._run_custom_models_fetch,
+            args=(fetch_id, snapshot),
+            name="stt_app_settings_custom_models_fetch",
+            daemon=True,
+        )
+        self._active_custom_models_fetch_thread = worker
+        # The busy marker is set; a start that raises would leave it set for
+        # the life of the dialog (see the connection test's guard).
+        try:
+            worker.start()
+        except RuntimeError as exc:
+            self._on_custom_models_fetched(
+                fetch_id, False, f"Could not start the model fetch: {exc}"
+            )
+
+    def _run_custom_models_fetch(self, fetch_id: int, snapshot: dict[str, str]) -> None:
+        try:
+            from .transcriber.custom_endpoint_provider import (
+                CustomEndpointTranscriber,
+            )
+
+            transcriber = CustomEndpointTranscriber(**snapshot)
+            result: object = tuple(model.id for model in transcriber.list_models())
+            ok = True
+        except Exception as exc:
+            ok, result = False, str(exc)
+        _emit_background_signal(
+            self, "custom_models_fetch_finished", fetch_id, ok, result
+        )
+
+    @QtCore.Slot(int, bool, object)
+    def _on_custom_models_fetched(self, fetch_id: int, ok: bool, result: object) -> None:
+        if fetch_id != self._custom_models_fetch_id:
+            return
+        self._active_custom_models_fetch_thread = None
+        self.custom_fetch_models_button.setEnabled(True)
+        if not ok:
+            self._set_custom_model_note(f"Could not fetch models: {result}", error=True)
+            return
+        models = tuple(result) if isinstance(result, tuple) else ()
+        self._custom_fetched_models = models
+        chosen = self._remote_model_value_for_provider("custom")
+        if not models:
+            text = "The endpoint offers no models this key can use."
+        elif chosen and chosen not in models:
+            text = (
+                f"The endpoint offers {len(models)} models, but not "
+                f"'{chosen}'. Pick one from the list."
+            )
+        else:
+            text = f"The endpoint offers {len(models)} models. Pick one from the list."
+        self._set_custom_model_note(text, error=not models)
+        if not chosen and models:
+            self._remote_model_values["custom"] = models[0]
+        self._update_remote_model_selector()
+        self._update_import_model_selector()
+        self._update_engine_indicator()
+        self._schedule_unsaved_changes_refresh()
+
+    def _set_custom_model_note(self, text: str, *, error: bool = False) -> None:
+        """The note under the model row reports the fetch while it is shown."""
+        self._custom_model_note = text
+        self._custom_model_note_error = error
+        if str(self.engine_combo.currentData() or "") != "custom":
+            return
+        self.remote_model_note_label.setText(text)
+        self.remote_model_note_label.setToolTip(text)
+        self.remote_model_note_label.setStyleSheet(
+            f"color: {'#b71c1c' if error else '#555'}; padding: 0;"
+        )
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)

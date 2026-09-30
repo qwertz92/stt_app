@@ -12,6 +12,7 @@ from .config import (
     AZURE_SPEECH_MODELS,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    CUSTOM_API_MODES,
     DEEPGRAM_MODELS,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_ASSEMBLYAI_MODEL,
@@ -21,6 +22,10 @@ from .config import (
     DEFAULT_COMPLETION_BEEP_ENABLED,
     DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_CUSTOM_API_MODE,
+    DEFAULT_CUSTOM_ENDPOINT,
+    DEFAULT_CUSTOM_KEY_COMMAND,
+    DEFAULT_CUSTOM_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DISPLAY_TIMEZONE,
@@ -167,6 +172,7 @@ DEFAULTS = {
     "has_elevenlabs_key": False,
     "has_azure_key": False,
     "has_funasr_key": False,
+    "has_custom_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -175,6 +181,10 @@ DEFAULTS = {
     "azure_speech_model": DEFAULT_AZURE_SPEECH_MODEL,
     "azure_endpoint": DEFAULT_AZURE_ENDPOINT,
     "funasr_model": DEFAULT_FUNASR_MODEL,
+    "custom_endpoint": DEFAULT_CUSTOM_ENDPOINT,
+    "custom_model": DEFAULT_CUSTOM_MODEL,
+    "custom_api_mode": DEFAULT_CUSTOM_API_MODE,
+    "custom_key_command": DEFAULT_CUSTOM_KEY_COMMAND,
 }
 
 
@@ -191,6 +201,15 @@ def _int_or_none(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _text_setting(value: Any) -> str:
+    """A free-text setting, stripped; anything that is not a string is "".
+
+    `str()` of a hand-edited `null` or list would store the word None or a
+    Python repr as an endpoint or a command line.
+    """
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _exact_int_or_none(value: Any) -> int | None:
@@ -273,6 +292,7 @@ class AppSettings:
     has_elevenlabs_key: bool = False
     has_azure_key: bool = False
     has_funasr_key: bool = False
+    has_custom_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -281,6 +301,14 @@ class AppSettings:
     azure_speech_model: str = DEFAULT_AZURE_SPEECH_MODEL
     azure_endpoint: str = DEFAULT_AZURE_ENDPOINT
     funasr_model: str = DEFAULT_FUNASR_MODEL
+    # A bring-your-own OpenAI-compatible endpoint. The model is free text:
+    # the endpoint decides what it offers, so nothing is checked against a
+    # list. The key command, when set, prints a short-lived token and wins
+    # over a stored key; it is a command line, not a secret.
+    custom_endpoint: str = DEFAULT_CUSTOM_ENDPOINT
+    custom_model: str = DEFAULT_CUSTOM_MODEL
+    custom_api_mode: str = DEFAULT_CUSTOM_API_MODE
+    custom_key_command: str = DEFAULT_CUSTOM_KEY_COMMAND
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppSettings:
@@ -445,6 +473,11 @@ class AppSettings:
         funasr_model = str(merged.get("funasr_model", DEFAULT_FUNASR_MODEL))
         if funasr_model not in FUNASR_MODELS:
             funasr_model = DEFAULT_FUNASR_MODEL
+        custom_api_mode = str(
+            merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)
+        ).strip().lower()
+        if custom_api_mode not in CUSTOM_API_MODES:
+            custom_api_mode = DEFAULT_CUSTOM_API_MODE
         start_beep_tone = str(
             merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)
         ).strip().lower()
@@ -680,6 +713,7 @@ class AppSettings:
             has_elevenlabs_key=parse_json_bool(merged.get("has_elevenlabs_key")),
             has_azure_key=parse_json_bool(merged.get("has_azure_key")),
             has_funasr_key=parse_json_bool(merged.get("has_funasr_key")),
+            has_custom_key=parse_json_bool(merged.get("has_custom_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -688,6 +722,10 @@ class AppSettings:
             azure_speech_model=azure_speech_model,
             azure_endpoint=azure_endpoint,
             funasr_model=funasr_model,
+            custom_endpoint=_text_setting(merged.get("custom_endpoint")),
+            custom_model=_text_setting(merged.get("custom_model")),
+            custom_api_mode=custom_api_mode,
+            custom_key_command=_text_setting(merged.get("custom_key_command")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -732,6 +770,7 @@ _REMOTE_MODEL_FIELDS: dict[str, str] = {
     "elevenlabs": "elevenlabs_model",
     "azure": "azure_speech_model",
     "funasr": "funasr_model",
+    "custom": "custom_model",
 }
 
 
@@ -858,6 +897,7 @@ class SettingsStore:
             "elevenlabs_api_key",
             "azure_api_key",
             "funasr_api_key",
+            "custom_api_key",
         ):
             payload.pop(secret_key, None)
         return payload

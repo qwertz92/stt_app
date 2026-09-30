@@ -18,6 +18,7 @@ from ..settings_store import AppSettings, preferred_onnx_device
 from .assemblyai_provider import AssemblyAITranscriber
 from .azure_provider import AzureLlmSpeechTranscriber
 from .base import ITranscriber
+from .custom_endpoint_provider import CustomEndpointTranscriber
 from .deepgram_provider import DeepgramTranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
 from .funasr_provider import FunAsrTranscriber
@@ -159,6 +160,16 @@ def create_transcriber(
             api_key=_api_key(secret_store, "funasr"),
             language_mode=settings.language_mode,
             model=getattr(settings, "funasr_model", DEFAULT_FUNASR_MODEL),
+        )
+    if settings.engine == "custom":
+        return CustomEndpointTranscriber(
+            api_key=_api_key(secret_store, "custom"),
+            endpoint=settings.custom_endpoint,
+            model=settings.custom_model,
+            api_mode=settings.custom_api_mode,
+            key_command=settings.custom_key_command,
+            language_mode=settings.language_mode,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
         )
 
     # Unknown engine — fall back to local provider.

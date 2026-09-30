@@ -150,3 +150,45 @@ history are in `docs/learning-log.md` and git history.
     (2.2 GB / 10 h), Fun-ASR (streams).
 - **Diagnostics**: workers log `transcription_timing`. Groq reuses its
   SDK/HTTP client for the cached transcriber's lifetime.
+- **The custom endpoint is one engine with two API styles, free-text model
+  ids and a key command (2026-09-30).** `custom_endpoint_provider.py`, modelled
+  on the OpenAI provider (urllib, `create_ssl_context()`, `http_error_suffix`,
+  `transcribe_in_parts`). Rules:
+  - **The base URL is used as given** (stripped, trailing `/` removed, http(s)
+    only, no credentials/query); gateways serve the routes under different
+    prefixes, so nothing is appended.
+  - **`custom_api_mode` picks the request**: `transcriptions` is the OpenAI
+    multipart shape (`prompt` = comma-joined vocabulary); `chat` posts an
+    `input_audio` part with a verbatim-transcript instruction, `temperature:
+    0` and `reasoning_effort: "low"`. A 400 whose detail names `reasoning` or
+    `thinking` drops the field once per runtime (INFO log, no body). Why:
+    a gateway measured here routes audio only to a multimodal LLM, where
+    `low` took a 25 s clip from 8-9 s to 2.5-3.3 s and `minimal`/`none` were
+    rejected; chat models without audio input answer 400 as well, and that
+    400 is reported, not retried.
+  - **Part limits are keyed by API style**:
+    `remote_batch_part_limit(engine, model, api_mode)` reads
+    `REMOTE_BATCH_API_MODE_LIMITS` first (chat: 300 s / 15 MB raw, since
+    base64 grows the body a third); the transcription style uses OpenAI's
+    600 s / 25 MB.
+  - **The key command wins over the stored key**, runs without a shell
+    (`shlex.split(posix=os.name != "nt")`, quotes stripped on Windows), with
+    stdin closed, `CREATE_NO_WINDOW` and a 30 s timeout; its last stdout line
+    is the token, cached `CUSTOM_KEY_COMMAND_TTL_S` (300 s); a 401 re-runs it
+    once and retries once. Errors name the exit code and the last stderr
+    line, never the token, and nothing logs it.
+  - **The identity reads endpoint, API style and key command**, and
+    `has_api_key` is true for a stored key *or* a key command (a command
+    alone makes the engine runnable); the connection test, the "all
+    configured" target and the Import tab's credential check treat a typed
+    command the same way.
+  - **Model ids are free text**: the Transcription tab's remote combo is
+    editable only for `custom`, "Fetch models" lists `GET {base}/models` on a
+    worker thread with the typed (unsaved) fields and rolls back if
+    `Thread.start` fails; the list is never persisted. Entries whose LiteLLM
+    `mode` is `embedding`/`image_generation`/`rerank` are dropped,
+    `audio_transcription` then `chat` sort first; reads are bounded (2 MB
+    list, 8 MB reply).
+  - **Not verified against a live server by the app's own code path**; the
+    chat request shape was verified by hand against one gateway.
+

@@ -65,7 +65,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Remote providers: AssemblyAI (SDK batch + Universal-3.5 Pro realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
-  Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German)
+  Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German),
+  Custom endpoint (any OpenAI-compatible REST API, batch-only)
 - keyring for secret storage
 - comtypes for MMDevice audio endpoint change notifications (Windows)
 
@@ -95,6 +96,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
+| `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
@@ -212,7 +214,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 ## Engines
 
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
-  azure, funasr
+  azure, funasr, custom
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - **OpenAI** model select picks `gpt-transcribe` (default) or one of the three
   models OpenAI removes on 2027-02-26.
@@ -225,6 +227,9 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
   driven over the realtime WebSocket in batch mode. It covers 31 languages but
   **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
+- **Custom endpoint** (`custom`): base URL, free-text model, API style
+  (`transcriptions` or `chat`) and an optional key command that prints a
+  short-lived Bearer token; the `custom` key is the static fallback.
 - All engine/model constants defined in `config.py`
 
 ## Tests

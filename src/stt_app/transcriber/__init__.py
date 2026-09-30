@@ -18,6 +18,9 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .azure_provider import AzureLlmSpeechTranscriber as AzureLlmSpeechTranscriber
     from .base import ITranscriber as ITranscriber
     from .base import TranscriptionError as TranscriptionError
+    from .custom_endpoint_provider import (
+        CustomEndpointTranscriber as CustomEndpointTranscriber,
+    )
     from .deepgram_provider import DeepgramTranscriber as DeepgramTranscriber
     from .elevenlabs_provider import ElevenLabsTranscriber as ElevenLabsTranscriber
     from .factory import create_transcriber as create_transcriber
@@ -32,6 +35,7 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
 _LAZY_ATTRIBUTES = {
     "AssemblyAITranscriber": ".assemblyai_provider",
     "AzureLlmSpeechTranscriber": ".azure_provider",
+    "CustomEndpointTranscriber": ".custom_endpoint_provider",
     "DeepgramTranscriber": ".deepgram_provider",
     "ElevenLabsTranscriber": ".elevenlabs_provider",
     "FunAsrTranscriber": ".funasr_provider",

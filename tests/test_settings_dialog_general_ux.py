@@ -288,6 +288,7 @@ def test_dynamic_engine_hints_keep_general_rows_stationary(
         ("assemblyai", None),
         ("azure", None),
         ("funasr", None),
+        ("custom", None),
         ("local", "small"),
     )
     for engine, model in selections:
@@ -352,6 +353,7 @@ def test_dynamic_notes_fit_their_reserved_area(
             "elevenlabs",
             "azure",
             "funasr",
+            "custom",
         ):
             dialog.engine_combo.setCurrentIndex(
                 dialog.engine_combo.findData(engine)

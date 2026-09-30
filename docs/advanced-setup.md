@@ -430,6 +430,53 @@ Restart terminal and app after changes.
 
 ---
 
+## Custom endpoint (OpenAI-compatible)
+
+The **Custom endpoint** engine sends dictations to any server that speaks the
+OpenAI REST API: a company gateway (for example LiteLLM or vLLM), a local
+speech server (speaches, faster-whisper-server, LocalAI) or a hosted
+OpenAI-compatible provider. It is batch-only.
+
+1. Settings -> **API Keys**: enter the **Custom Endpoint** base URL, for
+   example `https://llm-gateway.example.com/v1` or `http://localhost:8000/v1`.
+   It is used as given; nothing is appended, so include the `/v1` (or
+   whatever prefix the server uses).
+2. Enter the key in the **Custom** row. A server without authentication
+   accepts any placeholder, such as `none`.
+3. Pick the **API Style**:
+   - *OpenAI transcription API* sends `POST {base}/audio/transcriptions`
+     with the WAV, the model, the language (unless Auto) and the custom
+     vocabulary as `prompt`. Use it for speech models (Whisper and alike).
+   - *Chat completions with audio input* sends `POST {base}/chat/completions`
+     with the WAV as an `input_audio` part and an instruction to transcribe
+     verbatim. Use it when the gateway routes audio only to a multimodal LLM.
+     The app asks for `reasoning_effort: "low"`, which cut the latency of a
+     reasoning model to a third in one measurement, and drops it for good
+     when the server rejects it.
+4. Settings -> **Transcription**: select *Custom endpoint*, then type the
+   model id or press **Fetch models**, which lists what the endpoint offers
+   (`GET {base}/models`) and fills the Model box. The list is not saved;
+   only the chosen model is.
+
+**Key command.** When the endpoint needs a short-lived token, enter a command
+that prints it, for example `my-token-helper --print` or, from Windows into
+WSL, `wsl.exe -e /path/to/token-helper`. It runs without a shell and without a
+console window whenever a request needs a key; the last line it prints is
+sent as the Bearer token and reused for 5 minutes. An HTTP 401 re-runs it
+once. The command overrides a stored key. A command that fails, prints
+nothing or takes longer than 30 seconds fails the dictation with its exit
+code and the last line of its error output; the token itself is never logged
+or shown.
+
+**Limits.** A recording longer than 10 minutes (transcription API) or
+5 minutes (chat style, whose request carries the audio base64-encoded) is
+sent in parts cut at pauses.
+
+**Caveat.** A transcript written by a general LLM in the chat style is less
+deterministic than one from a speech model: it may paraphrase, drop filler
+words or fix grammar. Prefer the transcription API when the endpoint offers a
+speech model.
+
 ## API key storage fallback (when keyring is blocked)
 
 By default, keys are stored via keyring (Windows Credential Manager).
