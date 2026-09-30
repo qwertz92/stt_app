@@ -7,6 +7,7 @@ from typing import ClassVar
 from PySide6 import QtCore, QtWidgets
 
 from .config import (
+    ASSEMBLYAI_STREAMING_MODEL_LABEL,
     CANARY_MODEL_SIZE,
     CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
     DEFAULT_CUSTOM_API_MODE,
@@ -605,7 +606,8 @@ class _GeneralTabMixin:
         if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
             self.remote_model_combo.setEnabled(False)
             note = (
-                "Streaming always uses Universal-3.5 Pro Realtime. The selected "
+                f"Streaming always uses {ASSEMBLYAI_STREAMING_MODEL_LABEL} "
+                "Realtime. The selected "
                 "model applies to batch transcription and audio imports."
             )
         elif provider == "deepgram":

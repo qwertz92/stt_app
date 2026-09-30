@@ -16,7 +16,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 |--------|-------------|-----------------|--------------|-----------------|
 | Local (`faster-whisper`, Parakeet, Canary, Cohere, Granite, Nemotron) | Batch + Streaming (model-dependent) | see [models.md](models.md) | No API fee | $0 API cost (hardware/power only) |
 | AssemblyAI | Batch | Universal-3.5 Pro or Universal-2 (explicit selection; no fallback) | U3.5 Pro: $0.21/hour, U2: $0.15/hour ([pricing](https://www.assemblyai.com/pricing), checked 2026-09-21) | $0.15-$0.21/hour |
-| AssemblyAI | Streaming | Universal-3.5 Pro Realtime | $0.45/hour (same source) | $0.45/hour |
+| AssemblyAI | Streaming | Universal-3.6 Pro Realtime (streaming-only; launched 2026-09-29, 32 languages, keyterms included) | $0.45/hour (AssemblyAI SDK docs, checked 2026-10-01) | $0.45/hour |
 | OpenAI | Batch | `gpt-transcribe` (new default; replaces `gpt-4o-mini-transcribe`), `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | `gpt-transcribe`: $0.0045/min, `gpt-4o-transcribe`: $0.006/min, `gpt-4o-mini-transcribe`: $0.003/min, `whisper-1`: $0.006/min ([pricing](https://developers.openai.com/api/docs/pricing), checked 2026-09-21) | $0.27/hour, $0.36/hour, $0.18/hour, $0.36/hour |
 | Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour ([pricing](https://groq.com/pricing), checked 2026-09-21) | $0.111/hour, $0.040/hour |
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min ([pricing](https://deepgram.com/pricing), checked 2026-09-21) | $0.258/hour, $0.312/hour |

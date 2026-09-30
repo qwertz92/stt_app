@@ -415,7 +415,7 @@ class TestAssemblyAIStreaming:
         params = client.connect_params
         assert params.sample_rate == 16000
         assert str(params.encoding) == "pcm_s16le"
-        assert str(params.speech_model) == "universal-3-5-pro"
+        assert str(params.speech_model) == "universal-3-6-pro"
         assert params.language_detection is None
         assert params.format_turns is None
         t.abort_stream()

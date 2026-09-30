@@ -1437,6 +1437,12 @@ ASSEMBLYAI_MODELS = (
     "universal-2",
 )
 DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
+# Realtime model. Universal-3.6 Pro (launched 2026-09-29) is streaming-only:
+# the batch `speech_models` list has no 3.6 id, so batch stays on 3.5 Pro.
+# Same price as 3.5 Pro realtime ($0.45/h), same parameters, 32 languages;
+# its code-switching needs no language parameter, so the UI keeps Auto only.
+ASSEMBLYAI_STREAMING_MODEL = "universal-3-6-pro"
+ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
 
 # Total time one batch job may stay queued/processing before the app gives
 # up on it. The SDK's own `wait_for_completion` is `while True:` with no

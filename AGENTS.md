@@ -62,7 +62,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary, CPU only
 - numpy + ONNX Runtime (CPU provider) + `tokenizers` for IBM Granite Speech 5.0
   470M TurboCTC (INT8, English only, batch only)
-- Remote providers: AssemblyAI (SDK batch + Universal-3.5 Pro realtime),
+- Remote providers: AssemblyAI (SDK batch Universal-3.5 Pro + Universal-3.6 Pro realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German),

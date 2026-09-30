@@ -1,7 +1,7 @@
 """AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
-Real-time streaming via AssemblyAI's Universal-3.5 Pro (v3) WebSocket API
+Real-time streaming via AssemblyAI's Universal-3.6 Pro (v3) WebSocket API
 (``assemblyai.streaming.v3.StreamingClient``); the legacy v2
 ``RealtimeTranscriber`` API has been retired by AssemblyAI.
 Requires: pip install assemblyai
@@ -22,6 +22,7 @@ from pathlib import Path
 from ..app_paths import temp_audio_dir
 from ..config import (
     ASSEMBLYAI_BATCH_MAX_WAIT_S,
+    ASSEMBLYAI_STREAMING_MODEL,
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -550,7 +551,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        """Start a Universal-3.5 Pro (v3) streaming session.
+        """Start a Universal-3.6 Pro (v3) streaming session.
 
         The ``on_partial`` callback receives the accumulated transcript text
         (all completed turns + the current turn) each time an update arrives
@@ -621,10 +622,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             stream_kwargs = {
                 "sample_rate": AUDIO_SAMPLE_RATE,
                 "encoding": Encoding.pcm_s16le,
-                "speech_model": "universal-3-5-pro",
+                "speech_model": ASSEMBLYAI_STREAMING_MODEL,
             }
             if self._word_boost:
-                # U3.5 Pro accepts up to 100 terms. The
+                # U3.6 Pro accepts up to 100 terms (keyterms included in its
+                # price). The
                 # shared vocabulary parser already caps the app input at 100.
                 stream_kwargs["keyterms_prompt"] = self._word_boost
             client.connect(StreamingParameters(**stream_kwargs))

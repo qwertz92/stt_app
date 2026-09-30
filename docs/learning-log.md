@@ -9115,3 +9115,14 @@ whole last line (`_last_line`), error text is capped separately
 Live afterwards: model list (19 entries), connection test, and a German 25 s
 clip transcribed in chat mode in 4.3 s; transcription mode fails on that
 gateway with the backend's own HTTP 403, reported verbatim.
+
+## 2026-10-01: AssemblyAI realtime on Universal-3.6 Pro
+
+AssemblyAI launched Universal-3.6 Pro on 2026-09-29 as a streaming-only model
+(read from AssemblyAI's SDK repositories and agent skill on GitHub; the
+vendor site was not reachable from the development network). Realtime moves
+to it (`ASSEMBLYAI_STREAMING_MODEL`): same $0.45/h with keyterms included,
+same parameters, 32 languages against 19. Batch stays on `universal-3-5-pro`
+because the pre-recorded API has no 3.6 id. No published accuracy figures
+for 3.6 existed at the time. The installed SDK (1.5.5) already carries the
+id. Not verified live: the development network blocks the vendor.

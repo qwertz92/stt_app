@@ -750,7 +750,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
 
     assert dialog.remote_model_combo.isEnabled() is False
-    assert "Universal-3.5 Pro Realtime" in dialog.remote_model_note_label.text()
+    assert "Universal-3.6 Pro Realtime" in dialog.remote_model_note_label.text()
     assert (
         "batch transcription and audio imports"
         in dialog.remote_model_note_label.text()

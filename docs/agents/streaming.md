@@ -39,9 +39,11 @@ kept, so "above/below" refers to this file; "Known limitations" is
 - **Copy the window, not the recording**: `_trailing_window` returns window
   and byte range from one read; `bytes(pcm_buffer)` grew with the dictation
   on a ~350 ms path.
-- **AssemblyAI Universal-3.5 Pro realtime**: never reintroduce v2 realtime or
+- **AssemblyAI realtime (v3)**: never reintroduce v2 realtime or
   earlier Universal-Streaming. `assemblyai.streaming.v3.StreamingClient`,
-  model `universal-3-5-pro`, optional `keyterms_prompt`, no
+  model `ASSEMBLYAI_STREAMING_MODEL` (`universal-3-6-pro` since 2026-10-01:
+  streaming-only, same price and parameters as 3.5 Pro, 32 languages; batch
+  stays on `universal-3-5-pro`), optional `keyterms_prompt`, no
   `language_detection` / `format_turns`; the batch selector does not affect
   it. Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
   thread with bounded joins; the 8 s budget covers the text-bearing teardown

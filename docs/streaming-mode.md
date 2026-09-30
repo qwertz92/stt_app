@@ -106,7 +106,7 @@ Characteristics:
 
 ### AssemblyAI transcriber
 
-- `AssemblyAITranscriber` implements streaming via Universal-3.5 Pro Realtime
+- `AssemblyAITranscriber` implements streaming via Universal-3.6 Pro Realtime
   (`speech_model="universal-3-5-pro"`) in
   `assemblyai.streaming.v3.StreamingClient`; the legacy v2 realtime API was
   retired by AssemblyAI.
@@ -179,7 +179,8 @@ streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal
 dependency lock currently provides CPU execution; DirectML is attempted when a
 compatible runtime becomes available.
 
-AssemblyAI streaming always uses Universal-3.5 Pro Realtime. The batch selector
+AssemblyAI streaming always uses Universal-3.6 Pro Realtime (batch stays on
+Universal-3.5 Pro: 3.6 is streaming-only). The batch selector
 controls only pre-recorded requests and sends exactly the selected model:
 `universal-3-5-pro` for the highest accuracy across its 18 languages or
 `universal-2` for lower-cost 99-language coverage. The app does not silently
