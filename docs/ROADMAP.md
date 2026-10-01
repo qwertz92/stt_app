@@ -35,11 +35,14 @@ taking it out of this list; deleting one needs no ceremony.
   second download of 0.95-1.89 GB, a raw-graph Node runtime and a second feature
   extractor in JavaScript, for a gain nobody notices at dictation length.
 - **A cheaper Settings dialog construction** (2026-10-01). Building one
-  `SettingsDialog` takes about 0.19 s (profile of `test_settings_dialog_mode.py`:
-  33 of 43 s inside `SettingsDialog.__init__`, mostly `addWidget` and `addTab`),
-  and the test suite builds it about 420 times, roughly 80 of its 245 s. Gain:
-  a test suite about a third faster, and a dialog that opens a little sooner.
-  Why it waits: 0.19 s is not noticeable when the user opens Settings, so the
-  only real gain is test time; building tabs lazily changes when widgets exist,
-  which the save/merge baseline and the unsaved-changes fingerprint rely on. A
-  cProfile around `SettingsDialog(...)` alone would size what is achievable.
+  `SettingsDialog` takes about 0.19 s in the test suite (profile of
+  `test_settings_dialog_mode.py`: 33 of 43 s inside `SettingsDialog.__init__`,
+  mostly `addWidget` and `addTab`) and 949 ms in the running app
+  (`settings_timing event=dialog_init`, 2026-10-01 log, populated settings and
+  model inventory); the suite builds it about 420 times, roughly 80 of its
+  245 s. Gain: a test suite about a third faster. Why it waits: the app builds
+  the dialog in the background at startup, so opening Settings does not wait for
+  it, and the only real gain is test time; building tabs lazily changes when
+  widgets exist, which the save/merge baseline and the unsaved-changes
+  fingerprint rely on. A cProfile around `SettingsDialog(...)` alone would size
+  what is achievable.
