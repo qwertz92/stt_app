@@ -261,6 +261,10 @@ def start_loading() -> None:
         loader = _loader_thread
         if loader is not None and loader.is_alive():
             return
+        # Asked again under the lock: a loader that finished between the
+        # check above and here needs no successor.
+        if _session is not None or _in_backoff():
+            return
         # `_get_session` is looked up when the thread runs, so a test that
         # replaces it is honoured.
         loader = threading.Thread(

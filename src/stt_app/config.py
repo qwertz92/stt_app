@@ -1942,8 +1942,8 @@ SILERO_BATCH_QUIET_SPEECH_GAIN = 8.0
 # as before (46 ms for 60 s, one scan). Building the session costs 29 ms
 # when ONNX Runtime is already loaded (onnx-asr, Nemotron and Granite CTC
 # load it) and 123-275 ms when it still has to be imported (four fresh
-# interpreters); it happens once, on a daemon thread (`start_loading`),
-# never inside a stop.
+# interpreters); it happens once, on a daemon thread (`start_loading`) or on
+# the streaming worker that asks first, never inside a stop.
 SILERO_BATCH_STOP_AFTER_SPEECH_S = 1.0
 SILERO_BATCH_MAX_SCAN_S = 30.0
 # A session load that failed is retried after this long, not never: the file
