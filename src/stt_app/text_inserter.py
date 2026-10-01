@@ -1872,9 +1872,29 @@ class TextInserter:
             return _NO_INHERITED_STATE, None
         self._pending_restore = None
         self._cancel_scheduled_restore(record)
-        if self._restore_check(record) != _RESTORE_CHANGED:
-            # Ours, or unreadable right now: a capture would take our own
-            # transcript for the user's clipboard, or fail the same way.
+        verdict = self._restore_check(record)
+        if verdict == _RESTORE_BUSY:
+            # Unreadable right now. Only an unmoved counter still proves the
+            # clipboard is ours: a user copy moves it, and inheriting then
+            # restored the older state over what they had just copied
+            # (review of a404479). With a moved counter nothing can be told
+            # apart, so this paste is refused before it writes anything and
+            # the record waits for its own check to decide.
+            current = self._clipboard_sequence_number()
+            if record.marker is None or current != record.marker:
+                self._pending_restore = record
+                self._log_restore_outcome(record, "busy_refused")
+                if record.retry:
+                    self._schedule_restore_retry(record)
+                else:
+                    self._schedule_restore(record)
+                raise ClipboardContentionError(
+                    "The clipboard is in use by another program."
+                )
+            verdict = _RESTORE_OURS
+        if verdict == _RESTORE_OURS:
+            # A capture would take our own transcript for the user's
+            # clipboard.
             self._log_restore_outcome(record, "superseded")
             return record.previous_state, record
         # The user copied something of their own in between, so the older

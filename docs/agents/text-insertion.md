@@ -23,15 +23,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     `CLIPBOARD_RESTORE_MAX_WAIT_S` (10 s) leaving the transcript. Logged as
     `clipboard_restore id=... outcome=restored|skipped_changed|superseded|
     superseded_changed|busy_rescheduled|abandoned_busy|failed_retrying|
-    busy_retrying|resumed|failed delay_ms=...`; failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
+    busy_retrying|busy_refused|resumed|failed delay_ms=...`; failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
     (`SENDINPUT_RESTORE_DELAY_S`) lost pastes into Electron
     (`probe_wm_null_order.py`: WM_NULL answers before queued input). Raising
     the delay was rejected: on the Qt thread a longer sleep froze the UI
     during a streaming dictation, and any fixed delay only moves the race.
   - A paste during a pending restore takes the record over, keeping the
     *original* previous state while the clipboard is still ours by the rule
-    below, or cannot be read (streaming pastes every ~350 ms); a paste that
-    then never touches the clipboard hands the record back
+    below (streaming pastes every ~350 ms). A clipboard that cannot be read
+    is inherited only while the sequence counter is unmoved since our last
+    write; with a moved counter the paste is refused as contention before it
+    writes anything (`busy_refused`) and the record stays pending, because
+    inheriting restored the older state over a copy the user had just made
+    (review of a404479). A paste that then never touches the clipboard hands
+    the record back
     (`_resume_pending_restore`), so the user's content is not lost with it.
     `flush_pending_restore`
     restores at once (content check kept); `DictationController.shutdown`

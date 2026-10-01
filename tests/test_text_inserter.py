@@ -4067,3 +4067,69 @@ def test_another_programs_history_exclusion_is_captured_and_put_back(monkeypatch
         (_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO),
         (_EXCLUDE_FROM_MONITOR, b"\x01"),
     ]
+
+
+def _hold_clipboard_during_take_over(inserter, held, monkeypatch):
+    original = inserter._take_over_pending_restore
+
+    def _held_during_take_over():
+        held["on"] = True
+        try:
+            return original()
+        finally:
+            held["on"] = False
+
+    monkeypatch.setattr(inserter, "_take_over_pending_restore", _held_during_take_over)
+
+
+def test_a_busy_take_over_after_a_user_copy_refuses_the_paste(monkeypatch):
+    """The user copies something new while the previous paste's restore is
+    pending, and the clipboard is still held when the next paste takes the
+    record over. Inheriting restored the older content over the new copy
+    (review of a404479); the moved counter now refuses the paste before it
+    writes, and the record's own check then leaves the copy alone."""
+    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    inserter, _backend, scheduler, reports, held = _inserter_on_a_holdable_clipboard(
+        clipboard, monkeypatch
+    )
+    assert inserter.insert_text_with_options(
+        "first", target_hwnd=321, paste_mode="send_input"
+    ) is True
+    clipboard.text = "the user's new copy"
+    clipboard.payloads = {
+        CF_UNICODETEXT: "the user's new copy".encode("utf-16-le") + b"\x00\x00"
+    }
+    clipboard.order = [CF_UNICODETEXT]
+    clipboard.sequence += 1
+    _hold_clipboard_during_take_over(inserter, held, monkeypatch)
+
+    with pytest.raises(ClipboardContentionError):
+        inserter.insert_text_with_options(
+            "second", target_hwnd=321, paste_mode="send_input"
+        )
+    while scheduler.pending:
+        scheduler.fire_pending()
+
+    assert clipboard.text == "the user's new copy"
+    assert reports == []
+
+
+def test_a_busy_take_over_with_an_unmoved_counter_still_inherits(monkeypatch):
+    """Held during the take-over but nobody wrote: the clipboard is still
+    ours, the paste goes ahead and the original content comes back."""
+    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    inserter, _backend, scheduler, _reports, held = _inserter_on_a_holdable_clipboard(
+        clipboard, monkeypatch
+    )
+    assert inserter.insert_text_with_options(
+        "first", target_hwnd=321, paste_mode="send_input"
+    ) is True
+    _hold_clipboard_during_take_over(inserter, held, monkeypatch)
+
+    assert inserter.insert_text_with_options(
+        "second", target_hwnd=321, paste_mode="send_input"
+    ) is True
+    while scheduler.pending:
+        scheduler.fire_pending()
+
+    assert clipboard.text == "Guten Tag"
