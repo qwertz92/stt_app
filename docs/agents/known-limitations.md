@@ -50,12 +50,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   never skipping quiet speech. A speechless recording longer than
   `SILERO_BATCH_MAX_SCAN_S` (30 s) is never skipped (incomplete scan).
 - **In a noisy room the batch speech check can skip one short quiet word**
-  (P3, 2026-10-01). With fan-like noise at 0 dB SNR, a single word of
-  140 ms near the lowest settable threshold (0.0005) scored 0.072 as
-  recorded and 0.135 amplified -- under the 0.15 cut -- and was skipped in
-  1 of 50 seeds (review of 4298c8a). The calibration holds no noisy-room
-  speech, so the cut was never set against it. Lowering the cut lets more
-  noise through; a noisy-room speech set is what would settle it.
+  (P3, accepted by the owner 2026-10-01). With fan-like noise at 0 dB SNR, a
+  single word of 140 ms near the lowest settable threshold (0.0005) scored
+  0.072 as recorded and 0.135 amplified -- under the 0.15 cut -- and was
+  skipped in 1 of 50 seeds (review of 4298c8a). The calibration holds no
+  noisy-room speech, so the cut was never set against it. Lowering the cut
+  lets more noise through; a noisy-room speech set is what would settle it.
 - **The batch speech check is off for a stop that comes before its model
   loaded**: the stop is transcribed as before (`silero_speech_seconds=loading`)
   rather than waiting on the Qt thread. Only the first second or so after
