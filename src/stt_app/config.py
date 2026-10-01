@@ -2241,6 +2241,15 @@ OVERLAY_ERROR_ACTION_INSERT = "insert"
 # The tray menu's cancel entry, named by the preload's progress line when no
 # cancel hotkey reaches the download and the overlay's slot holds Insert.
 TRAY_CANCEL_ACTION_LABEL = "Cancel current action"
+# The tray menu's re-paste entry, named by the reports of transcripts that are
+# still waiting to be inserted, which is what that entry inserts first.
+TRAY_REPASTE_ACTION_LABEL = "Insert transcript again"
+# The two kinds of row the overlay's queue panel shows: a transcription still
+# running or queued (its button cancels it), and a finished transcript whose
+# paste failed or may have failed (its button dismisses the row; the text
+# stays in history).
+QUEUE_ROW_KIND_TRANSCRIPTION = "transcription"
+QUEUE_ROW_KIND_UNDELIVERED = "undelivered"
 # An Error state that must offer NO action at all. `None` cannot express
 # this: the action slot treats "not Insert" as Retry, so passing None gave
 # the user a Retry button on a transcript that had already been inserted --
@@ -2316,6 +2325,19 @@ CLIPBOARD_RESTORE_DELAY_S = 1.5
 # good: a target this slow has demonstrably not read it yet, and restoring is
 # exactly what turns its eventual paste into the user's old content.
 CLIPBOARD_RESTORE_MAX_WAIT_S = 10.0
+# A restore that fails -- another program held the clipboard for longer than
+# one operation's opens, or closed our open after its `EmptyClipboard` -- is
+# written again from the captured state this many times, this far apart, on
+# the restore's timer thread; only then is it reported through the tray. A
+# restore that found the clipboard emptied by our own write had left the user
+# with nothing at all, and nothing ever tried again. Each attempt is one
+# reopen-guarded operation (about 0.33 s at most), never a sleep on the Qt
+# thread, and every attempt first checks that the clipboard still holds our
+# transcript or our own partial restore, so it never writes over a copy the
+# user made meanwhile. 3 x 1.0 s covers a clipboard manager or an RDP
+# redirection holding the clipboard for a few seconds.
+CLIPBOARD_RESTORE_RETRY_ATTEMPTS = 3
+CLIPBOARD_RESTORE_RETRY_DELAY_S = 1.0
 # Inserts are often triggered straight from a WM_HOTKEY press, so the user's
 # physical Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is injected.
 # The target would then see e.g. Ctrl+Alt+V (AltGr+V) instead of a paste, so

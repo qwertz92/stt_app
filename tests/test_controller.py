@@ -3583,19 +3583,19 @@ def test_an_overlay_error_during_a_transcription_in_flight_goes_to_the_tray(
         controller.shutdown()
 
 
-def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray(
+def test_a_re_paste_during_a_transcription_in_flight_pastes_without_touching_the_overlay(
     monkeypatch, tmp_path
 ):
     """The tray's "Insert transcript again" while a batch result is pending.
 
-    `_repaste` refused a recording and a stream, not a transcription in
-    flight: "Processing" -- the microphone already closed, the result not
-    yet delivered -- passed its guard, the previous dictation was pasted
-    into whatever held the focus, and "Done" with that older text replaced
-    "Processing" for a job that had not finished; a paste that failed there
-    painted "Error" over it through the inserter's own handler (the wave-13
-    reach lens). The refusal takes the tray road like the other two, and
-    the same call pastes as before once the result is on screen.
+    The wave-13 refusal blocked the re-paste for as long as any foreground
+    transcription ran, and the owner's field report (2026-10-01) is what that
+    cost: with several queued transcriptions on a slow machine the hotkey
+    did nothing for minutes. The microphone is closed while a result is
+    pending, so a paste interferes with nothing; what the refusal protected
+    was the overlay, and that is kept: the paste goes out, "Processing" stays
+    on screen, and nothing is painted over the job that has not finished.
+    Once the result is on screen the same call pastes that result.
     """
     settings_store = SettingsStore(tmp_path / "settings.json")
     settings_store.save(
@@ -3634,12 +3634,12 @@ def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray
 
         controller.repaste_last_transcript()
 
-        assert inserter.calls == pasted, "it pasted during a transcription in flight"
+        assert inserter.calls == [
+            *pasted,
+            ("the previous transcript.", 321, "auto"),
+        ], inserter.calls
         assert overlay.states == painted, overlay.states[len(painted) :]
-        assert tray == [
-            ("Wait for the current transcription to finish before inserting "
-             "the last transcript again.")
-        ]
+        assert tray == []
 
         release.set()
         _pump_until(app, lambda: overlay.state == "Done")
@@ -3648,9 +3648,9 @@ def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray
 
         controller.repaste_last_transcript()
 
-        assert len(inserter.calls) == len(pasted) + 1, inserter.calls
+        assert inserter.calls == [*pasted, ("the new transcript.", 321, "auto")]
         assert overlay.states[-1] == ("Done", "the new transcript.")
-        assert len(tray) == 1, tray
+        assert tray == []
     finally:
         release.set()
         controller.shutdown()

@@ -76,6 +76,12 @@ def _record_and_stop(controller):
     return controller._active_request_token
 
 
+def _capture_another_window(controller):
+    """The next recording snapshots a different target window."""
+    focus = controller._window_focus_helper
+    focus.captured, focus.captured_focus, focus.captured_caret = 111, 222, 333
+
+
 def test_failed_background_insert_emits_a_notification(monkeypatch, tmp_path):
     """The queued transcript A is produced but its paste fails."""
     controller, app, _overlay, inserter, history = _make_controller(
@@ -86,6 +92,9 @@ def test_failed_background_insert_emits_a_notification(monkeypatch, tmp_path):
     controller.background_insertion_failed.connect(messages.append)
 
     token_a = _record_and_stop(controller)
+    # B is dictated into another window: a foreground result for A's own
+    # window would join A's deferred paste instead of following it.
+    _capture_another_window(controller)
     controller.start_recording()
     # A finishes while B records, so its insert is deferred.
     controller._on_transcription_ready("transcript A", request_token=token_a)
@@ -200,6 +209,9 @@ def test_failed_coalesced_flush_counts_every_lost_transcript(
     controller._on_transcription_ready("transcript A", request_token=token_a)
     controller.stop_recording()
     token_b = controller._active_request_token
+    # C is dictated into another window, so it is not joined to the paste
+    # of A and B.
+    _capture_another_window(controller)
     controller.start_recording()
     controller._on_transcription_ready("transcript B", request_token=token_b)
     controller.stop_recording()

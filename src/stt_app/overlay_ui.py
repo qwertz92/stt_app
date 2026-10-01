@@ -24,7 +24,10 @@ from .config import (
     OVERLAY_QUEUE_MIN_HEIGHT,
     OVERLAY_STATE_COLORS,
     OVERLAY_WIDTH,
+    QUEUE_ROW_KIND_TRANSCRIPTION,
+    QUEUE_ROW_KIND_UNDELIVERED,
 )
+from .settings_dialog_helpers import ElidingLabel
 from .ui_feedback import restore_vertical_scrollbar
 
 RECORD_BUTTON_START_TEXT = "Record"
@@ -68,6 +71,19 @@ _ACTION_SLOT_CAPTIONS = ("Retry", "Cancel", "Insert")
 _QUEUE_CLEAR_BUTTON_HEIGHT = 20
 _QUEUE_CANCEL_BUTTON_WIDTH = 58
 _QUEUE_CANCEL_BUTTON_HEIGHT = 20
+# Every row button is sized for both captions, so a row of either kind has the
+# same button width and the labels beside them wrap at the same width.
+_QUEUE_ROW_BUTTON_CAPTIONS = ("Cancel", "Dismiss")
+_QUEUE_ROW_BUTTONS = {
+    QUEUE_ROW_KIND_TRANSCRIPTION: ("Cancel", "Cancel this transcription."),
+    QUEUE_ROW_KIND_UNDELIVERED: (
+        "Dismiss",
+        (
+            "Remove this transcript from the list without inserting it. "
+            "It stays in history."
+        ),
+    ),
+}
 
 
 def _fit_button_height(
@@ -121,6 +137,29 @@ def _fit_button(
     finally:
         button.setText(original)
     button.setFixedSize(max(width, widest), max(height, tallest))
+
+
+def _queue_entry(item) -> tuple[int, str, str]:
+    """One queue row as ``(token, label, kind)``; an unknown kind is a
+    transcription, the kind every caller had before waiting inserts."""
+    token, label, *rest = item
+    kind = str(rest[0]) if rest else QUEUE_ROW_KIND_TRANSCRIPTION
+    if kind not in _QUEUE_ROW_BUTTONS:
+        kind = QUEUE_ROW_KIND_TRANSCRIPTION
+    return int(token), str(label), kind
+
+
+def _queue_title(entries) -> str:
+    """Count running transcriptions and waiting inserts apart."""
+    waiting = sum(1 for _t, _l, kind in entries if kind == QUEUE_ROW_KIND_UNDELIVERED)
+    running = len(entries) - waiting
+    transcribing = f"Transcribing {running} file" + ("" if running == 1 else "s")
+    if not waiting:
+        return transcribing
+    if not running:
+        noun = "transcript" if waiting == 1 else "transcripts"
+        return f"{waiting} {noun} not inserted"
+    return f"{transcribing} · {waiting} not inserted"
 
 
 class _OverlayLanguageButton(QtWidgets.QPushButton):
@@ -1065,6 +1104,9 @@ class OverlayUI(QtWidgets.QWidget):
                 color: rgba(255,255,255,0.55);
                 border-color: rgba(255,255,255,0.2);
             }}
+            QLabel[queueRowKind="undelivered"] {{
+                color: #ffd98a;
+            }}
                 """
             )
             self._state_background = bg
@@ -1707,7 +1749,8 @@ class OverlayUI(QtWidgets.QWidget):
         self._queue_clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._queue_clear_button.setFixedHeight(_QUEUE_CLEAR_BUTTON_HEIGHT)
         self._queue_clear_button.setToolTip(
-            "Cancel all queued and running transcriptions."
+            "Cancel all queued and running transcriptions and dismiss the "
+            "transcripts that were not inserted."
         )
         self._queue_clear_button.clicked.connect(self.queue_clear_requested.emit)
         queue_header.addWidget(self._queue_title_label, 1)
@@ -1732,7 +1775,7 @@ class OverlayUI(QtWidgets.QWidget):
         queue_layout.addWidget(self._queue_scroll)
 
         self._queue_widget.setVisible(False)
-        self._queue_entries: list[tuple[int, str]] = []
+        self._queue_entries: list[tuple[int, str, str]] = []
 
     def _clear_queue_rows(self) -> None:
         while self._queue_rows_layout.count():
@@ -1743,27 +1786,32 @@ class OverlayUI(QtWidgets.QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
-    def _build_queue_row(self, token: int, label: str) -> QtWidgets.QWidget:
+    def _build_queue_row(
+        self, token: int, label: str, kind: str
+    ) -> QtWidgets.QWidget:
         row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
-        text_label = QtWidgets.QLabel(str(label))
+        # One line, elided, with the whole label in its tooltip: wrapped, a
+        # long label grew its row, and a label that changes in place -- a
+        # failed re-paste turns "Not inserted" into "Possibly inserted, check
+        # the window" -- grew the rows from 32 to 40 px and the overlay from
+        # 230 to 246 px under the user's eyes.
+        text_label = ElidingLabel(str(label))
         text_label.setTextFormat(QtCore.Qt.PlainText)
-        text_label.setWordWrap(True)
-        text_label.setToolTip(str(label))
+        # The stylesheet colours a waiting insert apart from a transcription;
+        # colour only, so the row's size never depends on its kind.
+        text_label.setProperty("queueRowKind", kind)
         text_label.setMinimumWidth(0)
-        text_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
-        )
-        cancel_button = QtWidgets.QPushButton("Cancel")
+        caption, tooltip = _QUEUE_ROW_BUTTONS[kind]
+        cancel_button = QtWidgets.QPushButton(caption)
         cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
         cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
         cancel_button.setFixedSize(
             _QUEUE_CANCEL_BUTTON_WIDTH, _QUEUE_CANCEL_BUTTON_HEIGHT
         )
-        cancel_button.setToolTip("Cancel this transcription.")
+        cancel_button.setToolTip(tooltip)
         cancel_button.clicked.connect(
             lambda _checked=False, t=int(token): self.queue_cancel_requested.emit(t)
         )
@@ -1774,10 +1822,14 @@ class OverlayUI(QtWidgets.QWidget):
     def set_transcription_queue(self, items) -> None:
         """Render the in-flight transcription queue with per-item cancel.
 
-        ``items`` is a list of ``(token, label)`` pairs. An empty list hides
+        ``items`` is a list of ``(token, label)`` or ``(token, label, kind)``
+        entries; ``kind`` is `QUEUE_ROW_KIND_TRANSCRIPTION` (the default, a
+        Cancel button) or `QUEUE_ROW_KIND_UNDELIVERED` (a finished transcript
+        that was not inserted, a Dismiss button). Both buttons emit
+        `queue_cancel_requested` with the row's token. An empty list hides
         the queue panel entirely.
         """
-        entries = [(int(token), str(label)) for token, label in (items or [])]
+        entries = [_queue_entry(item) for item in (items or [])]
         if entries == self._queue_entries:
             # Nothing about the queue changed, and a rebuild is not free: it
             # deletes every row widget, so the panel scrolls back to the top
@@ -1790,12 +1842,9 @@ class OverlayUI(QtWidgets.QWidget):
         previous_scroll = scroll_bar.value() if self._queue_visible else 0
         self._clear_queue_rows()
         if entries:
-            count = len(entries)
-            self._queue_title_label.setText(
-                f"Transcribing {count} file" + ("" if count == 1 else "s")
-            )
-            for token, label in entries:
-                row = self._build_queue_row(token, label)
+            self._queue_title_label.setText(_queue_title(entries))
+            for token, label, kind in entries:
+                row = self._build_queue_row(token, label, kind)
                 self._queue_rows_layout.addWidget(row)
                 # Qt shows a widget added to a visible parent only once the
                 # event loop delivers its ShowToParent event, and a hidden
@@ -1824,7 +1873,7 @@ class OverlayUI(QtWidgets.QWidget):
                         cancel_button,
                         _QUEUE_CANCEL_BUTTON_WIDTH,
                         _QUEUE_CANCEL_BUTTON_HEIGHT,
-                        "Cancel",
+                        *_QUEUE_ROW_BUTTON_CAPTIONS,
                     )
             self._queue_visible = True
             self._queue_widget.setVisible(True)

@@ -19,6 +19,7 @@ from .config import (
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
     SESSION_START_LOG_MARKER,
     TRAY_CANCEL_ACTION_LABEL,
+    TRAY_REPASTE_ACTION_LABEL,
 )
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
@@ -134,7 +135,18 @@ def _connect_tray_notifications(tray_icon, controller) -> None:
     controller.background_insertion_failed.connect(
         _notify_background_insertion_failure
     )
+    def _notify_clipboard_restore_failure(message: str) -> None:
+        # The paste itself was reported long before; this is the user's own
+        # clipboard content, which they will reach for next.
+        tray_icon.showMessage(
+            "Clipboard not restored",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
     controller.busy_overlay_error.connect(_notify_busy_overlay_error)
+    controller.clipboard_restore_failed.connect(_notify_clipboard_restore_failure)
 
 
 def run() -> int:
@@ -346,7 +358,7 @@ def _create_tray_icon(
     cancel_action = menu.addAction(TRAY_CANCEL_ACTION_LABEL)
 
     copy_last_action = menu.addAction("Copy transcript")
-    repaste_action = menu.addAction("Insert transcript again")
+    repaste_action = menu.addAction(TRAY_REPASTE_ACTION_LABEL)
     copy_diag_action = menu.addAction("Copy diagnostics")
     check_updates_action = menu.addAction("Check for updates")
 

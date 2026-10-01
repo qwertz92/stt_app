@@ -1129,6 +1129,7 @@ class _NotificationSignals(QtCore.QObject):
     background_transcription_failed = QtCore.Signal(str)
     background_insertion_failed = QtCore.Signal(str)
     busy_overlay_error = QtCore.Signal(str)
+    clipboard_restore_failed = QtCore.Signal(str)
 
 
 class _TrayMessages:
@@ -1165,11 +1166,13 @@ def test_an_error_the_overlay_cannot_show_reaches_the_tray():
     controller.busy_overlay_error.emit("The overlay opacity was not saved.")
     controller.background_transcription_failed.emit("Recording 12:00:00 failed: x")
     controller.background_insertion_failed.emit("Recording 12:00:00 was not pasted.")
+    controller.clipboard_restore_failed.emit("Your clipboard could not be put back.")
 
     assert tray.messages == [
         (APP_DISPLAY_NAME, "The overlay opacity was not saved."),
         ("Transcription failed", "Recording 12:00:00 failed: x"),
         ("Transcript not inserted", "Recording 12:00:00 was not pasted."),
+        ("Clipboard not restored", "Your clipboard could not be put back."),
     ]
 
 

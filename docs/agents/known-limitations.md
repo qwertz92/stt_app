@@ -109,9 +109,46 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **One insert offer at a time; a later failure replaces an earlier one.** In
   a flush, an earlier pre-keystroke failure (Insert useful) is replaced by a
   later post-keystroke one (Insert withheld); the earlier text is in history
-  and the tray. A tray re-paste of the whole dictation failing before its
-  keystroke replaces a streaming tail's offer, whose Insert then re-pastes the
-  already-streamed prefix.
+  and the tray, and since 2026-10-01 stays listed as a queue-panel row that
+  the re-paste inserts. A tray re-paste of the whole dictation failing before
+  its keystroke replaces a streaming tail's offer, whose Insert then re-pastes
+  the already-streamed prefix.
+- **The paste pace is target-agnostic**: a queued paste into another window
+  also waits up to `CLIPBOARD_RESTORE_DELAY_S` after the previous keystroke
+  (one clipboard). Only the last SendInput keystroke is tracked.
+- **Paced pastes and waiting-insert rows end with the app**: shutdown drops
+  them (the texts stay in history), and a streaming finalize tail whose
+  insert fails gets an Insert offer but no row. A foreground result without
+  a job is not paced.
+- **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
+  a NULL owner, so a clipboard manager can still close it under us; three
+  reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
+  and one paste runs up to four (capture, write, read-back, changed-after-set
+  read), so about 1.3 s before it reports contention.
+- **A close lost between the text write and the Win+V exclusion formats
+  publishes the transcript without them**: a clipboard manager that closes
+  our open right after `SetClipboardText` sees the clipboard with the text
+  alone, and Windows may list it in Win+V history; the exclusion sets that
+  follow fail and log `clipboard_history_exclusion_partial`. Not closed: the
+  formats cannot be set before the text (`EmptyClipboard` would drop them),
+  and the race is the 1418 one above. Separately and on purpose, the
+  `copy_on_error` fallback (`QGuiApplication.clipboard().setText`) leaves a
+  failed paste's transcript on the clipboard as an ordinary copy, so it is
+  in Win+V: the user is meant to paste it by hand.
+- **The streaming finalize tail is not paced** (from code reading,
+  2026-10-01, not reproduced in a test): it pastes at once in
+  `_on_transcription_ready`. Trigger: a batch result queued before a switch
+  to streaming finishes during the streaming recording, waits for it, and
+  reaches the finalize's flush. Inside the last live insert's restore window
+  it is held by the pace and pasted after the tail (token order inverted);
+  outside it, it pastes and the tail follows inside its restore window.
+  Holding the tail would route the append-only finalize through the paste
+  queue, a larger change; the inverted order keeps the streamed dictation in
+  one piece.
+- **A transcript left on the clipboard after an abandoned restore**
+  (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
+  restoring the user's own content may add their copy to Win+V again, as
+  before.
 - **`close_if_idle` is not bounded against its own closes**: a
   `request_restart` after its generation bump reopens and each own close
   re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
@@ -193,3 +230,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   wait (`start /wait`, `-Wait`). When the job cannot be assigned (a nested
   job that forbids it), the taskkill fallback cannot reach an orphan whose
   parent exited, so such a run times out even though the token arrived.
+- **A resumed restore can run two timer chains for one record** (P4,
+  2026-10-01, review of a404479). When the deferred timer sits in its
+  readiness probe (outside the lock) while a new paste takes the record over,
+  fails without touching the clipboard and resumes it, both the old run and
+  the new timer act on the record. It is never restored twice (the first
+  success clears it), but the retry budget runs out about a second early. A
+  per-record chain generation checked under the lock would close it.

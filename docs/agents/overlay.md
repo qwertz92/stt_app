@@ -69,6 +69,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   78x24). It runs after the first `set_state` (stylesheet padding counts only
   then), and `_balance_header_flanks` runs after it. Each entry lists every
   caption its button shows; the Cancel/Retry/Insert slot fits the widest.
+- **The queue panel has two row kinds** (2026-10-01): `(token, label)` or
+  `(token, label, kind)`, kind `QUEUE_ROW_KIND_TRANSCRIPTION` (Cancel) or
+  `QUEUE_ROW_KIND_UNDELIVERED` (Dismiss, a transcript that was not
+  inserted). Every row button is fitted for both captions
+  (`_QUEUE_ROW_BUTTON_CAPTIONS`), so kinds never differ in button width;
+  every row label is one line (`ElidingLabel`, the whole label in its
+  tooltip), and the controller puts each row's status ("Pending insert",
+  "Not inserted", "Possibly inserted, check the window") before the
+  provider, model or preview, so eliding never hides it; a label that
+  changes in place never changes a row's height
+  (wrapped, the long "Possibly inserted, check the window" label grew rows
+  from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
+  differs by colour only
+  (`QLabel[queueRowKind="undelivered"]`). The title counts the two apart
+  (`_queue_title`: "Transcribing N files", "N transcripts not inserted", or
+  both joined by " · "). Both buttons emit `queue_cancel_requested`.
 - **A dragged overlay is clamped from where the user put it**, not from
   `self.pos()` (a tall result pushed it up for good). The remembered position
   and `_manual_positioned` have one writer, `_claim_manual_position`. A

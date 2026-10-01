@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import math
 import os
 import re
 import subprocess
@@ -50,6 +51,8 @@ from .config import (
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
+    QUEUE_ROW_KIND_TRANSCRIPTION,
+    QUEUE_ROW_KIND_UNDELIVERED,
     RECORDINGS_MAX_COUNT_UNLIMITED,
     REMOTE_BATCH_MAX_PART_SECONDS,
     SILERO_BATCH_MAX_SCAN_S,
@@ -70,6 +73,7 @@ from .config import (
     STREAMING_REVISION_WORD_WINDOW,
     STREAMING_STABLE_WORD_GUARD,
     TRAY_CANCEL_ACTION_LABEL,
+    TRAY_REPASTE_ACTION_LABEL,
     VAD_ENERGY_THRESHOLD_MIN,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
@@ -165,6 +169,21 @@ def _local_model_display_name(model_name: str) -> str:
     return local_model_short_label(model_name)
 
 
+# How much of a transcript a "Not inserted" queue row quotes, enough to tell
+# the rows apart; the whole text is in history and is what the re-paste pastes.
+_UNDELIVERED_PREVIEW_CHARS = 48
+
+
+def _pace_ms(wait_s: float) -> int:
+    """A paste-pace wait as whole milliseconds, rounded up, at least 1.
+
+    Rounded to the microsecond first: the wait is a difference of two
+    monotonic readings, and 1.1 s arrives as 1.1000000000000227, which a
+    bare ceiling turns into 1101 ms.
+    """
+    return max(1, math.ceil(round(wait_s * 1000.0, 3)))
+
+
 def _join_transcripts(texts: list[str]) -> str:
     """Join transcripts for one paste, separating them by a single space
     unless a boundary already carries whitespace."""
@@ -234,6 +253,50 @@ class _TranscriptionJob:
     # later takeover of the overlay (a failed queued paste) can move the
     # Edit target together with the text it shows.
     history_entry: TranscriptHistoryEntry | None = None
+    # True once this finished result has been held back by the paste pace
+    # (`_flush_deferred_background_results`): it waits only for the end of
+    # the previous paste's restore window, never again for the transcription
+    # that may be running by then -- it may be the foreground result itself.
+    paste_paced: bool = False
+    # True while the pace is the only thing holding this result back: it is
+    # pasted within `CLIPBOARD_RESTORE_DELAY_S`, so the queue panel does not
+    # list it and Clear queue or its Cancel cannot drop it. Cleared when a
+    # recording or a window defers it again, which lists it as before.
+    pace_held: bool = False
+
+
+@dataclass(slots=True)
+class _UndeliveredInsert:
+    """A finished transcript whose paste failed or could not be confirmed.
+
+    Kept until it is inserted or dismissed, one per failed paste, and shown
+    as a row of the overlay's queue panel. The single Insert offer
+    (`_insert_action_text`) held one text: a later failure replaced it, the
+    next recording start cleared it, and while a transcription ran it was
+    never painted at all -- with several queued results on a slow machine
+    the owner noticed only later which transcripts were missing (field
+    report, 2026-10-01). The text is in history either way.
+    """
+
+    # Negative, so a row's id can never be a live job's token.
+    row_id: int
+    text: str
+    # The paste keystroke went out and only the cleanup failed: listed, but
+    # never pasted again by the re-paste (no double paste).
+    may_have_pasted: bool
+    created_at: datetime
+    history_entry: TranscriptHistoryEntry | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingRepaste:
+    """A re-paste the user asked for inside the previous paste's restore
+    window, held for `_on_paste_pace_timeout` like every other paste."""
+
+    text: str
+    display_entry: object
+    undelivered: tuple[_UndeliveredInsert, ...]
+    offer_rows: tuple[_UndeliveredInsert, ...] = ()
 
 
 class _TranscriberRuntimeLease:
@@ -420,6 +483,10 @@ class DictationController(QtCore.QObject):
     # An error raised while a recording or a transcription owns the overlay:
     # shown as a tray notification, never painted over the live session.
     busy_overlay_error = QtCore.Signal(str)
+    # The user's clipboard could not be put back after a paste, even after the
+    # inserter's retries. Emitted from the restore's timer thread; the queued
+    # connection carries it to the tray on the Qt thread.
+    clipboard_restore_failed = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
@@ -447,6 +514,11 @@ class DictationController(QtCore.QObject):
         self._repaste_hotkey_manager = repaste_hotkey_manager
         self._overlay = overlay
         self._text_inserter = text_inserter
+        register_restore_failure = getattr(
+            text_inserter, "set_restore_failure_handler", None
+        )
+        if callable(register_restore_failure):
+            register_restore_failure(self.clipboard_restore_failed.emit)
         self._logger = logger
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
         self._secret_store = secret_store
@@ -515,7 +587,23 @@ class DictationController(QtCore.QObject):
         self._repaste_hotkey_notice: str | None = None
         self._target_window_handle: int | None = None
         self._target_focus_signature: FocusSignature | None = None
-        self._last_transcript: str = ""
+        # What the overlay shows and Copy/Edit act on; a property, because
+        # every write of it also retires `_delivered_after_shown` below.
+        self._last_transcript = ""
+        # The text a background paste delivered after the shown transcript,
+        # with its single history entry or None for a coalesced paste. The
+        # re-paste pastes this one: it is the last text that reached a
+        # window, while Copy and Edit keep the shown transcript.
+        self._delivered_after_shown: tuple[str, TranscriptHistoryEntry | None] | None = (
+            None
+        )
+        # Finished transcripts whose paste failed or could not be confirmed,
+        # oldest first; see `_UndeliveredInsert`.
+        self._undelivered_inserts: list[_UndeliveredInsert] = []
+        self._undelivered_row_counter = 0
+        # The message the last failed `_insert_text_at_target` reported, for a
+        # caller that has to carry it to the tray instead of the overlay.
+        self._last_insert_error_text = ""
         # What the overlay's Insert action re-pastes: the text of the insert
         # that failed, which is not always the last transcript -- a streaming
         # finalize inserts only the tail past `committed_text`. Written by the
@@ -527,6 +615,21 @@ class DictationController(QtCore.QObject):
         # that create it: `_last_insert_may_have_pasted` below is per insert
         # attempt, and one flush pastes several queued transcripts.
         self._insert_offer_may_have_pasted = False
+        # The listed rows the offer's text was built from, so the overlay's
+        # Insert retires those rows and no other: two dictations with the
+        # same text are two rows. Several when a re-paste of several waiting
+        # rows failed and painted the offer for their joined text.
+        self._insert_action_rows: tuple[_UndeliveredInsert, ...] = ()
+        # The job whose result is the shown transcript, so a re-paste of it
+        # can tell that this very result is still held in the paste queue.
+        self._shown_transcript_token: int | None = None
+        # The listed row of the shown transcript's own failed paste, so the
+        # re-paste fallback refuses exactly that dictation when its keystroke
+        # may have gone out, and not another one with the same text.
+        self._shown_transcript_row: _UndeliveredInsert | None = None
+        # Whether the last `_insert_text_at_target` call painted the Insert
+        # offer, so the caller can attach the rows that failure is about.
+        self._last_insert_offered = False
         # `(state, detail)` the offer painter wrote last, None once a plain
         # status replaced it. The preload progress poll compares it with
         # what the overlay shows, to tell the painter's own Error from a
@@ -617,6 +720,15 @@ class DictationController(QtCore.QObject):
         self._preload_progress_timer = QtCore.QTimer(self)
         self._preload_progress_timer.setInterval(600)
         self._preload_progress_timer.timeout.connect(self._on_preload_progress_poll)
+        # Flushes the results the paste pace held back, at the end of the
+        # previous paste's clipboard-restore window.
+        self._paste_pace_timer = QtCore.QTimer(self)
+        self._paste_pace_timer.setSingleShot(True)
+        self._paste_pace_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
+        self._paste_pace_timer.timeout.connect(self._on_paste_pace_timeout)
+        # One re-paste (tray, hotkey or the overlay's Insert) asked for while
+        # the restore window was open; a later request replaces it.
+        self._pending_repaste: _PendingRepaste | None = None
         self._preload_target_model: str | None = None
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
@@ -687,6 +799,10 @@ class DictationController(QtCore.QObject):
         self._flush_pending_clipboard_restore()
         self._release_all_global_hotkeys()
         self._focus_poll_timer.stop()
+        # A paced paste still waiting is dropped with the process; its text
+        # is in history like every delivered transcript.
+        self._paste_pace_timer.stop()
+        self._pending_repaste = None
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
         listener = self._audio_device_listener
@@ -758,6 +874,7 @@ class DictationController(QtCore.QObject):
         self._request_audio_by_token.clear()
         self._jobs.clear()
         self._deferred_background_results.clear()
+        self._undelivered_inserts.clear()
         # Every other teardown step above carries its own guard; these did
         # not, so a failure in the first of them skipped all three executor
         # shutdowns and left the transcription, stream-finalize and preload
@@ -3107,6 +3224,21 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to append transcript history")
             return None
 
+    @property
+    def _last_transcript(self) -> str:
+        return self._shown_transcript
+
+    @_last_transcript.setter
+    def _last_transcript(self, text: str) -> None:
+        # A newly shown transcript is also the newest delivered text, so a
+        # background delivery recorded before it no longer decides what the
+        # re-paste pastes. Every writer -- the foreground result, a rescued
+        # partial, an edit, a takeover -- goes through here.
+        self._shown_transcript = text
+        self._delivered_after_shown = None
+        self._shown_transcript_token = None
+        self._shown_transcript_row = None
+
     def _set_last_transcript(
         self,
         text: str,
@@ -3392,8 +3524,8 @@ class DictationController(QtCore.QObject):
         # this text and wrote the edit into the previous dictation's entry.
         self._set_last_transcript(partial, entry)
 
+    @staticmethod
     def _queue_job_label(
-        self,
         job: _TranscriptionJob,
         *,
         rank: int,
@@ -3408,23 +3540,158 @@ class DictationController(QtCore.QObject):
             rank_label = f"{rank_label} Newest"
         timestamp = job.created_at.strftime("%H:%M:%S")
         provider = f"{engine} · {model}" if model else engine
-        status = " · Pending insert" if job.insertion_deferred else ""
-        return f"{rank_label} · {timestamp} · {provider}{status}"
+        # Before the provider and model: the overlay row is one elided line,
+        # and with real model names a status at the end was cut off -- the one
+        # word that tells a finished result waiting to be pasted from a
+        # running transcription.
+        status = "Pending insert · " if job.insertion_deferred else ""
+        return f"{rank_label} · {status}{timestamp} · {provider}"
+
+    @staticmethod
+    def _undelivered_row_label(entry: _UndeliveredInsert) -> str:
+        """One queue row for a transcript that did not reach its window.
+
+        Sent as `QUEUE_ROW_KIND_UNDELIVERED`, so the overlay gives the row a
+        Dismiss button and its own colour; that button emits the same
+        `queue_cancel_requested`, which `cancel_queued_transcription` answers
+        by dismissing the row.
+        """
+        preview = " ".join(entry.text.split())
+        if len(preview) > _UNDELIVERED_PREVIEW_CHARS:
+            preview = preview[: _UNDELIVERED_PREVIEW_CHARS - 3].rstrip() + "..."
+        status = (
+            "Possibly inserted, check the window"
+            if entry.may_have_pasted
+            else "Not inserted"
+        )
+        timestamp = entry.created_at.strftime("%H:%M:%S")
+        return f'{status} · {timestamp} · "{preview}"'
 
     def _update_queue_overlay(self) -> None:
         setter = getattr(self._overlay, "set_transcription_queue", None)
         if not callable(setter):
             return
-        visible_jobs = [job for job in self._jobs.values() if not job.aborting]
+        # A result the pace alone holds is pasted within the restore delay;
+        # listed, it flashed the panel open and shut under a "Transcribing"
+        # title for a paste the overlay already showed as Done.
+        visible_jobs = [
+            job
+            for job in self._jobs.values()
+            if not job.aborting and not job.pace_held
+        ]
         total = len(visible_jobs)
         items = [
             (
                 job.token,
                 self._queue_job_label(job, rank=index, total=total),
+                QUEUE_ROW_KIND_TRANSCRIPTION,
             )
             for index, job in enumerate(visible_jobs, start=1)
         ]
+        items.extend(
+            (
+                entry.row_id,
+                self._undelivered_row_label(entry),
+                QUEUE_ROW_KIND_UNDELIVERED,
+            )
+            for entry in self._undelivered_inserts
+        )
         setter(items)
+
+    # -- Transcripts that did not reach their window --------------------------
+
+    def _record_undelivered_insert(
+        self,
+        text: str,
+        *,
+        may_have_pasted: bool,
+        created_at: datetime,
+        history_entry: TranscriptHistoryEntry | None,
+    ) -> _UndeliveredInsert | None:
+        """Keep a failed paste listed until it is inserted or dismissed."""
+        transcript = text.strip()
+        if not transcript or self._shutdown_started:
+            return None
+        self._undelivered_row_counter += 1
+        entry = _UndeliveredInsert(
+            row_id=-self._undelivered_row_counter,
+            text=transcript,
+            may_have_pasted=may_have_pasted,
+            created_at=created_at,
+            history_entry=history_entry,
+        )
+        self._undelivered_inserts.append(entry)
+        self._logger.info(
+            "undelivered_insert_recorded row=%d may_have_pasted=%s chars=%d "
+            "waiting=%d",
+            -self._undelivered_row_counter,
+            may_have_pasted,
+            len(transcript),
+            len(self._insertable_undelivered()),
+        )
+        self._update_queue_overlay()
+        return entry
+
+    def _insertable_undelivered(self) -> list[_UndeliveredInsert]:
+        """The waiting transcripts the re-paste may paste: never one whose
+        keystroke already went out."""
+        return [entry for entry in self._undelivered_inserts if not entry.may_have_pasted]
+
+    def _still_insertable(
+        self, rows: Sequence[_UndeliveredInsert]
+    ) -> tuple[_UndeliveredInsert, ...]:
+        """Those of `rows` still listed and insertable, by identity."""
+        insertable = self._insertable_undelivered()
+        return tuple(
+            row for row in rows if any(row is entry for entry in insertable)
+        )
+
+    def _retire_undelivered(self, entries: Sequence[_UndeliveredInsert]) -> None:
+        """Drop exactly the rows a successful paste was built from.
+
+        By identity, never by text: two dictations of "okay." are two rows,
+        and the overlay's Insert on one of them retired both (the 2026-10-01
+        review). A "possibly inserted" row is never among them -- nothing
+        pastes it -- so it stays listed until the user dismisses it.
+        """
+        delivered = {id(entry) for entry in entries}
+        before = len(self._undelivered_inserts)
+        self._undelivered_inserts = [
+            entry
+            for entry in self._undelivered_inserts
+            if id(entry) not in delivered
+        ]
+        if len(self._undelivered_inserts) != before:
+            self._update_queue_overlay()
+
+    def _dismiss_undelivered(self, row_id: int | None = None) -> bool:
+        """Dismiss one listed row, or every row when ``row_id`` is None."""
+        before = len(self._undelivered_inserts)
+        self._undelivered_inserts = [
+            entry
+            for entry in self._undelivered_inserts
+            if row_id is not None and entry.row_id != row_id
+        ]
+        dismissed = before - len(self._undelivered_inserts)
+        if dismissed:
+            self._logger.info("undelivered_insert_dismissed rows=%d", dismissed)
+            self._update_queue_overlay()
+        return bool(dismissed)
+
+    def _undelivered_hint(self) -> str:
+        """How many transcripts wait, and how to insert them; "" for none."""
+        count = len(self._insertable_undelivered())
+        if not count:
+            return ""
+        hotkey = str(getattr(self._settings, "repaste_hotkey", "") or "").strip()
+        how = f'choose "{TRAY_REPASTE_ACTION_LABEL}" in the tray menu'
+        # Named only while it is registered: a combination another program
+        # holds does nothing when pressed.
+        if hotkey and self._repaste_hotkey_registration_ok:
+            how = f"press {hotkey} or {how}"
+        noun = "transcript is" if count == 1 else "transcripts are"
+        them = "it" if count == 1 else "them"
+        return f"{count} {noun} waiting to be inserted: {how} to insert {them}."
 
     def _mark_job_recording_canceled(
         self, job: _TranscriptionJob, *, foreground: bool
@@ -3532,9 +3799,18 @@ class DictationController(QtCore.QObject):
         """Cancel a single queued/running transcription from the overlay.
 
         The compute is stopped where supported; a transcript that still finishes
-        is kept in history rather than discarded.
+        is kept in history rather than discarded. On a "Not inserted" row the
+        same button dismisses the row; its transcript stays in history.
         """
-        if request_token not in self._jobs:
+        if self._dismiss_undelivered(request_token):
+            return
+        job = self._jobs.get(request_token)
+        if job is None:
+            return
+        if job.pace_held:
+            # Not listed, so only a row the panel showed a moment earlier
+            # can ask; the overlay already shows this paste as Done.
+            self._logger.info("queue_cancel_ignored_pace_held token=%d", request_token)
             return
         was_active = request_token == self._active_request_token
         self._request_job_stop(
@@ -3570,9 +3846,13 @@ class DictationController(QtCore.QObject):
         the second one into the focused window (measured: `transcript B.`),
         while the first, reached before the flush, was discarded. Stopping
         every job first removes each deferred entry with its job, so there is
-        nothing left for a flush to deliver.
+        nothing left for a flush to deliver. The "Not inserted" rows go with
+        the rest of the panel: their transcripts stay in history.
         """
-        tokens = list(self._jobs.keys())
+        self._dismiss_undelivered()
+        # A result only the pace holds is not in the panel being cleared: it
+        # shows as Done and is pasted when the restore window ends.
+        tokens = [token for token, job in self._jobs.items() if not job.pace_held]
         had_foreground = self._active_request_token in tokens
         for token in tokens:
             if token not in self._jobs:
@@ -5343,13 +5623,27 @@ class DictationController(QtCore.QObject):
             self._retire_retry_audio_delivered_by(request_token, job)
 
         self._finish_transcription_job(request_token)
+        # A batch result with a job may join the deferred results bound for
+        # its own window: the flush below holds that group back instead of
+        # pasting it, and the result is appended to it further down, so the
+        # whole group goes out as one paste. A second paste right after the
+        # first, inside the same call, overwrote a clipboard the target may
+        # not have read yet.
+        joins_paste_queue = job is not None and job.mode != "streaming"
+        hold_key = (
+            self._paste_group_key(
+                job, single_group=self._insert_target_is_current_window()
+            )
+            if joins_paste_queue
+            else None
+        )
         # A foreground result is about to claim the overlay. A deferred insert
         # that fails inside this flush must therefore not paint an Error state
         # that is overwritten a few statements later — it would flash and be
         # gone. Its notification still fires, so the failure is never silent.
         self._foreground_delivery_pending = True
         try:
-            self._flush_deferred_background_results()
+            self._flush_deferred_background_results(hold_key=hold_key)
         finally:
             self._foreground_delivery_pending = False
 
@@ -5409,6 +5703,7 @@ class DictationController(QtCore.QObject):
         # already gets this right.
         if text.strip():
             self._last_transcript = text
+            self._shown_transcript_token = job.token if job is not None else None
 
         if not text.strip():
             self._mark_last_recording_completed(job, text)
@@ -5421,7 +5716,7 @@ class DictationController(QtCore.QObject):
         used_settings = (
             self._last_transcribe_settings or stream_settings or self._settings
         )
-        self._append_transcript_history(
+        history_entry = self._append_transcript_history(
             text,
             used_settings,
             session_mode,
@@ -5429,7 +5724,21 @@ class DictationController(QtCore.QObject):
             source_audio_path=(job.source_audio_path if job is not None else ""),
         )
 
+        if (
+            joins_paste_queue
+            and session_mode != "streaming"
+            and (
+                self._deferred_paste_group_exists(hold_key)
+                or self._paste_pace_wait_s() > 0
+            )
+        ):
+            self._deliver_foreground_through_paste_queue(job, text, history_entry)
+            return
+
         if session_mode == "streaming":
+            # Exempt from the paste pace: the live inserts pace themselves
+            # through the locked prefix, and this tail is the rest of a
+            # dictation whose words are already in the document.
             final_insertion, final_text = self._stream_text_state.finalize_append_only(
                 text
             )
@@ -5452,6 +5761,22 @@ class DictationController(QtCore.QObject):
                 target_handle=target_handle,
                 target_signature=target_signature,
             ):
+                # The Error with its Insert is replaced by the next
+                # recording; the row keeps the transcript visible after that.
+                offered = self._last_insert_offered
+                entry = self._record_undelivered_insert(
+                    text,
+                    may_have_pasted=self._last_insert_may_have_pasted,
+                    created_at=(
+                        job.created_at
+                        if job is not None
+                        else datetime.now().astimezone()
+                    ),
+                    history_entry=history_entry,
+                )
+                if offered and entry is not None:
+                    self._insert_action_rows = (entry,)
+                self._shown_transcript_row = entry
                 self._reveal_overlay_result(is_error=True)
                 self._mark_last_recording_completed(job, text)
                 self._last_transcribe_settings = None
@@ -5469,6 +5794,135 @@ class DictationController(QtCore.QObject):
         self._mark_last_recording_completed(job, text)
         self._last_transcribe_settings = None
         self._reset_streaming_state()
+
+    def _deliver_foreground_through_paste_queue(
+        self,
+        job: _TranscriptionJob,
+        text: str,
+        history_entry: TranscriptHistoryEntry | None,
+    ) -> None:
+        """Show a foreground result now and paste it with the paste queue.
+
+        Taken when deferred results for the same window are waiting, or when
+        the previous paste's restore window is still open. Everything the
+        user sees happens now -- Done with this result, the history entry,
+        Copy/Edit on it -- and only the paste joins the queue: one paste with
+        the waiting results, at once or at the end of the window. A failed
+        joined paste takes the coalesced queue paste's road
+        (`_report_background_insertion_failure`): the Error shows, copies and
+        offers Insert for the joined text, and Edit refuses.
+
+        `keep_transcript_in_clipboard` is not applied separately here: the
+        paste itself skips the restore then, so the clipboard ends up with
+        the text that was pasted, the joined one when others went with it.
+        """
+        job.history_entry = history_entry
+        job.insertion_deferred = True
+        # A foreground result waits for nothing but the restore window: a
+        # transcription started meanwhile must not hold it back.
+        job.paste_paced = True
+        self._jobs[job.token] = job
+        self._deferred_background_results.append((job, text))
+        self._overlay.set_state("Done", text)
+        self._reveal_overlay_result(is_error=False)
+        self._mark_last_recording_completed(job, text)
+        self._last_transcribe_settings = None
+        self._reset_streaming_state()
+        self._flush_deferred_background_results()
+
+    # -- Paste pace -----------------------------------------------------------
+
+    @staticmethod
+    def _paste_group_key(
+        job: _TranscriptionJob, *, single_group: bool
+    ) -> tuple[object, object]:
+        """The window a deferred result is pasted into, as the coalescing key.
+
+        With current-window insertion every result goes to the same (current)
+        target, so one key covers them all.
+        """
+        if single_group:
+            return (None, None)
+        return (job.target_handle, job.target_signature)
+
+    def _deferred_paste_group_exists(self, key: tuple[object, object] | None) -> bool:
+        if key is None:
+            return False
+        single_group = self._insert_target_is_current_window()
+        return any(
+            self._paste_group_key(job, single_group=single_group) == key
+            for job, _text in self._deferred_background_results
+        )
+
+    def _paste_pace_wait_s(self) -> float:
+        """Seconds until the previous paste's clipboard-restore window ends.
+
+        Read from the inserter, which knows when its last SendInput keystroke
+        went out (`TextInserter.paste_pace_remaining_s`), rather than from a
+        second clock here. 0.0 when it cannot say: an inserter without the
+        method, one that raised, or an answer that is not a finite positive
+        number -- pacing is a guard on top of the paste, never a reason to
+        hold one back for good.
+        """
+        reader = getattr(self._text_inserter, "paste_pace_remaining_s", None)
+        if not callable(reader):
+            return 0.0
+        try:
+            remaining = float(reader())
+        except Exception:
+            self._logger.exception("Could not read the paste pace")
+            return 0.0
+        if not math.isfinite(remaining) or remaining <= 0.0:
+            return 0.0
+        return remaining
+
+    @QtCore.Slot()
+    def _on_paste_pace_timeout(self) -> None:
+        """The restore window ended: paste what the pace held back.
+
+        Held results first, in token order, then a re-paste the user asked
+        for meanwhile -- which the flush's own paste may hold again for one
+        more window.
+        """
+        self._paste_pace_timer.stop()
+        if self._shutdown_started:
+            return
+        with self._overlay_batch():
+            self._flush_deferred_background_results()
+            self._run_pending_repaste()
+
+    def _run_pending_repaste(self) -> None:
+        pending = self._pending_repaste
+        if pending is None:
+            return
+        self._pending_repaste = None
+        text = pending.text
+        display_entry = pending.display_entry
+        undelivered = pending.undelivered
+        if undelivered:
+            # Rows dismissed or delivered meanwhile are not pasted.
+            still_waiting = [
+                entry
+                for entry in self._insertable_undelivered()
+                if any(entry is requested for requested in undelivered)
+            ]
+            if not still_waiting:
+                self._logger.info("repaste_dropped reason=rows_gone")
+                return
+            if len(still_waiting) != len(undelivered):
+                text = _join_transcripts([entry.text for entry in still_waiting])
+                display_entry = (
+                    still_waiting[0].history_entry if len(still_waiting) == 1 else None
+                )
+            undelivered = tuple(still_waiting)
+        # Rows dismissed meanwhile drop out: the Insert still pastes its text.
+        offer_rows = self._still_insertable(pending.offer_rows)
+        self._repaste(
+            text,
+            display_entry=display_entry,
+            undelivered=undelivered,
+            offer_rows=offer_rows,
+        )
 
     def _handle_background_transcription_ready(
         self,
@@ -5524,7 +5978,15 @@ class DictationController(QtCore.QObject):
                     job.model,
                 )
                 return False
-            self._insert_background_transcription(job, text)
+            # Through the deferred queue rather than a paste of its own: the
+            # flush delivers it at once unless the previous paste's restore
+            # window is still open, and then holds it back and joins it with
+            # whatever else arrives for the same window. The flush finishes
+            # the job itself, so the caller must not.
+            job.insertion_deferred = True
+            self._deferred_background_results.append((job, text))
+            self._flush_deferred_background_results()
+            return False
         return True
 
     def _should_defer_background_insertion(
@@ -5638,6 +6100,14 @@ class DictationController(QtCore.QObject):
             show_overlay_error=False,
         )
         if inserted:
+            # The last text that reached a window, which the re-paste pastes
+            # while the overlay keeps showing the foreground transcript. A
+            # coalesced paste delivered its joined text and has no single
+            # history entry.
+            self._delivered_after_shown = (
+                text,
+                job.history_entry if job_count == 1 else None,
+            )
             self._play_completion_beep()
             return True, False
         claimed = self._report_background_insertion_failure(
@@ -5695,6 +6165,19 @@ class DictationController(QtCore.QObject):
                 f"{identity} transcribed but could not be inserted. "
                 "The text is saved in history."
             )
+        # Listed until it is inserted or dismissed, whatever arrives after
+        # it: the overlay's single offer below is replaced by the next
+        # failure and the next recording, and is not painted at all while a
+        # session owns the overlay.
+        entry = self._record_undelivered_insert(
+            text,
+            may_have_pasted=may_have_pasted,
+            created_at=job.created_at,
+            history_entry=job.history_entry if job_count == 1 else None,
+        )
+        hint = self._undelivered_hint()
+        if hint:
+            message = f"{message} {hint}"
         self.background_insertion_failed.emit(message)
         if self._overlay_session_active() or self._foreground_delivery_pending:
             # A newer session owns the overlay (or is one statement away from
@@ -5711,6 +6194,8 @@ class DictationController(QtCore.QObject):
             transcript, job.history_entry if job_count == 1 else None
         )
         self._insert_action_text = transcript
+        self._insert_action_rows = (entry,) if entry is not None else ()
+        self._shown_transcript_row = entry
         self._insert_offer_may_have_pasted = may_have_pasted
         detail = f"{message}\n\n{transcript}" if transcript else message
         # One value for Copy and Insert; a raw `text` here and the stripped
@@ -5732,6 +6217,7 @@ class DictationController(QtCore.QObject):
         self,
         *,
         ignore_active_transcription: bool = False,
+        hold_key: tuple[object, object] | None = None,
     ) -> bool:
         """Deliver the completed results nothing is blocking any more.
 
@@ -5740,38 +6226,79 @@ class DictationController(QtCore.QObject):
         painted here carries the transcript and the Insert action that is the
         only way to recover it, and overwriting that one statement later left
         the transcript in history alone.
+
+        The paste pace: a group that would paste while the previous paste's
+        clipboard-restore window is still open (`_paste_pace_wait_s`) stays
+        queued, marked `paste_paced`, and `_paste_pace_timer` flushes again
+        when the window ends, so everything that arrived meanwhile for the
+        same window goes out as one paste. A second paste inside the window
+        overwrote the clipboard while the first target -- a renderer that
+        reads it late -- had not read it yet. The window is global, because
+        the clipboard is: a late reader of one window's paste reads whatever
+        the clipboard holds then. Streaming live inserts never come through
+        here; they pace themselves through the locked prefix. ``hold_key``
+        holds that one group back unpasted for a foreground result that is
+        about to join it.
         """
         if not self._deferred_background_results:
             return False
+        single_group = self._insert_target_is_current_window()
         # Deferral is per job: with an active capture, only results targeting
         # the current foreground window may insert (immediate mode); the rest
-        # stay queued for the next flush.
+        # stay queued for the next flush. A paced result waits for nothing but
+        # the restore window -- it may be the foreground result itself, and a
+        # transcription started since must not hold it back.
         pending = []
         still_deferred = []
+        relisted = False
         for job, text in sorted(
             self._deferred_background_results, key=lambda item: item[0].token
         ):
             if self._should_defer_background_insertion(
-                ignore_active_transcription=ignore_active_transcription,
+                ignore_active_transcription=(
+                    ignore_active_transcription or job.paste_paced
+                ),
                 job=job,
             ):
+                # Deferred by a recording or a window again: listed as before.
+                relisted = relisted or job.pace_held
+                job.pace_held = False
                 still_deferred.append((job, text))
             else:
                 pending.append((job, text))
         self._deferred_background_results = still_deferred
         if not pending:
+            if relisted:
+                self._update_queue_overlay()
             return False
         # Coalesce results that target the same window into one paste: each
         # separate paste is its own clipboard set/paste/restore cycle and thus
         # its own race window against the target app, so six queued results
         # used to mean six chances to lose one.
         claimed_overlay = False
-        for jobs, text in self._coalesced_deferred_inserts(
+        paced_wait_s = 0.0
+        for pairs, text, key in self._coalesced_deferred_inserts(
             pending,
-            # With current-window insertion every result goes to the same
-            # (current) target anyway, so one paste covers them all.
-            single_group=self._insert_target_is_current_window(),
+            single_group=single_group,
         ):
+            jobs = [job for job, _text in pairs]
+            held = key == hold_key
+            wait_s = 0.0 if held else self._paste_pace_wait_s()
+            if held or wait_s > 0.0:
+                for job in jobs:
+                    job.insertion_deferred = True
+                    job.paste_paced = job.paste_paced or not held
+                    job.pace_held = job.pace_held or not held
+                self._deferred_background_results.extend(pairs)
+                if not held:
+                    paced_wait_s = max(paced_wait_s, wait_s)
+                    self._logger.info(
+                        "paste_paced wait_ms=%d joined=%d tokens=%s",
+                        _pace_ms(wait_s),
+                        len(jobs),
+                        [job.token for job in jobs],
+                    )
+                continue
             for job in jobs:
                 job.insertion_deferred = False
             if len(jobs) > 1:
@@ -5804,31 +6331,40 @@ class DictationController(QtCore.QObject):
                 )
             for job in jobs:
                 self._finish_transcription_job(job.token)
+        if paced_wait_s > 0.0:
+            # Restarted, never left running from an earlier hold: every flush
+            # reads the window afresh, and the last read is the one to keep.
+            self._paste_pace_timer.start(_pace_ms(paced_wait_s))
+        # The held rows now read "Pending insert".
+        self._update_queue_overlay()
         return claimed_overlay
 
-    @staticmethod
     def _coalesced_deferred_inserts(
+        self,
         pending: list[tuple[_TranscriptionJob, str]],
         *,
         single_group: bool = False,
-    ) -> list[tuple[list[_TranscriptionJob], str]]:
-        """Group token-ordered deferred results by their insertion target."""
-        groups: list[tuple[list[_TranscriptionJob], list[str]]] = []
+    ) -> list[
+        tuple[list[tuple[_TranscriptionJob, str]], str, tuple[object, object]]
+    ]:
+        """Group token-ordered deferred results by their insertion target.
+
+        Each group is ``(its results, their joined text, its target key)``.
+        """
+        groups: list[tuple[list[tuple[_TranscriptionJob, str]], tuple]] = []
         index_by_target: dict[tuple, int] = {}
         for job, text in pending:
-            key = (
-                (None, None)
-                if single_group
-                else (job.target_handle, job.target_signature)
-            )
+            key = self._paste_group_key(job, single_group=single_group)
             index = index_by_target.get(key)
             if index is None:
                 index_by_target[key] = len(groups)
-                groups.append(([job], [text]))
+                groups.append(([(job, text)], key))
             else:
-                groups[index][0].append(job)
-                groups[index][1].append(text)
-        return [(jobs, _join_transcripts(texts)) for jobs, texts in groups]
+                groups[index][0].append((job, text))
+        return [
+            (pairs, _join_transcripts([text for _job, text in pairs]), key)
+            for pairs, key in groups
+        ]
 
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:
@@ -6528,6 +7064,7 @@ class DictationController(QtCore.QObject):
     def _retire_insert_offer(self) -> None:
         """Drop the pending Insert offer, its flag and its painted record."""
         self._insert_action_text = ""
+        self._insert_action_rows = ()
         self._insert_offer_may_have_pasted = False
         self._offer_painted = None
 
@@ -6617,6 +7154,8 @@ class DictationController(QtCore.QObject):
         insert_hwnd = self._target_insert_window(signature, handle)
         insertion_text = str(text)
         self._last_insert_may_have_pasted = False
+        self._last_insert_error_text = ""
+        self._last_insert_offered = False
         try:
             if restore_focus and handle:
                 try:
@@ -6683,11 +7222,14 @@ class DictationController(QtCore.QObject):
                 self._logger.warning(
                     "Insertion reported a post-paste failure: %s", exc
                 )
+                self._last_insert_error_text = (
+                    f"{exc} The text was most likely inserted; check the "
+                    "target window before inserting it again."
+                )
                 if show_overlay_error:
                     self._overlay.set_state(
                         "Error",
-                        f"{exc} The text was most likely inserted; check the "
-                        "target window before inserting it again.",
+                        self._last_insert_error_text,
                         copy_text=insertion_text,
                         # Explicitly no action. Omitting this leaves Retry,
                         # which re-transcribes the last *failed* recording --
@@ -6702,15 +7244,16 @@ class DictationController(QtCore.QObject):
             )
             if copy_on_error and allow_clipboard_fallback:
                 QtGui.QGuiApplication.clipboard().setText(insertion_text)
+            detail = str(exc)
+            if copy_on_error and allow_clipboard_fallback:
+                detail = f"{detail} Transcript copied to clipboard."
+            elif copy_on_error:
+                detail = (
+                    f"{detail} Transcript saved to history; current "
+                    "clipboard left untouched."
+                )
+            self._last_insert_error_text = detail
             if show_overlay_error:
-                detail = str(exc)
-                if copy_on_error and allow_clipboard_fallback:
-                    detail = f"{detail} Transcript copied to clipboard."
-                elif copy_on_error:
-                    detail = (
-                        f"{detail} Transcript saved to history; current "
-                        "clipboard left untouched."
-                    )
                 # Show what was transcribed: the text is otherwise invisible
                 # until it is inserted again, which is exactly when the user
                 # needs to see and be able to copy it.
@@ -6719,9 +7262,12 @@ class DictationController(QtCore.QObject):
                     detail = f"{detail}\n\n{preview}"
                 # The transcription itself succeeded, so Retry (which
                 # re-transcribes) has nothing to work with; offer inserting the
-                # transcript again instead.
+                # transcript again instead. Its rows, if any, are attached by
+                # the caller, which knows them (`_last_insert_offered`).
                 self._insert_action_text = insertion_text
+                self._insert_action_rows = ()
                 self._insert_offer_may_have_pasted = False
+                self._last_insert_offered = True
                 self._overlay.set_state(
                     "Error",
                     detail,
@@ -6760,18 +7306,82 @@ class DictationController(QtCore.QObject):
         return True
 
     def repaste_last_transcript(self) -> None:
-        """Insert the last transcript again into the currently focused window.
+        """Insert what is still missing, else the last delivered text again.
 
-        Tray action and optional global hotkey. Uses the normal insertion
-        path (paste-mode and clipboard semantics from settings, modifier
-        release wait in the inserter), but targets the current focus instead
-        of a recording snapshot. Blocked while a recording is active so the
-        paste cannot interfere with a capture or live streaming inserts, and
-        while a foreground transcription is in flight, whose result owns the
-        overlay and pastes itself; both refusals reach the tray, since a
-        session owns the overlay then.
+        Tray action and optional global hotkey, into the currently focused
+        window through the normal insertion path (paste-mode and clipboard
+        semantics from settings, the modifier-release wait in the inserter).
+
+        Transcripts whose paste failed come first: when any are listed (and
+        not "possibly inserted", which is never pasted twice), this pastes
+        all of them as one paste, oldest first. Otherwise it pastes the last
+        text that reached a window -- a queued result pasted in the
+        background after the shown transcript, else the shown transcript.
+
+        Allowed while a transcription is in flight, without touching the
+        overlay that transcription owns (field report, 2026-10-01: the
+        wave-13 refusal left the hotkey dead for as long as anything was
+        transcribing, which on a slow machine with a queue was minutes).
+        Allowed during an open batch capture too (owner's decision,
+        2026-10-01). Refused, with the reason on the tray or the overlay,
+        while a recording starts or stops, during a streaming recording, and
+        while a streaming finalize is pending, whose own tail is still to be
+        inserted.
         """
-        self._repaste(self._last_transcript)
+        waiting = self._insertable_undelivered()
+        if waiting:
+            self._repaste(
+                _join_transcripts([entry.text for entry in waiting]),
+                display_entry=(
+                    waiting[0].history_entry if len(waiting) == 1 else None
+                ),
+                undelivered=waiting,
+            )
+            return
+        delivered = self._delivered_after_shown
+        if delivered is not None:
+            text, entry = delivered
+            self._repaste(text, display_entry=entry)
+            return
+        self._repaste_last_unless_possibly_inserted()
+
+    def _repaste_last_unless_possibly_inserted(self) -> None:
+        """Re-paste `_last_transcript`, unless its own paste may have landed.
+
+        A paste whose keystroke went out is never pasted again: its row says
+        "Possibly inserted, check the window", and pasting the same text from
+        the fallback would put it in the document twice.
+        """
+        text = self._last_transcript
+        held = self._shown_transcript_token
+        if held is not None and any(
+            job.token == held for job, _text in self._deferred_background_results
+        ):
+            # This very result is still in the paste queue -- the pace holds
+            # it -- and pasting it now as well put it in the document twice.
+            # Told through the tray: the overlay shows that result as Done.
+            self._logger.info("repaste_skipped reason=queued token=%d", held)
+            self.busy_overlay_error.emit(
+                "The last transcript is about to be inserted; it is not "
+                "inserted a second time."
+            )
+            return
+        row = self._shown_transcript_row
+        if (
+            row is not None
+            and row.may_have_pasted
+            and any(row is entry for entry in self._undelivered_inserts)
+        ):
+            # By identity: another dictation with the same text whose paste
+            # may have landed is a different paste, and refusing this one for
+            # it left the shown transcript impossible to insert.
+            self.show_overlay_error(
+                "The last transcript may already have been inserted, so it is "
+                "not inserted again. Check the window; the transcript is in "
+                "history."
+            )
+            return
+        self._repaste(text)
 
     def insert_failed_text(self) -> None:
         """Insert the text the overlay's Error state offered Insert for.
@@ -6787,35 +7397,94 @@ class DictationController(QtCore.QObject):
         the failed insert and the last transcript are the same text -- which
         is also why the fallback below is safe.
         """
-        self._repaste(self._insert_action_text or self._last_transcript)
+        if self._insert_action_text:
+            self._repaste(
+                self._insert_action_text,
+                offer_rows=self._still_insertable(self._insert_action_rows),
+            )
+            return
+        self._repaste_last_unless_possibly_inserted()
 
-    def _repaste(self, text: str) -> None:
+    _KEEP_DISPLAY = object()
+
+    def _repaste(
+        self,
+        text: str,
+        *,
+        display_entry=_KEEP_DISPLAY,
+        undelivered: Sequence[_UndeliveredInsert] = (),
+        offer_rows: Sequence[_UndeliveredInsert] = (),
+    ) -> None:
+        """Paste ``text`` into the focused window on the user's request.
+
+        ``display_entry`` is given when the text is not the shown transcript
+        (a background delivery, waiting transcripts): a paste with no session
+        on screen then shows it, and Copy and Edit move to it with that entry
+        (None for a joined text, so Edit refuses). ``undelivered`` are the
+        listed rows the text was built from; a successful paste retires them.
+        ``offer_rows`` are the overlay Insert's own rows: retired on success
+        like them, without making this a queued paste (its failure still
+        copies the text, as the Insert always did). A failure that paints the
+        offer again hands it all of these rows, so its next Insert retires
+        them too.
+        """
         if not text.strip():
             self.show_overlay_error("No transcript available to insert yet.")
             return
-        if (
-            self._recording_start_in_progress
-            or self._recording_stop_in_progress
-            or self._audio_capture is not None
-            or self._streaming_recording
-        ):
+        what = (
+            "the transcripts that were not inserted"
+            if undelivered
+            else "the last transcript again"
+        )
+        # Allowed during an open batch capture (owner's decision,
+        # 2026-10-01): the paste goes to the current focus with its own
+        # target, leaves the recording's target snapshot alone and reports
+        # through the tray, as during a transcription in flight.
+        if self._recording_start_in_progress or self._recording_stop_in_progress:
+            # The start or stop is taking the recording's target snapshot,
+            # and a paste then races it.
+            message = (
+                f"Wait for the recording to start or stop before inserting {what}."
+            )
+            hint = self._undelivered_hint()
+            if hint:
+                message = f"{message} {hint}"
+            self.show_overlay_error(message)
+            return
+        if self._streaming_recording and self._audio_capture is not None:
+            # Live inserts write at the caret while the microphone is open;
+            # a paste in between would land inside the streamed text.
+            message = f"Finish the streaming recording before inserting {what}."
+            hint = self._undelivered_hint()
+            if hint:
+                message = f"{message} {hint}"
+            self.show_overlay_error(message)
+            return
+        if self._streaming_recording:
+            # The microphone is closed, but the finalize still inserts its
+            # tail past the text already in the document; a paste in between
+            # would land in front of it.
             self.show_overlay_error(
-                "Finish the current recording before inserting the last "
-                "transcript again."
+                f"Wait for the streaming transcript to finish before inserting "
+                f"{what}."
             )
             return
-        if self._active_request_token is not None:
-            # A foreground transcription in flight: the microphone is closed,
-            # so a paste interferes with nothing, but its result owns the
-            # overlay and pastes itself, and `_last_transcript` is still the
-            # previous dictation. Let through, "Done" with that older text
-            # replaced "Processing" for a job that had not finished, and a
-            # paste that failed painted "Error" over it through the
-            # inserter's own handler (the wave-13 reach lens).
-            self.show_overlay_error(
-                "Wait for the current transcription to finish before inserting "
-                "the last transcript again."
+        wait_s = self._paste_pace_wait_s()
+        if wait_s > 0.0:
+            # Through the pace like every other paste: a second paste inside
+            # the previous one's restore window overwrites a clipboard a late
+            # reader has not read yet. Nothing waits on the Qt thread; the
+            # timer runs it, after the results the pace holds.
+            self._pending_repaste = _PendingRepaste(
+                text=text,
+                display_entry=display_entry,
+                undelivered=tuple(undelivered),
+                offer_rows=tuple(offer_rows),
             )
+            self._logger.info(
+                "repaste_paced wait_ms=%d rows=%d", _pace_ms(wait_s), len(undelivered)
+            )
+            self._paste_pace_timer.start(_pace_ms(wait_s))
             return
         # Resolve the target instead of pasting at whatever holds the
         # foreground. This action's main entry point is the tray menu, and the
@@ -6846,28 +7515,63 @@ class DictationController(QtCore.QObject):
                 "transcript in, then try again."
             )
             return
-        if self._insert_text_at_target(
+        # A foreground transcription in flight owns the overlay: the paste
+        # goes out, and its outcome reaches the tray instead of painting over
+        # "Processing" (the wave-13 reach lens saw "Done" with an older text
+        # replace it, and a failed paste paint "Error" over it).
+        session = self._overlay_session_active()
+        inserted = self._insert_text_at_target(
             text,
             restore_focus=True,
+            # Waiting transcripts are queued pastes: like every queued paste
+            # a failure leaves the user's clipboard alone; the text is in
+            # history and stays listed.
+            copy_on_error=not undelivered,
+            show_overlay_error=not session,
             target_handle=target,
             target_signature=signature,
             may_carry_offer=True,
-        ):
-            if self._paste_carried_the_offer(text):
-                self._retire_insert_offer()
-                self._overlay.set_state("Done", text)
+        )
+        rows = [*undelivered, *offer_rows]
+        if not inserted:
+            if self._last_insert_offered:
+                # The failure painted the offer for this text: it covers the
+                # same rows, so its Insert retires them on success instead of
+                # leaving them listed for the re-paste to paste once more.
+                self._insert_action_rows = tuple(rows)
+            if rows and self._last_insert_may_have_pasted:
+                # The keystroke went out: listed still, never offered again.
+                for entry in rows:
+                    entry.may_have_pasted = True
+                self._update_queue_overlay()
+            if session:
+                self.show_overlay_error(self._last_insert_error_text)
             else:
-                # `_last_transcript` has moved on -- a queued streaming job
-                # that failed rescues its partial into it -- so the tray
-                # pasted text the offer is no part of. Retiring the offer
-                # here took the tail's Insert away while the tail had
-                # reached no window (measured: the overlay's Insert then
-                # pasted the unrelated text instead).
-                self._paint_status_keeping_offer("Done", text)
-            self._reveal_overlay_result(is_error=False)
+                self._reveal_overlay_result(is_error=True)
+            return
+        self._retire_undelivered(rows)
+        carried = self._paste_carried_the_offer(text)
+        if carried:
+            self._retire_insert_offer()
+        if session:
+            if display_entry is not self._KEEP_DISPLAY:
+                self._delivered_after_shown = (text, display_entry)
             self._play_completion_beep()
+            return
+        if display_entry is not self._KEEP_DISPLAY:
+            self._set_last_transcript(text, display_entry)
+        if carried:
+            self._overlay.set_state("Done", text)
         else:
-            self._reveal_overlay_result(is_error=True)
+            # `_last_transcript` has moved on -- a queued streaming job
+            # that failed rescues its partial into it -- so the tray
+            # pasted text the offer is no part of. Retiring the offer
+            # here took the tail's Insert away while the tail had
+            # reached no window (measured: the overlay's Insert then
+            # pasted the unrelated text instead).
+            self._paint_status_keeping_offer("Done", text)
+        self._reveal_overlay_result(is_error=False)
+        self._play_completion_beep()
 
     def show_overlay_notice(self, message: str) -> None:
         """Confirm a completed action on the overlay and return to Idle.

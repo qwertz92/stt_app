@@ -197,6 +197,9 @@ class FakeOverlay:
         self.reveal_calls = 0
         self.reveal_durations = []
         self.queue_updates = []
+        # The kind of each row, parallel to `queue_updates` (the real overlay
+        # takes `(token, label)` or `(token, label, kind)`).
+        self.queue_kinds = []
         # Mirrors `OverlayUI.detail_is_being_read`; a test sets it.
         self.detail_is_being_read = False
 
@@ -219,7 +222,11 @@ class FakeOverlay:
         return self.states[-1][1] if self.states else OVERLAY_INITIAL_DETAIL
 
     def set_transcription_queue(self, items):
-        self.queue_updates.append([(int(t), str(label)) for t, label in items])
+        rows = [tuple(item) for item in items]
+        self.queue_updates.append([(int(row[0]), str(row[1])) for row in rows])
+        self.queue_kinds.append(
+            [str(row[2]) if len(row) > 2 else "transcription" for row in rows]
+        )
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))
