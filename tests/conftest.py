@@ -724,9 +724,10 @@ def _silero_speech_check_unavailable(monkeypatch):
 def real_silero(monkeypatch):
     """The real Silero graph, loaded fresh for this test and forgotten after.
 
-    The detector caches its session and remembers a failed load for the life
-    of the process; a test that simulates a failure would otherwise leave the
-    detector dead for every later test, so the cache is reset on both sides.
+    The detector caches its session and remembers a failed load for
+    SILERO_LOAD_RETRY_S; a test that simulates a failure would otherwise
+    leave the detector off for the tests after it, so the cache is reset on
+    both sides.
     """
     from stt_app import silero_vad
 

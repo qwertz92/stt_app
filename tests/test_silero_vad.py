@@ -257,6 +257,43 @@ def test_two_threads_share_one_session(real_silero, monkeypatch):
     assert alone is not None and alone.max_probability > 0.5
 
 
+def test_starting_the_load_never_waits_for_a_build_in_progress(
+    real_silero, monkeypatch
+):
+    """The Qt thread calls `start_loading` at every stop that finds no
+    session. A build in progress holds the session lock for its whole
+    length; asking again must return at once, not wait for it, and must not
+    start a second build."""
+    entered = threading.Event()
+    release = threading.Event()
+    builds = []
+    real_build = silero_vad._build_session
+
+    def held_build():
+        builds.append(threading.get_ident())
+        entered.set()
+        release.wait(timeout=10)
+        return real_build()
+
+    monkeypatch.setattr(silero_vad, "_build_session", held_build)
+    try:
+        silero_vad.start_loading()
+        assert entered.wait(timeout=10)
+
+        started = time.monotonic()
+        silero_vad.start_loading()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.5, f"start_loading waited {elapsed:.2f} s"
+        assert len(builds) == 1
+    finally:
+        release.set()
+        loader = silero_vad._loader_thread
+        assert loader is not None
+        loader.join(timeout=10)
+    assert silero_vad.loaded_session() is not None
+
+
 def _one_pass_probabilities(samples: np.ndarray) -> np.ndarray:
     """Every window's probability from one run over the whole input -- the
     reference the block-by-block scan is compared with."""

@@ -8,6 +8,7 @@ signals directly.
 import logging
 import re
 import threading
+import time
 from dataclasses import replace
 
 import numpy as np
@@ -1175,10 +1176,11 @@ def _join_speech_model_loader():
     loader = getattr(silero_vad, "_loader_thread", None)
     if loader is not None:
         loader.join(timeout=10)
+        assert not loader.is_alive(), "the speech model loader did not finish"
 
 
 def test_the_first_stop_does_not_build_the_speech_model_on_its_thread(
-    monkeypatch, tmp_path, real_silero
+    monkeypatch, tmp_path, caplog, real_silero
 ):
     # Building the session imports ONNX Runtime and loads the graph: 123-275 ms
     # cold. A stop arriving before the background load has finished must not
@@ -1202,11 +1204,20 @@ def test_the_first_stop_does_not_build_the_speech_model_on_its_thread(
     controller, app, overlay = _gated_controller(
         monkeypatch, tmp_path, wait_for_speech_model=False
     )
+    caplog.set_level(logging.INFO)
     try:
+        started = time.monotonic()
         _stop_with(controller, wav_bytes(typing(120, 3.0)))
+        elapsed = time.monotonic() - started
 
         assert caller not in builders
         assert len(controller._executor.calls) == 1
+        # The build is held for up to 10 s; a stop that waited for it -- on
+        # the loader's lock, say -- would take that long.
+        assert elapsed < 2.0, f"the stop waited {elapsed:.2f} s for the build"
+        lines = _peak_level_lines(caplog)
+        assert len(lines) == 1
+        assert "silero_speech_seconds=loading" in lines[0]
     finally:
         release.set()
         _join_speech_model_loader()
@@ -1241,6 +1252,34 @@ def test_the_speech_model_loads_in_the_background_when_the_controller_starts(
 
         # Loaded before the stop, so the stop measured and skipped the typing.
         assert controller._executor.calls == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_switching_the_silence_gate_on_loads_the_speech_model(
+    monkeypatch, tmp_path, real_silero
+):
+    # With the gate off at start nothing is loaded; a settings save that
+    # switches it on must start the background load, or the first gated stop
+    # after it would go unmeasured.
+    from stt_app import silero_vad
+
+    silero_vad.reset_silero_for_tests()
+    controller, app, _overlay = _gated_controller(
+        monkeypatch, tmp_path, enabled=False, wait_for_speech_model=False
+    )
+    try:
+        _join_speech_model_loader()
+        assert silero_vad.loaded_session() is None
+
+        controller._settings_store._settings = replace(
+            controller.settings, silence_gate_enabled=True
+        )
+        controller.reload_settings(re_register_hotkey=False)
+        _join_speech_model_loader()
+
+        assert silero_vad.loaded_session() is not None
     finally:
         controller.shutdown()
     _ = app

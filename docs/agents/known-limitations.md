@@ -53,7 +53,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   (P3, 2026-10-01). With fan-like noise at 0 dB SNR, a single word of
   140 ms near the lowest settable threshold (0.0005) scored 0.072 as
   recorded and 0.135 amplified -- under the 0.15 cut -- and was skipped in
-  1 of 50 seeds (review of 54ba37d). The calibration holds no noisy-room
+  1 of 50 seeds (review of 4298c8a). The calibration holds no noisy-room
   speech, so the cut was never set against it. Lowering the cut lets more
   noise through; a noisy-room speech set is what would settle it.
 - **The batch speech check is off for a stop that comes before its model

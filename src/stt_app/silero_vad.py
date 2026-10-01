@@ -82,6 +82,9 @@ _INPUTS = ("input", "h", "c")
 _OUTPUTS = ("speech_probs", "hn", "cn")
 
 _session_lock = threading.Lock()
+# Guards only `_loader_thread`; held for microseconds, so the Qt thread may
+# take it (see `start_loading`).
+_loader_lock = threading.Lock()
 _session: object | None = None
 # When the last load failed (`_now()` seconds), or None. A failure is not
 # forever: a scanner or a backup tool holding the file for a moment would
@@ -243,13 +246,18 @@ def loaded_session():
 
 def start_loading() -> None:
     """Build the session on a daemon thread, unless it is built, being built
-    or inside the retry backoff. Cheap and idempotent: the controller calls it
-    at start, on every settings reload with the silence gate on, and from a
-    stop that found no session yet."""
+    or inside the retry backoff. Idempotent and never waits for a build: the
+    controller calls it on the Qt thread at start, on every settings reload
+    with the silence gate on, and from a stop that found no session yet.
+
+    It takes `_loader_lock`, never `_session_lock`: the loader holds
+    `_session_lock` for the whole build, and a stop that waited on it would
+    freeze the Qt thread for as long as the build takes.
+    """
     global _loader_thread
     if _session is not None or _in_backoff():
         return
-    with _session_lock:
+    with _loader_lock:
         loader = _loader_thread
         if loader is not None and loader.is_alive():
             return
@@ -258,13 +266,16 @@ def start_loading() -> None:
         loader = threading.Thread(
             target=lambda: _get_session(), name="stt_app_silero_load", daemon=True
         )
+        try:
+            # Started under the lock, so a second caller cannot see the new
+            # thread as not yet alive and start another.
+            loader.start()
+        except RuntimeError as exc:
+            # No thread available: the check stays off for this stop and the
+            # next stop asks again.
+            logger.warning("silero_vad_load_thread_not_started error=%s", exc)
+            return
         _loader_thread = loader
-    try:
-        loader.start()
-    except RuntimeError as exc:
-        # No thread available: the check stays off for this stop and the next
-        # stop asks again.
-        logger.warning("silero_vad_load_thread_not_started error=%s", exc)
 
 
 def reset_silero_for_tests() -> None:

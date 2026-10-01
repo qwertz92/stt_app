@@ -1928,7 +1928,8 @@ SILERO_BATCH_MIN_PROBABILITY = 0.15
 # (gain 4: lowest 0.230 at L = 0.0005), 8 is the smallest that restored every
 # case above.
 SILERO_BATCH_QUIET_SPEECH_GAIN = 8.0
-# The batch scan runs on the Qt thread at every stop, so it is bounded.
+# The batch scan runs on the Qt thread at every stop the level gate admits
+# while the gate is on, so it is bounded.
 # Measured on a Ryzen 5 7600X, warm, from the WAV bytes: audio with no speech
 # costs about 1.5-1.7 ms per second scanned per scan, while speech settles
 # the natural scan after about 3 s whatever the length (4-11 ms for 10 s,
@@ -1938,10 +1939,11 @@ SILERO_BATCH_QUIET_SPEECH_GAIN = 8.0
 # 92 ms for 30 s (2026-10-01). A scan that stopped for either reason is
 # incomplete, and an incomplete scan never skips: the unscanned rest may hold
 # the speech, so a speechless recording longer than the budget is transcribed
-# as before (46 ms for 60 s, one scan). The first call in a process also
-# builds the session: 29 ms when ONNX Runtime is already loaded (onnx-asr,
-# Nemotron and Granite CTC load it), 123-275 ms when it still has to be
-# imported (four fresh interpreters), once.
+# as before (46 ms for 60 s, one scan). Building the session costs 29 ms
+# when ONNX Runtime is already loaded (onnx-asr, Nemotron and Granite CTC
+# load it) and 123-275 ms when it still has to be imported (four fresh
+# interpreters); it happens once, on a daemon thread (`start_loading`),
+# never inside a stop.
 SILERO_BATCH_STOP_AFTER_SPEECH_S = 1.0
 SILERO_BATCH_MAX_SCAN_S = 30.0
 # A session load that failed is retried after this long, not never: the file
