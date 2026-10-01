@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 from test_settings_dialog_connection import (
     _FakeLogger,
     _FakeSecretStore,
@@ -140,6 +140,72 @@ def test_fetch_models_fills_the_combo_from_the_typed_fields(monkeypatch):
         assert store.saved is not None
         assert store.saved.custom_model == "whisper-1"
     finally:
+        dialog.deleteLater()
+
+
+def test_picking_the_current_list_entry_after_typing_replaces_the_typed_text(
+    monkeypatch,
+):
+    """Qt only rewrites the line edit when the picked entry is the current one.
+
+    With the index unchanged neither `textEdited` nor `currentIndexChanged`
+    fires, so the field read "B" while the typed "foo" was still what Save
+    wrote. Driven with real keystrokes and a real click on the popup.
+    """
+
+    class _FakeTranscriber:
+        def __init__(self, **_kwargs):
+            pass
+
+        def list_models(self):
+            return [
+                CustomEndpointModel("A", "chat"),
+                CustomEndpointModel("B", "chat"),
+            ]
+
+    monkeypatch.setattr(
+        custom_endpoint_provider, "CustomEndpointTranscriber", _FakeTranscriber
+    )
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog, store = _dialog(
+        AppSettings(engine="custom", custom_endpoint="http://x/v1", custom_model="B")
+    )
+    try:
+        monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+        dialog._fetch_custom_models()
+        combo = dialog.remote_model_combo
+        assert [combo.itemData(i) for i in range(combo.count())] == ["B", "A"]
+        dialog.show()
+        for _ in range(3):
+            app.processEvents()
+
+        line_edit = combo.lineEdit()
+        line_edit.selectAll()
+        QtTest.QTest.keyClicks(line_edit, "foo")
+        assert line_edit.text() == "foo"
+        assert dialog._remote_model_values["custom"] == "foo"
+        assert combo.currentIndex() == 0
+
+        combo.showPopup()
+        for _ in range(3):
+            app.processEvents()
+        view = combo.view()
+        rect = view.visualRect(view.model().index(0, 0))
+        QtTest.QTest.mouseClick(
+            view.viewport(), QtCore.Qt.LeftButton, pos=rect.center()
+        )
+        for _ in range(3):
+            app.processEvents()
+
+        assert line_edit.text() == "B"
+        # What Save would write follows the field, and "B" is what is stored.
+        assert dialog._remote_model_values["custom"] == "B"
+        assert not dialog.has_unsaved_changes()
+        dialog._save()
+        assert store.saved is None
+    finally:
+        dialog.close()
         dialog.deleteLater()
 
 

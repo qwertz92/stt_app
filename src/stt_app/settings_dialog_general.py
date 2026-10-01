@@ -208,6 +208,10 @@ class _GeneralTabMixin:
         self.remote_model_combo.currentIndexChanged.connect(
             self._on_remote_model_changed
         )
+        # `activated` also fires when the picked entry is the current one,
+        # which Qt answers by rewriting the editable line edit without any
+        # other signal (a typed custom model would otherwise outlive the pick).
+        self.remote_model_combo.activated.connect(self._on_remote_model_activated)
         # Only the custom endpoint has a button here: its models are whatever
         # the endpoint offers, fetched on request with the API Keys tab's
         # typed (unsaved) URL and credentials. It sits beside the combo it
@@ -1359,6 +1363,10 @@ class _GeneralTabMixin:
         self._remote_model_values[provider] = value
         self._update_language_availability()
         self._update_engine_indicator()
+
+    def _on_remote_model_activated(self, _index: int = 0) -> None:
+        self._on_remote_model_changed()
+        self._schedule_unsaved_changes_refresh()
 
     def _on_import_engine_changed(self, _index: int = 0) -> None:
         self._update_import_model_selector()
