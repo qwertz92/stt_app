@@ -610,9 +610,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "speech_model": ASSEMBLYAI_STREAMING_MODEL,
             }
             if self._word_boost:
-                # U3.6 Pro accepts up to 100 terms (keyterms included in its
-                # price). The
-                # shared vocabulary parser already caps the app input at 100.
+                # U3.6 Pro accepts up to 100 terms of at most 50 characters
+                # each, keyterms included in its price (docs and pricing page,
+                # read 2026-10-01); a longer term is ignored by the service.
+                # The shared vocabulary parser already caps the input at 100.
                 stream_kwargs["keyterms_prompt"] = self._word_boost
             client.connect(StreamingParameters(**stream_kwargs))
         except Exception as exc:
