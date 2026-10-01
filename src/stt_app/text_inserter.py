@@ -113,6 +113,15 @@ class _ClipboardNotOpenError(TextInsertionError):
     """
 
 
+class _ClipboardOpenFailedError(TextInsertionError):
+    """`OpenClipboard` kept failing through every one of its retries.
+
+    A `TextInsertionError` to every caller outside the backend, as it always
+    was; `Win32ClipboardBackend._with_reopen` tells it apart because on a
+    later attempt it means something else (see there).
+    """
+
+
 def _is_clipboard_not_open(exc: BaseException) -> bool:
     """Is this a pywin32 error carrying 1418?
 
@@ -303,9 +312,11 @@ class Win32ClipboardBackend:
         self._retry_sleep_s = retry_sleep_s
         # How often one clipboard operation is opened afresh after a 1418
         # before it gives up as contention. Each attempt may spend the open
-        # retries above as well, so the worst case on the Qt thread is about
-        # reopen_attempts x (retry_count x retry_sleep_s + retry_sleep_s),
-        # 0.33 s at the defaults.
+        # retries above as well, so the worst case of one operation on the Qt
+        # thread is about reopen_attempts x (retry_count x retry_sleep_s +
+        # retry_sleep_s), 0.33 s at the defaults. One paste runs up to four
+        # such operations -- the capture, the write, the read-back after a
+        # lost close and the changed-after-set read -- so about 1.3 s.
         self._reopen_attempts = max(1, int(reopen_attempts))
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
         # The clipboard's data blocks are HGLOBALs, so reading and writing
@@ -314,18 +325,39 @@ class Win32ClipboardBackend:
         # `GetLastError`, which `hotkey.Win32HotkeyApi.get_last_error` reads.
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-    def _with_reopen(self, operation: str, body, exhausted_error=None):
+    def _with_reopen(
+        self,
+        operation: str,
+        body,
+        exhausted_error=None,
+        *,
+        reopen_on_lost_close: bool = False,
+    ):
         """Run `body` inside an open clipboard, opening afresh after a 1418.
 
         Returns `(result, lost_close)`. `body` raises `_ClipboardNotOpenError`
         for a call that found the clipboard closed under it. A close refused
-        with 1418 after a body that finished is not retried: the body's work
-        is done, and what that means is the caller's to decide -- a read has
-        its answer, a write has to be read back (`set_clipboard_text`), which
-        is what `lost_close` is for. The spent attempts raise
-        `exhausted_error()`, by default `ClipboardContentionError`, which
-        every caller already treats as "try again, and never write over the
-        clipboard".
+        with 1418 after a body that finished is not retried by default: the
+        body's work is done, and what that means is the caller's to decide --
+        a read whose every call raises on a closed clipboard has its answer, a
+        write has to be read back (`set_clipboard_text`), which is what
+        `lost_close` is for. `reopen_on_lost_close` makes that close a reason
+        to run the body again instead, for a body whose reads do not all raise
+        on a closed clipboard (`capture_clipboard_state`).
+
+        The spent attempts raise `exhausted_error()`, by default
+        `ClipboardContentionError`, which every caller already treats as "try
+        again, and never write over the clipboard". So does an open that fails
+        on a later attempt: by then an earlier attempt may have emptied the
+        clipboard, and only `exhausted_error` knows whether it has to be put
+        back. A first open that fails stays the plain open failure it always
+        was, since nothing of ours has touched the clipboard yet.
+
+        Each call can spend `reopen_attempts` opens, each with its own open
+        retries; one paste runs several calls (capture, write, the read-back
+        after a lost close, the changed-after-set read), so its worst case on
+        the Qt thread is a multiple of one call's (see the 1418 entry in
+        `docs/agents/text-insertion.md`).
 
         This survives the race rather than closing it: the race comes from
         pywin32 opening with a NULL owner window, and opening with a window of
@@ -343,6 +375,21 @@ class Win32ClipboardBackend:
             except _ClipboardNotOpenError:
                 _LOGGER.info(
                     "clipboard_not_open op=%s attempt=%s of %s",
+                    operation,
+                    attempt,
+                    self._reopen_attempts,
+                )
+                continue
+            except _ClipboardOpenFailedError:
+                if attempt == 1:
+                    raise
+                _LOGGER.info(
+                    "clipboard_reopen_failed op=%s attempt=%s", operation, attempt
+                )
+                break
+            if context.lost_before_close and reopen_on_lost_close:
+                _LOGGER.info(
+                    "clipboard_close_not_open op=%s attempt=%s of %s",
                     operation,
                     attempt,
                     self._reopen_attempts,
@@ -370,8 +417,16 @@ class Win32ClipboardBackend:
         return str(text)
 
     def capture_clipboard_state(self) -> ClipboardState:
+        # A lost close is a reason to read again, never a finished capture:
+        # the byte copy reads through ctypes, whose `GetClipboardData` answers
+        # NULL on a clipboard closed under us without raising, and the copy
+        # counts NULL as an unreadable format. A capture that read nothing
+        # because its open was taken would come back as an empty state, and the
+        # restore would write that empty state over the user's clipboard. The
+        # refused close is the one reliable sign: the open can only be taken
+        # by another program's `CloseClipboard`, and once it is, ours fails.
         state, _lost_close = self._with_reopen(
-            "capture", self._capture_open_clipboard
+            "capture", self._capture_open_clipboard, reopen_on_lost_close=True
         )
         return state
 
@@ -1013,7 +1068,7 @@ class Win32ClipboardBackend:
                 except Exception:
                     time.sleep(self._backend._retry_sleep_s)
 
-            raise TextInsertionError("Failed to open clipboard.")
+            raise _ClipboardOpenFailedError("Failed to open clipboard.")
 
         def __exit__(self, exc_type, exc, tb):
             try:

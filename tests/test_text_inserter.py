@@ -2893,6 +2893,135 @@ def test_a_refused_write_is_put_back_through_the_transaction(monkeypatch):
     assert clipboard.set_formats == [(CF_UNICODETEXT, _GUTEN_TAG)]
 
 
+def test_a_capture_whose_close_was_lost_is_taken_again(monkeypatch):
+    """A lost close means the capture's reads may have run on a closed clipboard.
+
+    The `GetClipboardData` behind the byte copy is a ctypes call: on a
+    clipboard closed under us it answers NULL, which the copy counts as an
+    unreadable format, and nothing raises. On a screenshot-only clipboard the
+    capture then came back as an empty state, the restore wrote that empty
+    state back, and the screenshot was gone. The refused close is the one
+    signal that the open was taken during the reads, so the capture is opened
+    and read afresh.
+    """
+    clipboard = _NotOpenClipboard(contents=[(CF_DIB, b"the screenshot")], text=None)
+    backend, pasted = _not_open_backend(clipboard, monkeypatch)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+    original_open = clipboard.OpenClipboard
+    opens = []
+
+    def _open_closed_underneath_the_first_time():
+        opens.append("open")
+        original_open()
+        # The manager's CloseClipboard closes ours right after the first open.
+        clipboard.null_handles = {CF_DIB} if len(opens) == 1 else set()
+        if len(opens) == 1:
+            clipboard.close_not_open = 1
+
+    clipboard.OpenClipboard = _open_closed_underneath_the_first_time
+
+    assert inserter.insert_text_with_options(
+        "the transcript", target_hwnd=321, paste_mode="send_input"
+    ) is True
+    assert pasted == [("send_input", 321)]
+    assert scheduler.fire_pending() == 1
+
+    # The restore writes the captured bytes through `SetClipboardData`, which
+    # the fake records in `set_formats`; the transcript's own write is first.
+    assert clipboard.set_formats[1:] == [(CF_DIB, b"the screenshot")]
+
+
+def test_a_capture_that_keeps_losing_its_close_is_contention(monkeypatch):
+    clipboard = _NotOpenClipboard(contents=[(CF_DIB, b"the screenshot")], text=None)
+    clipboard.null_handles = {CF_DIB}
+    clipboard.close_not_open = 99
+    backend = _backend_on(clipboard, monkeypatch)
+
+    with pytest.raises(ClipboardContentionError):
+        backend.capture_clipboard_state()
+
+    assert clipboard.calls.count("open") == 3
+    assert clipboard.payloads == {CF_DIB: b"the screenshot"}
+
+
+def test_a_reopen_that_cannot_open_puts_the_emptied_clipboard_back(monkeypatch):
+    """Our `EmptyClipboard` ran, the write hit 1418, and the reopen never opened.
+
+    The program that closed ours now holds the clipboard itself for longer
+    than the open retries. The reopen's plain "Failed to open clipboard." was
+    neither contention nor `ClipboardEmptiedError`, so the transaction
+    restored nothing and the user's clipboard stayed empty.
+    """
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+    backend, pasted = _not_open_backend(clipboard, monkeypatch)
+    backend._retry_sleep_s = 0.0
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+    original_open = clipboard.OpenClipboard
+    busy = {"opens_refused": 0}
+
+    def _open():
+        if busy["opens_refused"] > 0:
+            busy["opens_refused"] -= 1
+            raise clipboard.Win32Error("(5, 'OpenClipboard', 'Access is denied.')")
+        original_open()
+
+    original_set = clipboard.SetClipboardText
+
+    def _set(text, format_id):
+        if text == "the transcript" and clipboard.set_not_open == 1:
+            # The manager keeps the clipboard for longer than one open's retries.
+            busy["opens_refused"] = backend._retry_count
+        return original_set(text, format_id)
+
+    clipboard.OpenClipboard = _open
+    clipboard.SetClipboardText = _set
+    clipboard.set_not_open = 1
+
+    with pytest.raises(ClipboardEmptiedError):
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+
+    assert pasted == []
+    # The transcript never landed; what `SetClipboardData` received is the
+    # restore of both captured formats.
+    assert clipboard.set_formats == [
+        (CF_UNICODETEXT, _GUTEN_TAG),
+        (CF_DIB, b"the screenshot"),
+    ]
+
+
+def test_a_first_open_that_fails_stays_a_plain_open_failure(monkeypatch):
+    """Nothing of ours has touched the clipboard before the first open."""
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag"
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+    backend._retry_sleep_s = 0.0
+
+    def _refused():
+        raise clipboard.Win32Error("(5, 'OpenClipboard', 'Access is denied.')")
+
+    clipboard.OpenClipboard = _refused
+
+    with pytest.raises(TextInsertionError) as excinfo:
+        backend.set_clipboard_text("the transcript")
+
+    assert not isinstance(
+        excinfo.value, (ClipboardContentionError, ClipboardEmptiedError)
+    )
+    assert clipboard.calls.count("empty") == 0
+
+
 # --- Paste pacing: when the last keystroke went out -----------------------
 
 
