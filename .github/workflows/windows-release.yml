@@ -65,6 +65,10 @@ jobs:
         shell: pwsh
         run: uv run --no-sync ruff check .
 
+      - name: Check release formatting
+        shell: pwsh
+        run: uv run --no-sync ruff format --check .
+
       - name: Run the release test suite
         shell: pwsh
         # The same command on the same runner image as quality.yml's test

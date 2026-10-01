@@ -1,0 +1,5 @@
+# Mechanical reformats that git blame should skip.
+# Enable locally with: git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# style: apply ruff format to the whole repository (2026-10-01)
+af586652e1e6dd135d80db71c737a367a62220df

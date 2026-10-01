@@ -29,6 +29,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-
 - **Ruff's rule set is written out, never inherited**: `pyproject.toml` names
   every rule and every ignore with its reason (defaults checked almost
   nothing). An upgrade may add findings; it must not silently change the gate.
+- **`ruff format --check .` is a gate** (2026-10-01): both workflows run it
+  as its own step after `ruff check`, so a step's exit code is its own. The
+  whole repository was reformatted once (listed in `.git-blame-ignore-revs`;
+  `git config blame.ignoreRevsFile .git-blame-ignore-revs` makes blame skip
+  it). Run `ruff format .` before committing; a ruff upgrade that changes the
+  style is a reformat commit of its own, added to that file.
 - **`scripts/smoke_test.py` must never touch the real settings or move the
   data folder**: `SettingsStore.load` writes and quarantines
   (`*.corrupt.<timestamp>`), so it loads a throwaway copy; the model step

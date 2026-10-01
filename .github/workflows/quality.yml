@@ -51,8 +51,11 @@ jobs:
       - name: Install locked dependencies
         run: uv sync --group dev --locked
 
-      - name: Check formatting and static rules
+      - name: Check static rules
         run: uv run --no-sync ruff check .
+
+      - name: Check formatting
+        run: uv run --no-sync ruff format --check .
 
       - name: Run test suite
         # No -q here: pyproject already sets addopts = "-q", and a
