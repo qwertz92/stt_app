@@ -1385,9 +1385,13 @@ def _raise_empty(timeout=None):
     raise queue.Empty
 
 
-def test_an_interrupt_while_collecting_terminates_and_reaps_the_child():
+def test_an_interrupt_while_collecting_terminates_and_reaps_the_child(monkeypatch):
     """Ctrl+C must stop the child, not leave it holding a model."""
     module = _load_benchmark_module()
+    # The fake child never dies, so the reap spins to its whole budget (2.0 s
+    # in the script). 0.3 s still exceeds the 0.2 s per-join bound asserted
+    # below, so a single `join(budget)` would still be caught.
+    monkeypatch.setattr(module, "_TERMINATED_CHILD_JOIN_TIMEOUT_S", 0.3)
     calls: list[str] = []
 
     def _interrupting_get(timeout=None):

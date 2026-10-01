@@ -1146,6 +1146,16 @@ def test_a_noise_floor_above_the_gate_is_reported(
     absent. Nothing in the UI shows that, so the log has to.
     """
     monkeypatch.setattr(local_faster_whisper, "_NOISE_FLOOR_WARN_AFTER_S", 0.4)
+    # The warning is timed, and the module reads its clock only through
+    # `time.monotonic()`. A clock the test advances by one chunk's length
+    # after each decode replaces 60 real sleeps: the loud stretch "lasts"
+    # because the audio it carries does, not because the test waited.
+    now = [0.0]
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "time",
+        types.SimpleNamespace(monotonic=lambda: now[0], sleep=time.sleep),
+    )
 
     class _Model:
         def transcribe(self, *args, **kwargs):
@@ -1164,9 +1174,7 @@ def test_a_noise_floor_above_the_gate_is_reported(
     try:
         for amplitude in amplitudes:
             _push_and_decode(transcriber, _ms(100, amplitude))
-            # The warning is timed (`_NOISE_FLOOR_WARN_AFTER_S`), so the
-            # loud stretch has to last.
-            time.sleep(0.01)
+            now[0] += 0.1
         warned = transcriber._stream_session.result.noise_floor_warned
     finally:
         transcriber.stop_stream()

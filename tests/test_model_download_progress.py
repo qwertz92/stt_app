@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from stt_app.config import MODEL_ESTIMATED_SIZE_MB
 from stt_app.model_download_progress import (
     DOWNLOAD_PROGRESS_UNKNOWN,
     HUB_SNAPSHOT_PROGRESS_BAR_NAME,
@@ -414,18 +415,26 @@ def test_the_baseline_does_not_follow_a_snapshot_symlink_into_its_blob(tmp_path)
     assert completed_download_bytes("small", destination) == 3_000_000
 
 
-def test_the_baseline_never_exceeds_the_models_own_size(tmp_path):
+def test_the_baseline_never_exceeds_the_models_own_size(tmp_path, monkeypatch):
     """A blob cache keeps the blobs of every revision it ever fetched.
 
     A repo re-uploaded upstream therefore leaves a full model's worth of
     bytes that the next download neither fetches again nor uses. Uncapped
     that is a download starting above 100%.
-    """
-    destination = tmp_path / "models--Systran--faster-whisper-small"
-    _write(destination / "blobs" / "old-revision", _SMALL_TABLE_BYTES)
-    _write(destination / "blobs" / "older-revision", _SMALL_TABLE_BYTES)
 
-    assert completed_download_bytes("small", destination) == _SMALL_TABLE_BYTES
+    The table size is shrunk to 1 MB for this test: the cap is `min(on-disk
+    bytes, table size)`, so two blobs of the table's size prove it the same
+    way as two 486 MB ones, which cost a second and half a gigabyte of RAM
+    to write (measured here: a `truncate`d file on this NTFS volume was no
+    cheaper, 1.9 s, so a sparse file is not an option).
+    """
+    table_bytes = 1_000_000
+    monkeypatch.setitem(MODEL_ESTIMATED_SIZE_MB, "small", 1)
+    destination = tmp_path / "models--Systran--faster-whisper-small"
+    _write(destination / "blobs" / "old-revision", table_bytes)
+    _write(destination / "blobs" / "older-revision", table_bytes)
+
+    assert completed_download_bytes("small", destination) == table_bytes
 
 
 def test_the_baseline_of_a_destination_that_is_not_there_yet_is_zero(tmp_path):
