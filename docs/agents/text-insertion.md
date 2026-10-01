@@ -22,15 +22,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     never the counter alone), reschedules while busy, and gives up at
     `CLIPBOARD_RESTORE_MAX_WAIT_S` (10 s) leaving the transcript. Logged as
     `clipboard_restore id=... outcome=restored|skipped_changed|superseded|
-    superseded_changed|busy_rescheduled|abandoned_busy|failed_retrying|failed
-    delay_ms=...`; failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
+    superseded_changed|busy_rescheduled|abandoned_busy|failed_retrying|
+    busy_retrying|resumed|failed delay_ms=...`; failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
     (`SENDINPUT_RESTORE_DELAY_S`) lost pastes into Electron
     (`probe_wm_null_order.py`: WM_NULL answers before queued input). Raising
     the delay was rejected: on the Qt thread a longer sleep froze the UI
     during a streaming dictation, and any fixed delay only moves the race.
   - A paste during a pending restore takes the record over, keeping the
-    *original* previous state while the clipboard still holds the previous
-    transcript (streaming pastes every ~350 ms). `flush_pending_restore`
+    *original* previous state while the clipboard is still ours by the rule
+    below, or cannot be read (streaming pastes every ~350 ms); a paste that
+    then never touches the clipboard hands the record back
+    (`_resume_pending_restore`), so the user's content is not lost with it.
+    `flush_pending_restore`
     restores at once (content check kept); `DictationController.shutdown`
     calls it first. A scheduler that cannot start a thread leaves the record
     pending, never reports a landed paste as failed.
@@ -44,20 +47,45 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     counter must be unchanged since the call began, after it the clipboard
     may hold only our own partial restore (`_holds_only_our_restore`: every
     format byte-equal to a captured one, trailing NULs aside, or synthesized
-    from one). A restore that still fails -- the immediate one after a failed
-    write, or the deferred one -- stays the pending record and is retried
-    `CLIPBOARD_RESTORE_RETRY_ATTEMPTS` (3) times `CLIPBOARD_RESTORE_RETRY_DELAY_S`
-    (1.0 s) apart on the scheduler from the captured state, each attempt
-    first checking that the clipboard holds our transcript or only our
-    partial restore (`_restore_still_ours`); then it is reported once
-    through `set_restore_failure_handler` -> `clipboard_restore_failed` ->
-    the tray ("Clipboard not restored"). Why: after a reopen failure or a
+    from one; empty counts as ours there, within the call's ~0.3 s reopen
+    budget only). Either refusal raises `_ClipboardRestoreRefusedError`,
+    which ends the restore as `skipped_changed`. A restore that still fails
+    -- the immediate one after a failed write, or the deferred one -- stays
+    the pending record and is retried `CLIPBOARD_RESTORE_RETRY_ATTEMPTS` (3)
+    times `CLIPBOARD_RESTORE_RETRY_DELAY_S` (1.0 s) apart on the scheduler
+    from the captured state; then it is reported once through
+    `set_restore_failure_handler` -> `clipboard_restore_failed` -> the tray
+    ("Clipboard not restored"). A check that cannot read the clipboard
+    counts as one of those attempts (`busy_retrying`): another program holds
+    it, which is never evidence of a change -- answering "changed" there
+    dropped the record silently and lost the user's content (2026-10-01
+    review, P1). Why the retry exists at all: after a reopen failure or a
     manager closing the restore's open the user's clipboard stayed empty,
     and nothing tried again. A write whose close was lost and whose
     read-back could not open (`_ClipboardWriteUnconfirmedError`, contention:
     nothing pastes) arms the same retry with the counter read before the
     read-back, because the transcript most likely replaced the user's
     content. `flush_pending_restore` at shutdown does not retry.
+  - *Whether the clipboard is still ours goes by Windows' sequence counter*
+    (`TextInserter._restore_check`, owner's decision 2026-10-01). The record
+    keeps `GetClipboardSequenceNumber` read right after our own last write:
+    the transcript write's marker, or the counter read after a restore
+    attempt that failed past its `EmptyClipboard` (the record then forgets
+    the transcript: `text=None`). A record whose clipboard was emptied or
+    holds a partial restore of ours is ours only while the counter is
+    unchanged. A record that left the transcript there is ours while the
+    clipboard reads exactly that text, even when the counter moved (a
+    clipboard manager may set the same content again), and changed when it
+    reads anything else. Changed means `skipped_changed`, no report. So an
+    empty clipboard is never evidence on its own -- a Win+V "Clear all" or a
+    password manager's clear moves the counter and is left alone -- and a
+    user's re-copy of the same plain text no longer gets the old HTML
+    formats written next to it. Why: the content heuristic
+    (`_holds_only_our_restore`) took both for our partial restore (2026-10-01
+    review, P3). Residuals: the user copying our exact transcript back out
+    of the document while a retry is pending looks like ours; a foreign
+    write between our last write or failed attempt and the counter read is
+    adopted as ours (the same microseconds `ClipboardMarker` describes).
   - *The marker is read inside the write*: `set_clipboard_text` returns a
     `ClipboardMarker` read before it returns; `_clipboard_changed_after_set`
     compares content when readable, the counter only otherwise (each open may
@@ -213,8 +241,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   successful paste built from the row retires it -- by identity, never by
   text (`_retire_undelivered(entries)`): two dictations of "okay." are two
   rows, and the overlay's Insert on one retired both (2026-10-01 review).
-  The offer knows its own row (`_insert_action_row`, set by both paths that
-  paint the offer). The tray report appends
+  The offer knows the rows its text was built from (`_insert_action_rows`):
+  set by the two paths that record a failure and paint the offer, and by
+  `_repaste` when its failure paints the offer again -- a failed re-paste of
+  waiting rows or a failed Insert hands it the same rows, so the next
+  successful Insert retires exactly them (before, it carried none, the row
+  stayed listed and F10 pasted the text a second time; 2026-10-01 review).
+  The tray report appends
   `_undelivered_hint`: the count and how to insert them -- the re-paste
   hotkey only while registered, else the tray's "Insert transcript again".
 - **The overlay's Insert pastes the text that failed** (a streaming
@@ -276,10 +309,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   paste. A failed insert still shows briefly in the tray and stays as a
   row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
-  inserted, never pasted again. A possibly-inserted text is skipped by the
-  `_last_transcript` fallback too (`_repaste_last_unless_possibly_inserted`,
-  with the reason shown), and nothing pastes its row, so only Dismiss or
-  Clear queue take it away. The no-window refusal
+  inserted, never pasted again. The `_last_transcript` fallback
+  (`_repaste_last_unless_possibly_inserted`) refuses, with the reason shown,
+  only when the shown transcript's own row is possibly inserted
+  (`_shown_transcript_row`, by identity): another dictation with the same
+  text is a different paste. Nothing pastes a possibly-inserted row, so
+  only Dismiss or Clear queue take it away. The no-window refusal
   reveals the overlay once (`show_overlay_error` reveals only when it
   paints). The hotkey may not equal the recording, cancel or overlay one.
   Inside the previous paste's restore window a re-paste or the overlay's

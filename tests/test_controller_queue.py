@@ -3485,6 +3485,193 @@ def test_the_overlay_insert_retires_only_its_own_row(monkeypatch, tmp_path):
     _ = app
 
 
+def test_insert_on_an_offer_a_failed_repaste_painted_retires_its_row(
+    monkeypatch, tmp_path
+):
+    """F10 re-pastes the listed row and fails before its keystroke; the offer
+    it paints used to carry no row, so its successful Insert left the row
+    listed and the next F10 pasted the same text a second time."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token)
+        assert len(_not_inserted_rows(overlay)) == 1
+        inserter.now += 10.0
+        controller.repaste_last_transcript()
+        assert overlay.states[-1][0] == "Error"
+        inserter.fail = set()
+        inserter.now += 10.0
+
+        controller.insert_failed_text()
+
+        assert _not_inserted_rows(overlay) == []
+        inserter.now += 10.0
+        token_next = _record_and_stop(controller)
+        controller._on_transcription_ready("next.", request_token=token_next)
+        inserter.now += 10.0
+        controller.repaste_last_transcript()
+        assert [call[0] for call in inserter.calls] == [
+            "okay.",
+            "okay.",
+            "okay.",
+            "next.",
+            "next.",
+        ]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_insert_on_an_offer_a_failed_insert_painted_retires_its_row(
+    monkeypatch, tmp_path
+):
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token)
+        inserter.now += 10.0
+        controller.insert_failed_text()  # fails before its keystroke again
+        assert overlay.states[-1][0] == "Error"
+        assert len(_not_inserted_rows(overlay)) == 1
+        inserter.fail = set()
+        inserter.now += 10.0
+
+        controller.insert_failed_text()
+
+        assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_insert_on_a_failed_repaste_of_several_rows_retires_all_of_them(
+    monkeypatch, tmp_path
+):
+    """A re-paste of two waiting rows is one joined text; its offer covers
+    both rows, and its Insert retires both."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"first.", "second."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_1 = _record_and_stop(controller)
+        controller._on_transcription_ready("first.", request_token=token_1)
+        inserter.now += 10.0
+        token_2 = _record_and_stop(controller)
+        controller._on_transcription_ready("second.", request_token=token_2)
+        assert len(_not_inserted_rows(overlay)) == 2
+        inserter.now += 10.0
+        controller.repaste_last_transcript()  # both rows, joined: fails
+        assert overlay.states[-1][0] == "Error"
+        inserter.fail = set()
+        inserter.now += 10.0
+
+        controller.insert_failed_text()
+
+        assert _not_inserted_rows(overlay) == []
+        assert "first." in inserter.calls[-1][0]
+        assert "second." in inserter.calls[-1][0]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_f10_pastes_the_shown_transcript_when_another_dictation_may_have_landed(
+    monkeypatch, tmp_path
+):
+    """An older dictation "okay." may have landed and is listed so. A newer
+    "okay." was inserted fine; F10 re-pastes the newer one -- a different
+    dictation, which the text match refused."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.maybe = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_1 = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token_1)
+        assert "Possibly inserted" in _not_inserted_rows(overlay)[0][1]
+        inserter.maybe = set()
+        inserter.now += 10.0
+        token_2 = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token_2)
+        assert overlay.states[-1] == ("Done", "okay.")
+        inserter.now += 10.0
+
+        controller.repaste_last_transcript()
+
+        assert [call[0] for call in inserter.calls] == ["okay.", "okay.", "okay."]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_f10_refuses_the_shown_transcript_whose_own_paste_may_have_landed(
+    monkeypatch, tmp_path
+):
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.maybe = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token)
+        inserter.maybe = set()
+        inserter.now += 10.0
+
+        controller.repaste_last_transcript()
+
+        assert [call[0] for call in inserter.calls] == ["okay."]
+        assert "may already have been inserted" in overlay.states[-1][1]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_paced_insert_still_retires_its_row(monkeypatch, tmp_path):
+    """The overlay's Insert inside the previous paste's restore window is held
+    and run by the pace timer; it carries the offer's rows through the wait."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token)
+        assert len(_not_inserted_rows(overlay)) == 1
+        inserter.fail = set()
+        # Another paste's keystroke just went out: the Insert waits for it.
+        inserter.last_keystroke_at = inserter.now
+
+        controller.insert_failed_text()
+
+        assert [call[0] for call in inserter.calls] == ["okay."]
+        inserter.now += 10.0
+        controller._on_paste_pace_timeout()
+        assert [call[0] for call in inserter.calls] == ["okay.", "okay."]
+        assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
 def test_f10_pastes_a_row_whose_text_a_held_result_shares(monkeypatch, tmp_path):
     """A listed row "okay." and a pace-held foreground result "okay." are two
     dictations: F10 inserts the row after the held one, both go in."""
