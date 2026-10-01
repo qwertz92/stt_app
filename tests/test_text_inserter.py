@@ -4133,3 +4133,54 @@ def test_a_busy_take_over_with_an_unmoved_counter_still_inherits(monkeypatch):
         scheduler.fire_pending()
 
     assert clipboard.text == "Guten Tag"
+
+
+def _first_paste_with_a_pending_restore_then_a_user_copy(monkeypatch):
+    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    inserter, _backend, scheduler, reports, held = _inserter_on_a_holdable_clipboard(
+        clipboard, monkeypatch
+    )
+    assert inserter.insert_text_with_options(
+        "first", target_hwnd=321, paste_mode="send_input"
+    ) is True
+    clipboard.text = "user copy"
+    clipboard.payloads = {CF_UNICODETEXT: "user copy".encode("utf-16-le") + b"\x00\x00"}
+    clipboard.order = [CF_UNICODETEXT]
+    clipboard.sequence += 1
+    _hold_clipboard_during_take_over(inserter, held, monkeypatch)
+    return clipboard, inserter, scheduler, reports, held
+
+
+def test_a_refused_take_over_keeps_one_timer_chain(monkeypatch):
+    """The record's deferred timer has already fired and waits on the lock
+    when the take-over is refused. Re-arming the record then left two chains
+    counting attempts for one record (review of 4be13ec)."""
+    _clipboard, inserter, scheduler, _reports, held = (
+        _first_paste_with_a_pending_restore_then_a_user_copy(monkeypatch)
+    )
+    started = scheduler.pending[0]
+    with pytest.raises(ClipboardContentionError):
+        inserter.insert_text_with_options(
+            "second", target_hwnd=321, paste_mode="send_input"
+        )
+    held["on"] = True
+    started.fired = True  # a started timer is past cancelling
+    started.callback()
+
+    assert len(scheduler.pending) == 1
+
+
+def test_repeated_refusals_never_push_the_records_own_check_back(monkeypatch):
+    """Streaming partials arrive about every 350 ms; each refusal used to
+    cancel and re-arm the record's timer, so its own check never ran."""
+    _clipboard, inserter, scheduler, _reports, _held = (
+        _first_paste_with_a_pending_restore_then_a_user_copy(monkeypatch)
+    )
+    timer = scheduler.pending[0]
+    for _ in range(3):
+        with pytest.raises(ClipboardContentionError):
+            inserter.insert_text_with_options(
+                "w", target_hwnd=321, paste_mode="send_input"
+            )
+
+    assert scheduler.pending == [timer]

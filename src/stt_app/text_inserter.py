@@ -1870,8 +1870,6 @@ class TextInserter:
         record = self._pending_restore
         if record is None:
             return _NO_INHERITED_STATE, None
-        self._pending_restore = None
-        self._cancel_scheduled_restore(record)
         verdict = self._restore_check(record)
         if verdict == _RESTORE_BUSY:
             # Unreadable right now. Only an unmoved counter still proves the
@@ -1879,19 +1877,24 @@ class TextInserter:
             # restored the older state over what they had just copied
             # (review of a404479). With a moved counter nothing can be told
             # apart, so this paste is refused before it writes anything and
-            # the record waits for its own check to decide.
+            # the record keeps its pending slot and its own timer: cancelling
+            # and re-arming it started a second chain when the timer had
+            # already fired, and pushed its check back on every refusal
+            # (review of 4be13ec).
             current = self._clipboard_sequence_number()
             if record.marker is None or current != record.marker:
-                self._pending_restore = record
                 self._log_restore_outcome(record, "busy_refused")
-                if record.retry:
-                    self._schedule_restore_retry(record)
-                else:
-                    self._schedule_restore(record)
+                if record.handle is None:
+                    if record.retry:
+                        self._schedule_restore_retry(record)
+                    else:
+                        self._schedule_restore(record)
                 raise ClipboardContentionError(
                     "The clipboard is in use by another program."
                 )
             verdict = _RESTORE_OURS
+        self._pending_restore = None
+        self._cancel_scheduled_restore(record)
         if verdict == _RESTORE_OURS:
             # A capture would take our own transcript for the user's
             # clipboard.
