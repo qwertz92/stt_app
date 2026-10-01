@@ -12,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from stt_app.transcriber import _job_poll as job_poll_module
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.base import TranscriptionError
 
@@ -1125,8 +1126,8 @@ def _fake_clock(monkeypatch, provider):
             )
         now[0] += seconds
 
-    monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(provider.time, "sleep", _sleep)
+    monkeypatch.setattr(job_poll_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(job_poll_module.time, "sleep", _sleep)
     return now
 
 
@@ -1643,8 +1644,8 @@ def test_a_shutdown_ends_the_poll_within_one_slice(monkeypatch):
         # The quit lands during the first slice of the first interval.
         request_transcription_shutdown()
 
-    monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(provider.time, "sleep", _sleep)
+    monkeypatch.setattr(job_poll_module.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(job_poll_module.time, "sleep", _sleep)
     t = AssemblyAITranscriber(api_key="key", aai_module=aai)
     try:
         with pytest.raises(TranscriptionError) as excinfo:
@@ -1706,3 +1707,129 @@ def test_the_loop_sleeps_one_polling_interval_between_fetches(monkeypatch):
     assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
     assert len(fetched) == 3
     assert now[0] == 4.0, "two non-terminal fetches, one interval after each"
+
+
+# ---------------------------------------------------------------------------
+# Tests: data-residency region (EU endpoint)
+# ---------------------------------------------------------------------------
+
+
+class TestAssemblyAIRegion:
+    """The EU region moves batch, streaming and the connection test.
+
+    Hosts from AssemblyAI's own pages, read 2026-10-01:
+    https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region
+    (US `api.assemblyai.com`, EU `api.eu.assemblyai.com`) and
+    https://www.assemblyai.com/docs/streaming/endpoints-and-data-zones
+    (EU `streaming.eu.assemblyai.com`, default `streaming.assemblyai.com`).
+    """
+
+    def test_batch_requests_go_to_the_eu_host(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="k", aai_module=fake_aai, region="eu")
+        t._configure()
+        assert fake_aai.settings.base_url == "https://api.eu.assemblyai.com"
+
+    def test_the_default_region_is_automatic_and_keeps_the_default_host(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="k", aai_module=fake_aai)
+        t._configure()
+        assert t._region == "auto"
+        assert fake_aai.settings.base_url == "https://api.assemblyai.com"
+
+    def test_us_only_batch_uses_the_documented_us_host(self):
+        """"The default endpoint (`api.assemblyai.com`) processes your
+        pre-recorded audio transcription requests in the US region" -- there
+        is no separate US batch host (select-the-region page, 2026-10-01)."""
+        fake_aai = _make_fake_aai()
+        AssemblyAITranscriber(api_key="k", aai_module=fake_aai, region="us")._configure()
+        assert fake_aai.settings.base_url == "https://api.assemblyai.com"
+
+    def test_a_us_transcriber_after_an_eu_one_puts_the_us_host_back(self):
+        """The SDK's settings are process-global, so each call sets them."""
+        fake_aai = _make_fake_aai()
+        AssemblyAITranscriber(
+            api_key="k", aai_module=fake_aai, region="eu"
+        )._configure()
+        AssemblyAITranscriber(
+            api_key="k", aai_module=fake_aai, region="us"
+        )._configure()
+        assert fake_aai.settings.base_url == "https://api.assemblyai.com"
+
+    def test_an_unknown_region_falls_back_to_the_default(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="k", aai_module=fake_aai, region="mars")
+        t._configure()
+        assert t._region == "auto"
+        assert fake_aai.settings.base_url == "https://api.assemblyai.com"
+
+    def test_the_installed_sdk_sends_batch_calls_to_the_configured_host(
+        self, monkeypatch
+    ):
+        """Against the real SDK: its default client follows `settings.base_url`."""
+        import assemblyai as real_aai
+
+        monkeypatch.setattr(real_aai.settings, "api_key", real_aai.settings.api_key)
+        monkeypatch.setattr(real_aai.settings, "base_url", real_aai.settings.base_url)
+        monkeypatch.setattr(real_aai.Client, "_default", None)
+        t = AssemblyAITranscriber(
+            api_key="local-test", aai_module=real_aai, region="eu"
+        )
+        t._configure()
+        client = real_aai.Client.get_default()
+        assert str(client.http_client.base_url).rstrip("/") == (
+            "https://api.eu.assemblyai.com"
+        )
+
+    def test_the_connection_test_asks_the_eu_host(self):
+        t = AssemblyAITranscriber(
+            api_key="k", aai_module=_make_fake_aai(), region="eu"
+        )
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.status = 200
+            ok, _message = t.test_connection()
+        assert ok is True
+        request = mock_urlopen.call_args[0][0]
+        assert request.full_url == (
+            "https://api.eu.assemblyai.com/v2/transcript?limit=1"
+        )
+
+    def test_the_connection_test_keeps_the_us_host_by_default(self):
+        t = AssemblyAITranscriber(api_key="k", aai_module=_make_fake_aai())
+        with patch("urllib.request.urlopen") as mock_urlopen:
+            mock_urlopen.return_value.__enter__.return_value.status = 200
+            t.test_connection()
+        request = mock_urlopen.call_args[0][0]
+        assert request.full_url == "https://api.assemblyai.com/v2/transcript?limit=1"
+
+    @pytest.mark.parametrize(
+        ("region", "host"),
+        [
+            ("eu", "streaming.eu.assemblyai.com"),
+            # The default host is edge routing: data "may be processed in any
+            # of the US or EU locations"; only the data-zone host keeps it in
+            # the US (endpoints-and-data-zones page, 2026-10-01).
+            ("us", "streaming.us.assemblyai.com"),
+            ("auto", "streaming.assemblyai.com"),
+        ],
+    )
+    def test_streaming_connects_to_the_region_host(self, monkeypatch, region, host):
+        """Built through the real `StreamingClientOptions`, not a test factory."""
+        import assemblyai.streaming.v3 as streaming_v3
+
+        built: list = []
+
+        class _RecordingClient(FakeStreamingClient):
+            def __init__(self, options):
+                built.append(options)
+                super().__init__(api_key=options.api_key)
+
+        monkeypatch.setattr(streaming_v3, "StreamingClient", _RecordingClient)
+        t = AssemblyAITranscriber(
+            api_key="k", aai_module=_make_fake_aai(), region=region
+        )
+        t.start_stream()
+        try:
+            assert [options.api_host for options in built] == [host]
+        finally:
+            t.abort_stream()

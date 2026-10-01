@@ -9,8 +9,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .benchmark_history import BenchmarkHistoryEntry
 from .config import (
     ASSEMBLYAI_MODELS,
+    ASSEMBLYAI_REGION_AUTO,
+    ASSEMBLYAI_REGION_EU,
+    ASSEMBLYAI_REGION_US,
     AZURE_SPEECH_MODELS,
     DEEPGRAM_MODELS,
+    DEEPGRAM_REGION_EU,
+    DEEPGRAM_REGION_GLOBAL,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_DEEPGRAM_MODEL,
@@ -18,16 +23,21 @@ from .config import (
     DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_MISTRAL_MODEL,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
+    MISTRAL_MODELS,
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
+    SPEECHMATICS_MODELS,
     VALID_MODEL_SIZES,
 )
 from .local_benchmark import _format_seconds
+from .settings_store import _REMOTE_MODEL_FIELDS
 
 
 def _emit_background_signal(
@@ -197,6 +207,10 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "mai-transcribe-1.5": "mai-transcribe-1.5 (previous generation, 43 languages)",
     "mai-transcribe-1": "mai-transcribe-1 (deprecated by Microsoft)",
     "fun-asr-realtime": "fun-asr-realtime (31 languages; no German)",
+    "melia-1": "melia-1 (current default; Auto detects the language)",
+    "enhanced": "enhanced (highest accuracy; pick a language)",
+    "standard": "standard (pick a language)",
+    "voxtral-mini-2602": "voxtral-mini-2602 (Voxtral Mini Transcribe 2)",
 }
 
 
@@ -224,6 +238,76 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
         (value, _REMOTE_MODEL_LABELS.get(value, value))
         for value in FUNASR_MODELS
     ),
+    "speechmatics": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in SPEECHMATICS_MODELS
+    ),
+    "mistral": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in MISTRAL_MODELS
+    ),
+}
+
+
+# The data-residency region choices of each provider that has them, as
+# (value, label, what the vendor guarantees for it); the field each is
+# stored in is `settings_store._REMOTE_REGION_FIELDS`, the hosts and the
+# vendor sentences behind each guarantee are beside the host tables in
+# `config.py`. The vendor's default endpoint comes first and says so. A
+# label claims no more than the vendor does: AssemblyAI's default streaming
+# host routes to the US or the EU, so it is "Automatic", not "US", and
+# Deepgram's default is its "global" endpoint (review of 2026-10-01).
+_REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "assemblyai": (
+        (
+            ASSEMBLYAI_REGION_AUTO,
+            "Automatic (default)",
+            (
+                "AssemblyAI's default endpoints: batch is processed in the US; "
+                "streaming goes to the nearest location, in the US or EU."
+            ),
+        ),
+        (
+            ASSEMBLYAI_REGION_US,
+            "US only",
+            "Batch and streaming are processed only in the US.",
+        ),
+        (
+            ASSEMBLYAI_REGION_EU,
+            "EU only",
+            "Batch and streaming are processed only in the EU.",
+        ),
+    ),
+    "deepgram": (
+        (
+            DEEPGRAM_REGION_GLOBAL,
+            "Global (default)",
+            (
+                "Deepgram's default global endpoint; Deepgram states no "
+                "processing location for it."
+            ),
+        ),
+        (
+            DEEPGRAM_REGION_EU,
+            "EU",
+            (
+                "Deepgram's EU endpoint, which routes the traffic through the "
+                "EU. It takes the same API key."
+            ),
+        ),
+    ),
+    "speechmatics": (
+        ("eu1", "EU (default)", "Jobs are created in Speechmatics' EU region."),
+        ("us1", "US", "Jobs are created in Speechmatics' US region."),
+        (
+            "au1",
+            "Australia",
+            (
+                "Jobs are created in Speechmatics' Australian region; Melia 1 "
+                "is not offered there."
+            ),
+        ),
+    ),
 }
 
 
@@ -240,6 +324,8 @@ _ENGINE_LABELS: dict[str, str] = {
     "elevenlabs": "ElevenLabs",
     "azure": "Azure LLM Speech",
     "funasr": "Fun-ASR / Alibaba",
+    "speechmatics": "Speechmatics",
+    "mistral": "Mistral (Voxtral)",
     "custom": "Custom endpoint",
 }
 
@@ -613,10 +699,26 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
     "azure": DEFAULT_AZURE_SPEECH_MODEL,
     "funasr": DEFAULT_FUNASR_MODEL,
+    "speechmatics": DEFAULT_SPEECHMATICS_MODEL,
+    "mistral": DEFAULT_MISTRAL_MODEL,
     # Free text: there is no default model for an endpoint the app does not
     # know.
     "custom": "",
 }
+
+
+def remote_model_values(settings: object) -> dict[str, str]:
+    """Each remote engine's stored model, keyed by engine.
+
+    Read through `settings_store._REMOTE_MODEL_FIELDS`, the one map of which
+    field holds which engine's model, so a new engine needs no entry here.
+    """
+    return {
+        engine: str(
+            getattr(settings, field, "") or _REMOTE_MODEL_DEFAULTS.get(engine, "")
+        )
+        for engine, field in _REMOTE_MODEL_FIELDS.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -645,6 +747,8 @@ _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
     _RemoteProviderInfo("elevenlabs", "ElevenLabs", "ElevenLabs"),
     _RemoteProviderInfo("azure", "Azure", "Azure LLM Speech"),
     _RemoteProviderInfo("funasr", "Fun-ASR", "Fun-ASR (Alibaba)"),
+    _RemoteProviderInfo("speechmatics", "Speechmatics", "Speechmatics"),
+    _RemoteProviderInfo("mistral", "Mistral", "Mistral (Voxtral)"),
     _RemoteProviderInfo("custom", "Custom", "Custom endpoint"),
 )
 
@@ -656,6 +760,16 @@ _REMOTE_PROVIDER_LABELS: dict[str, str] = {
 
 def _remote_provider_label(name: str) -> str:
     return _REMOTE_PROVIDER_LABELS.get(name, name)
+
+
+_REMOTE_PROVIDER_TITLES: dict[str, str] = {
+    provider.name: provider.title for provider in _REMOTE_PROVIDERS
+}
+
+
+def region_row_label(name: str) -> str:
+    """The API Keys tab's label for a provider's region selector."""
+    return f"{_REMOTE_PROVIDER_TITLES.get(name, name)} Region"
 
 
 _REMOTE_API_KEY_PROVIDERS: tuple[str, ...] = tuple(

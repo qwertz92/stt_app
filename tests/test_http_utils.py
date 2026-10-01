@@ -212,6 +212,23 @@ def test_a_detail_that_is_a_plain_string_is_kept_as_before():
     assert read_http_error_detail(_http_error(b'{"detail": "Not Found"}')) == "Not Found"
 
 
+def test_a_status_phrase_under_error_keeps_the_detail_beside_it():
+    """Speechmatics answers `{"code", "error", "detail"}`, where `error` is
+    only the status phrase and `detail` is what to change; reading `error`
+    alone handed the user "Forbidden" for a missing entitlement."""
+    body = b'{"code": 403, "detail": "Entitlement check failed", "error": "Forbidden"}'
+
+    assert read_http_error_detail(_http_error(body)) == (
+        "Forbidden: Entitlement check failed"
+    )
+
+
+def test_a_detail_that_already_repeats_the_error_is_not_doubled():
+    body = b'{"error": "Job rejected", "detail": "Job rejected: file too long"}'
+
+    assert read_http_error_detail(_http_error(body)) == "Job rejected: file too long"
+
+
 def test_the_recovered_text_suffix_lives_here_once_for_every_caller():
     """Fun-ASR's recovered-text convention (what a failure leaves behind goes
     into the error, bounded) is shared with the loop over a long recording's

@@ -9131,3 +9131,33 @@ Update 2026-10-01: the vendor pages were read later that day
 streaming id `universal-3-6-pro` and the 32-language code-switching figure
 (3.5: 19); the $0.45/h price and the "up to 100 keyterms" figure remain
 unverified.
+
+## 2026-10-01: Speechmatics, Mistral and region selectors in Settings
+
+The Speechmatics and Mistral backends and the AssemblyAI/Deepgram EU regions
+landed with no Settings widgets. `_construct_settings_from_widgets` builds a
+whole `AppSettings`, so the seven new fields took their dataclass defaults,
+read as edits against the baseline and were written over the stored values
+on an untouched Save (a hand-set `"deepgram_region": "eu"` came back `us`).
+The field guard test that exists for exactly this had not been run, because
+the settings-dialog suites were excluded from the backend work. The fields
+now come from widgets: model pickers for both engines on Transcription, key
+rows and connection tests on API Keys, and one region selector per provider
+(AssemblyAI, Deepgram, Speechmatics) on API Keys. Lesson: a new
+`AppSettings` field is not done until the settings-dialog suites ran.
+
+## 2026-10-01: review of the provider branch
+
+- **A region label must not claim more than the vendor guarantees.** "US
+  (default)" streamed AssemblyAI to `streaming.assemblyai.com`, which routes
+  to the US or the EU. AssemblyAI now offers Automatic (default), US only
+  (`streaming.us.assemblyai.com`) and EU only; Deepgram's default is
+  "Global", its own word for `api.deepgram.com`.
+- **A provider asked for JSON treats anything else as an error.** The custom
+  endpoint pasted a BOM-prefixed or comment-led HTML page and a plain
+  "Internal Server Error" as transcripts; chat `content: null` (a refusal, a
+  cut-off answer) read as silence. One reader, `transcript_from_json`.
+- **Waiting for EOF is not waiting for the child.** A key command that
+  printed its token and exited 0 failed with a timeout because a grandchild
+  held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
+  in a Windows job object, and the call returns once the child exited.

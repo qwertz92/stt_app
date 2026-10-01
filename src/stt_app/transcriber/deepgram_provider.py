@@ -22,10 +22,13 @@ from pathlib import Path
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
+    DEEPGRAM_API_HOSTS,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
+    DEFAULT_DEEPGRAM_REGION,
     DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
+    normalize_deepgram_region,
     parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context
@@ -41,8 +44,6 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
-
-DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
 
 _STREAM_SEND_SENTINEL = object()
 _STREAM_AUDIO_QUEUE_MAX_CHUNKS = 32
@@ -74,6 +75,10 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         or a language code like ``"de"`` / ``"en"``.
     model : str
         Deepgram model name.  Defaults to ``nova-3``.
+    region : str
+        ``"us"`` (the default global endpoint) or ``"eu"``
+        (``api.eu.deepgram.com``); batch, streaming and the connection test
+        all use it.
     """
 
     def __init__(
@@ -82,6 +87,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         language_mode: str = "auto",
         model: str = DEFAULT_DEEPGRAM_MODEL,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
+        region: str = DEFAULT_DEEPGRAM_REGION,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -90,6 +96,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
+        self._host = DEEPGRAM_API_HOSTS[normalize_deepgram_region(region)]
         self._model = model or DEFAULT_DEEPGRAM_MODEL
         # Needs self._model, so this must run after it is assigned above
         # (reordered from the model assignment's original position below it).
@@ -217,7 +224,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             self._apply_vocabulary_params(params)
 
             url = (
-                f"{DEEPGRAM_API_BASE}/listen?"
+                f"https://{self._host}/v1/listen?"
                 f"{urllib.parse.urlencode(params, doseq=True)}"
             )
 
@@ -294,7 +301,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         Returns ``(success, message)`` where *success* is ``True`` when the
         key is accepted by the Deepgram API.
         """
-        url = f"{DEEPGRAM_API_BASE}/projects"
+        url = f"https://{self._host}/v1/projects"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Token {self._api_key}")
 
@@ -398,7 +405,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._apply_vocabulary_params(params)
 
         url = (
-            f"wss://api.deepgram.com/v1/listen?"
+            f"wss://{self._host}/v1/listen?"
             f"{urllib.parse.urlencode(params, doseq=True)}"
         )
 

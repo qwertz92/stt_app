@@ -23,7 +23,7 @@ from stt_app.config import (
     VALID_MODEL_SIZES,
     supports_custom_vocabulary,
 )
-from stt_app.settings_store import AppSettings
+from stt_app.settings_store import AppSettings, apply_engine_model_selection
 from stt_app.transcriber import factory
 
 # Every class `create_transcriber` may instantiate, by the name it is bound to
@@ -41,6 +41,8 @@ _TRANSCRIBER_NAMES = (
     "AzureLlmSpeechTranscriber",
     "FunAsrTranscriber",
     "CustomEndpointTranscriber",
+    "SpeechmaticsTranscriber",
+    "MistralTranscriber",
 )
 
 
@@ -79,6 +81,8 @@ def factory_kwargs(monkeypatch):
                 model_size=model,
                 custom_vocabulary="Kubernetes",
             )
+        elif model:
+            settings = apply_engine_model_selection(settings, engine, model)
         built = factory.create_transcriber(settings, secret_store=_SecretStore())
         assert isinstance(built, _Recorder), engine
         return built.kwargs
@@ -107,7 +111,10 @@ def test_the_remote_answer_matches_what_the_factory_hands_the_provider(
     kwargs = factory_kwargs(engine)
     received = "custom_vocabulary" in kwargs
 
-    assert received is supports_custom_vocabulary(engine), engine
+    # Asked for the model the factory built: the answer is per model
+    # where an engine has one without a biasing input (Speechmatics).
+    model = str(kwargs.get("model", ""))
+    assert received is supports_custom_vocabulary(engine, model), engine
     if received:
         assert kwargs["custom_vocabulary"] == "Kubernetes"
 
@@ -167,6 +174,8 @@ def test_the_sentence_that_names_the_supported_set_names_every_engine() -> None:
         "openai": "OpenAI",
         "deepgram": "Deepgram",
         "custom": "custom endpoint",
+        "speechmatics": "Speechmatics",
+        "mistral": "Mistral",
     }
 
     assert set(labels) == set(CUSTOM_VOCABULARY_ENGINES)
@@ -175,3 +184,19 @@ def test_the_sentence_that_names_the_supported_set_names_every_engine() -> None:
     # The local half: every runtime that takes the terms is a Whisper one.
     assert config.CUSTOM_VOCABULARY_LOCAL_RUNTIMES == ("faster-whisper",)
     assert "Whisper models" in CUSTOM_VOCABULARY_SUPPORTED_SUMMARY
+
+
+@pytest.mark.parametrize("model", config.SPEECHMATICS_MODELS)
+def test_a_speechmatics_model_gets_the_vocabulary_only_with_a_dictionary(
+    factory_kwargs,
+    model: str,
+) -> None:
+    """Melia 1 has no custom dictionary ("Not yet."), so the Transcription
+    tab's note must say the terms are ignored there, and the factory must not
+    hand them over -- the answer is per model within one engine."""
+    kwargs = factory_kwargs("speechmatics", model)
+    assert kwargs["model"] == model
+    received = "custom_vocabulary" in kwargs
+
+    assert received is supports_custom_vocabulary("speechmatics", model), model
+    assert received is (model != config.SPEECHMATICS_MELIA_MODEL), model

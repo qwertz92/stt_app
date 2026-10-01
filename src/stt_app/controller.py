@@ -76,6 +76,7 @@ from .config import (
     VALID_START_BEEP_TONES,
     language_modes_for_selection,
     nemotron_provider_order,
+    supports_custom_vocabulary,
     supports_streaming,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
@@ -98,6 +99,8 @@ from .model_download_progress import (
     format_model_download_progress,
 )
 from .overlay_ui import OverlayUI
+from .settings_store import _REMOTE_MODEL_FIELDS as _ENGINE_MODEL_FIELDS
+from .settings_store import _REMOTE_REGION_FIELDS as _ENGINE_REGION_FIELDS
 from .settings_store import AppSettings, SettingsStore, preferred_onnx_device
 from .streaming_text import (
     StreamingTextState,
@@ -335,27 +338,14 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "azure": "has_azure_key",
     "funasr": "has_funasr_key",
     "custom": "has_custom_key",
+    "speechmatics": "has_speechmatics_key",
+    "mistral": "has_mistral_key",
 }
 
-# Which ``AppSettings`` field carries the model name each remote engine sends.
-# Only one is ever read, so they collapse into a single identity slot: editing
-# the Groq model must not reload a loaded local model.
-_ENGINE_MODEL_FIELDS: dict[str, str] = {
-    "assemblyai": "assemblyai_model",
-    "openai": "openai_model",
-    "groq": "groq_model",
-    "deepgram": "deepgram_model",
-    "elevenlabs": "elevenlabs_model",
-    "azure": "azure_speech_model",
-    "funasr": "funasr_model",
-    "custom": "custom_model",
-}
-
-# Remote engines that pass the biasing prompt through to their provider. The
-# rest expose no such input, so the setting cannot change their runtime.
-_ENGINES_USING_CUSTOM_VOCABULARY = frozenset(
-    {DEFAULT_ENGINE, "assemblyai", "openai", "groq", "deepgram", "custom"}
-)
+# `_ENGINE_MODEL_FIELDS` and `_ENGINE_REGION_FIELDS` (imported from the
+# store) say which field carries each remote engine's model and region.
+# Only the selected engine's is read, so each collapses into one identity
+# slot: editing the Groq model must not reload a loaded local model.
 
 
 class _TranscriberIdentity(NamedTuple):
@@ -392,6 +382,7 @@ class _TranscriberIdentity(NamedTuple):
     # read for a given engine.
     remote_model: str = ""
     azure_endpoint: str = ""
+    remote_region: str = ""
     # The custom endpoint's constructor arguments besides its model and key.
     custom_endpoint: str = ""
     custom_api_mode: str = ""
@@ -3062,23 +3053,10 @@ class DictationController(QtCore.QObject):
         )
 
     def _selected_model_name(self, settings: AppSettings) -> str:
-        if settings.engine == "groq":
-            return settings.groq_model
-        if settings.engine == "openai":
-            return settings.openai_model
-        if settings.engine == "deepgram":
-            return getattr(settings, "deepgram_model", "")
-        if settings.engine == "assemblyai":
-            return getattr(settings, "assemblyai_model", "")
-        if settings.engine == "elevenlabs":
-            return getattr(settings, "elevenlabs_model", "")
-        if settings.engine == "azure":
-            return getattr(settings, "azure_speech_model", "")
-        if settings.engine == "funasr":
-            return getattr(settings, "funasr_model", "")
-        if settings.engine == "custom":
-            return getattr(settings, "custom_model", "")
-        return settings.model_size
+        field = _ENGINE_MODEL_FIELDS.get(settings.engine)
+        if field is None:
+            return settings.model_size
+        return str(getattr(settings, field, "") or "")
 
     def _current_last_recording_id(self) -> str:
         try:
@@ -5134,9 +5112,14 @@ class DictationController(QtCore.QObject):
             # unknown engine to `local`, so this is a latent inconsistency
             # rather than a reachable one -- but the fallback below is written
             # to survive an unknown engine, and this was the one field where
-            # it did not.
-            if engine in _ENGINES_USING_CUSTOM_VOCABULARY
+            # it did not. A remote engine reads it only where its provider
+            # receives it (`supports_custom_vocabulary`, per model: Speechmatics'
+            # Melia 1 has no custom dictionary).
+            if engine == DEFAULT_ENGINE
             or engine not in _ENGINE_MODEL_FIELDS
+            or supports_custom_vocabulary(
+                engine, getattr(settings, _ENGINE_MODEL_FIELDS[engine], "")
+            )
             else ""
         )
         if engine == DEFAULT_ENGINE or engine not in _ENGINE_MODEL_FIELDS:
@@ -5247,6 +5230,11 @@ class DictationController(QtCore.QObject):
                 )
                 if engine in REMOTE_BATCH_MAX_PART_SECONDS
                 else 0.0
+            ),
+            remote_region=(
+                str(getattr(settings, _ENGINE_REGION_FIELDS[engine], "") or "")
+                if engine in _ENGINE_REGION_FIELDS
+                else ""
             ),
             **custom_fields,
             # A key command is a credential source of its own: with one set,

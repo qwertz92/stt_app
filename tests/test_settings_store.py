@@ -1686,3 +1686,90 @@ def test_the_custom_endpoint_settings_round_trip_and_default(tmp_path):
     # Free text: any model id is taken, it is not checked against a list.
     picked = apply_engine_model_selection(defaults, "custom", " my/model ")
     assert picked.custom_model == "my/model"
+
+
+def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
+    tmp_path,
+):
+    """`assemblyai_region` is "auto", "us" or "eu"; `deepgram_region` is
+    "global" or "eu". The default is each vendor's default endpoint.
+
+    A file written before the setting existed carries neither key and must
+    keep sending to the hosts it always used; a value this build does not
+    know falls back to the default rather than reaching a provider.
+    """
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(assemblyai_region="eu", deepgram_region="eu")
+    store.save(saved)
+    assert store.load() == saved
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert (older.assemblyai_region, older.deepgram_region) == ("auto", "global")
+
+    us_only = AppSettings.from_dict({"assemblyai_region": "us", "deepgram_region": "us"})
+    # Deepgram documents no US-only endpoint, so "us" is not one of its values.
+    assert (us_only.assemblyai_region, us_only.deepgram_region) == ("us", "global")
+
+    shouting = AppSettings.from_dict({"assemblyai_region": " EU ", "deepgram_region": "Eu"})
+    assert (shouting.assemblyai_region, shouting.deepgram_region) == ("eu", "eu")
+
+    damaged = AppSettings.from_dict(
+        {"assemblyai_region": "mars", "deepgram_region": ["eu"]}
+    )
+    assert (damaged.assemblyai_region, damaged.deepgram_region) == ("auto", "global")
+
+
+def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
+    """Model, region and key flag of the two engines added on 2026-10-01: an
+    older file carries none of them (no schema bump), and a value this build
+    does not know falls back to the default rather than reaching a provider."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="speechmatics",
+        speechmatics_model="enhanced",
+        speechmatics_region="us1",
+        has_speechmatics_key=True,
+        mistral_model="voxtral-mini-2602",
+        has_mistral_key=True,
+    )
+    store.save(saved)
+    assert store.load() == saved
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert (older.speechmatics_model, older.speechmatics_region) == ("melia-1", "eu1")
+    assert older.mistral_model == "voxtral-mini-2602"
+    assert not older.has_speechmatics_key and not older.has_mistral_key
+
+    damaged = AppSettings.from_dict(
+        {
+            "speechmatics_model": "ultra",
+            "speechmatics_region": "EU2",
+            "mistral_model": "voxtral-small",
+        }
+    )
+    assert (damaged.speechmatics_model, damaged.speechmatics_region) == (
+        "melia-1",
+        "eu1",
+    )
+    assert damaged.mistral_model == "voxtral-mini-2602"
+    assert AppSettings.from_dict({"speechmatics_region": " AU1 "}).speechmatics_region == "au1"
+
+
+@pytest.mark.parametrize(
+    ("engine", "field", "model"),
+    [("speechmatics", "speechmatics_model", "standard"),
+     ("mistral", "mistral_model", "voxtral-mini-2602")],
+)
+def test_the_new_engines_take_a_model_selection(engine, field, model):
+    from stt_app.settings_store import apply_engine_model_selection
+
+    chosen = apply_engine_model_selection(AppSettings(), engine, model)
+    assert getattr(chosen, field) == model
+
+
+def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save(AppSettings(), extra={"speechmatics_api_key": "s", "mistral_api_key": "m"})
+    raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
+    assert "speechmatics_api_key" not in raw
+    assert "mistral_api_key" not in raw

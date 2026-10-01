@@ -24,6 +24,8 @@ This document compares pricing, free-tier availability, and quality signals for 
 | ElevenLabs | Batch | `scribe_v2` | $3.67 per 1,000 minutes on the [Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text) (read 2026-09-21) — consistent with the pay-as-you-go credit cost below | $0.22/hour |
 | Azure LLM Speech | Batch | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" ([announcement](https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/), 2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.000047/second, Beijing region rate — the only region this model's own pricing page lists ([fun-asr-realtime pricing](https://www.alibabacloud.com/help/en/model-studio/fun-asr-realtime), checked 2026-09-21) | ~$0.169/hour |
+| Speechmatics | Batch | `melia-1` (default), `enhanced`, `standard` | Melia 1: $0.129/hour (a pricing summary read 2026-09-27; the vendor's [pricing page](https://www.speechmatics.com/pricing) shows $0.129 without naming the model); Enhanced and Standard: not read | $0.129/hour (Melia 1) |
+| Mistral | Batch | `voxtral-mini-2602` (Voxtral Mini Transcribe 2) | $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -71,6 +73,8 @@ All figures below were re-read from the vendor's own pricing page on
 | Deepgram | Yes | $200 free credit, no credit card required ([pricing](https://deepgram.com/pricing)) |
 | ElevenLabs | Yes | **Corrected 2026-09-21**: the Free plan gives 10,000 credits/month, and Speech to Text costs 330 credits per minute of audio — about **30 minutes/month**, not the "2 hours 30 minutes" this document said before ([pricing](https://elevenlabs.io/pricing)) |
 | Azure LLM Speech | **No** | **Corrected 2026-09-21**: Microsoft's own quotas page lists "Not applicable" in the Free (F0) column for every LLM-speech and fast-transcription row — the F0 tier does not cover the API this app uses at all. A Standard (S0) resource is required from the start; see [Azure LLM Speech Setup](azure-llm-speech.md#cost-and-free-tier) |
+| Speechmatics | Yes | $100 in free credit to start, no credit card required ([pricing](https://www.speechmatics.com/pricing), read 2026-09-21) |
+| Mistral | **Not verified** | Not read this session |
 | Fun-ASR (Alibaba) | Likely yes, amount **not verified** | Alibaba grants new users a free quota per model, valid 90 days, and only for models in the Singapore region with the International deployment scope, which is the endpoint this app uses ([free-quota page](https://www.alibabacloud.com/help/en/model-studio/new-free-quota), read 2026-09-21); that page does not state the amount for Fun-ASR specifically. The "36,000 audio seconds (10 hours)" this document stated before could not be re-confirmed this session; check the Model Studio console for the current figure before relying on it |
 
 OpenAI caveat:
@@ -251,7 +255,7 @@ implemented as a remote engine.
 | Cohere hosted Transcribe API | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Local/offline usage is covered by the integrated ONNX model, not by the hosted API | Hosted provider not integrated |
 | Alibaba Fun-ASR — **local** weights | Open weights Apache-2.0 on HF/ModelScope | n/a (self-hosted) | 7.7B (too big) or 0.8B nano (no ONNX export, different runtime) | Local path not integrated; the **hosted** Fun-ASR is integrated as a remote engine. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 | Soniox API | Hosted, key-based, publicly documented | Read on Artificial Analysis (checked 2026-09-21): "Soniox v5 Async" at 3.8% WER / $1.66 per 1,000 minutes | Not local; would be a new remote engine | Not integrated — see the note below |
-| Mistral Voxtral API | Hosted, key-based. Voxtral Small/Mini also ship as open weights (Apache 2.0), but no ONNX or CTranslate2 export was found this session, so they would need a new local runtime, not the app's existing ones | Read on Artificial Analysis (checked 2026-09-21): "Voxtral Small" at 2.8% WER / $4.00 per 1,000 minutes | Open weights exist but no ONNX path; not a drop-in for this app's local runtimes | Not integrated — see the note below |
+| Mistral Voxtral API (Voxtral Small) | Hosted, key-based. Voxtral Small/Mini also ship as open weights (Apache 2.0), but no ONNX or CTranslate2 export was found this session, so they would need a new local runtime, not the app's existing ones | Read on Artificial Analysis (checked 2026-09-21): "Voxtral Small" at 2.8% WER / $4.00 per 1,000 minutes | Open weights exist but no ONNX path; not a drop-in for this app's local runtimes | Not integrated — see the note below |
 
 **Why Soniox and Voxtral were not added as remote providers now**: on the
 same Artificial Analysis reading (2026-09-21), neither is *both* more
@@ -266,6 +270,12 @@ on accuracy — are therefore not beaten by either candidate on the date this
 was checked. Re-check before deciding differently; both prices and rankings
 move.
 
+**Update 2026-10-01**: Speechmatics and Mistral were integrated anyway, on
+request, as the `speechmatics` and `mistral` engines (section 1). The
+Mistral engine uses Voxtral Mini Transcribe 2 ($0.003/min, about $3.00
+per 1,000 minutes), not the Voxtral Small figure above; Artificial
+Analysis was not re-read for either.
+
 Recommendation:
 
 - Revisit the hosted path if Cohere publishes explicit STT pricing and quotas.
@@ -279,7 +289,8 @@ Recommendation:
 Verified against each vendor's own page (checked 2026-09-21), for context —
 none of these are wired into `stt_app`:
 
-- **Speechmatics** — $100 in free credit to start, no credit card required
+- **Speechmatics** (integrated since 2026-10-01; see section 2) — $100 in
+  free credit to start, no credit card required
   ([pricing](https://www.speechmatics.com/pricing)). The vendor's own page
   states a credit amount, not a fixed minutes/month allowance (some
   third-party aggregators describe a monthly minute cap instead; this

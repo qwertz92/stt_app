@@ -440,7 +440,11 @@ OpenAI-compatible provider. It is batch-only.
 1. Settings -> **API Keys**: enter the **Custom Endpoint** base URL, for
    example `https://llm-gateway.example.com/v1` or `http://localhost:8000/v1`.
    It is used as given; nothing is appended, so include the `/v1` (or
-   whatever prefix the server uses).
+   whatever prefix the server uses). A pasted request URL ending in
+   `/audio/transcriptions`, `/chat/completions` or `/models` is cut back
+   to its base. The endpoint may redirect the model list within its own
+   server; an upload that is redirected, or any redirect to another
+   server, fails with the target named, so the key is never sent there.
 2. Enter the key in the **Custom** row. A server without authentication
    accepts any placeholder, such as `none`.
 3. Pick the **API Style**:
@@ -476,6 +480,96 @@ sent in parts cut at pauses.
 deterministic than one from a speech model: it may paraphrase, drop filler
 words or fix grammar. Prefer the transcription API when the endpoint offers a
 speech model.
+
+## Speechmatics and Mistral (Voxtral)
+
+Both are batch-only cloud engines: the recording is sent after you stop
+speaking. Neither has been verified against the live service by the app's
+own code yet (no keys were available while building it); report a failing
+request with the message the overlay shows.
+
+**Speechmatics**
+
+1. Create a key in the Speechmatics portal and enter it in the
+   **Speechmatics** row on Settings -> **API Keys**.
+2. Pick the **Speechmatics Region** on the same tab: EU (default), US or
+   Australia.
+3. On **Transcription**, set Engine to `Speechmatics` and pick the model:
+   - `melia-1` (default) is the one that works with Language `Auto`: it
+     detects the language itself, and a chosen language is sent as a hint.
+     It runs in the EU and US regions only and ignores the custom
+     vocabulary (Speechmatics offers no custom dictionary for it yet).
+   - `enhanced` (highest accuracy) and `standard` need a chosen language;
+     Auto is not offered for them. Both use the custom vocabulary.
+4. Run the connection test on the API Keys tab; it asks the region you
+   picked.
+
+A job is uploaded, polled once a second and its text fetched; the app waits
+at most 30 minutes for one job and sends a longer recording in parts of at
+most 30 minutes.
+
+**Mistral (Voxtral)**
+
+1. Create a key in Mistral's console and enter it in the **Mistral** row on
+   Settings -> **API Keys**.
+2. On **Transcription**, set Engine to `Mistral (Voxtral)`. The model is
+   `voxtral-mini-2602` (Voxtral Mini Transcribe 2, $0.003 per minute).
+3. Language: Auto or one of 13 languages (English, Chinese, Hindi, Spanish,
+   Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian,
+   Dutch). The custom vocabulary is sent as Mistral's context bias, which
+   Mistral calls optimized for English and experimental for other languages.
+
+Mistral offers no region choice for transcription: its EU host lists no
+audio route, and for the global one Mistral does not commit to a location.
+
+Sources, read 2026-09-27: Speechmatics'
+[models](https://docs.speechmatics.com/speech-to-text/models) and
+[authentication](https://docs.speechmatics.com/get-started/authentication)
+pages; Mistral's
+[Voxtral Mini Transcribe 2 model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02)
+and [announcement](https://mistral.ai/news/voxtral-transcribe-2/).
+
+## Data residency regions (AssemblyAI, Deepgram, Speechmatics)
+
+Settings -> **API Keys** has a region selector for each provider that offers
+a choice: **AssemblyAI Region**, **Deepgram Region** and **Speechmatics
+Region**. Dictation, audio imports and the connection test all use the
+selected region; Save or Save API Keys stores it. Each choice's tooltip says
+what the vendor guarantees for it, and no more:
+
+| Selector: choice | Hosts | What the vendor states |
+|---|---|---|
+| AssemblyAI: Automatic (default) | batch `api.assemblyai.com`, streaming `streaming.assemblyai.com` | Batch is processed in the US. Streaming is routed to the nearest location: "Your data may be processed in any of the US or EU locations." |
+| AssemblyAI: US only | batch `api.assemblyai.com`, streaming `streaming.us.assemblyai.com` | Batch in the US (there is no separate US batch host); streaming data "never leaves the specified region". |
+| AssemblyAI: EU only | batch `api.eu.assemblyai.com`, streaming `streaming.eu.assemblyai.com` | Data "never leaves the European Union". |
+| Deepgram: Global (default) | `api.deepgram.com` (batch and streaming) | "The default global endpoint"; no processing location is stated. |
+| Deepgram: EU | `api.eu.deepgram.com` (batch and streaming) | Routes "traffic through the EU"; the same API keys work. |
+| Speechmatics: EU (default), US, Australia | `eu1.`, `us1.`, `au1.asr.api.speechmatics.com` | "Jobs are created in the region corresponding to the endpoint used." |
+
+In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
+`us`, `eu`), `deepgram_region` (`global`, `eu`) and `speechmatics_region`
+(`eu1`, `us1`, `au1`); an unknown value means the default.
+
+- **Deepgram** states that the EU endpoint takes the same API keys as the
+  global one, and that Whisper models are not offered there (the app uses
+  Nova-3 and Nova-2 only).
+- **AssemblyAI** does not say on its region pages whether a key or every
+  model works on the EU hosts; if a request fails there, check the key and
+  the model in AssemblyAI's dashboard for the EU region.
+- Deepgram also runs endpoints in Australia and India
+  (`api.au.deepgram.com`, `api.in.deepgram.com`); the app does not offer
+  them yet.
+- **Speechmatics** runs Melia 1 in the EU and US only; with Australia
+  selected, pick Enhanced or Standard, or the request is refused before
+  anything is uploaded.
+
+Sources, read 2026-10-01: AssemblyAI's
+[region page](https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region)
+and [streaming endpoints and data zones](https://www.assemblyai.com/docs/streaming/endpoints-and-data-zones);
+Deepgram's [custom endpoints](https://developers.deepgram.com/reference/custom-endpoints)
+reference and its [EU endpoint announcement](https://deepgram.com/learn/deepgram-eu-endpoint-now-generally-available);
+Speechmatics' [authentication](https://docs.speechmatics.com/get-started/authentication)
+page.
 
 ## API key storage fallback (when keyring is blocked)
 

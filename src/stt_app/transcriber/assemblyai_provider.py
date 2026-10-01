@@ -16,22 +16,26 @@ from __future__ import annotations
 import logging
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 from ..app_paths import temp_audio_dir
 from ..config import (
+    ASSEMBLYAI_API_BASE_URLS,
     ASSEMBLYAI_BATCH_MAX_WAIT_S,
+    ASSEMBLYAI_STREAMING_HOSTS,
     ASSEMBLYAI_STREAMING_MODEL,
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_ASSEMBLYAI_REGION,
     DEFAULT_CUSTOM_VOCABULARY,
     language_modes_for_selection,
+    normalize_assemblyai_region,
     parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import format_ssl_error_message, http_error_suffix
+from ._job_poll import MAX_CONSECUTIVE_FETCH_FAILURES, SHUTDOWN_POLL_S, poll_job
 from .base import (
     AudioInput,
     ITranscriber,
@@ -39,7 +43,6 @@ from .base import (
     StreamingCallback,
     StreamingErrorCallback,
     TranscriptionError,
-    transcription_shutdown_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -103,9 +106,15 @@ ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S = 8.0
 # failures, one polling interval apart, so a blip survives while a
 # persistent fault (a revoked key answering 401 forever) still fails in
 # under a minute rather than spending the thirty-minute budget.
-ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES = 3
+# The loop is `_job_poll.poll_job`, shared with the REST providers; these
+# names are its constants, kept for the tests and the comments that cite them.
+ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES = MAX_CONSECUTIVE_FETCH_FAILURES
 # How long a quit can wait for the poll's sleep to notice it.
-ASSEMBLYAI_SHUTDOWN_POLL_S = 0.5
+ASSEMBLYAI_SHUTDOWN_POLL_S = SHUTDOWN_POLL_S
+
+
+def _status_text(status: object) -> str:
+    return str(getattr(status, "value", status))
 
 
 class AssemblyAITranscriber(ProgressReporter, ITranscriber):
@@ -120,6 +129,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         or a language code like ``"de"`` / ``"en"``.
     aai_module :
         Injected ``assemblyai`` module (for testing).
+    region : str
+        ``"us"`` (the default endpoints) or ``"eu"`` (AssemblyAI's EU
+        hosts); batch, streaming and the connection test all use it.
     """
 
     def __init__(
@@ -131,6 +143,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         aai_module=None,
         streaming_client_factory=None,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
+        region: str = DEFAULT_ASSEMBLYAI_REGION,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -139,6 +152,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
+        self._region = normalize_assemblyai_region(region)
         # No class-specific validation: the base ``_normalize_language_mode``
         # (strip/lower with an "auto" fallback) already matches what this
         # provider needs. Actual language-code validity is decided per
@@ -165,9 +179,18 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         return self._aai
 
     def _configure(self):
-        """Set API key on the assemblyai global settings."""
+        """Set the API key and the region's host on the SDK's settings.
+
+        Both are process-global in the SDK, and `Client.get_default()`
+        rebuilds its client whenever they differ from the ones it was
+        built with, so setting them before every call is what keeps a US
+        transcriber created after an EU one (or the reverse) on its own
+        host. The base URL is set in the default region too, for exactly
+        that reason.
+        """
         aai = self._get_aai()
         aai.settings.api_key = self._api_key
+        aai.settings.base_url = ASSEMBLYAI_API_BASE_URLS[self._region]
 
     def _build_config(self):
         """Build a TranscriptionConfig for the current language mode."""
@@ -258,6 +281,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         without a status is a failed fetch, counted with the raising ones:
         read outside the `try` it was an `AttributeError` that skipped the
         retry and reported without the id.
+
+        Each of these properties is now `_job_poll.poll_job`'s, the loop the
+        REST providers share (2026-10-01); this method keeps what is
+        AssemblyAI's own: the already-finished shortcut, the id check and
+        the SDK's polling interval.
         """
         terminal = {aai.TranscriptStatus.completed, aai.TranscriptStatus.error}
         if transcript.status in terminal:
@@ -275,57 +303,19 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             or 3.0
         )
         interval = min(max(interval, 0.5), 10.0)
-        deadline = time.monotonic() + ASSEMBLYAI_BATCH_MAX_WAIT_S
-        consecutive_failures = 0
-        while True:
-            if transcription_shutdown_requested():
-                raise TranscriptionError(
-                    "The application is shutting down; the AssemblyAI job was "
-                    f"left running (last status: {transcript.status}, "
-                    f"transcript id {transcript_id})."
-                )
-            if time.monotonic() >= deadline:
-                raise TranscriptionError(
-                    "AssemblyAI did not finish the transcription within "
-                    f"{int(ASSEMBLYAI_BATCH_MAX_WAIT_S / 60)} minutes "
-                    f"(last status: {transcript.status}). The job may still "
-                    "complete; transcript id "
-                    f"{transcript_id or 'unknown'}."
-                )
-            # Fetch first and sleep between fetches, which is also the order
-            # the SDK's own loop uses. Sleeping first spent a full polling
-            # interval before ever asking, on every batch dictation.
-            try:
-                fetched = cls._fetch_transcript(aai, transcript_id)
-                status = fetched.status
-            except TranscriptionError:
-                raise
-            except Exception as exc:
-                consecutive_failures += 1
-                if consecutive_failures >= ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES:
-                    raise TranscriptionError(
-                        "AssemblyAI transcription failed: could not fetch the "
-                        f"transcript status ({exc}). The job may still complete; "
-                        f"transcript id {transcript_id}."
-                    ) from exc
-            else:
-                consecutive_failures = 0
-                transcript = fetched
-                if status in terminal:
-                    return transcript
-            cls._sleep_between_fetches(
-                min(interval, max(deadline - time.monotonic(), 0.0))
-            )
-
-    @staticmethod
-    def _sleep_between_fetches(seconds: float) -> None:
-        """One polling interval, in slices, so a quit ends it within a slice."""
-        end = time.monotonic() + seconds
-        while not transcription_shutdown_requested():
-            remaining = end - time.monotonic()
-            if remaining <= 0:
-                return
-            time.sleep(min(remaining, ASSEMBLYAI_SHUTDOWN_POLL_S))
+        return poll_job(
+            lambda: cls._fetch_transcript(aai, transcript_id),
+            # The SDK's statuses are a `str` enum; its value is what reads
+            # as "queued" in a message. An answer without a status raises
+            # here, which `poll_job` counts as a failed fetch.
+            status_of=lambda fetched: _status_text(fetched.status),
+            terminal={_status_text(status) for status in terminal},
+            provider="AssemblyAI",
+            job_id=transcript_id,
+            max_wait_s=ASSEMBLYAI_BATCH_MAX_WAIT_S,
+            interval_s=interval,
+            initial_status=_status_text(transcript.status),
+        )
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.
@@ -410,7 +400,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         import urllib.error
         import urllib.request
 
-        url = "https://api.assemblyai.com/v2/transcript?limit=1"
+        url = f"{ASSEMBLYAI_API_BASE_URLS[self._region]}/v2/transcript?limit=1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._api_key)
 
@@ -586,6 +576,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 client = StreamingClient(
                     StreamingClientOptions(
                         api_key=self._api_key,
+                        api_host=ASSEMBLYAI_STREAMING_HOSTS[self._region],
                         terminate_timeout=(
                             ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S
                         ),

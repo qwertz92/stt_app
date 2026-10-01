@@ -119,11 +119,77 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - Schema 25 = schema 24 with `has_openai_key` for the endpoint (pre-25
     files carry `gpt-4o-mini-transcribe`).
   - **Not verified live** (no OpenAI key).
-- **Soniox and Mistral Voxtral were not added (2026-09-21)**: a new provider
-  must be both more accurate and cheaper than what is offered
-  (MAI-Transcribe-2 and ElevenLabs Scribe v2 lead). Open argument: Soniox's
-  $0.12/h realtime. Figures: `docs/provider-costs.md`,
-  `docs/local-asr-model-candidates-2026.md`.
+- **Soniox was not added (2026-09-21)**: a new provider must be both more
+  accurate and cheaper than what is offered (MAI-Transcribe-2 and ElevenLabs
+  Scribe v2 lead). Open argument: Soniox's $0.12/h realtime. Figures:
+  `docs/provider-costs.md`, `docs/local-asr-model-candidates-2026.md`.
+  Speechmatics and Mistral were assessed the same way and are integrated
+  anyway, on request (2026-10-01, entries below); neither beats both leaders
+  on the 2026-09-21 reading.
+- **Speechmatics is a polled batch job (`speechmatics_provider.py`,
+  2026-10-01).** `POST /v2/jobs/` with `data_file` and a JSON `config`, then
+  `GET /v2/jobs/{id}` until the status is terminal, then `GET
+  /v2/jobs/{id}/transcript?format=txt`. Vendor pages read 2026-09-27 (quick
+  start, models, languages, language identification, batch limits, the
+  `batch.yaml` spec, authentication). Rules:
+  - **The loop is `_job_poll.poll_job`, the transcript fetch
+    `fetch_with_retries`**: a total budget (`SPEECHMATICS_BATCH_MAX_WAIT_S`,
+    1800 s) plus one request, three consecutive failed fetches, the shutdown
+    flag, the job id in every message, a terminal status as the positive
+    test. An answer a retry cannot change (401/403, and 404/410 for a job
+    "expired" or "deleted from the storage") raises `TranscriptionError` and
+    ends the wait at once.
+  - **Melia 1 is the default model** because the app's default language is
+    Auto: Melia "does not support the `auto` option", so Auto is sent as
+    `"language": "multi"` and a chosen language as `language_hints`. Enhanced
+    ("the highest accuracy") and Standard offer no Auto, because automatic
+    identification needs "at least 60 seconds of speech" and rejects the job
+    otherwise; a stored Auto reaching them is sent as `de`, as the Cohere
+    runtime does. `zh` is sent as `cmn`; the bilingual packs (`tl` is one),
+    `eo`, `ia` and `ug` are not offered.
+  - **The custom vocabulary is per model**: Enhanced and Standard send it as
+    `additional_vocab` `{"content": term}` entries; Melia's custom dictionary
+    is "Not yet.", so `config.CUSTOM_VOCABULARY_EXCLUDED_MODELS` makes
+    `supports_custom_vocabulary` answer False for it, the factory does not
+    hand the terms over, and the controller identity ignores them there.
+  - **Region** `speechmatics_region`: `eu1` (default), `us1`, `au1`, read
+    through `config.normalize_speechmatics_region`; the enterprise-only
+    `eu2`/`us2` are not offered. Melia in `au1` is refused at construction
+    ("EU and US regions only"), before an upload that could only be rejected.
+    A slot of the runtime identity through `_ENGINE_REGION_FIELDS`.
+  - **Parts**: at most 1800 s and 999,000,000 bytes per job ("less than 1 GB";
+    no duration limit is stated), so one job stays well inside the wait
+    budget.
+  - **Not verified live**: no Speechmatics key exists here. The request shape
+    is the documented one; the error body `{code, error, detail}` is unwrapped
+    by `read_http_error_detail`.
+- **Mistral is one synchronous request (`mistral_provider.py`, 2026-10-01).**
+  `POST https://api.mistral.ai/v1/audio/transcriptions`, multipart `model`,
+  `file`, optional `language`, repeated `context_bias`; the answer's `text`.
+  Model `voxtral-mini-2602` (Voxtral Mini Transcribe 2, released 2026-02-04,
+  $0.003/min), pinned rather than `voxtral-mini-latest`. Rules:
+  - **13 languages** (Mistral's announcement), plus Auto (no `language`
+    field); any other code is sent as Auto.
+  - **The custom vocabulary is `context_bias`**, one repeated field per term
+    (up to 100, the app's cap as well; "optimized for English ... experimental"
+    for other languages). Repeated fields, not `context_bias[]` and not a
+    JSON array, is what Mistral's own Python SDK sends: `context_bias` is
+    `Optional[List[str]]` with `FieldMetadata(multipart=True)` in
+    `src/mistralai/client/models/audiotranscriptionrequest.py`, and
+    `src/mistralai/client/utils/forms.py` serializes a list field as
+    `array_field_name = f_name` with the list as the value, i.e. one form
+    field per element under the plain name (mistralai/client-python `main`,
+    read 2026-10-01).
+  - **An answer that is not a transcript is an error**: an HTML page, JSON
+    without a string `text`, or a body that is not JSON. `"text": ""` is a
+    valid empty answer. One reader for both providers asked for JSON,
+    `_http_utils.transcript_from_json`, with `is_markup_page` (below).
+  - **No region**: `api.eu.mistral.ai` lists no audio route, and of the global
+    endpoint "Mistral does not commit to a specific inference location"
+    (regional-inference page, read 2026-09-27).
+  - **Parts**: 1800 s and 500,000,000 bytes ("60 minutes", "500 MB"), with a
+    300 s socket timeout for the synchronous request.
+  - **Not verified live**: no Mistral key exists here.
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
   16 kHz WAV); `gpt-4o-transcribe`/`gpt-4o-mini-transcribe` (2,000 output
@@ -174,6 +240,54 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - Split, not compressed (new dependency; OpenAI rejects FLAC).
   - Sent whole: Deepgram (2 GB), ElevenLabs (3 GB / 10 h), AssemblyAI
     (2.2 GB / 10 h), Fun-ASR (streams).
+- **AssemblyAI and Deepgram take a data-residency region (2026-10-01).**
+  `assemblyai_region` is `auto` (default), `us` or `eu`; `deepgram_region` is
+  `global` (default) or `eu`; read through `config.normalize_assemblyai_region`
+  / `normalize_deepgram_region` (anything else is the default). The host
+  tables `ASSEMBLYAI_API_BASE_URLS`, `ASSEMBLYAI_STREAMING_HOSTS` and
+  `DEEPGRAM_API_HOSTS` sit in `config.py` with the vendor sentences behind
+  each guarantee. Rules:
+  - **A choice claims no more than the vendor guarantees** (review of
+    2026-10-01). AssemblyAI's default streaming host
+    `streaming.assemblyai.com` is edge routing ("Your data may be processed
+    in any of the US or EU locations"), so the default is `auto`, labelled
+    "Automatic", and only `us` streams to the US data zone
+    `streaming.us.assemblyai.com`. Batch has no separate US host:
+    `api.assemblyai.com` "processes your pre-recorded audio transcription
+    requests in the US region", so `auto` and `us` share it. Deepgram calls
+    `api.deepgram.com` "the default global endpoint" and states no location
+    for it, so its default is `global`, not `us`; Deepgram also offers
+    `api.au.deepgram.com` and `api.in.deepgram.com`, not offered here. The
+    first version offered `us`/`eu` for both and streamed AssemblyAI "US" to
+    the routed host; that never shipped, so no migration exists.
+  - **Speechmatics**: "Jobs are created in the region corresponding to the
+    endpoint used" (authentication page, read 2026-10-01); the page states
+    no further storage guarantee, and the tooltips say exactly that.
+  - **Batch, streaming and the connection test use the same region**: a
+    connection test against the US host would pass for a key the EU host
+    then refuses, or the reverse.
+  - **The defaults are exactly what was sent before**: `auto` and `global`
+    use the hosts every earlier build used.
+  - **AssemblyAI's `_configure()` sets `settings.base_url` on every call, in
+    both regions**: the SDK's settings are process-global and
+    `Client.get_default()` rebuilds its client when they change, so a US
+    runtime created after an EU one would otherwise inherit the EU host. A
+    test drives the installed SDK's `Client.get_default()`. Two runtimes of
+    different regions transcribing at the same moment would still race on
+    that global (only an isolated runtime beside the shared one can do it).
+  - **The region is a slot of the runtime identity** (`remote_region`, read
+    through `_ENGINE_REGION_FIELDS` for the selected engine only), because the
+    host is baked into the provider at construction.
+  - **One field map, `settings_store._REMOTE_REGION_FIELDS`**: the
+    controller imports it as `_ENGINE_REGION_FIELDS`, and the Settings
+    dialog's region selectors (API Keys tab, `_REMOTE_REGION_CHOICES` in
+    `settings_dialog_helpers.py`) read and write through it.
+  - No schema bump: an absent key is the default.
+  - **Not verified live**: no request was sent to either EU host (no Deepgram
+    key; the AssemblyAI key was not used). Deepgram's page names the REST
+    host only; `wss://api.eu.deepgram.com/v1/listen` is derived from it.
+    AssemblyAI's pages say nothing about key or model availability in the EU,
+    so whether Universal-3.6 Pro streams there is open.
 - **Diagnostics**: workers log `transcription_timing`. Groq reuses its
   SDK/HTTP client for the cached transcriber's lifetime.
 - **The custom endpoint is one engine with two API styles, free-text model
@@ -182,7 +296,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `transcribe_in_parts`). Rules:
   - **The base URL is used as given** (stripped, trailing `/` removed, http(s)
     only, no credentials/query); gateways serve the routes under different
-    prefixes, so nothing is appended.
+    prefixes, so nothing is appended. The one change: a route the app
+    appends itself (`/audio/transcriptions`, `/chat/completions`,
+    `/models`, any case) is taken off the end (2026-10-01), because a
+    pasted request URL otherwise doubled the route into a 404.
   - **`custom_api_mode` picks the request**: `transcriptions` is the OpenAI
     multipart shape (`prompt` = comma-joined vocabulary); `chat` posts an
     `input_audio` part with a verbatim-transcript instruction, `temperature:
@@ -203,6 +320,53 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     is the token, cached `CUSTOM_KEY_COMMAND_TTL_S` (300 s); a 401 re-runs it
     once and retries once. Errors name the exit code and the last stderr
     line, never the token, and nothing logs it.
+    **It runs through `process_tree.run_bounded`, never `subprocess.run`**
+    (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
+    then reads the pipes to the end, which a grandchild holding them
+    (`wsl.exe -e ...`, a `.cmd` wrapper) keeps open -- 15.1 s on a 2 s
+    timeout, 25 s in the test's reproduction. `run_bounded` kills the
+    process tree (`kill_process_tree`, shared with the benchmark worker)
+    and reads for at most 2 s after.
+    **On Windows the child runs in a job object** (review of 2026-10-01):
+    a child that printed its token and exited 0 while a grandchild kept the
+    inherited pipes open made `communicate` wait for the timeout, and
+    `taskkill /T` cannot reach a grandchild whose parent has exited. The
+    child is created suspended, put into a job and resumed
+    (`NtResumeProcess`, since `Popen` closes the thread handle), and once the
+    direct child has exited and the pipes stay open
+    `_PIPES_GRACE_AFTER_EXIT_S` (0.5 s) longer, the job is terminated and
+    the child's own output and exit code returned. The job has no
+    kill-on-close limit, so a helper that detached a daemon from its stdio
+    leaves it running. POSIX does the same through `killpg` on the child's
+    session, which reaches the group after the leader exited.
+  - **The key and a command's token must be visible ASCII**
+    (`_header_unsafe`, 2026-10-01): `http.client` refuses a header value
+    with a line break and puts the whole value -- `Bearer <key>` -- into
+    its `ValueError`, which reached the overlay and the log. Such a key is
+    refused at construction without being echoed, and `_other_error`
+    replaces any "invalid header" message.
+  - **Redirects go through `_RedirectGuard`** (2026-10-01): urllib's own
+    handler copies `Authorization` to whatever host `Location` names
+    (reproduced 127.0.0.1:A -> localhost:B; https -> http would send it
+    in clear) and turns a redirected POST into a bodiless GET answered
+    with a 405. An upload is never redirected; a model list only within
+    its origin (same scheme, host and port, or http -> https on the
+    default ports, `_redirect_keeps_origin`). A refusal names the target
+    without its query. `_open` builds the opener; tests patch `_open`.
+  - **An answer that is not a transcript is an error** (2026-10-01): an
+    HTML page (a proxy's sign-in or block page answering 200) used to be
+    returned as the transcript and pasted; JSON without a string `text`
+    used to read as silence. `"text": ""` stays a valid empty answer.
+    **Any body starting with `<`** (after whitespace and a UTF-8 BOM) is a
+    markup page (`_http_utils.is_markup_page`): matching `<!doctype html` /
+    `<html` let a BOM, `<!-- -->`, `<?xml ?>` or a bare `<head>` through.
+    **A body that is not JSON is an error naming its first 80 characters**:
+    the request sends `response_format=json`, so "Internal Server Error"
+    was a proxy's error page, not a transcript (it used to be pasted). A
+    top-level JSON string is still taken.
+  - **Chat: `content: null` is an error, not silence** (2026-10-01): it is
+    a refusal (named, shortened to 80 characters) or an answer cut off
+    (`finish_reason` named, e.g. `length`). `content: ""` stays silence.
   - **The identity reads endpoint, API style and key command**, and
     `has_api_key` is true for a stored key *or* a key command (a command
     alone makes the engine runnable); the connection test, the "all
@@ -213,8 +377,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     worker thread with the typed (unsaved) fields and rolls back if
     `Thread.start` fails; the list is never persisted. Entries whose LiteLLM
     `mode` is `embedding`/`image_generation`/`rerank` are dropped,
-    `audio_transcription` then `chat` sort first; reads are bounded (2 MB
-    list, 8 MB reply).
+    `audio_transcription` then `chat` sort first, and within each group an
+    id that names a speech recognizer (`whisper`, `transcri`, `parakeet`,
+    ...; not `tts`) comes first, since OpenAI's own list sends no `mode`;
+    ordering only, never a filter. Reads are bounded (2 MB list, 8 MB
+    reply).
   - **Not verified against a live server by the app's own code path**; the
     chat request shape was verified by hand against one gateway.
 

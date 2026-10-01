@@ -16,6 +16,7 @@ from .config import (
     DEEPGRAM_MODELS,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_ASSEMBLYAI_REGION,
     DEFAULT_AZURE_ENDPOINT,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
@@ -28,6 +29,7 @@ from .config import (
     DEFAULT_CUSTOM_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
+    DEFAULT_DEEPGRAM_REGION,
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
@@ -43,6 +45,7 @@ from .config import (
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_LOCAL_ONNX_DEVICE,
+    DEFAULT_MISTRAL_MODEL,
     DEFAULT_MODE,
     DEFAULT_MODEL_DIR,
     DEFAULT_MODEL_SIZE,
@@ -60,6 +63,8 @@ from .config import (
     DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_SILENCE_GATE_ENABLED,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    DEFAULT_SPEECHMATICS_MODEL,
+    DEFAULT_SPEECHMATICS_REGION,
     DEFAULT_START_BEEP_ENABLED,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
@@ -72,6 +77,7 @@ from .config import (
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LOCAL_WEBGPU_DEVICE_POLICIES,
+    MISTRAL_MODELS,
     ONNX_MEASURABLE_DEVICES,
     OPENAI_MODELS,
     OVERLAY_OPACITY_MAX_PERCENT,
@@ -81,6 +87,7 @@ from .config import (
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
+    SPEECHMATICS_MODELS,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_CONCURRENT_TRANSCRIPTION_MODES,
@@ -94,6 +101,9 @@ from .config import (
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
     effective_preferred_device,
+    normalize_assemblyai_region,
+    normalize_deepgram_region,
+    normalize_speechmatics_region,
     onnx_auto_device_order,
     order_with_preferred_device,
 )
@@ -173,6 +183,8 @@ DEFAULTS = {
     "has_azure_key": False,
     "has_funasr_key": False,
     "has_custom_key": False,
+    "has_speechmatics_key": False,
+    "has_mistral_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -185,6 +197,11 @@ DEFAULTS = {
     "custom_model": DEFAULT_CUSTOM_MODEL,
     "custom_api_mode": DEFAULT_CUSTOM_API_MODE,
     "custom_key_command": DEFAULT_CUSTOM_KEY_COMMAND,
+    "assemblyai_region": DEFAULT_ASSEMBLYAI_REGION,
+    "deepgram_region": DEFAULT_DEEPGRAM_REGION,
+    "speechmatics_model": DEFAULT_SPEECHMATICS_MODEL,
+    "speechmatics_region": DEFAULT_SPEECHMATICS_REGION,
+    "mistral_model": DEFAULT_MISTRAL_MODEL,
 }
 
 
@@ -293,6 +310,8 @@ class AppSettings:
     has_azure_key: bool = False
     has_funasr_key: bool = False
     has_custom_key: bool = False
+    has_speechmatics_key: bool = False
+    has_mistral_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -309,6 +328,18 @@ class AppSettings:
     custom_model: str = DEFAULT_CUSTOM_MODEL
     custom_api_mode: str = DEFAULT_CUSTOM_API_MODE
     custom_key_command: str = DEFAULT_CUSTOM_KEY_COMMAND
+    # Data residency: "us" is the vendor's default endpoint (what every
+    # build before these fields sent), "eu" its EU host. No schema bump:
+    # an absent key is the default, and an older build keeps an unknown
+    # key through `SettingsStore._unknown_keys`.
+    assemblyai_region: str = DEFAULT_ASSEMBLYAI_REGION
+    deepgram_region: str = DEFAULT_DEEPGRAM_REGION
+    # Speechmatics names its regions itself (eu1, us1, au1), so its region
+    # is a field of its own rather than the us/eu pair above. Added on
+    # 2026-10-01, likewise without a schema bump.
+    speechmatics_model: str = DEFAULT_SPEECHMATICS_MODEL
+    speechmatics_region: str = DEFAULT_SPEECHMATICS_REGION
+    mistral_model: str = DEFAULT_MISTRAL_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppSettings:
@@ -473,6 +504,12 @@ class AppSettings:
         funasr_model = str(merged.get("funasr_model", DEFAULT_FUNASR_MODEL))
         if funasr_model not in FUNASR_MODELS:
             funasr_model = DEFAULT_FUNASR_MODEL
+        speechmatics_model = _text_setting(merged.get("speechmatics_model"))
+        if speechmatics_model not in SPEECHMATICS_MODELS:
+            speechmatics_model = DEFAULT_SPEECHMATICS_MODEL
+        mistral_model = _text_setting(merged.get("mistral_model"))
+        if mistral_model not in MISTRAL_MODELS:
+            mistral_model = DEFAULT_MISTRAL_MODEL
         custom_api_mode = str(
             merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)
         ).strip().lower()
@@ -714,6 +751,10 @@ class AppSettings:
             has_azure_key=parse_json_bool(merged.get("has_azure_key")),
             has_funasr_key=parse_json_bool(merged.get("has_funasr_key")),
             has_custom_key=parse_json_bool(merged.get("has_custom_key")),
+            has_speechmatics_key=parse_json_bool(
+                merged.get("has_speechmatics_key")
+            ),
+            has_mistral_key=parse_json_bool(merged.get("has_mistral_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -726,6 +767,15 @@ class AppSettings:
             custom_model=_text_setting(merged.get("custom_model")),
             custom_api_mode=custom_api_mode,
             custom_key_command=_text_setting(merged.get("custom_key_command")),
+            assemblyai_region=normalize_assemblyai_region(
+                merged.get("assemblyai_region")
+            ),
+            deepgram_region=normalize_deepgram_region(merged.get("deepgram_region")),
+            speechmatics_model=speechmatics_model,
+            speechmatics_region=normalize_speechmatics_region(
+                merged.get("speechmatics_region")
+            ),
+            mistral_model=mistral_model,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -771,6 +821,17 @@ _REMOTE_MODEL_FIELDS: dict[str, str] = {
     "azure": "azure_speech_model",
     "funasr": "funasr_model",
     "custom": "custom_model",
+    "speechmatics": "speechmatics_model",
+    "mistral": "mistral_model",
+}
+
+# Which field carries each remote engine's data-residency region; an engine
+# missing here has no region setting. Read by the controller's runtime
+# identity and by the Settings dialog's region selectors.
+_REMOTE_REGION_FIELDS: dict[str, str] = {
+    "assemblyai": "assemblyai_region",
+    "deepgram": "deepgram_region",
+    "speechmatics": "speechmatics_region",
 }
 
 
@@ -898,6 +959,8 @@ class SettingsStore:
             "azure_api_key",
             "funasr_api_key",
             "custom_api_key",
+            "speechmatics_api_key",
+            "mistral_api_key",
         ):
             payload.pop(secret_key, None)
         return payload

@@ -130,6 +130,7 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
             api_key: str,
             language_mode: str = "auto",
             model: str = "nova-3",
+            region: str = "us",
         ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode
@@ -273,6 +274,7 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
             api_key: str,
             language_mode: str = "auto",
             model: str = "nova-3",
+            region: str = "us",
         ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode

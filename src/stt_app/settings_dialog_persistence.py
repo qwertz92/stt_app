@@ -8,19 +8,14 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
-    DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_ENDPOINT,
-    DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
-    DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DISPLAY_TIMEZONE,
-    DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
-    DEFAULT_FUNASR_MODEL,
     DEFAULT_HOTKEY,
     DEFAULT_INSERT_TARGET,
     DEFAULT_LANGUAGE_MODE,
@@ -38,8 +33,13 @@ from .settings_dialog_helpers import (
     _app_hotkey_to_qt_hotkey_text,
     _hotkeys_conflict,
     _qt_hotkey_sequence_to_app_hotkey,
+    remote_model_values,
 )
-from .settings_store import AppSettings, normalize_local_onnx_device
+from .settings_store import (
+    _REMOTE_REGION_FIELDS,
+    AppSettings,
+    normalize_local_onnx_device,
+)
 
 
 class _PersistenceMixin:
@@ -199,34 +199,7 @@ class _PersistenceMixin:
         )
         self._remote_model_values.update(
             {
-                "groq": settings.groq_model,
-                "openai": settings.openai_model,
-                "deepgram": getattr(
-                    settings,
-                    "deepgram_model",
-                    DEFAULT_DEEPGRAM_MODEL,
-                ),
-                "assemblyai": getattr(
-                    settings,
-                    "assemblyai_model",
-                    DEFAULT_ASSEMBLYAI_MODEL,
-                ),
-                "elevenlabs": getattr(
-                    settings,
-                    "elevenlabs_model",
-                    DEFAULT_ELEVENLABS_MODEL,
-                ),
-                "azure": getattr(
-                    settings,
-                    "azure_speech_model",
-                    DEFAULT_AZURE_SPEECH_MODEL,
-                ),
-                "funasr": getattr(
-                    settings,
-                    "funasr_model",
-                    DEFAULT_FUNASR_MODEL,
-                ),
-                "custom": str(getattr(settings, "custom_model", "") or ""),
+                **remote_model_values(settings),
             }
         )
         if hasattr(self, "azure_endpoint_edit"):
@@ -248,6 +221,12 @@ class _PersistenceMixin:
                 self.custom_api_mode_combo, settings.custom_api_mode
             )
             del blocker
+        for provider, combo in getattr(self, "_provider_region_combos", {}).items():
+            blocker = QtCore.QSignalBlocker(combo)
+            self._select_combo_data(
+                combo, getattr(settings, _REMOTE_REGION_FIELDS[provider])
+            )
+            del blocker
         self._update_remote_model_selector()
         self._update_engine_indicator()
         self._refresh_secret_store_options_ui()
@@ -260,34 +239,7 @@ class _PersistenceMixin:
         self._import_model_values.update(
             {
                 "local": settings.model_size,
-                "groq": settings.groq_model,
-                "openai": settings.openai_model,
-                "deepgram": getattr(
-                    settings,
-                    "deepgram_model",
-                    DEFAULT_DEEPGRAM_MODEL,
-                ),
-                "assemblyai": getattr(
-                    settings,
-                    "assemblyai_model",
-                    DEFAULT_ASSEMBLYAI_MODEL,
-                ),
-                "elevenlabs": getattr(
-                    settings,
-                    "elevenlabs_model",
-                    DEFAULT_ELEVENLABS_MODEL,
-                ),
-                "azure": getattr(
-                    settings,
-                    "azure_speech_model",
-                    DEFAULT_AZURE_SPEECH_MODEL,
-                ),
-                "funasr": getattr(
-                    settings,
-                    "funasr_model",
-                    DEFAULT_FUNASR_MODEL,
-                ),
-                "custom": str(getattr(settings, "custom_model", "") or ""),
+                **remote_model_values(settings),
             }
         )
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
@@ -563,10 +515,17 @@ class _PersistenceMixin:
             has_azure_key=key_states["azure"],
             has_funasr_key=key_states["funasr"],
             has_custom_key=key_states["custom"],
+            has_speechmatics_key=key_states["speechmatics"],
+            has_mistral_key=key_states["mistral"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
             custom_key_command=self.custom_key_command_edit.text().strip(),
+            # The region selectors sit on the API Keys tab, so its own Save
+            # writes them as well.
+            assemblyai_region=self._region_shown("assemblyai"),
+            deepgram_region=self._region_shown("deepgram"),
+            speechmatics_region=self._region_shown("speechmatics"),
         )
         updated = replace(
             widget_settings,
@@ -617,6 +576,7 @@ class _PersistenceMixin:
                 self.custom_endpoint_edit,
                 self.custom_key_command_edit,
                 self.custom_api_mode_combo,
+                *self._provider_region_combos.values(),
             )
         )
         if changed or settings_changed:
@@ -740,6 +700,8 @@ class _PersistenceMixin:
             has_azure_key = getattr(self._loaded_settings, "has_azure_key", False)
             has_funasr_key = getattr(self._loaded_settings, "has_funasr_key", False)
             has_custom_key = getattr(self._loaded_settings, "has_custom_key", False)
+            has_speechmatics_key = self._loaded_settings.has_speechmatics_key
+            has_mistral_key = self._loaded_settings.has_mistral_key
         else:
             has_openai_key = key_states["openai"]
             has_deepgram_key = key_states["deepgram"]
@@ -749,6 +711,8 @@ class _PersistenceMixin:
             has_azure_key = key_states["azure"]
             has_funasr_key = key_states["funasr"]
             has_custom_key = key_states["custom"]
+            has_speechmatics_key = key_states["speechmatics"]
+            has_mistral_key = key_states["mistral"]
         return AppSettings(
             # Carried, not stamped. This is the one field with no widget that
             # was never read back, and its dataclass default is *this build's*
@@ -878,6 +842,8 @@ class _PersistenceMixin:
             has_azure_key=has_azure_key,
             has_funasr_key=has_funasr_key,
             has_custom_key=has_custom_key,
+            has_speechmatics_key=has_speechmatics_key,
+            has_mistral_key=has_mistral_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -890,6 +856,11 @@ class _PersistenceMixin:
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
             custom_key_command=self.custom_key_command_edit.text().strip(),
+            speechmatics_model=self._remote_model_value_for_provider("speechmatics"),
+            mistral_model=self._remote_model_value_for_provider("mistral"),
+            assemblyai_region=self._region_shown("assemblyai"),
+            deepgram_region=self._region_shown("deepgram"),
+            speechmatics_region=self._region_shown("speechmatics"),
         )
 
     def _custom_api_mode_shown(self) -> str:

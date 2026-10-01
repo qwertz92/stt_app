@@ -354,7 +354,9 @@ def test_a_missing_key_points_at_the_api_keys_tab(engine):
     assert message.endswith("Enter your key in Settings -> API Keys.")
 
 
-@pytest.mark.parametrize("engine", ["openai", "groq", "azure", "custom"])
+@pytest.mark.parametrize(
+    "engine", ["openai", "groq", "azure", "custom", "speechmatics", "mistral"]
+)
 def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
     monkeypatch, engine
 ):
@@ -369,6 +371,8 @@ def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
             "groq": "stt_app.transcriber.groq_provider",
             "azure": "stt_app.transcriber.azure_provider",
             "custom": "stt_app.transcriber.custom_endpoint_provider",
+            "speechmatics": "stt_app.transcriber.speechmatics_provider",
+            "mistral": "stt_app.transcriber.mistral_provider",
         }[engine]
     )
     seen: list[float] = []
@@ -394,3 +398,67 @@ def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
 
     assert transcriber.transcribe_batch(b"RIFF") == "ok"
     assert seen == [0.02]
+
+
+class _AnyKeyStore:
+    def get_api_key(self, name):
+        return "test-key"
+
+
+@pytest.mark.parametrize("region", ["auto", "us", "eu"])
+def test_the_data_residency_region_reaches_assemblyai(region):
+    """The setting is only useful if the factory hands it to the provider."""
+    assemblyai = create_transcriber(
+        AppSettings(engine="assemblyai", assemblyai_region=region),
+        secret_store=_AnyKeyStore(),
+    )
+    assert assemblyai._region == region
+
+
+@pytest.mark.parametrize(
+    ("region", "host"), [("global", "api.deepgram.com"), ("eu", "api.eu.deepgram.com")]
+)
+def test_the_data_residency_region_reaches_deepgram(region, host):
+    deepgram = create_transcriber(
+        AppSettings(engine="deepgram", deepgram_region=region),
+        secret_store=_AnyKeyStore(),
+    )
+    assert deepgram._host == host
+
+
+def test_each_provider_reads_its_own_region_field():
+    """Choosing EU for one provider must not move the other one."""
+    settings = AppSettings(assemblyai_region="eu", deepgram_region="global")
+
+    assemblyai = create_transcriber(
+        replace(settings, engine="assemblyai"), secret_store=_AnyKeyStore()
+    )
+    deepgram = create_transcriber(
+        replace(settings, engine="deepgram"), secret_store=_AnyKeyStore()
+    )
+
+    assert assemblyai._region == "eu"
+    assert deepgram._host == "api.deepgram.com"
+
+
+@pytest.mark.parametrize("region", ["eu1", "us1", "au1"])
+def test_the_speechmatics_region_and_model_reach_the_provider(region):
+    settings = AppSettings(
+        engine="speechmatics",
+        speechmatics_region=region,
+        speechmatics_model="enhanced",
+        language_mode="fr",
+    )
+    built = create_transcriber(settings, secret_store=_AnyKeyStore())
+
+    assert built._base_url == f"https://{region}.asr.api.speechmatics.com/v2"
+    assert built._model == "enhanced"
+    assert built._language_mode == "fr"
+
+
+def test_the_mistral_model_reaches_the_provider():
+    built = create_transcriber(
+        AppSettings(engine="mistral", language_mode="de"), secret_store=_AnyKeyStore()
+    )
+    assert built._model == "voxtral-mini-2602"
+    assert built._language_mode == "de"

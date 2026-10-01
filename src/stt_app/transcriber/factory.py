@@ -13,6 +13,7 @@ from ..config import (
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     nemotron_provider_order,
+    supports_custom_vocabulary,
 )
 from ..settings_store import AppSettings, preferred_onnx_device
 from .assemblyai_provider import AssemblyAITranscriber
@@ -26,7 +27,9 @@ from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
 from .local_nemotron import LocalNemotronTranscriber
 from .local_webgpu_asr import LocalOnnxWebGpuTranscriber
+from .mistral_provider import MistralTranscriber
 from .openai_provider import OpenAITranscriber
+from .speechmatics_provider import SpeechmaticsTranscriber
 
 
 def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
@@ -129,6 +132,7 @@ def create_transcriber(
             language_mode=settings.language_mode,
             model=settings.assemblyai_model,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            region=getattr(settings, "assemblyai_region", ""),
         )
     if settings.engine == "groq":
         return GroqTranscriber(
@@ -152,6 +156,7 @@ def create_transcriber(
             language_mode=settings.language_mode,
             model=settings.deepgram_model,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            region=getattr(settings, "deepgram_region", ""),
         )
     if settings.engine == "elevenlabs":
         return ElevenLabsTranscriber(
@@ -181,6 +186,31 @@ def create_transcriber(
             api_mode=settings.custom_api_mode,
             key_command=settings.custom_key_command,
             language_mode=settings.language_mode,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
+        )
+    if settings.engine == "speechmatics":
+        # The vocabulary is handed over only to a model with a custom
+        # dictionary (not Melia 1), so `supports_custom_vocabulary` answers
+        # exactly what the provider receives.
+        vocabulary = (
+            {"custom_vocabulary": getattr(settings, "custom_vocabulary", "")}
+            if supports_custom_vocabulary("speechmatics", settings.speechmatics_model)
+            else {}
+        )
+        return SpeechmaticsTranscriber(
+            api_key=_api_key(secret_store, "speechmatics"),
+            language_mode=settings.language_mode,
+            model=settings.speechmatics_model,
+            region=settings.speechmatics_region,
+            silence_gate_threshold=_part_silence_threshold(settings),
+            **vocabulary,
+        )
+    if settings.engine == "mistral":
+        return MistralTranscriber(
+            api_key=_api_key(secret_store, "mistral"),
+            language_mode=settings.language_mode,
+            model=settings.mistral_model,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
             silence_gate_threshold=_part_silence_threshold(settings),
         )

@@ -98,6 +98,15 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "{name} uses the custom vocabulary as the request prompt, or as a "
         "spelling instruction in the chat style (batch only)."
     ),
+    # Enhanced and Standard only; Melia 1 gets the "ignores" sentence.
+    "speechmatics": (
+        "{name} uses the custom vocabulary as its additional vocabulary "
+        "(batch only)."
+    ),
+    "mistral": (
+        "{name} uses the custom vocabulary as context bias, tuned for "
+        "English (batch only)."
+    ),
 }
 
 # Where the two things the Model row does not do are done. The tabs are named
@@ -1022,12 +1031,9 @@ class _GeneralTabMixin:
         """
         if not hasattr(self, "vocabulary_support_label"):
             return
-        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        model = (
-            str(self.model_combo.currentData() or "")
-            if hasattr(self, "model_combo")
-            else ""
-        )
+        # The remote engine's own model, not the local combo's: Speechmatics'
+        # answer differs by model.
+        engine, model = self._pending_engine_selection()
         # Named the way the screen names it: `local_model_short_label` for a
         # local model and the provider label for a remote one. A settings id
         # ('parakeet-tdt-0.6b-v3') matches nothing the user can see.
@@ -1214,8 +1220,6 @@ class _GeneralTabMixin:
         self._update_language_availability()
         self._update_local_model_runtime_warning()
         self._update_local_onnx_device_row()
-        # Only the local models differ from one another here; a remote engine's
-        # answer is the same for all of its models.
         self._update_custom_vocabulary_note()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
@@ -1363,6 +1367,7 @@ class _GeneralTabMixin:
         self._remote_model_values[provider] = value
         self._update_language_availability()
         self._update_engine_indicator()
+        self._update_custom_vocabulary_note()
 
     def _on_remote_model_activated(self, _index: int = 0) -> None:
         self._on_remote_model_changed()

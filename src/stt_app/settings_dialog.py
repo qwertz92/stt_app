@@ -29,14 +29,7 @@ from .benchmark_history import (
 # is kept so ``stt_app.settings_dialog.run_benchmark_cases`` stays the seam
 # tests patch.
 from .benchmark_process import run_benchmark_cases
-from .config import (
-    APP_LOGGER_NAME,
-    DEFAULT_ASSEMBLYAI_MODEL,
-    DEFAULT_AZURE_SPEECH_MODEL,
-    DEFAULT_DEEPGRAM_MODEL,
-    DEFAULT_ELEVENLABS_MODEL,
-    DEFAULT_FUNASR_MODEL,
-)
+from .config import APP_LOGGER_NAME
 from .dialog_style import make_label_selectable
 from .last_recording_store import LastRecordingStore
 from .local_benchmark import BenchmarkCase
@@ -67,6 +60,7 @@ from .settings_dialog_helpers import (
     _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX,
     _PROVIDER_STATUS_BADGE_TEXTS,
     _REMOTE_PROVIDER_LABEL_EXTRA_PX,
+    _REMOTE_REGION_CHOICES,
     ElidingLabel,
     _app_hotkey_to_qt_hotkey_text,
     _emit_background_signal,
@@ -76,6 +70,8 @@ from .settings_dialog_helpers import (
     _qt_hotkey_text_to_app_hotkey,
     configure_button_row,
     hint_font,
+    region_row_label,
+    remote_model_values,
 )
 from .settings_dialog_history import _HistoryTabMixin
 from .settings_dialog_hotkeys import _HotkeysTabMixin
@@ -200,6 +196,7 @@ class SettingsDialog(
         self._connection_test_id = 0
         self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
         self._provider_key_edits: dict[str, QtWidgets.QLineEdit] = {}
+        self._provider_region_combos: dict[str, QtWidgets.QComboBox] = {}
         self._provider_status_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_pending_clear: set[str] = set()
@@ -262,36 +259,9 @@ class SettingsDialog(
         # The case the runner announced last (its `[Case i/N]` line): the
         # row a finished case is marked on.
         self._benchmark_plan_running_index: int | None = None
-        self._remote_model_values: dict[str, str] = {
-            "groq": self._loaded_settings.groq_model,
-            "openai": self._loaded_settings.openai_model,
-            "deepgram": getattr(
-                self._loaded_settings,
-                "deepgram_model",
-                DEFAULT_DEEPGRAM_MODEL,
-            ),
-            "assemblyai": getattr(
-                self._loaded_settings,
-                "assemblyai_model",
-                DEFAULT_ASSEMBLYAI_MODEL,
-            ),
-            "elevenlabs": getattr(
-                self._loaded_settings,
-                "elevenlabs_model",
-                DEFAULT_ELEVENLABS_MODEL,
-            ),
-            "azure": getattr(
-                self._loaded_settings,
-                "azure_speech_model",
-                DEFAULT_AZURE_SPEECH_MODEL,
-            ),
-            "funasr": getattr(
-                self._loaded_settings,
-                "funasr_model",
-                DEFAULT_FUNASR_MODEL,
-            ),
-            "custom": str(getattr(self._loaded_settings, "custom_model", "") or ""),
-        }
+        self._remote_model_values: dict[str, str] = remote_model_values(
+            self._loaded_settings
+        )
         # What the last "Fetch models" returned; never persisted -- only the
         # chosen model is.
         self._custom_fetched_models: tuple[str, ...] = ()
@@ -301,14 +271,7 @@ class SettingsDialog(
         self._active_custom_models_fetch_thread: threading.Thread | None = None
         self._import_model_values: dict[str, str] = {
             "local": self._loaded_settings.model_size,
-            "groq": self._remote_model_values["groq"],
-            "openai": self._remote_model_values["openai"],
-            "deepgram": self._remote_model_values["deepgram"],
-            "assemblyai": self._remote_model_values["assemblyai"],
-            "elevenlabs": self._remote_model_values["elevenlabs"],
-            "azure": self._remote_model_values["azure"],
-            "funasr": self._remote_model_values["funasr"],
-            "custom": self._remote_model_values["custom"],
+            **self._remote_model_values,
         }
         self._import_language_values: dict[tuple[str, str], str] = {}
         self._active_connection_test_thread: threading.Thread | None = None
@@ -687,6 +650,7 @@ class SettingsDialog(
         candidates = [title for _provider, title in provider_rows]
         candidates.extend(
             (
+                *(region_row_label(name) for name in _REMOTE_REGION_CHOICES),
                 "Azure Endpoint",
                 "Custom Endpoint",
                 "Key Command",

@@ -74,7 +74,7 @@ class _Server:
 def server(monkeypatch):
     def install(*answers: object) -> _Server:
         fake = _Server(*answers)
-        monkeypatch.setattr(provider_module.urllib.request, "urlopen", fake)
+        monkeypatch.setattr(provider_module, "_open", fake)
         return fake
 
     return install
@@ -160,10 +160,37 @@ def test_the_transcription_request_is_the_openai_shape(server):
     }
 
 
-def test_auto_sends_no_language_and_plain_text_is_accepted(server):
-    fake = server("plain transcript")
-    assert _transcriber().transcribe_batch(WAV) == "plain transcript"
+def test_auto_sends_no_language(server):
+    fake = server({"text": "transcript"})
+    assert _transcriber().transcribe_batch(WAV) == "transcript"
     assert "language" not in _multipart_fields(fake.requests[0])
+
+
+# Bodies that are not the JSON the request asked for (`response_format=json`).
+# Each was returned as the transcript and pasted (review of 2026-10-01).
+_MARKUP_BODIES = [
+    pytest.param("\ufeff<!DOCTYPE html><html><body>Sign in</body></html>", id="bom"),
+    pytest.param("<!-- proxy --><html><body>Sign in</body></html>", id="comment"),
+    pytest.param("<head><title>Sign in</title></head>", id="head"),
+    pytest.param('<?xml version="1.0"?><html><body>Sign in</body></html>', id="xml"),
+]
+
+
+@pytest.mark.parametrize("page", _MARKUP_BODIES)
+def test_any_markup_page_is_an_error_not_a_transcript(server, page):
+    server(page)
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "HTML" in str(raised.value)
+    assert "Sign in" not in str(raised.value)
+
+
+def test_a_plain_text_answer_is_an_error_not_a_transcript(server):
+    """The request asks for JSON; a text body is the server's error page."""
+    server("Internal Server Error")
+    with pytest.raises(TranscriptionError, match="not JSON") as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "Internal Server Error" in str(raised.value)
 
 
 def test_no_model_is_refused_before_any_request(server):
@@ -222,12 +249,59 @@ def test_the_chat_request_carries_the_audio_and_the_instruction(server):
         ("  „Hallo Welt.“ ", "Hallo Welt."),
         ([{"type": "text", "text": "Hallo"}, {"type": "text", "text": "Welt."}], "Hallo Welt."),
         ("", ""),
-        (None, ""),
     ],
 )
 def test_the_chat_reply_is_unwrapped(server, reply, expected):
     server(_chat_reply(reply))
     assert _transcriber(api_mode="chat").transcribe_batch(WAV) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "finish_reason", "expected"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+            "stop",
+            "refused: I can't help with that.",
+            id="refusal",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": None},
+            "length",
+            "finish reason 'length'",
+            id="length",
+        ),
+        pytest.param({"role": "assistant"}, "stop", "finish reason 'stop'", id="missing"),
+        pytest.param(
+            {"role": "assistant", "content": [{"type": "refusal", "refusal": "No."}]},
+            "stop",
+            "refused: No.",
+            id="refusal-part",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": 5},
+            "stop",
+            "content is not text (int)",
+            id="number",
+        ),
+    ],
+)
+def test_a_chat_reply_with_null_content_is_an_error_not_silence(
+    server, message, finish_reason, expected
+):
+    """`content: null` is a refusal or a cut-off answer, not "nothing said";
+    read as silence, a part of a split recording vanished."""
+    server({"choices": [{"message": message, "finish_reason": finish_reason}]})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert expected in str(raised.value)
+
+
+def test_a_long_refusal_is_shortened_in_the_message(server):
+    server({"choices": [{"message": {"content": None, "refusal": "x" * 500}}]})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert len(str(raised.value)) < 260
 
 
 def test_a_chat_reply_without_content_is_an_error(server):
@@ -316,7 +390,7 @@ def _completed(stdout: str = "", returncode: int = 0, stderr: str = ""):
 def runs(monkeypatch):
     def install(*results: object) -> _Runs:
         fake = _Runs(*results)
-        monkeypatch.setattr(provider_module.subprocess, "run", fake)
+        monkeypatch.setattr(provider_module, "run_bounded", fake)
         return fake
 
     return install
@@ -478,7 +552,8 @@ def test_an_oversized_model_list_is_refused(server, monkeypatch):
 
 
 def test_a_model_list_that_is_not_json_points_at_the_url(server):
-    server("<html>login</html>")
+    # An HTML page has a message of its own (the HTML tests below).
+    server("Service Unavailable")
     with pytest.raises(TranscriptionError, match="not JSON"):
         _transcriber().list_models()
 
@@ -495,3 +570,509 @@ def test_the_connection_test_checks_the_chosen_model(server):
 def test_streaming_is_not_offered():
     with pytest.raises(NotImplementedError):
         _transcriber().start_stream()
+
+
+# -- key command: a real process -------------------------------------------
+
+_GRANDCHILD_SCRIPT = """
+import os, sys, time
+heartbeat = sys.argv[1]
+deadline = time.monotonic() + 25
+while time.monotonic() < deadline:
+    with open(heartbeat, "w", encoding="utf-8") as handle:
+        handle.write(f"{os.getpid()} {time.monotonic()}")
+    time.sleep(0.1)
+"""
+
+_CHILD_SCRIPT = """
+import subprocess, sys, time
+# Handed the child's own pipes, as `wsl.exe -e ...` or a `.cmd` wrapper hands
+# them to the program it starts.
+subprocess.Popen(
+    [sys.executable, sys.argv[1], sys.argv[2]],
+    stdout=sys.stdout,
+    stderr=sys.stderr,
+)
+time.sleep(60)
+"""
+
+
+def _heartbeat(path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _kill_leftover(heartbeat) -> None:
+    text = _heartbeat(heartbeat)
+    if not text:
+        return
+    pid = text.split()[0]
+    if provider_module.os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", pid],
+            capture_output=True,
+            check=False,
+        )
+    else:
+        import signal
+
+        try:
+            provider_module.os.kill(int(pid), signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def test_a_key_command_whose_grandchild_holds_the_pipe_is_still_bounded(
+    tmp_path, monkeypatch
+):
+    """The timeout bounds the whole call and takes the process tree with it.
+
+    `subprocess.run(timeout=...)` kills the direct child only and then reads
+    its pipes to the end, which a grandchild holding them keeps open:
+    reproduced at 15.1 s on a 2 s timeout before this was fixed.
+    """
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(_GRANDCHILD_SCRIPT, encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(_CHILD_SCRIPT, encoding="utf-8")
+    heartbeat = tmp_path / "heartbeat.txt"
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 1.0)
+    command = subprocess.list2cmdline(
+        [sys.executable, str(child), str(grandchild), str(heartbeat)]
+    ) if provider_module.os.name == "nt" else " ".join(
+        [sys.executable, str(child), str(grandchild), str(heartbeat)]
+    )
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(TranscriptionError, match="did not finish within 1 s"):
+            transcriber._run_key_command()
+        elapsed = time.monotonic() - started
+        assert elapsed < 10.0, f"the timeout of 1 s took {elapsed:.1f} s"
+        # The grandchild was ended with its parent, not left running.
+        time.sleep(0.5)
+        before = _heartbeat(heartbeat)
+        time.sleep(0.6)
+        assert _heartbeat(heartbeat) == before, "the grandchild is still running"
+    finally:
+        _kill_leftover(heartbeat)
+
+
+_EXITING_CHILD_SCRIPT = """
+import subprocess, sys
+# Starts a program that inherits the pipes, prints the token and exits 0: the
+# token has arrived, but the pipes stay open as long as the grandchild runs.
+subprocess.Popen(
+    [sys.executable, sys.argv[1], sys.argv[2]],
+    stdout=sys.stdout,
+    stderr=sys.stderr,
+)
+print("child-token", flush=True)
+"""
+
+
+def test_a_key_command_that_exits_while_its_grandchild_holds_the_pipe(
+    tmp_path, monkeypatch
+):
+    """The token arrived with exit code 0; the call must not wait for EOF.
+
+    Before: `communicate` waited for the grandchild to close the inherited
+    pipes, the call failed with the timeout although the token had arrived,
+    and the grandchild -- an orphan once its parent had exited, which
+    `taskkill /T` cannot reach -- kept running (review of 2026-10-01).
+    """
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(_GRANDCHILD_SCRIPT, encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(_EXITING_CHILD_SCRIPT, encoding="utf-8")
+    heartbeat = tmp_path / "heartbeat.txt"
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 8.0)
+    parts = [sys.executable, str(child), str(grandchild), str(heartbeat)]
+    command = (
+        subprocess.list2cmdline(parts)
+        if provider_module.os.name == "nt"
+        else " ".join(parts)
+    )
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    started = time.monotonic()
+    try:
+        assert transcriber._run_key_command() == "child-token"
+        elapsed = time.monotonic() - started
+        assert elapsed < 5.0, f"the call waited {elapsed:.1f} s for the pipes"
+        time.sleep(0.5)
+        before = _heartbeat(heartbeat)
+        time.sleep(0.6)
+        assert _heartbeat(heartbeat) == before, "the grandchild is still running"
+    finally:
+        _kill_leftover(heartbeat)
+
+
+def test_a_real_key_command_prints_its_token(monkeypatch):
+    """The process runner itself, not a stand-in for it."""
+    import sys
+
+    script = "print('notice'); print('real-token')"
+    if provider_module.os.name == "nt":
+        command = subprocess.list2cmdline([sys.executable, "-c", script])
+    else:
+        import shlex
+
+        command = shlex.join([sys.executable, "-c", script])
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    assert transcriber._run_key_command() == "real-token"
+
+
+# -- redirects (real HTTP servers on the loopback interface) ----------------
+
+
+class _RecordingHandler:
+    """Builds `BaseHTTPRequestHandler` classes for the two loopback servers."""
+
+    @staticmethod
+    def target(seen: list):
+        import http.server
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def _answer(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                seen.append((self.command, self.path, self.headers.get("Authorization")))
+                if self.path.endswith("/models") or self.path.endswith("/models/"):
+                    body = json.dumps({"data": [{"id": "whisper-1"}]}).encode()
+                else:
+                    body = json.dumps({"text": "leaked"}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            do_GET = _answer
+            do_POST = _answer
+
+            def log_message(self, *_args):
+                pass
+
+        return Handler
+
+    @staticmethod
+    def redirector(location_for):
+        import http.server
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def _answer(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                if length:
+                    self.rfile.read(length)
+                location = location_for(self.path)
+                if location is None:
+                    body = json.dumps({"data": [{"id": "whisper-1"}]}).encode()
+                    self.send_response(200)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    self.wfile.write(body)
+                    return
+                self.send_response(302)
+                self.send_header("Location", location)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
+            do_GET = _answer
+            do_POST = _answer
+
+            def log_message(self, *_args):
+                pass
+
+        return Handler
+
+
+@pytest.fixture
+def loopback(monkeypatch):
+    """Start loopback HTTP servers; no proxy may stand in between."""
+    import http.server
+    import threading
+
+    for name in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("NO_PROXY", "*")
+    started: list = []
+
+    def start(handler) -> int:
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+        thread.start()
+        started.append(httpd)
+        return httpd.server_address[1]
+
+    yield start
+    for httpd in started:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_a_redirect_to_another_origin_never_carries_the_key(loopback):
+    """127.0.0.1:A -> localhost:B is another origin; the Bearer key stays home.
+
+    urllib's default redirect handler copies every header, Authorization
+    included, to whatever host the Location names -- and from https to http
+    it sends the key in clear.
+    """
+    seen: list = []
+    target_port = loopback(_RecordingHandler.target(seen))
+    redirect_port = loopback(
+        _RecordingHandler.redirector(
+            lambda path: f"http://localhost:{target_port}{path}"
+        )
+    )
+    transcriber = _transcriber(
+        api_key=SECRET_TOKEN, endpoint=f"http://127.0.0.1:{redirect_port}/v1"
+    )
+
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber.list_models()
+    with pytest.raises(TranscriptionError) as raised_upload:
+        transcriber.transcribe_batch(WAV)
+
+    assert seen == [], f"the other origin was contacted: {seen}"
+    for message in (str(raised.value), str(raised_upload.value)):
+        assert "redirect" in message.lower()
+        assert f"localhost:{target_port}" in message
+        assert SECRET_TOKEN not in message
+
+
+def test_a_same_origin_redirect_of_the_model_list_is_followed(loopback):
+    """A gateway that adds a trailing slash keeps working, key and all."""
+    seen: list = []
+
+    def location(path):
+        return None if path.endswith("/") else f"{path}/"
+
+    class Recording(_RecordingHandler.redirector(location)):
+        def _answer(self):
+            seen.append((self.command, self.path, self.headers.get("Authorization")))
+            super()._answer()
+
+        do_GET = _answer
+
+    port = loopback(Recording)
+    transcriber = _transcriber(api_key="k", endpoint=f"http://127.0.0.1:{port}/v1")
+
+    assert transcriber.list_models() == [CustomEndpointModel("whisper-1", "")]
+    assert seen == [
+        ("GET", "/v1/models", "Bearer k"),
+        ("GET", "/v1/models/", "Bearer k"),
+    ]
+
+
+def test_a_redirected_upload_is_refused_rather_than_resent_as_a_get(loopback):
+    """urllib turns a redirected POST into a GET without its body.
+
+    The endpoint then answered a request that carried no audio -- typically
+    HTTP 405, which names nothing the user can act on.
+    """
+    seen: list = []
+
+    def location(path):
+        return None if path.endswith("/") else f"{path}/"
+
+    class Recording(_RecordingHandler.redirector(location)):
+        def _answer(self):
+            seen.append((self.command, self.path))
+            super()._answer()
+
+        do_GET = _answer
+        do_POST = _answer
+
+    port = loopback(Recording)
+    transcriber = _transcriber(api_key="k", endpoint=f"http://127.0.0.1:{port}/v1")
+
+    with pytest.raises(TranscriptionError, match="redirected") as raised:
+        transcriber.transcribe_batch(WAV)
+
+    assert seen == [("POST", "/v1/audio/transcriptions")]
+    assert f"127.0.0.1:{port}/v1/audio/transcriptions/" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "allowed"),
+    [
+        ("https://gw.example/v1/models", "https://gw.example/v1/models/", True),
+        ("https://gw.example/v1/models", "https://GW.example:443/v1/x", True),
+        ("http://gw.example/v1/models", "https://gw.example/v1/models", True),
+        ("https://gw.example/v1/models", "http://gw.example/v1/models", False),
+        ("https://gw.example/v1/models", "https://other.example/v1/models", False),
+        ("https://gw.example/v1/models", "https://gw.example:8443/v1/models", False),
+        ("http://127.0.0.1:8000/v1", "http://localhost:8000/v1", False),
+        ("http://gw.example:8080/v1", "https://gw.example/v1", False),
+    ],
+)
+def test_which_redirects_may_carry_the_key(old, new, allowed):
+    assert provider_module._redirect_keeps_origin(old, new) is allowed
+
+
+# -- a key a header cannot carry --------------------------------------------
+
+
+def test_a_stored_key_with_a_line_break_is_refused_without_echoing_it(
+    loopback, caplog
+):
+    """`http.client` refuses the header with the whole value in its message.
+
+    That message reached the overlay and the log: "Invalid header value
+    b'Bearer <key>...'". The key is refused before any request instead, and
+    nothing that names it is shown or logged.
+    """
+    seen: list = []
+    port = loopback(_RecordingHandler.target(seen))
+    key = "sk-first-half\nsecond-half-SECRET"
+
+    with caplog.at_level(logging.DEBUG), pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=key, endpoint=f"http://127.0.0.1:{port}/v1").transcribe_batch(
+            WAV
+        )
+
+    message = str(raised.value)
+    assert "line break" in message
+    for fragment in ("sk-first-half", "second-half-SECRET"):
+        assert fragment not in message
+        assert fragment not in caplog.text
+    assert seen == []
+
+
+def test_a_command_token_with_a_control_character_is_refused(runs, server):
+    runs(_completed("tok\x00en-SECRET\n"))
+    fake = server({"text": "ok"})
+
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(key_command="helper").transcribe_batch(WAV)
+
+    assert "en-SECRET" not in str(raised.value)
+    assert fake.requests == []
+
+
+def test_an_invalid_header_value_never_reaches_the_message(server):
+    """Defence in depth: whatever builds the header, its value stays out."""
+    server(ValueError("Invalid header value b'Bearer leaked-SECRET'"))
+
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+
+    assert "leaked-SECRET" not in str(raised.value)
+
+
+# -- answers that are not a transcript --------------------------------------
+
+
+_LOGIN_PAGE = (
+    "<!DOCTYPE html>\n<html><head><title>Sign in</title></head>"
+    "<body>Your session expired. Please sign in.</body></html>"
+)
+
+
+@pytest.mark.parametrize("page", [_LOGIN_PAGE, "  <html><body>Blocked</body></html>"])
+def test_an_html_page_is_never_returned_as_the_transcript(server, page):
+    """A proxy's login or block page answers 200 with HTML.
+
+    Read as a plain-text transcript, the page was pasted into the user's
+    document.
+    """
+    server(page)
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTML" in message
+    assert "Sign in" not in message and "Blocked" not in message
+
+
+def test_an_html_model_list_names_the_page_rather_than_json(server):
+    server(_LOGIN_PAGE)
+    with pytest.raises(TranscriptionError, match="HTML"):
+        _transcriber().list_models()
+
+
+def test_a_json_answer_without_text_is_an_error_naming_its_keys(server):
+    """`{"error": ...}` with HTTP 200, or another shape, is not "no speech"."""
+    server({"error": {"message": "model not loaded"}, "id": "x"})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "'text'" in message
+    assert "error" in message and "id" in message
+
+
+def test_an_empty_text_field_is_still_an_empty_transcript(server):
+    """Silence is answered with `"text": ""`, which must stay a valid answer."""
+    server({"text": ""})
+    assert _transcriber().transcribe_batch(WAV) == ""
+
+
+# -- a base URL pasted with its route ---------------------------------------
+
+
+@pytest.mark.parametrize(
+    "pasted",
+    [
+        f"{BASE}/audio/transcriptions",
+        f"{BASE}/chat/completions/",
+        f"{BASE}/models",
+        f"{BASE}/Audio/Transcriptions",
+    ],
+)
+def test_a_pasted_route_is_taken_off_the_base_url(pasted):
+    """Users paste the request URL their gateway documents; the app then
+    posted to `.../audio/transcriptions/audio/transcriptions` and got a 404."""
+    assert normalize_custom_endpoint(pasted) == BASE
+
+
+def test_a_prefix_that_only_resembles_a_route_is_kept():
+    assert (
+        normalize_custom_endpoint("https://gw.example/my-models")
+        == "https://gw.example/my-models"
+    )
+
+
+# -- model list ordering ----------------------------------------------------
+
+
+def test_speech_models_without_a_mode_are_listed_first(server):
+    """OpenAI's own list carries no `mode`; whisper-1 sat behind dozens of
+    chat and image models in alphabetical order."""
+    server(
+        {
+            "data": [
+                {"id": "babbage-002"},
+                {"id": "dall-e-3"},
+                {"id": "gpt-4o"},
+                {"id": "gpt-4o-mini-tts"},
+                {"id": "gpt-4o-transcribe"},
+                {"id": "tts-1"},
+                {"id": "whisper-1"},
+                {"id": "Systran/faster-whisper-small"},
+            ]
+        }
+    )
+    ids = [model.id for model in _transcriber().list_models()]
+    assert ids[:3] == ["gpt-4o-transcribe", "Systran/faster-whisper-small", "whisper-1"]
+    assert set(ids) == {
+        "babbage-002",
+        "dall-e-3",
+        "gpt-4o",
+        "gpt-4o-mini-tts",
+        "gpt-4o-transcribe",
+        "tts-1",
+        "whisper-1",
+        "Systran/faster-whisper-small",
+    }
