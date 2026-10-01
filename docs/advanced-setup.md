@@ -532,20 +532,23 @@ and [announcement](https://mistral.ai/news/voxtral-transcribe-2/).
 ## Data residency regions (AssemblyAI, Deepgram, Speechmatics)
 
 Settings -> **API Keys** has a region selector for each provider that offers
-a choice: **AssemblyAI Region** and **Deepgram Region** (US by default, or
-EU) and **Speechmatics Region** (EU by default, US or Australia). Dictation,
-audio imports and the connection test all use the selected region; Save or
-Save API Keys stores it.
+a choice: **AssemblyAI Region**, **Deepgram Region** and **Speechmatics
+Region**. Dictation, audio imports and the connection test all use the
+selected region; Save or Save API Keys stores it. Each choice's tooltip says
+what the vendor guarantees for it, and no more:
 
-| Selector | Default | Other choices |
+| Selector: choice | Hosts | What the vendor states |
 |---|---|---|
-| AssemblyAI Region | US: batch `api.assemblyai.com`, streaming `streaming.assemblyai.com` | EU: batch `api.eu.assemblyai.com`, streaming `streaming.eu.assemblyai.com` |
-| Deepgram Region | US: `api.deepgram.com` (batch and streaming) | EU: `api.eu.deepgram.com` (batch and streaming) |
-| Speechmatics Region | EU: `eu1.asr.api.speechmatics.com` | US: `us1.asr.api.speechmatics.com`; Australia: `au1.asr.api.speechmatics.com` |
+| AssemblyAI: Automatic (default) | batch `api.assemblyai.com`, streaming `streaming.assemblyai.com` | Batch is processed in the US. Streaming is routed to the nearest location: "Your data may be processed in any of the US or EU locations." |
+| AssemblyAI: US only | batch `api.assemblyai.com`, streaming `streaming.us.assemblyai.com` | Batch in the US (there is no separate US batch host); streaming data "never leaves the specified region". |
+| AssemblyAI: EU only | batch `api.eu.assemblyai.com`, streaming `streaming.eu.assemblyai.com` | Data "never leaves the European Union". |
+| Deepgram: Global (default) | `api.deepgram.com` (batch and streaming) | "The default global endpoint"; no processing location is stated. |
+| Deepgram: EU | `api.eu.deepgram.com` (batch and streaming) | Routes "traffic through the EU"; the same API keys work. |
+| Speechmatics: EU (default), US, Australia | `eu1.`, `us1.`, `au1.asr.api.speechmatics.com` | "Jobs are created in the region corresponding to the endpoint used." |
 
-In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region`,
-`deepgram_region` (`us` or `eu`) and `speechmatics_region` (`eu1`, `us1`,
-`au1`); an unknown value means the default.
+In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
+`us`, `eu`), `deepgram_region` (`global`, `eu`) and `speechmatics_region`
+(`eu1`, `us1`, `au1`); an unknown value means the default.
 
 - **Deepgram** states that the EU endpoint takes the same API keys as the
   global one, and that Whisper models are not offered there (the app uses
@@ -553,9 +556,9 @@ In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region`,
 - **AssemblyAI** does not say on its region pages whether a key or every
   model works on the EU hosts; if a request fails there, check the key and
   the model in AssemblyAI's dashboard for the EU region.
-- `us` keeps AssemblyAI's streaming on its default host, which AssemblyAI
-  describes as edge routing, not on its US data-zone host
-  `streaming.us.assemblyai.com`.
+- Deepgram also runs endpoints in Australia and India
+  (`api.au.deepgram.com`, `api.in.deepgram.com`); the app does not offer
+  them yet.
 - **Speechmatics** runs Melia 1 in the EU and US only; with Australia
   selected, pick Enhanced or Standard, or the request is refused before
   anything is uploaded.
@@ -566,7 +569,7 @@ and [streaming endpoints and data zones](https://www.assemblyai.com/docs/streami
 Deepgram's [custom endpoints](https://developers.deepgram.com/reference/custom-endpoints)
 reference and its [EU endpoint announcement](https://deepgram.com/learn/deepgram-eu-endpoint-now-generally-available);
 Speechmatics' [authentication](https://docs.speechmatics.com/get-started/authentication)
-page (read 2026-09-27).
+page.
 
 ## API key storage fallback (when keyring is blocked)
 

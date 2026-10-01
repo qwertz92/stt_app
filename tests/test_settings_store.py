@@ -1688,8 +1688,11 @@ def test_the_custom_endpoint_settings_round_trip_and_default(tmp_path):
     assert picked.custom_model == "my/model"
 
 
-def test_the_data_residency_regions_round_trip_and_default_to_us(tmp_path):
-    """`assemblyai_region` / `deepgram_region`: "us" unless "eu" was chosen.
+def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
+    tmp_path,
+):
+    """`assemblyai_region` is "auto", "us" or "eu"; `deepgram_region` is
+    "global" or "eu". The default is each vendor's default endpoint.
 
     A file written before the setting existed carries neither key and must
     keep sending to the hosts it always used; a value this build does not
@@ -1701,7 +1704,11 @@ def test_the_data_residency_regions_round_trip_and_default_to_us(tmp_path):
     assert store.load() == saved
 
     older = AppSettings.from_dict({"schema_version": 25})
-    assert (older.assemblyai_region, older.deepgram_region) == ("us", "us")
+    assert (older.assemblyai_region, older.deepgram_region) == ("auto", "global")
+
+    us_only = AppSettings.from_dict({"assemblyai_region": "us", "deepgram_region": "us"})
+    # Deepgram documents no US-only endpoint, so "us" is not one of its values.
+    assert (us_only.assemblyai_region, us_only.deepgram_region) == ("us", "global")
 
     shouting = AppSettings.from_dict({"assemblyai_region": " EU ", "deepgram_region": "Eu"})
     assert (shouting.assemblyai_region, shouting.deepgram_region) == ("eu", "eu")
@@ -1709,7 +1716,7 @@ def test_the_data_residency_regions_round_trip_and_default_to_us(tmp_path):
     damaged = AppSettings.from_dict(
         {"assemblyai_region": "mars", "deepgram_region": ["eu"]}
     )
-    assert (damaged.assemblyai_region, damaged.deepgram_region) == ("us", "us")
+    assert (damaged.assemblyai_region, damaged.deepgram_region) == ("auto", "global")
 
 
 def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):

@@ -405,26 +405,30 @@ class _AnyKeyStore:
         return "test-key"
 
 
-@pytest.mark.parametrize("region", ["us", "eu"])
-def test_the_data_residency_region_reaches_assemblyai_and_deepgram(region):
+@pytest.mark.parametrize("region", ["auto", "us", "eu"])
+def test_the_data_residency_region_reaches_assemblyai(region):
     """The setting is only useful if the factory hands it to the provider."""
-    settings = AppSettings(assemblyai_region=region, deepgram_region=region)
-    hosts = {"us": "api.deepgram.com", "eu": "api.eu.deepgram.com"}
-
     assemblyai = create_transcriber(
-        replace(settings, engine="assemblyai"), secret_store=_AnyKeyStore()
+        AppSettings(engine="assemblyai", assemblyai_region=region),
+        secret_store=_AnyKeyStore(),
     )
-    deepgram = create_transcriber(
-        replace(settings, engine="deepgram"), secret_store=_AnyKeyStore()
-    )
-
     assert assemblyai._region == region
-    assert deepgram._host == hosts[region]
+
+
+@pytest.mark.parametrize(
+    ("region", "host"), [("global", "api.deepgram.com"), ("eu", "api.eu.deepgram.com")]
+)
+def test_the_data_residency_region_reaches_deepgram(region, host):
+    deepgram = create_transcriber(
+        AppSettings(engine="deepgram", deepgram_region=region),
+        secret_store=_AnyKeyStore(),
+    )
+    assert deepgram._host == host
 
 
 def test_each_provider_reads_its_own_region_field():
     """Choosing EU for one provider must not move the other one."""
-    settings = AppSettings(assemblyai_region="eu", deepgram_region="us")
+    settings = AppSettings(assemblyai_region="eu", deepgram_region="global")
 
     assemblyai = create_transcriber(
         replace(settings, engine="assemblyai"), secret_store=_AnyKeyStore()

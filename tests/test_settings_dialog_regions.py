@@ -9,7 +9,7 @@ stored value -- a hand-set `"deepgram_region": "eu"` came back `us`.
 from __future__ import annotations
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 import stt_app.settings_dialog_remote as remote_module
 from stt_app.config import SPEECHMATICS_MODELS
@@ -140,6 +140,37 @@ def test_a_picked_speechmatics_model_and_region_are_saved(tmp_path):
         assert saved.speechmatics_model == "standard"
         assert saved.speechmatics_region == "au1"
         assert saved.deepgram_region == "eu"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_each_region_choice_says_what_it_guarantees(tmp_path):
+    """The default AssemblyAI streaming host routes to the US or the EU, so
+    it is not labelled US; Deepgram's default endpoint is "global"."""
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        def choices(provider: str) -> list[tuple[str, str, str]]:
+            combo = dialog._provider_region_combos[provider]
+            return [
+                (
+                    combo.itemData(i),
+                    combo.itemText(i),
+                    str(combo.itemData(i, QtCore.Qt.ToolTipRole) or ""),
+                )
+                for i in range(combo.count())
+            ]
+
+        assemblyai = choices("assemblyai")
+        assert [value for value, _label, _tip in assemblyai] == ["auto", "us", "eu"]
+        assert assemblyai[0][1].startswith("Automatic")
+        assert "US or EU" in assemblyai[0][2]
+        assert assemblyai[1][1] == "US only" and assemblyai[2][1] == "EU only"
+        deepgram = choices("deepgram")
+        assert [value for value, _label, _tip in deepgram] == ["global", "eu"]
+        assert deepgram[0][1].startswith("Global")
+        assert all(tip for _value, _label, tip in [*assemblyai, *deepgram])
+        assert all(tip for _value, _label, tip in choices("speechmatics"))
     finally:
         dialog.deleteLater()
     _ = app

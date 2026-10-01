@@ -25,10 +25,10 @@ from ..config import (
     DEEPGRAM_API_HOSTS,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
-    DEFAULT_REMOTE_REGION,
+    DEFAULT_DEEPGRAM_REGION,
     DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
-    normalize_remote_region,
+    normalize_deepgram_region,
     parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context
@@ -87,7 +87,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         language_mode: str = "auto",
         model: str = DEFAULT_DEEPGRAM_MODEL,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
-        region: str = DEFAULT_REMOTE_REGION,
+        region: str = DEFAULT_DEEPGRAM_REGION,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -96,7 +96,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
-        self._host = DEEPGRAM_API_HOSTS[normalize_remote_region(region)]
+        self._host = DEEPGRAM_API_HOSTS[normalize_deepgram_region(region)]
         self._model = model or DEFAULT_DEEPGRAM_MODEL
         # Needs self._model, so this must run after it is assigned above
         # (reordered from the model assignment's original position below it).

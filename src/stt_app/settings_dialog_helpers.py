@@ -9,8 +9,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .benchmark_history import BenchmarkHistoryEntry
 from .config import (
     ASSEMBLYAI_MODELS,
+    ASSEMBLYAI_REGION_AUTO,
+    ASSEMBLYAI_REGION_EU,
+    ASSEMBLYAI_REGION_US,
     AZURE_SPEECH_MODELS,
     DEEPGRAM_MODELS,
+    DEEPGRAM_REGION_EU,
+    DEEPGRAM_REGION_GLOBAL,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_DEEPGRAM_MODEL,
@@ -28,12 +33,8 @@ from .config import (
     MISTRAL_MODELS,
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
-    REMOTE_REGION_EU,
-    REMOTE_REGION_US,
     SPEECHMATICS_MODELS,
-    SPEECHMATICS_REGIONS,
     VALID_MODEL_SIZES,
-    VALID_REMOTE_REGIONS,
 )
 from .local_benchmark import _format_seconds
 from .settings_store import _REMOTE_MODEL_FIELDS
@@ -248,25 +249,64 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
-# The data-residency region choices of each provider that has them; the
-# field each is stored in is `settings_store._REMOTE_REGION_FIELDS`. The
-# vendor's default endpoint comes first and says so.
-_REGION_LABELS: dict[str, str] = {
-    REMOTE_REGION_US: "US (default)",
-    REMOTE_REGION_EU: "EU",
-    "eu1": "EU (default)",
-    "us1": "US",
-    "au1": "Australia",
-}
-_REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
-    "assemblyai": tuple(
-        (value, _REGION_LABELS[value]) for value in VALID_REMOTE_REGIONS
+# The data-residency region choices of each provider that has them, as
+# (value, label, what the vendor guarantees for it); the field each is
+# stored in is `settings_store._REMOTE_REGION_FIELDS`, the hosts and the
+# vendor sentences behind each guarantee are beside the host tables in
+# `config.py`. The vendor's default endpoint comes first and says so. A
+# label claims no more than the vendor does: AssemblyAI's default streaming
+# host routes to the US or the EU, so it is "Automatic", not "US", and
+# Deepgram's default is its "global" endpoint (review of 2026-10-01).
+_REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
+    "assemblyai": (
+        (
+            ASSEMBLYAI_REGION_AUTO,
+            "Automatic (default)",
+            (
+                "AssemblyAI's default endpoints: batch is processed in the US; "
+                "streaming goes to the nearest location, in the US or EU."
+            ),
+        ),
+        (
+            ASSEMBLYAI_REGION_US,
+            "US only",
+            "Batch and streaming are processed only in the US.",
+        ),
+        (
+            ASSEMBLYAI_REGION_EU,
+            "EU only",
+            "Batch and streaming are processed only in the EU.",
+        ),
     ),
-    "deepgram": tuple(
-        (value, _REGION_LABELS[value]) for value in VALID_REMOTE_REGIONS
+    "deepgram": (
+        (
+            DEEPGRAM_REGION_GLOBAL,
+            "Global (default)",
+            (
+                "Deepgram's default global endpoint; Deepgram states no "
+                "processing location for it."
+            ),
+        ),
+        (
+            DEEPGRAM_REGION_EU,
+            "EU",
+            (
+                "Deepgram's EU endpoint, which routes the traffic through the "
+                "EU. It takes the same API key."
+            ),
+        ),
     ),
-    "speechmatics": tuple(
-        (value, _REGION_LABELS[value]) for value in SPEECHMATICS_REGIONS
+    "speechmatics": (
+        ("eu1", "EU (default)", "Jobs are created in Speechmatics' EU region."),
+        ("us1", "US", "Jobs are created in Speechmatics' US region."),
+        (
+            "au1",
+            "Australia",
+            (
+                "Jobs are created in Speechmatics' Australian region; Melia 1 "
+                "is not offered there."
+            ),
+        ),
     ),
 }
 

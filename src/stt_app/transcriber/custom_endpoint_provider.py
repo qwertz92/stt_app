@@ -50,11 +50,14 @@ from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     audio_content_type,
+    body_excerpt,
     format_ssl_error_message,
     http_error_suffix,
+    is_markup_page,
     multipart_form_data,
     normalize_transcript_text,
     read_http_error_detail,
+    transcript_from_json,
 )
 from .base import (
     AudioInput,
@@ -94,8 +97,6 @@ _SPEECH_SYNTHESIS_NAME = re.compile(
 )
 # A base URL pasted together with one of the routes the app appends.
 _PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
-# How the start of an HTML page looks, after leading whitespace.
-_HTML_STARTS = (b"<!doctype html", b"<html")
 _ERROR_TAIL_MAX_CHARS = 200
 _CODE_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n?(.*?)\n?```$", re.DOTALL)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("„", "“"))
@@ -439,7 +440,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 f"{_PROVIDER_NAME}: the response is larger than "
                 f"{max_bytes // (1024 * 1024)} MB."
             )
-        if payload.lstrip()[:16].lower().startswith(_HTML_STARTS):
+        if is_markup_page(payload):
             # A proxy's sign-in or block page answers HTTP 200. Read as a
             # plain-text transcript it was pasted into the document; its
             # text is left out of the message, it is not the server's.
@@ -653,29 +654,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             timeout=self._request_timeout_s,
             max_bytes=_MAX_TRANSCRIPT_RESPONSE_BYTES,
         )
-        text = payload.decode("utf-8", errors="replace")
-        try:
-            parsed = json.loads(text)
-        except ValueError:
-            return normalize_transcript_text(text)
-        if isinstance(parsed, str):
-            return normalize_transcript_text(parsed)
-        value = parsed.get("text") if isinstance(parsed, dict) else None
-        if not isinstance(value, str):
-            # Not "no speech": that is `"text": ""`. An HTTP 200 carrying
-            # an error object, or a shape this app does not know, would
-            # otherwise read as silence, and a part of a split recording
-            # would then be dropped from the transcript.
-            keys = (
-                ", ".join(sorted(str(key) for key in parsed)[:8])
-                if isinstance(parsed, dict)
-                else type(parsed).__name__
-            )
-            raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the answer has no 'text' field "
-                f"(it holds: {keys or 'nothing'})."
-            )
-        return normalize_transcript_text(value)
+        # The request asks for `response_format=json`, so a body that is not
+        # JSON -- "Internal Server Error" from a proxy -- is an error, not a
+        # transcript to paste (review of 2026-10-01).
+        return transcript_from_json(
+            payload, prefix=_PROVIDER_NAME, accept_bare_string=True
+        )
 
     def _chat_instruction(self) -> str:
         parts = [
@@ -760,11 +744,31 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def _chat_text(payload: bytes) -> str:
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
-            content = parsed["choices"][0]["message"].get("content")
+            choice = parsed["choices"][0]
+            message = choice["message"]
+            content = message.get("content")
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no message content."
             ) from exc
+        if content is None:
+            # A refusal or an answer cut off at the token limit, not
+            # "nothing said": read as silence, a part of a split recording
+            # vanished from the transcript (review of 2026-10-01).
+            refusal = message.get("refusal")
+            if isinstance(refusal, str) and refusal.strip():
+                raise TranscriptionError(
+                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusal)}"
+                )
+            reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the chat reply has no text "
+                + (
+                    f"(finish reason '{reason}')."
+                    if isinstance(reason, str) and reason
+                    else "(no finish reason given)."
+                )
+            )
         if isinstance(content, list):
             content = " ".join(
                 part.get("text", "")

@@ -8,7 +8,6 @@ the answer is JSON with a `text` field. Read on the vendor's pages on
 
 from __future__ import annotations
 
-import json
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -31,7 +30,7 @@ from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
     multipart_form_data,
-    normalize_transcript_text,
+    transcript_from_json,
 )
 from .base import (
     AudioInput,
@@ -47,9 +46,6 @@ from .base import (
 # inference location", so no region is offered.
 MISTRAL_API_BASE = "https://api.mistral.ai/v1"
 _UPLOAD_PROGRESS = "Uploading audio to Mistral and waiting for transcription..."
-# How the start of an HTML page looks, after leading whitespace: a proxy's
-# sign-in or block page answering HTTP 200.
-_HTML_STARTS = (b"<!doctype html", b"<html")
 
 
 class MistralTranscriber(ProgressReporter, ITranscriber):
@@ -163,29 +159,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
         read as silence, a part of a split recording would be dropped from
         the transcript without a word.
         """
-        if payload.lstrip()[:16].lower().startswith(_HTML_STARTS):
-            raise TranscriptionError(
-                "Mistral answered with an HTML page instead of JSON -- typically "
-                "a proxy's sign-in or block page."
-            )
-        try:
-            parsed = json.loads(payload.decode("utf-8", errors="replace"))
-        except ValueError as exc:
-            raise TranscriptionError(
-                "Mistral transcription failed: the answer is not JSON."
-            ) from exc
-        value = parsed.get("text") if isinstance(parsed, dict) else None
-        if not isinstance(value, str):
-            keys = (
-                ", ".join(sorted(str(key) for key in parsed)[:8])
-                if isinstance(parsed, dict)
-                else type(parsed).__name__
-            )
-            raise TranscriptionError(
-                "Mistral transcription failed: the answer has no 'text' field "
-                f"(it holds: {keys or 'nothing'})."
-            )
-        return normalize_transcript_text(value)
+        return transcript_from_json(payload, prefix="Mistral transcription failed")
 
     def test_connection(self) -> tuple[bool, str]:
         request = urllib.request.Request(f"{MISTRAL_API_BASE}/models", method="GET")

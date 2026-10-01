@@ -1276,6 +1276,18 @@ class TestDeepgramRegion:
         url = mock_urlopen.call_args[0][0].full_url
         assert url == "https://api.eu.deepgram.com/v1/projects"
 
+    def test_the_default_region_is_the_global_endpoint(self):
+        """Deepgram calls `api.deepgram.com` "the default global endpoint"
+        and documents no US guarantee for it (custom-endpoints page,
+        2026-10-01), so the default is not labelled US."""
+        from stt_app.config import DEEPGRAM_API_HOSTS, DEFAULT_DEEPGRAM_REGION
+
+        assert DEFAULT_DEEPGRAM_REGION == "global"
+        assert DEEPGRAM_API_HOSTS == {
+            "global": "api.deepgram.com",
+            "eu": "api.eu.deepgram.com",
+        }
+
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_an_unknown_region_falls_back_to_the_default_host(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response({"projects": []})
@@ -1287,7 +1299,7 @@ class TestDeepgramRegion:
         ("region", "prefix"),
         [
             ("eu", "wss://api.eu.deepgram.com/v1/listen?"),
-            ("us", "wss://api.deepgram.com/v1/listen?"),
+            ("global", "wss://api.deepgram.com/v1/listen?"),
         ],
     )
     def test_streaming_connects_to_the_region_host(self, monkeypatch, region, prefix):

@@ -301,12 +301,16 @@ class _RemoteProvidersMixin:
         # the page's minimum width.
         for provider, choices in _REMOTE_REGION_CHOICES.items():
             combo = _WheelPassthroughComboBox()
-            for value, label in choices:
+            for value, label, guarantee in choices:
                 combo.addItem(label, value)
+                combo.setItemData(
+                    combo.count() - 1, guarantee, QtCore.Qt.ToolTipRole
+                )
             combo.setToolTip(
                 f"Where {_remote_provider_label(provider)} processes the "
                 "audio. Dictation, audio imports and the connection test all "
-                "use this region."
+                "use this region.\n"
+                + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
             )
             region_label = QtWidgets.QLabel(region_row_label(provider))
             region_label.setFixedWidth(provider_label_width)
@@ -328,7 +332,8 @@ class _RemoteProvidersMixin:
             grid_row += 1
             self._provider_region_combos[provider] = combo
         region_hint = QtWidgets.QLabel(
-            "The vendor's default endpoint unless you pick another region. "
+            "The vendor's default endpoint unless you pick another region; "
+            "each choice's tooltip says what the vendor guarantees for it. "
             "Speechmatics' Melia 1 model runs in the EU and US only; pick "
             "Enhanced or Standard on the Transcription tab for Australia."
         )

@@ -2627,6 +2627,16 @@ def test_every_remote_engine_is_in_both_identity_maps():
         assert hasattr(defaults, controller_module._ENGINE_KEY_FLAGS[engine])
 
 
+def test_the_engine_field_maps_are_the_stores_own():
+    """One map of model fields and one of region fields, both owned by the
+    settings store; the controller and the Settings dialog read the same
+    objects rather than keeping copies that have to be edited in step."""
+    import stt_app.settings_store as store_module
+
+    assert controller_module._ENGINE_MODEL_FIELDS is store_module._REMOTE_MODEL_FIELDS
+    assert controller_module._ENGINE_REGION_FIELDS is store_module._REMOTE_REGION_FIELDS
+
+
 def test_every_region_field_names_a_setting_of_a_remote_engine():
     """A typo in the region map would read the default host forever."""
     remote = set(VALID_ENGINES) - {DEFAULT_ENGINE}

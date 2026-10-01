@@ -6,8 +6,9 @@ holds the app's single transcription worker -- and, because
 `ThreadPoolExecutor`'s exit handler joins its workers, keeps the process (and
 its single-instance lock) alive after the user quit. The AssemblyAI provider
 learnt each of these properties separately (`docs/agents/remote-providers.md`,
-"No remote batch wait may be unbounded" and the entries after it); this is the
-same loop for a provider that fetches over plain HTTP, and `fetch_with_retries`
+"No remote batch wait may be unbounded" and the entries after it); this is
+that loop, used by AssemblyAI (through its SDK) and by Speechmatics (over
+plain HTTP) since 2026-10-01, and `fetch_with_retries`
 is its counterpart for the one request that fetches the finished result:
 
 - a total budget (`max_wait_s`), plus one request in flight, which a

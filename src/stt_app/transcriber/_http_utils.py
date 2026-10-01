@@ -13,6 +13,7 @@ import urllib.error
 from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
+from .base import TranscriptionError
 
 _AUDIO_CONTENT_TYPE_BY_SUFFIX = {
     ".wav": "audio/wav",
@@ -93,6 +94,73 @@ def multipart_form_data(
 def normalize_transcript_text(value: object) -> str:
     """Collapse whitespace runs and trim, defensively handling ``None``."""
     return " ".join(str(value or "").strip().split()).strip()
+
+
+_BYTE_ORDER_MARK = b"\xef\xbb\xbf"
+_BODY_EXCERPT_MAX_CHARS = 80
+
+
+def is_markup_page(payload: bytes) -> bool:
+    """Whether a response body is an HTML or XML page rather than JSON.
+
+    JSON never starts with ``<``, and a proxy's sign-in or block page does,
+    whatever comes first: a byte-order mark, ``<!-- ... -->``, ``<?xml ...?>``
+    or a bare ``<head>``. Matching ``<!doctype html``/``<html`` only let each
+    of those through as a transcript (review of 2026-10-01).
+    """
+    return payload.lstrip().removeprefix(_BYTE_ORDER_MARK).lstrip().startswith(b"<")
+
+
+def body_excerpt(payload: bytes | str) -> str:
+    """The start of a body on one line, short enough for an error message."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8-sig", errors="replace")
+    text = " ".join(payload.split())
+    if len(text) > _BODY_EXCERPT_MAX_CHARS:
+        text = text[: _BODY_EXCERPT_MAX_CHARS - 3] + "..."
+    return text
+
+
+def transcript_from_json(
+    payload: bytes, *, prefix: str, accept_bare_string: bool = False
+) -> str:
+    """The ``text`` of a transcription answer, or an error naming what came.
+
+    For providers asked for JSON. ``"text": ""`` is a valid answer (nothing
+    said). An HTML page, a body that is not JSON (a plain "Internal Server
+    Error"), or JSON without a string ``text`` is not: read as silence or
+    as a transcript, it was pasted, or a part of a split recording dropped.
+    ``prefix`` starts every message ("Custom endpoint", "Mistral
+    transcription failed"); ``accept_bare_string`` takes a top-level JSON
+    string as the transcript.
+    """
+    if is_markup_page(payload):
+        raise TranscriptionError(
+            f"{prefix}: the answer is an HTML page instead of JSON -- "
+            "typically a proxy's sign-in or block page."
+        )
+    try:
+        parsed = json.loads(payload.decode("utf-8-sig", errors="replace"))
+    except ValueError as exc:
+        excerpt = body_excerpt(payload)
+        raise TranscriptionError(
+            f"{prefix}: the answer is not JSON"
+            + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
+        ) from exc
+    if accept_bare_string and isinstance(parsed, str):
+        return normalize_transcript_text(parsed)
+    value = parsed.get("text") if isinstance(parsed, dict) else None
+    if not isinstance(value, str):
+        keys = (
+            ", ".join(sorted(str(key) for key in parsed)[:8])
+            if isinstance(parsed, dict)
+            else type(parsed).__name__
+        )
+        raise TranscriptionError(
+            f"{prefix}: the answer has no 'text' field "
+            f"(it holds: {keys or 'nothing'})."
+        )
+    return normalize_transcript_text(value)
 
 
 # The recovered text goes into a user-facing error, and the overlay's error

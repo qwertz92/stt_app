@@ -95,6 +95,7 @@ from .model_download_progress import (
     format_model_download_progress,
 )
 from .overlay_ui import OverlayUI
+from .settings_store import _REMOTE_MODEL_FIELDS as _ENGINE_MODEL_FIELDS
 from .settings_store import _REMOTE_REGION_FIELDS as _ENGINE_REGION_FIELDS
 from .settings_store import AppSettings, SettingsStore, preferred_onnx_device
 from .streaming_text import (
@@ -337,27 +338,10 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "mistral": "has_mistral_key",
 }
 
-# Which ``AppSettings`` field carries the model name each remote engine sends.
-# Only one is ever read, so they collapse into a single identity slot: editing
-# the Groq model must not reload a loaded local model.
-_ENGINE_MODEL_FIELDS: dict[str, str] = {
-    "assemblyai": "assemblyai_model",
-    "openai": "openai_model",
-    "groq": "groq_model",
-    "deepgram": "deepgram_model",
-    "elevenlabs": "elevenlabs_model",
-    "azure": "azure_speech_model",
-    "funasr": "funasr_model",
-    "custom": "custom_model",
-    "speechmatics": "speechmatics_model",
-    "mistral": "mistral_model",
-}
-
-# Which ``AppSettings`` field carries the data-residency region each
-# remote engine connects to (`_ENGINE_REGION_FIELDS`, imported from the
-# store). One identity slot, like the model: the host is baked into the
-# provider at construction, and an engine that has no region setting
-# reads none.
+# `_ENGINE_MODEL_FIELDS` and `_ENGINE_REGION_FIELDS` (imported from the
+# store) say which field carries each remote engine's model and region.
+# Only the selected engine's is read, so each collapses into one identity
+# slot: editing the Groq model must not reload a loaded local model.
 
 
 class _TranscriberIdentity(NamedTuple):

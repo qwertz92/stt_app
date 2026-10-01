@@ -102,7 +102,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Mini Transcribe 2); custom vocabulary as `context_bias` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
-| `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
+| `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
@@ -156,7 +156,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_benchmark.py` | Pure benchmark runner (`run_benchmark_cases`) + result models; used by the CLI and the out-of-process worker |
 | `benchmark_worker.py` | Subprocess entry point: runs `run_benchmark_cases` and streams progress/case/done events as prefixed JSON lines |
 | `benchmark_process.py` | Launches/streams the benchmark worker; re-exports `run_benchmark_cases` (same signature) for the settings dialog so the UI never freezes |
-| `transcriber/_http_utils.py` | Safe multipart construction and audio MIME inference shared by REST providers |
+| `transcriber/_http_utils.py` | Safe multipart construction, audio MIME inference, HTTP error detail and the JSON transcript reader (`transcript_from_json`, `is_markup_page`) shared by REST providers |
 | `scripts/import_model.py` | Import manually downloaded models; validates for Git LFS pointers |
 | `scripts/download_model.py` | Automated model download for offline/corporate use |
 
@@ -238,9 +238,11 @@ Short forms of rules that recur across areas; the area files hold the detail.
   `speechmatics_region` `eu1` (default), `us1`, `au1` (Melia 1 not in
   `au1`).
 - **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
-- **Regions**: `assemblyai_region` and `deepgram_region` (`us` default,
-  `eu`) and `speechmatics_region` are picked on the API Keys tab; the field
-  map is `settings_store._REMOTE_REGION_FIELDS`.
+- **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
+  `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
+  picked on the API Keys tab; a label claims only what the vendor
+  guarantees (`docs/agents/remote-providers.md`); the field map is
+  `settings_store._REMOTE_REGION_FIELDS`.
 - **Custom endpoint** (`custom`): base URL, free-text model, API style
   (`transcriptions` or `chat`) and an optional key command that prints a
   short-lived Bearer token; the `custom` key is the static fallback.

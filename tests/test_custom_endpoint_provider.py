@@ -160,10 +160,37 @@ def test_the_transcription_request_is_the_openai_shape(server):
     }
 
 
-def test_auto_sends_no_language_and_plain_text_is_accepted(server):
-    fake = server("plain transcript")
-    assert _transcriber().transcribe_batch(WAV) == "plain transcript"
+def test_auto_sends_no_language(server):
+    fake = server({"text": "transcript"})
+    assert _transcriber().transcribe_batch(WAV) == "transcript"
     assert "language" not in _multipart_fields(fake.requests[0])
+
+
+# Bodies that are not the JSON the request asked for (`response_format=json`).
+# Each was returned as the transcript and pasted (review of 2026-10-01).
+_MARKUP_BODIES = [
+    pytest.param("\ufeff<!DOCTYPE html><html><body>Sign in</body></html>", id="bom"),
+    pytest.param("<!-- proxy --><html><body>Sign in</body></html>", id="comment"),
+    pytest.param("<head><title>Sign in</title></head>", id="head"),
+    pytest.param('<?xml version="1.0"?><html><body>Sign in</body></html>', id="xml"),
+]
+
+
+@pytest.mark.parametrize("page", _MARKUP_BODIES)
+def test_any_markup_page_is_an_error_not_a_transcript(server, page):
+    server(page)
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "HTML" in str(raised.value)
+    assert "Sign in" not in str(raised.value)
+
+
+def test_a_plain_text_answer_is_an_error_not_a_transcript(server):
+    """The request asks for JSON; a text body is the server's error page."""
+    server("Internal Server Error")
+    with pytest.raises(TranscriptionError, match="not JSON") as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "Internal Server Error" in str(raised.value)
 
 
 def test_no_model_is_refused_before_any_request(server):
@@ -222,12 +249,47 @@ def test_the_chat_request_carries_the_audio_and_the_instruction(server):
         ("  „Hallo Welt.“ ", "Hallo Welt."),
         ([{"type": "text", "text": "Hallo"}, {"type": "text", "text": "Welt."}], "Hallo Welt."),
         ("", ""),
-        (None, ""),
     ],
 )
 def test_the_chat_reply_is_unwrapped(server, reply, expected):
     server(_chat_reply(reply))
     assert _transcriber(api_mode="chat").transcribe_batch(WAV) == expected
+
+
+@pytest.mark.parametrize(
+    ("message", "finish_reason", "expected"),
+    [
+        pytest.param(
+            {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+            "stop",
+            "refused: I can't help with that.",
+            id="refusal",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": None},
+            "length",
+            "finish reason 'length'",
+            id="length",
+        ),
+        pytest.param({"role": "assistant"}, "stop", "finish reason 'stop'", id="missing"),
+    ],
+)
+def test_a_chat_reply_with_null_content_is_an_error_not_silence(
+    server, message, finish_reason, expected
+):
+    """`content: null` is a refusal or a cut-off answer, not "nothing said";
+    read as silence, a part of a split recording vanished."""
+    server({"choices": [{"message": message, "finish_reason": finish_reason}]})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert expected in str(raised.value)
+
+
+def test_a_long_refusal_is_shortened_in_the_message(server):
+    server({"choices": [{"message": {"content": None, "refusal": "x" * 500}}]})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert len(str(raised.value)) < 260
 
 
 def test_a_chat_reply_without_content_is_an_error(server):
@@ -582,6 +644,59 @@ def test_a_key_command_whose_grandchild_holds_the_pipe_is_still_bounded(
         elapsed = time.monotonic() - started
         assert elapsed < 10.0, f"the timeout of 1 s took {elapsed:.1f} s"
         # The grandchild was ended with its parent, not left running.
+        time.sleep(0.5)
+        before = _heartbeat(heartbeat)
+        time.sleep(0.6)
+        assert _heartbeat(heartbeat) == before, "the grandchild is still running"
+    finally:
+        _kill_leftover(heartbeat)
+
+
+_EXITING_CHILD_SCRIPT = """
+import subprocess, sys
+# Starts a program that inherits the pipes, prints the token and exits 0: the
+# token has arrived, but the pipes stay open as long as the grandchild runs.
+subprocess.Popen(
+    [sys.executable, sys.argv[1], sys.argv[2]],
+    stdout=sys.stdout,
+    stderr=sys.stderr,
+)
+print("child-token", flush=True)
+"""
+
+
+def test_a_key_command_that_exits_while_its_grandchild_holds_the_pipe(
+    tmp_path, monkeypatch
+):
+    """The token arrived with exit code 0; the call must not wait for EOF.
+
+    Before: `communicate` waited for the grandchild to close the inherited
+    pipes, the call failed with the timeout although the token had arrived,
+    and the grandchild -- an orphan once its parent had exited, which
+    `taskkill /T` cannot reach -- kept running (review of 2026-10-01).
+    """
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(_GRANDCHILD_SCRIPT, encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(_EXITING_CHILD_SCRIPT, encoding="utf-8")
+    heartbeat = tmp_path / "heartbeat.txt"
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 8.0)
+    parts = [sys.executable, str(child), str(grandchild), str(heartbeat)]
+    command = (
+        subprocess.list2cmdline(parts)
+        if provider_module.os.name == "nt"
+        else " ".join(parts)
+    )
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    started = time.monotonic()
+    try:
+        assert transcriber._run_key_command() == "child-token"
+        elapsed = time.monotonic() - started
+        assert elapsed < 5.0, f"the call waited {elapsed:.1f} s for the pipes"
         time.sleep(0.5)
         before = _heartbeat(heartbeat)
         time.sleep(0.6)

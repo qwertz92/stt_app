@@ -1560,48 +1560,72 @@ DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
 ASSEMBLYAI_STREAMING_MODEL = "universal-3-6-pro"
 ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
 
-# Data-residency region for AssemblyAI and Deepgram (`assemblyai_region`,
-# `deepgram_region`). "us" is each vendor's default endpoint, i.e. what every
-# build before this setting sent; "eu" is the vendor's EU host. Hosts read on
-# the vendors' own pages on 2026-10-01:
-# - AssemblyAI batch: https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region
-#   (US default `api.assemblyai.com`, EU `api.eu.assemblyai.com`).
-# - AssemblyAI streaming:
-#   https://www.assemblyai.com/docs/streaming/endpoints-and-data-zones
-#   (EU data zone `streaming.eu.assemblyai.com`). "us" keeps the default
-#   `streaming.assemblyai.com`, which that page calls edge routing, and not
-#   the US data-zone host `streaming.us.assemblyai.com`: the default must stay
-#   what was sent before.
-# - Deepgram: https://developers.deepgram.com/reference/custom-endpoints
-#   (`api.eu.deepgram.com`, "the same API keys and SDKs as the default global
-#   endpoint"). That page names the REST host; the WebSocket host is the same
-#   name with `wss://`, which it does not spell out.
-REMOTE_REGION_US = "us"
-REMOTE_REGION_EU = "eu"
-VALID_REMOTE_REGIONS = (REMOTE_REGION_US, REMOTE_REGION_EU)
-DEFAULT_REMOTE_REGION = REMOTE_REGION_US
+# Data-residency regions (`assemblyai_region`, `deepgram_region`). Each
+# provider's default is its default endpoint, i.e. what every build before
+# these settings sent. What each choice guarantees, in the vendors' words
+# (pages read 2026-10-01):
+# - AssemblyAI batch
+#   (https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region):
+#   "The default endpoint (`api.assemblyai.com`) processes your pre-recorded
+#   audio transcription requests in the US region"; "The EU endpoint
+#   (`api.eu.assemblyai.com`) guarantees your data never leaves the European
+#   Union". There is no separate US batch host, so "auto" and "us" share it.
+# - AssemblyAI streaming
+#   (https://www.assemblyai.com/docs/streaming/endpoints-and-data-zones): the
+#   default `streaming.assemblyai.com` "automatically routes requests to the
+#   nearest available region" and "Your data may be processed in any of the
+#   US or EU locations"; the data-zone hosts `streaming.us.assemblyai.com`
+#   and `streaming.eu.assemblyai.com` "guarantee your data never leaves the
+#   specified region". So "auto" streams to the routed host, "us" and "eu"
+#   to the data zones (review of 2026-10-01: "us" used to stream to the
+#   routed host while the picker said US).
+# - Deepgram (https://developers.deepgram.com/reference/custom-endpoints):
+#   `api.deepgram.com` is "the default global endpoint", with no residency
+#   stated for it, and `api.eu.deepgram.com` routes "traffic through the EU";
+#   regional endpoints "use the same API keys". Hence "global", not "us".
+#   That page names the REST host; the WebSocket host is the same name with
+#   `wss://`, which it does not spell out.
+ASSEMBLYAI_REGION_AUTO = "auto"
+ASSEMBLYAI_REGION_US = "us"
+ASSEMBLYAI_REGION_EU = "eu"
+ASSEMBLYAI_REGIONS = (ASSEMBLYAI_REGION_AUTO, ASSEMBLYAI_REGION_US, ASSEMBLYAI_REGION_EU)
+DEFAULT_ASSEMBLYAI_REGION = ASSEMBLYAI_REGION_AUTO
 ASSEMBLYAI_API_BASE_URLS = {
-    REMOTE_REGION_US: "https://api.assemblyai.com",
-    REMOTE_REGION_EU: "https://api.eu.assemblyai.com",
+    ASSEMBLYAI_REGION_AUTO: "https://api.assemblyai.com",
+    ASSEMBLYAI_REGION_US: "https://api.assemblyai.com",
+    ASSEMBLYAI_REGION_EU: "https://api.eu.assemblyai.com",
 }
 ASSEMBLYAI_STREAMING_HOSTS = {
-    REMOTE_REGION_US: "streaming.assemblyai.com",
-    REMOTE_REGION_EU: "streaming.eu.assemblyai.com",
+    ASSEMBLYAI_REGION_AUTO: "streaming.assemblyai.com",
+    ASSEMBLYAI_REGION_US: "streaming.us.assemblyai.com",
+    ASSEMBLYAI_REGION_EU: "streaming.eu.assemblyai.com",
 }
+DEEPGRAM_REGION_GLOBAL = "global"
+DEEPGRAM_REGION_EU = "eu"
+DEEPGRAM_REGIONS = (DEEPGRAM_REGION_GLOBAL, DEEPGRAM_REGION_EU)
+DEFAULT_DEEPGRAM_REGION = DEEPGRAM_REGION_GLOBAL
 DEEPGRAM_API_HOSTS = {
-    REMOTE_REGION_US: "api.deepgram.com",
-    REMOTE_REGION_EU: "api.eu.deepgram.com",
+    DEEPGRAM_REGION_GLOBAL: "api.deepgram.com",
+    DEEPGRAM_REGION_EU: "api.eu.deepgram.com",
 }
 
 
-def normalize_remote_region(value: object) -> str:
-    """Return a known region; anything else is the default (US) region.
+def _known_region(value: object, known: tuple[str, ...], default: str) -> str:
+    """A region this build knows; anything else is the provider's default.
 
     A value this build does not know -- a typo in a hand-edited file, a
     region a newer build added -- must not reach a provider as a host name.
     """
     normalized = str(value or "").strip().lower()
-    return normalized if normalized in VALID_REMOTE_REGIONS else DEFAULT_REMOTE_REGION
+    return normalized if normalized in known else default
+
+
+def normalize_assemblyai_region(value: object) -> str:
+    return _known_region(value, ASSEMBLYAI_REGIONS, DEFAULT_ASSEMBLYAI_REGION)
+
+
+def normalize_deepgram_region(value: object) -> str:
+    return _known_region(value, DEEPGRAM_REGIONS, DEFAULT_DEEPGRAM_REGION)
 
 # Total time one batch job may stay queued/processing before the app gives
 # up on it. The SDK's own `wait_for_completion` is `while True:` with no
@@ -1694,9 +1718,7 @@ SPEECHMATICS_POLL_INTERVAL_S = 1.0
 
 
 def normalize_speechmatics_region(value: object) -> str:
-    """A Speechmatics region this build knows; anything else is the default."""
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in SPEECHMATICS_REGIONS else DEFAULT_SPEECHMATICS_REGION
+    return _known_region(value, SPEECHMATICS_REGIONS, DEFAULT_SPEECHMATICS_REGION)
 
 
 # Mistral Voxtral Mini Transcribe 2, released 2026-02-04, $0.003 per minute

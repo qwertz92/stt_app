@@ -16,6 +16,7 @@ from .config import (
     DEEPGRAM_MODELS,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_ASSEMBLYAI_REGION,
     DEFAULT_AZURE_ENDPOINT,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
@@ -28,6 +29,7 @@ from .config import (
     DEFAULT_CUSTOM_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
+    DEFAULT_DEEPGRAM_REGION,
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
@@ -55,7 +57,6 @@ from .config import (
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_DIR,
     DEFAULT_RECORDINGS_MAX_COUNT,
-    DEFAULT_REMOTE_REGION,
     DEFAULT_REPASTE_HOTKEY,
     DEFAULT_SAVE_ALL_RECORDINGS,
     DEFAULT_SAVE_LAST_WAV,
@@ -100,7 +101,8 @@ from .config import (
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
     effective_preferred_device,
-    normalize_remote_region,
+    normalize_assemblyai_region,
+    normalize_deepgram_region,
     normalize_speechmatics_region,
     onnx_auto_device_order,
     order_with_preferred_device,
@@ -195,8 +197,8 @@ DEFAULTS = {
     "custom_model": DEFAULT_CUSTOM_MODEL,
     "custom_api_mode": DEFAULT_CUSTOM_API_MODE,
     "custom_key_command": DEFAULT_CUSTOM_KEY_COMMAND,
-    "assemblyai_region": DEFAULT_REMOTE_REGION,
-    "deepgram_region": DEFAULT_REMOTE_REGION,
+    "assemblyai_region": DEFAULT_ASSEMBLYAI_REGION,
+    "deepgram_region": DEFAULT_DEEPGRAM_REGION,
     "speechmatics_model": DEFAULT_SPEECHMATICS_MODEL,
     "speechmatics_region": DEFAULT_SPEECHMATICS_REGION,
     "mistral_model": DEFAULT_MISTRAL_MODEL,
@@ -330,8 +332,8 @@ class AppSettings:
     # build before these fields sent), "eu" its EU host. No schema bump:
     # an absent key is the default, and an older build keeps an unknown
     # key through `SettingsStore._unknown_keys`.
-    assemblyai_region: str = DEFAULT_REMOTE_REGION
-    deepgram_region: str = DEFAULT_REMOTE_REGION
+    assemblyai_region: str = DEFAULT_ASSEMBLYAI_REGION
+    deepgram_region: str = DEFAULT_DEEPGRAM_REGION
     # Speechmatics names its regions itself (eu1, us1, au1), so its region
     # is a field of its own rather than the us/eu pair above. Added on
     # 2026-10-01, likewise without a schema bump.
@@ -765,10 +767,10 @@ class AppSettings:
             custom_model=_text_setting(merged.get("custom_model")),
             custom_api_mode=custom_api_mode,
             custom_key_command=_text_setting(merged.get("custom_key_command")),
-            assemblyai_region=normalize_remote_region(
+            assemblyai_region=normalize_assemblyai_region(
                 merged.get("assemblyai_region")
             ),
-            deepgram_region=normalize_remote_region(merged.get("deepgram_region")),
+            deepgram_region=normalize_deepgram_region(merged.get("deepgram_region")),
             speechmatics_model=speechmatics_model,
             speechmatics_region=normalize_speechmatics_region(
                 merged.get("speechmatics_region")

@@ -175,7 +175,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   `tests/test_settings_dialog_regions.py` pins the round trip.
 - **Region selectors sit on the API Keys tab** (2026-10-01): one row per
   provider in `_REMOTE_REGION_CHOICES` ("AssemblyAI Region", "Deepgram
-  Region", "Speechmatics Region") below the key rows, always visible and
+  Region", "Speechmatics Region"; each choice carries its vendor guarantee
+  as an item tooltip) below the key rows, always visible and
   enabled whatever the engine, so a pick moves nothing; the combo spans the
   key/button/badge columns left-aligned at its own width, so it never raises
   the page minimum. Next to the key because the connection test there uses

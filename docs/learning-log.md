@@ -9145,3 +9145,19 @@ now come from widgets: model pickers for both engines on Transcription, key
 rows and connection tests on API Keys, and one region selector per provider
 (AssemblyAI, Deepgram, Speechmatics) on API Keys. Lesson: a new
 `AppSettings` field is not done until the settings-dialog suites ran.
+
+## 2026-10-01: review of the provider branch
+
+- **A region label must not claim more than the vendor guarantees.** "US
+  (default)" streamed AssemblyAI to `streaming.assemblyai.com`, which routes
+  to the US or the EU. AssemblyAI now offers Automatic (default), US only
+  (`streaming.us.assemblyai.com`) and EU only; Deepgram's default is
+  "Global", its own word for `api.deepgram.com`.
+- **A provider asked for JSON treats anything else as an error.** The custom
+  endpoint pasted a BOM-prefixed or comment-led HTML page and a plain
+  "Internal Server Error" as transcripts; chat `content: null` (a refusal, a
+  cut-off answer) read as silence. One reader, `transcript_from_json`.
+- **Waiting for EOF is not waiting for the child.** A key command that
+  printed its token and exited 0 failed with a timeout because a grandchild
+  held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
+  in a Windows job object, and the call returns once the child exited.

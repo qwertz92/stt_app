@@ -117,6 +117,27 @@ def test_an_html_page_is_never_a_transcript(recorder):
         MistralTranscriber("k").transcribe_batch(wav_seconds(1.0))
 
 
+@pytest.mark.parametrize(
+    "page",
+    [
+        pytest.param("\ufeff<!DOCTYPE html><html>sign in</html>", id="bom"),
+        pytest.param("<!-- proxy --><html>sign in</html>", id="comment"),
+        pytest.param("<head><title>sign in</title></head>", id="head"),
+        pytest.param('<?xml version="1.0"?><html>sign in</html>', id="xml"),
+    ],
+)
+def test_any_markup_page_is_named_as_html(recorder, page):
+    recorder.answer = fake_response(page)
+    with pytest.raises(TranscriptionError, match="HTML"):
+        MistralTranscriber("k").transcribe_batch(wav_seconds(1.0))
+
+
+def test_a_plain_text_answer_is_an_error_naming_it(recorder):
+    recorder.answer = fake_response("Internal Server Error")
+    with pytest.raises(TranscriptionError, match=r"not JSON.*Internal Server Error"):
+        MistralTranscriber("k").transcribe_batch(wav_seconds(1.0))
+
+
 def test_an_invalid_key_says_so(recorder):
     recorder.answer = http_error(_URL, 401)
     with pytest.raises(TranscriptionError, match="Authentication failed"):
