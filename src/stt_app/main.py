@@ -35,6 +35,7 @@ from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
+from .transcriber.base import transcript_has_gap
 from .transcript_history import TranscriptHistoryStore
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
@@ -787,10 +788,7 @@ def _last_recording_already_transcribed(
         for entry in recent_entries:
             if str(getattr(entry, "source_recording_id", "")).strip() != recording_id:
                 continue
-            try:
-                last_recording_store.mark_completed()
-            except Exception:
-                pass
+            _complete_unless_gap(last_recording_store, entry)
             return True
 
     path = last_recording_store.selectable_path()
@@ -807,14 +805,25 @@ def _last_recording_already_transcribed(
         except Exception:
             continue
         if 0 <= (history_ts - audio_mtime) <= 180:
-            try:
-                last_recording_store.mark_completed()
-            except Exception:
-                pass
+            _complete_unless_gap(last_recording_store, entry)
             return True
         if history_ts < audio_mtime:
             break
     return False
+
+
+def _complete_unless_gap(last_recording_store: LastRecordingStore, entry) -> None:
+    """Complete a recording whose transcript is already in history -- unless
+    that transcript carries a gap marker. The controller kept such a
+    recording on purpose (marked failed): completing it here deletes the audio
+    with `keep_after_success` off, and the marker names a stretch of it the
+    user may still need to listen to."""
+    if transcript_has_gap(str(getattr(entry, "text", "") or "")):
+        return
+    try:
+        last_recording_store.mark_completed()
+    except Exception:
+        pass
 
 
 def _install_signal_handlers(app: QtWidgets.QApplication) -> QtCore.QTimer:

@@ -1171,3 +1171,61 @@ def test_an_error_the_overlay_cannot_show_reaches_the_tray():
         ("Transcription failed", "Recording 12:00:00 failed: x"),
         ("Transcript not inserted", "Recording 12:00:00 was not pasted."),
     ]
+
+
+def test_a_transcript_with_a_gap_does_not_complete_its_recording_at_startup(
+    tmp_path,
+):
+    """The controller keeps the recording of a transcript with a gap marker
+    (marked failed), and the startup check must not undo that: it finds the
+    transcript in history, and completing the recording there deletes the
+    audio with `keep_after_success` off. No prompt either -- the transcript
+    exists; the audio stays reachable from History and Import."""
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    state = store.save_recording(b"RIFF", keep_after_success=False)
+    store.mark_failed("Part of the recording returned no text; the recording was kept.")
+    history = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history.add_entry(
+        TranscriptHistoryEntry.new(
+            text="erster teil [no text returned for 3:00-6:00] rest",
+            engine="openai",
+            model="gpt-transcribe",
+            mode="batch",
+            source_recording_id=state.recording_id,
+        ),
+        max_items=20,
+    )
+
+    assert _last_recording_already_transcribed(store, history) is True
+    assert store.audio_path.is_file()
+    assert store.has_recoverable_recording() is True
+
+
+def test_a_legacy_match_with_a_gap_does_not_complete_its_recording(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    audio_mtime = 1_800_000_000
+    os.utime(store.audio_path, (audio_mtime, audio_mtime))
+    history = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history.add_entry(
+        TranscriptHistoryEntry(
+            text="[no text returned for 0:00-0:31] rest",
+            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
+            engine="openai",
+            model="gpt-transcribe",
+            mode="batch",
+        ),
+        max_items=20,
+    )
+    legacy_state = SimpleNamespace(recording_id="", created_at="")
+
+    assert _last_recording_already_transcribed(
+        store, history, state=legacy_state
+    ) is True
+    assert store.audio_path.is_file()

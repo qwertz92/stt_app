@@ -156,7 +156,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (`transcriber/base.py`, beside `gap_marker`) makes the controller mark
     such a recording failed rather than completed, so with `save_last_wav`
     off the stretch the marker names is not deleted with the rest (found by
-    the review of a1e0b01).
+    the review of a1e0b01). Every road that completes a recording asks it:
+    the dictation roads, the import of the managed last recording, and the
+    startup check `main._complete_unless_gap`, which finds the transcript in
+    history and used to complete -- i.e. delete -- the kept recording on the
+    next launch (review of 384f84f). Such a recording has no Retry (its
+    overlay is Done); History and Import reach it.
     Failing used to throw away every other part's minutes of speech; skipping
     unmarked would hand back a transcript with a hole that reads complete,
     and the marker is the one channel that reaches the overlay, the document

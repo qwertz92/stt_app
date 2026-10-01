@@ -9626,3 +9626,50 @@ def test_a_queued_transcript_with_a_gap_keeps_its_recording():
     assert store.completed_ids == ["rec-Q"]
     controller.shutdown()
     _ = app
+
+
+def test_an_imported_last_recording_with_a_gap_is_kept(monkeypatch, tmp_path):
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+    last_recording_store = FakeLastRecordingStore(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(last_recording_store=last_recording_store)
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "erster teil [no text returned for 3:00-6:00] rest"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is True
+    assert "[no text returned for 3:00-6:00]" in text
+    assert last_recording_store.completed == 0
+    assert len(last_recording_store.failed) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_background_transcript_with_a_gap_keeps_its_recording():
+    """End to end through the background delivery: a newer session owns the
+    overlay, the older job's result carries a gap marker."""
+    store = _StoreWithIds("rec-B")
+    controller, app = _make_controller(last_recording_store=store)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(7, settings, "batch")
+    store.recording_id = "rec-N"
+    controller._register_transcription_job(8, settings, "batch")
+    controller._active_request_token = 8
+
+    controller._on_transcription_ready(
+        "[no text returned for 0:00-0:31] rest", request_token=7
+    )
+
+    assert store.completed_ids == []
+    assert store.failed_ids == ["rec-B"]
+    controller.shutdown()
+    _ = app

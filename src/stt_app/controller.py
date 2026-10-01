@@ -7012,7 +7012,17 @@ class DictationController(QtCore.QObject):
                 track_for_edit=False,
             )
             if managed_last_recording:
-                self._last_recording_store.mark_completed(**conditional_transition)
+                if transcript_has_gap(text):
+                    # Kept, like a dictation whose transcript has a gap
+                    # (`_mark_last_recording_completed`).
+                    self._last_recording_store.mark_failed(
+                        _GAP_KEPT_RECORDING_MESSAGE,
+                        **conditional_transition,
+                    )
+                else:
+                    self._last_recording_store.mark_completed(
+                        **conditional_transition
+                    )
             return True, text
         except Exception as exc:
             self._logger.exception("Failed to transcribe imported file")
