@@ -1716,7 +1716,8 @@ def test_a_paced_foreground_result_shows_at_once_and_pastes_after_the_window(
         assert controller._last_transcript == "transcript B."
         assert controller._last_history_entry.text == "transcript B."
         assert [e.text for e in history.load()] == ["transcript A.", "transcript B."]
-        assert any("Pending insert" in label for label in _queue_labels(overlay))
+        # Held by the pace alone, so not listed as a queue row.
+        assert _queue_labels(overlay) == []
         assert beeps == [None]
 
         token_c = _record_and_stop(controller)
@@ -1981,9 +1982,14 @@ def test_the_re_paste_inserts_every_waiting_transcript_while_a_job_runs(
     _ = app
 
 
-def test_the_re_paste_of_waiting_transcripts_is_refused_during_a_capture(
+def test_the_re_paste_of_waiting_transcripts_is_refused_while_a_recording_stops(
     monkeypatch, tmp_path
 ):
+    """The refusal names the waiting transcripts and how to insert them.
+
+    During a stop the recording's target snapshot is being taken; an open
+    batch capture alone no longer refuses (owner's decision, 2026-10-01).
+    """
     _fake_clipboard(monkeypatch)
     inserter = SelectiveTextInserter()
     inserter.fail = {"transcript A."}
@@ -2001,7 +2007,7 @@ def test_the_re_paste_of_waiting_transcripts_is_refused_during_a_capture(
     try:
         token_a, _token_b = _record_several(controller, 2)
         controller._on_transcription_ready("transcript A.", request_token=token_a)
-        controller.start_recording()
+        controller._recording_stop_in_progress = True
         inserter.fail = set()
         pasted = list(inserter.calls)
 
@@ -2009,11 +2015,12 @@ def test_the_re_paste_of_waiting_transcripts_is_refused_during_a_capture(
 
         assert inserter.calls == pasted
         assert len(busy) == 1, busy
-        assert "Finish the current recording" in busy[0]
+        assert "Wait for the recording to start or stop" in busy[0]
         assert "1 transcript is waiting to be inserted" in busy[0]
         assert "F10" not in busy[0]
         assert len(_not_inserted_rows(overlay)) == 1
     finally:
+        controller._recording_stop_in_progress = False
         controller.shutdown()
     _ = app
 
@@ -3065,4 +3072,324 @@ def test_a_background_failure_leaves_a_newer_active_token_alone(monkeypatch, tmp
 
     assert controller._active_request_token == token_b
     controller.shutdown()
+    _ = app
+
+
+# -- Re-paste and the pace; results held only by the pace -------------------
+
+
+def test_a_re_paste_inside_the_restore_window_waits_for_it(monkeypatch, tmp_path):
+    """F10 0.3 s after a paste overwrote the clipboard that paste may still
+    be read from, exactly what the pace exists to prevent for every other
+    paste. It is held and goes out when the window ends."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"transcript A."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 990.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        assert len(_not_inserted_rows(overlay)) == 1
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        inserter.fail = set()
+        inserter.now = 1000.3
+
+        controller.repaste_last_transcript()
+
+        assert [call[0] for call in inserter.calls] == [
+            "transcript A.",
+            "transcript B.",
+        ]
+        assert controller._paste_pace_timer.isActive()
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+
+        assert [call[0] for call in inserter.calls][2:] == ["transcript A."]
+        assert inserter.paste_times == [1000.0, 1001.5]
+        assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_the_overlay_insert_inside_the_restore_window_waits_for_it(
+    monkeypatch, tmp_path
+):
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        controller._insert_action_text = "offered text."
+        inserter.now = 1000.3
+
+        controller.insert_failed_text()
+
+        assert [call[0] for call in inserter.calls] == ["transcript A."]
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+        assert [call[0] for call in inserter.calls] == [
+            "transcript A.",
+            "offered text.",
+        ]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_f10_on_a_result_the_pace_holds_never_pastes_it_twice(monkeypatch, tmp_path):
+    """The shown transcript is already on its way; F10 must not send it ahead
+    of the pace and then let the timer send it again."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.5
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        inserter.now = 1000.8
+
+        controller.repaste_last_transcript()
+
+        # Every timer that would run, each after its window: a duplicate held
+        # behind B's own paste would go out on the second one.
+        for now in (1002.5, 1004.5):
+            inserter.now = now
+            controller._on_paste_pace_timeout()
+        assert [call[0] for call in inserter.calls] == [
+            "transcript A.",
+            "transcript B.",
+        ]
+        assert controller._pending_repaste is None
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_paced_result_a_recording_then_holds_is_listed_again(monkeypatch, tmp_path):
+    """Once a recording defers it, it waits for an unbounded time: the panel
+    lists it as "Pending insert" again, as every deferred result."""
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.4
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        assert _queue_labels(overlay) == []
+
+        controller.start_recording()
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+
+        assert inserter.calls == [("transcript A.", 321, "auto")]
+        assert overlay.queue_updates[-1][0][0] == token_b
+        assert "Pending insert" in overlay.queue_updates[-1][0][1]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_re_paste_skips_a_possibly_inserted_last_transcript(monkeypatch, tmp_path):
+    """A paste whose keystroke may have gone out is never pasted again, also
+    not through the last-transcript fallback, and its row stays listed."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.maybe = {"transcript A."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        rows = _not_inserted_rows(overlay)
+        assert len(rows) == 1 and "Possibly inserted" in rows[0][1]
+        inserter.maybe = set()
+        inserter.now += 10.0
+
+        controller.repaste_last_transcript()
+
+        assert [call[0] for call in inserter.calls] == ["transcript A."]
+        assert _not_inserted_rows(overlay) == rows
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_paste_of_the_same_text_leaves_a_possibly_inserted_row_listed(
+    monkeypatch, tmp_path
+):
+    """Only the user's Dismiss takes a possibly-landed row away."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.maybe = {"transcript A."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        rows = _not_inserted_rows(overlay)
+        assert len(rows) == 1
+
+        controller._retire_undelivered("transcript A.")
+
+        assert _not_inserted_rows(overlay) == rows
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("action", ["clear", "cancel"])
+def test_a_result_the_pace_holds_survives_clear_and_cancel(
+    monkeypatch, tmp_path, action
+):
+    """The overlay already shows it as Done; dropping it silently lost a paste
+    the user saw finish."""
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.4
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        assert overlay.states[-1] == ("Done", "transcript B.")
+
+        if action == "clear":
+            controller.clear_transcription_queue()
+        else:
+            controller.cancel_queued_transcription(token_b)
+
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+        assert inserter.calls[1:] == [("transcript B.", 321, "auto")]
+        assert overlay.states[-1] == ("Done", "transcript B.")
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_result_the_pace_holds_is_not_listed_in_the_queue(monkeypatch, tmp_path):
+    """Held for at most the restore delay, it flashed the panel open and shut
+    as a "Pending insert" row under a "Transcribing 1 file" title."""
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1001.0
+        updates_before = len(overlay.queue_updates)
+
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+
+        assert [call[0] for call in inserter.calls] == [
+            "transcript A.",
+            "transcript B.",
+        ]
+        assert overlay.queue_updates[updates_before:], "precondition"
+        assert all(
+            update == [] for update in overlay.queue_updates[updates_before:]
+        ), overlay.queue_updates[updates_before:]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+# -- Re-paste during an open batch capture (owner's decision, 2026-10-01) ----
+
+
+def test_a_re_paste_during_a_batch_recording_inserts_the_waiting_rows(
+    monkeypatch, tmp_path
+):
+    """The paste goes to the current focus; the recording keeps its own
+    target snapshot and its overlay session, and the microphone stays open."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"transcript A."}
+    controller, app, overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        assert len(_not_inserted_rows(overlay)) == 1
+        controller.start_recording()
+        assert controller._audio_capture is not None, "precondition"
+        snapshot = (
+            controller._target_window_handle,
+            controller._target_focus_signature,
+        )
+        # The user has clicked into another window since the recording began.
+        focus.current, focus.current_focus, focus.current_caret = 555, 556, 557
+        states_before = list(overlay.states)
+        inserter.fail = set()
+        inserter.now += 10.0
+
+        controller.repaste_last_transcript()
+
+        assert inserter.calls[1:] == [("transcript A.", 557, "auto")]
+        assert _not_inserted_rows(overlay) == []
+        assert (
+            controller._target_window_handle,
+            controller._target_focus_signature,
+        ) == snapshot
+        assert overlay.states == states_before
+        assert controller._audio_capture is not None
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_re_paste_during_a_batch_recording_waits_for_the_pace(
+    monkeypatch, tmp_path
+):
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"transcript A."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 990.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        controller.start_recording()
+        inserter.fail = set()
+        inserter.now = 1000.3
+
+        controller.repaste_last_transcript()
+
+        assert [call[0] for call in inserter.calls][2:] == []
+        inserter.now = 1001.5
+        controller._on_paste_pace_timeout()
+        assert [call[0] for call in inserter.calls][2:] == ["transcript A."]
+        assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
     _ = app

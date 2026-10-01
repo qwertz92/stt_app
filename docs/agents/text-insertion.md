@@ -40,15 +40,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     compares content when readable, the counter only otherwise (each open may
     raise retryable `ClipboardContentionError`).
   - *A 1418 inside our open clipboard reopens and retries* (2026-10-01,
-    `Win32ClipboardBackend._with_reopen`, 3 attempts, about 0.33 s worst case
-    on the Qt thread). pywin32 opens with a NULL owner, so a clipboard
-    manager's `CloseClipboard` closes ours and the next call fails with
-    "Thread does not have a clipboard open". Spent attempts raise
-    `ClipboardContentionError`. A close lost after a finished write is read
-    back (`_confirm_write_landed`: counter first, then exact text), and a
-    retried write never empties a clipboard someone wrote to since. This
-    survives the race; an owner window would close it and is not built (see
-    the rejected alternatives below).
+    `Win32ClipboardBackend._with_reopen`, 3 attempts). pywin32 opens with a
+    NULL owner, so a clipboard manager's `CloseClipboard` closes ours and the
+    next call fails with "Thread does not have a clipboard open". Spent
+    attempts raise `ClipboardContentionError`. A close lost after a finished
+    write is read back (`_confirm_write_landed`: counter first, then exact
+    text), and a retried write never empties a clipboard someone wrote to
+    since. A capture whose close was lost is read again
+    (`reopen_on_lost_close`): its ctypes `GetClipboardData` answers NULL on a
+    closed clipboard without raising, so a screenshot-only clipboard came
+    back as an empty state and the restore wiped it. An open that fails on a
+    later attempt raises the operation's `exhausted_error` (after our
+    `EmptyClipboard`, `ClipboardEmptiedError`, so the transaction restores);
+    a failed first open stays the plain error. Worst case on the Qt thread:
+    about 0.33 s per operation, and one paste runs up to four (capture,
+    write, the read-back after a lost close, the changed-after-set read), so
+    about 1.3 s. This survives the race; an owner window would close it and
+    is not built (see the rejected alternatives below).
   - *A transcript the transaction will restore stays out of Win+V and the
     cloud clipboard* (2026-10-01). `set_clipboard_text(exclude_from_history=
     restore_clipboard)` sets ExcludeClipboardContentFromMonitorProcessing,
@@ -134,6 +142,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (`_deliver_foreground_through_paste_queue`: Done, history and the
   last-recording mark at once, the paste after). Streaming live inserts and
   the finalize tail are exempt. Never sleep on the Qt thread for it.
+  A result only the pace holds (`pace_held`) is not listed in the queue
+  panel and Clear queue or Cancel cannot drop it: it is pasted within the
+  delay, and listed it flashed the panel open and shut while the overlay
+  already showed it as Done. A recording or a window that defers it again
+  lists it as "Pending insert" as before. Re-paste and the overlay's Insert
+  go through the pace too (below).
 - **`immediate_background_insert` (default off)**: a finished queued result
   inserts into its captured window at once, even during another
   transcription or a **batch** recording (safe because of the
@@ -225,15 +239,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (`_delivered_after_shown`); else `_last_transcript`. No history entry.
   It runs while a foreground transcription is in flight (2026-10-01, was
   refused since wave 13) and then reports through the tray, never over the
-  overlay. Refused with the reason during a capture or a recording
-  start/stop (kept from before: a paste then races the recording's target
-  snapshot; whether to allow it during a batch recording is open with the
-  owner) and during a streaming finalize, whose tail would land behind the
-  paste.
+  overlay. It also runs during an open batch capture (owner's decision,
+  2026-10-01): through the pace, into the current focus with its own target,
+  leaving the recording's target snapshot and its overlay session alone, and
+  reporting through the tray. Refused with the reason during a recording
+  start or stop (the start or stop takes the target snapshot, and a paste
+  then races it), during a streaming recording (live inserts write at the
+  caret) and during a streaming finalize, whose tail would land behind the
+  paste. A failed insert still shows briefly in the tray and stays as a
+  row; a re-paste that inserts exactly that text retires the row.
   A failed re-paste whose keystroke went out marks its rows possibly
-  inserted, never pasted again. The no-window refusal reveals the overlay
-  once (`show_overlay_error` reveals only when it paints). The hotkey may
-  not equal the recording, cancel or overlay one.
+  inserted, never pasted again. A possibly-inserted text is skipped by the
+  `_last_transcript` fallback too (`_repaste_last_unless_possibly_inserted`,
+  with the reason shown), and its row is never retired by a paste of the
+  same text: only Dismiss or Clear queue take it away. The no-window refusal
+  reveals the overlay once (`show_overlay_error` reveals only when it
+  paints). The hotkey may not equal the recording, cancel or overlay one.
+  Inside the previous paste's restore window a re-paste or the overlay's
+  Insert is held as one `_PendingRepaste` (a later request replaces it) and
+  `_on_paste_pace_timeout` runs it after the held results, re-checking the
+  refusals and dropping rows dismissed meanwhile (`repaste_paced`). A text
+  already waiting in the paste queue -- the shown transcript the pace holds
+  -- is not pasted by the re-paste (`repaste_skipped reason=queued`): it was
+  pasted twice, once by F10 and once by the timer.
 - **`retry_last_transcription` refuses during a recording start, stop or open
   capture** (via the tray), since it stops the running transcription and
   paints Processing. A pending streaming finalize is stopped by design, so

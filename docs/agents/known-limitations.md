@@ -122,8 +122,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   a job is not paced.
 - **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
   a NULL owner, so a clipboard manager can still close it under us; three
-  reopens cost up to about 0.33 s on the Qt thread before the paste reports
-  contention.
+  reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
+  and one paste runs up to four (capture, write, read-back, changed-after-set
+  read), so about 1.3 s before it reports contention.
+- **A close lost between the text write and the Win+V exclusion formats
+  publishes the transcript without them**: a clipboard manager that closes
+  our open right after `SetClipboardText` sees the clipboard with the text
+  alone, and Windows may list it in Win+V history; the exclusion sets that
+  follow fail and log `clipboard_history_exclusion_partial`. Not closed: the
+  formats cannot be set before the text (`EmptyClipboard` would drop them),
+  and the race is the 1418 one above. Separately and on purpose, the
+  `copy_on_error` fallback (`QGuiApplication.clipboard().setText`) leaves a
+  failed paste's transcript on the clipboard as an ordinary copy, so it is
+  in Win+V: the user is meant to paste it by hand.
+- **The streaming finalize tail is not paced** (from code reading,
+  2026-10-01, not reproduced in a test): it pastes at once in
+  `_on_transcription_ready`. Trigger: a batch result queued before a switch
+  to streaming finishes during the streaming recording, waits for it, and
+  reaches the finalize's flush. Inside the last live insert's restore window
+  it is held by the pace and pasted after the tail (token order inverted);
+  outside it, it pastes and the tail follows inside its restore window.
+  Holding the tail would route the append-only finalize through the paste
+  queue, a larger change; the inverted order keeps the streamed dictation in
+  one piece.
 - **A transcript left on the clipboard after an abandoned restore**
   (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
   restoring the user's own content may add their copy to Win+V again, as

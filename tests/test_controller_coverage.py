@@ -4050,18 +4050,20 @@ def test_repaste_last_transcript_without_transcript_shows_error():
     _ = app
 
 
-def test_repaste_last_transcript_blocked_while_recording():
-    """The refusal reaches the tray; the overlay the recording owns is untouched.
+def test_repaste_last_transcript_blocked_while_streaming():
+    """Refused while a streaming recording inserts live at the caret.
 
-    Painted, "Finish the current recording before inserting the last
-    transcript again." replaced "Listening" while the microphone was still
-    open (wave 12, `show_overlay_error`'s session guard).
+    The refusal reaches the tray; the overlay the recording owns is
+    untouched. Painted, a refusal replaced "Listening" while the microphone
+    was still open (wave 12, `show_overlay_error`'s session guard). A batch
+    capture allows the re-paste since 2026-10-01 (the owner's decision).
     """
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
     controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
     controller._last_transcript = "hello again"
     controller._audio_capture = FakeCapture()
+    controller._streaming_recording = True
     tray: list[str] = []
     controller.busy_overlay_error.connect(tray.append)
     painted_before = list(overlay.states)
@@ -4070,8 +4072,11 @@ def test_repaste_last_transcript_blocked_while_recording():
 
     assert inserter.calls == []
     assert overlay.states == painted_before
-    assert len(tray) == 1, tray
-    assert "recording" in tray[0].lower()
+    assert tray == [
+        "Finish the streaming recording before inserting the last transcript again."
+    ]
+    controller._streaming_recording = False
+    controller._audio_capture = None
     controller.shutdown()
     _ = app
 

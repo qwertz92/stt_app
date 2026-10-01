@@ -161,7 +161,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     `docs/agents/text-insertion.md`) passes the active-transcription guard
     (a capture still blocks unless immediate mode) and is flushed by the
     single-shot `_paste_pace_timer`, stopped in `shutdown`; a held group is
-    put back with the wait it still owes.
+    put back with the wait it still owes. While the pace is all that holds
+    it (`pace_held`), `_update_queue_overlay` leaves it out and
+    `clear_transcription_queue` / `cancel_queued_transcription` skip it; a
+    flush that defers it for a recording or a window clears the flag. The
+    same timer runs a re-paste held by the pace (`_pending_repaste`) after
+    the flush.
 - **Every local engine cancels mid-run** via `set_cancel_check`, raising
   `TranscriptionCanceled`; else a canceled job holds the worker, its model
   and the shared lease: the next dictation queues behind it, and a later

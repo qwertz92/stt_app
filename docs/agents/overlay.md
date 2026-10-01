@@ -73,8 +73,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   `(token, label, kind)`, kind `QUEUE_ROW_KIND_TRANSCRIPTION` (Cancel) or
   `QUEUE_ROW_KIND_UNDELIVERED` (Dismiss, a transcript that was not
   inserted). Every row button is fitted for both captions
-  (`_QUEUE_ROW_BUTTON_CAPTIONS`), so kinds never differ in button width or
-  label wrap; the undelivered row differs by colour only
+  (`_QUEUE_ROW_BUTTON_CAPTIONS`), so kinds never differ in button width;
+  every row label is one line (`ElidingLabel`, the whole label in its
+  tooltip), so a label that changes in place never changes a row's height
+  (wrapped, the long "Possibly inserted, check the window" label grew rows
+  from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
+  differs by colour only
   (`QLabel[queueRowKind="undelivered"]`). The title counts the two apart
   (`_queue_title`: "Transcribing N files", "N transcripts not inserted", or
   both joined by " · "). Both buttons emit `queue_cancel_requested`.

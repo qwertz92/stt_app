@@ -27,6 +27,7 @@ from .config import (
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
+from .settings_dialog_helpers import ElidingLabel
 from .ui_feedback import restore_vertical_scrollbar
 
 RECORD_BUTTON_START_TEXT = "Record"
@@ -1792,18 +1793,17 @@ class OverlayUI(QtWidgets.QWidget):
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
-        text_label = QtWidgets.QLabel(str(label))
+        # One line, elided, with the whole label in its tooltip: wrapped, a
+        # long label grew its row, and a label that changes in place -- a
+        # failed re-paste turns "Not inserted" into "Possibly inserted, check
+        # the window" -- grew the rows from 32 to 40 px and the overlay from
+        # 230 to 246 px under the user's eyes.
+        text_label = ElidingLabel(str(label))
         text_label.setTextFormat(QtCore.Qt.PlainText)
-        text_label.setWordWrap(True)
-        text_label.setToolTip(str(label))
         # The stylesheet colours a waiting insert apart from a transcription;
         # colour only, so the row's size never depends on its kind.
         text_label.setProperty("queueRowKind", kind)
         text_label.setMinimumWidth(0)
-        text_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
-        )
         caption, tooltip = _QUEUE_ROW_BUTTONS[kind]
         cancel_button = QtWidgets.QPushButton(caption)
         cancel_button.setCursor(QtCore.Qt.PointingHandCursor)

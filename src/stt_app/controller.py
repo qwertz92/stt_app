@@ -258,6 +258,11 @@ class _TranscriptionJob:
     # the previous paste's restore window, never again for the transcription
     # that may be running by then -- it may be the foreground result itself.
     paste_paced: bool = False
+    # True while the pace is the only thing holding this result back: it is
+    # pasted within `CLIPBOARD_RESTORE_DELAY_S`, so the queue panel does not
+    # list it and Clear queue or its Cancel cannot drop it. Cleared when a
+    # recording or a window defers it again, which lists it as before.
+    pace_held: bool = False
 
 
 @dataclass(slots=True)
@@ -281,6 +286,16 @@ class _UndeliveredInsert:
     may_have_pasted: bool
     created_at: datetime
     history_entry: TranscriptHistoryEntry | None = None
+
+
+@dataclass(slots=True, frozen=True)
+class _PendingRepaste:
+    """A re-paste the user asked for inside the previous paste's restore
+    window, held for `_on_paste_pace_timeout` like every other paste."""
+
+    text: str
+    display_entry: object
+    undelivered: tuple[_UndeliveredInsert, ...]
 
 
 class _TranscriberRuntimeLease:
@@ -686,6 +701,9 @@ class DictationController(QtCore.QObject):
         self._paste_pace_timer.setSingleShot(True)
         self._paste_pace_timer.setTimerType(QtCore.Qt.TimerType.PreciseTimer)
         self._paste_pace_timer.timeout.connect(self._on_paste_pace_timeout)
+        # One re-paste (tray, hotkey or the overlay's Insert) asked for while
+        # the restore window was open; a later request replaces it.
+        self._pending_repaste: _PendingRepaste | None = None
         self._preload_target_model: str | None = None
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
@@ -759,6 +777,7 @@ class DictationController(QtCore.QObject):
         # A paced paste still waiting is dropped with the process; its text
         # is in history like every delivered transcript.
         self._paste_pace_timer.stop()
+        self._pending_repaste = None
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
         listener = self._audio_device_listener
@@ -3521,7 +3540,14 @@ class DictationController(QtCore.QObject):
         setter = getattr(self._overlay, "set_transcription_queue", None)
         if not callable(setter):
             return
-        visible_jobs = [job for job in self._jobs.values() if not job.aborting]
+        # A result the pace alone holds is pasted within the restore delay;
+        # listed, it flashed the panel open and shut under a "Transcribing"
+        # title for a paste the overlay already showed as Done.
+        visible_jobs = [
+            job
+            for job in self._jobs.values()
+            if not job.aborting and not job.pace_held
+        ]
         total = len(visible_jobs)
         items = [
             (
@@ -3590,7 +3616,9 @@ class DictationController(QtCore.QObject):
         ``entries`` are the rows the paste was built from; besides them, a
         row whose text is exactly what was pasted is delivered as well --
         the overlay's Insert on the failed paste's Error, or a re-paste of
-        the same transcript.
+        the same transcript. Never a "possibly inserted" row: whether its
+        own paste landed is the user's to check, so it stays listed until
+        they dismiss it.
         """
         pasted = " ".join(pasted_text.split())
         delivered = {id(entry) for entry in entries}
@@ -3598,7 +3626,8 @@ class DictationController(QtCore.QObject):
         self._undelivered_inserts = [
             entry
             for entry in self._undelivered_inserts
-            if id(entry) not in delivered and " ".join(entry.text.split()) != pasted
+            if id(entry) not in delivered
+            and (entry.may_have_pasted or " ".join(entry.text.split()) != pasted)
         ]
         if len(self._undelivered_inserts) != before:
             self._update_queue_overlay()
@@ -3743,7 +3772,13 @@ class DictationController(QtCore.QObject):
         """
         if self._dismiss_undelivered(request_token):
             return
-        if request_token not in self._jobs:
+        job = self._jobs.get(request_token)
+        if job is None:
+            return
+        if job.pace_held:
+            # Not listed, so only a row the panel showed a moment earlier
+            # can ask; the overlay already shows this paste as Done.
+            self._logger.info("queue_cancel_ignored_pace_held token=%d", request_token)
             return
         was_active = request_token == self._active_request_token
         self._request_job_stop(
@@ -3783,7 +3818,9 @@ class DictationController(QtCore.QObject):
         the rest of the panel: their transcripts stay in history.
         """
         self._dismiss_undelivered()
-        tokens = list(self._jobs.keys())
+        # A result only the pace holds is not in the panel being cleared: it
+        # shows as Done and is pasted when the restore window ends.
+        tokens = [token for token, job in self._jobs.items() if not job.pace_held]
         had_foreground = self._active_request_token in tokens
         for token in tokens:
             if token not in self._jobs:
@@ -5780,6 +5817,14 @@ class DictationController(QtCore.QObject):
             for job, _text in self._deferred_background_results
         )
 
+    def _queued_for_paste(self, text: str) -> bool:
+        """Is ``text`` one of the results waiting in the paste queue?"""
+        folded = " ".join(text.split())
+        return bool(folded) and any(
+            " ".join(queued.split()) == folded
+            for _job, queued in self._deferred_background_results
+        )
+
     def _paste_pace_wait_s(self) -> float:
         """Seconds until the previous paste's clipboard-restore window ends.
 
@@ -5804,12 +5849,44 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot()
     def _on_paste_pace_timeout(self) -> None:
-        """The restore window ended: paste what the pace held back."""
+        """The restore window ended: paste what the pace held back.
+
+        Held results first, in token order, then a re-paste the user asked
+        for meanwhile -- which the flush's own paste may hold again for one
+        more window.
+        """
         self._paste_pace_timer.stop()
         if self._shutdown_started:
             return
         with self._overlay_batch():
             self._flush_deferred_background_results()
+            self._run_pending_repaste()
+
+    def _run_pending_repaste(self) -> None:
+        pending = self._pending_repaste
+        if pending is None:
+            return
+        self._pending_repaste = None
+        text = pending.text
+        display_entry = pending.display_entry
+        undelivered = pending.undelivered
+        if undelivered:
+            # Rows dismissed or delivered meanwhile are not pasted.
+            still_waiting = [
+                entry
+                for entry in self._insertable_undelivered()
+                if any(entry is requested for requested in undelivered)
+            ]
+            if not still_waiting:
+                self._logger.info("repaste_dropped reason=rows_gone")
+                return
+            if len(still_waiting) != len(undelivered):
+                text = _join_transcripts([entry.text for entry in still_waiting])
+                display_entry = (
+                    still_waiting[0].history_entry if len(still_waiting) == 1 else None
+                )
+            undelivered = tuple(still_waiting)
+        self._repaste(text, display_entry=display_entry, undelivered=undelivered)
 
     def _handle_background_transcription_ready(
         self,
@@ -6135,6 +6212,7 @@ class DictationController(QtCore.QObject):
         # transcription started since must not hold it back.
         pending = []
         still_deferred = []
+        relisted = False
         for job, text in sorted(
             self._deferred_background_results, key=lambda item: item[0].token
         ):
@@ -6144,11 +6222,16 @@ class DictationController(QtCore.QObject):
                 ),
                 job=job,
             ):
+                # Deferred by a recording or a window again: listed as before.
+                relisted = relisted or job.pace_held
+                job.pace_held = False
                 still_deferred.append((job, text))
             else:
                 pending.append((job, text))
         self._deferred_background_results = still_deferred
         if not pending:
+            if relisted:
+                self._update_queue_overlay()
             return False
         # Coalesce results that target the same window into one paste: each
         # separate paste is its own clipboard set/paste/restore cycle and thus
@@ -6167,6 +6250,7 @@ class DictationController(QtCore.QObject):
                 for job in jobs:
                     job.insertion_deferred = True
                     job.paste_paced = job.paste_paced or not held
+                    job.pace_held = job.pace_held or not held
                 self._deferred_background_results.extend(pairs)
                 if not held:
                     paced_wait_s = max(paced_wait_s, wait_s)
@@ -7195,9 +7279,11 @@ class DictationController(QtCore.QObject):
         overlay that transcription owns (field report, 2026-10-01: the
         wave-13 refusal left the hotkey dead for as long as anything was
         transcribing, which on a slow machine with a queue was minutes).
-        Refused, with the reason on the tray or the overlay, while a
-        recording runs or starts or stops, and while a streaming finalize is
-        pending, whose own tail is still to be inserted.
+        Allowed during an open batch capture too (owner's decision,
+        2026-10-01). Refused, with the reason on the tray or the overlay,
+        while a recording starts or stops, during a streaming recording, and
+        while a streaming finalize is pending, whose own tail is still to be
+        inserted.
         """
         waiting = self._insertable_undelivered()
         if waiting:
@@ -7214,7 +7300,28 @@ class DictationController(QtCore.QObject):
             text, entry = delivered
             self._repaste(text, display_entry=entry)
             return
-        self._repaste(self._last_transcript)
+        self._repaste_last_unless_possibly_inserted()
+
+    def _repaste_last_unless_possibly_inserted(self) -> None:
+        """Re-paste `_last_transcript`, unless its own paste may have landed.
+
+        A paste whose keystroke went out is never pasted again: its row says
+        "Possibly inserted, check the window", and pasting the same text from
+        the fallback would put it in the document twice.
+        """
+        text = self._last_transcript
+        folded = " ".join(text.split())
+        if folded and any(
+            entry.may_have_pasted and " ".join(entry.text.split()) == folded
+            for entry in self._undelivered_inserts
+        ):
+            self.show_overlay_error(
+                "The last transcript may already have been inserted, so it is "
+                "not inserted again. Check the window; the transcript is in "
+                "history."
+            )
+            return
+        self._repaste(text)
 
     def insert_failed_text(self) -> None:
         """Insert the text the overlay's Error state offered Insert for.
@@ -7230,7 +7337,10 @@ class DictationController(QtCore.QObject):
         the failed insert and the last transcript are the same text -- which
         is also why the fallback below is safe.
         """
-        self._repaste(self._insert_action_text or self._last_transcript)
+        if self._insert_action_text:
+            self._repaste(self._insert_action_text)
+            return
+        self._repaste_last_unless_possibly_inserted()
 
     _KEEP_DISPLAY = object()
 
@@ -7257,16 +7367,25 @@ class DictationController(QtCore.QObject):
             if undelivered
             else "the last transcript again"
         )
-        if (
-            self._recording_start_in_progress
-            or self._recording_stop_in_progress
-            or self._audio_capture is not None
-        ):
-            # No paste while the microphone is open, or about to open or
-            # close: kept from before the 2026-10-01 rework, because a paste
-            # then would race the recording's own target snapshot. Whether
-            # the owner wants it during a batch recording is still open.
-            message = f"Finish the current recording before inserting {what}."
+        # Allowed during an open batch capture (owner's decision,
+        # 2026-10-01): the paste goes to the current focus with its own
+        # target, leaves the recording's target snapshot alone and reports
+        # through the tray, as during a transcription in flight.
+        if self._recording_start_in_progress or self._recording_stop_in_progress:
+            # The start or stop is taking the recording's target snapshot,
+            # and a paste then races it.
+            message = (
+                f"Wait for the recording to start or stop before inserting {what}."
+            )
+            hint = self._undelivered_hint()
+            if hint:
+                message = f"{message} {hint}"
+            self.show_overlay_error(message)
+            return
+        if self._streaming_recording and self._audio_capture is not None:
+            # Live inserts write at the caret while the microphone is open;
+            # a paste in between would land inside the streamed text.
+            message = f"Finish the streaming recording before inserting {what}."
             hint = self._undelivered_hint()
             if hint:
                 message = f"{message} {hint}"
@@ -7280,6 +7399,28 @@ class DictationController(QtCore.QObject):
                 f"Wait for the streaming transcript to finish before inserting "
                 f"{what}."
             )
+            return
+        if self._queued_for_paste(text):
+            # The shown transcript the pace still holds: it is pasted when the
+            # restore window ends, and pasting it now as well put it in the
+            # document twice.
+            self._logger.info("repaste_skipped reason=queued chars=%d", len(text))
+            return
+        wait_s = self._paste_pace_wait_s()
+        if wait_s > 0.0:
+            # Through the pace like every other paste: a second paste inside
+            # the previous one's restore window overwrites a clipboard a late
+            # reader has not read yet. Nothing waits on the Qt thread; the
+            # timer runs it, after the results the pace holds.
+            self._pending_repaste = _PendingRepaste(
+                text=text,
+                display_entry=display_entry,
+                undelivered=tuple(undelivered),
+            )
+            self._logger.info(
+                "repaste_paced wait_ms=%d rows=%d", _pace_ms(wait_s), len(undelivered)
+            )
+            self._paste_pace_timer.start(_pace_ms(wait_s))
             return
         # Resolve the target instead of pasting at whatever holds the
         # foreground. This action's main entry point is the tray menu, and the
