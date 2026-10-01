@@ -8,6 +8,8 @@ this file; "Known limitations" is `docs/agents/known-limitations.md`.
 Measurements, forced schedules and history are in `docs/learning-log.md` and
 git history.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` (original AGENTS.md: `df2642a`).
+
 - **Warm microphone stream (`keep_microphone_warm`, default off)**: one shared
   PortAudio stream (`WarmMicrophoneStream`) stays open and recordings attach
   as consumers, so capture start is instant on EDR/GPO-hooked stacks where an
@@ -111,7 +113,10 @@ git history.
   transcribed. Default on: it is the only guard for every engine
   (Cohere/Granite have no VAD; faster-whisper's `vad_filter` follows
   auto-stop). Evidence: 26 silent/hallucinated recordings 0.0006-0.0034, 7
-  utterances 0.0075-0.0290. Logs `recording_peak_level`. The gate's canceled
+  utterances 0.0075-0.0290, so 0.0040 sits 1.2x above the loudest silent one
+  and the quietest utterance is 1.9x above it; a -40 dBFS whisper measures
+  0.0071 (passes), room tone at -54 dBFS is blocked. Logs
+  `recording_peak_level`. The gate's canceled
   mark is keyed by the id the stop's persist returned and skipped (text says
   not kept) when it failed. Unmeasurable audio (`None`) is never gated. Schema
   22 turns the gate on once for older files; "off" saved at >= 22 is kept.

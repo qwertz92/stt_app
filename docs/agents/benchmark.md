@@ -7,6 +7,8 @@ kept, so "the entry above/below" refers to this file; "Known limitations" is
 `docs/agents/known-limitations.md`. History and full measurements:
 `docs/learning-log.md` and git history.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (original AGENTS.md: `df2642a`).
+
 - **The Results view is one widget, `BenchmarkResultsPanel`**, in the tab and
   in pop-outs: results table, `_BenchmarkDetailsView`, splitter, row height,
   stylesheet, headers. The tab's `benchmark_results_table`,

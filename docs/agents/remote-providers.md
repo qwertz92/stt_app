@@ -7,6 +7,8 @@ so "the entry above/below" refers to this file; "Known limitations" is
 `docs/agents/known-limitations.md`. Measurements, vendor quotations and
 history are in `docs/learning-log.md` and git history.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.md` (original AGENTS.md: `df2642a`).
+
 - **AssemblyAI batch model**: send `speech_models`; `universal-3-5-pro` goes
   alone, never with a silent `universal-2` fallback. Legacy
   `universal-3-pro`/`best`/`nano` migrate to the default and are hidden.

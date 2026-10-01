@@ -5,6 +5,8 @@ Accepted, recorded defects and gaps, condensed from the list moved out of
 in `docs/learning-log.md` and git history. Record a new one here, not in
 `docs/ROADMAP.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.md` (original AGENTS.md: `df2642a`).
+
 - **A signal between "resource held" and "flag set" can strand it.**
   `incremented = True` in `_acquire_transcriber_runtime`, `acquired = True` in
   `_download_local_model_in_subprocess`, and the `try:` after
@@ -111,6 +113,13 @@ in `docs/learning-log.md` and git history. Record a new one here, not in
   no such path.
 - **`_unlink_partial` leaves a partial writable** when its retry is refused
   for another reason after clearing read-only. Harmless.
+- **Three recorded properties of the `_unlink_partial` 10 ms retry**
+  (measured, not changed): `removed_bytes` credits the size read before the
+  first attempt; the 10 ms is paid serially per refused file (50 held
+  partials: 0.53 s) on the queue worker, the preload worker or the script,
+  never on Qt; two concurrent cleanups over one tree over-count
+  `removed_files` (84 of 4,000), because Windows accepts a second delete of a
+  file whose delete is in flight.
 - **A minimised Run Benchmark window or pop-out returns with the settings
   dialog** (Windows restores `Qt.Window` owned windows with their owner; the
   owner relation keeps them above it).

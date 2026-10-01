@@ -9126,3 +9126,8 @@ same parameters, 32 languages against 19. Batch stays on `universal-3-5-pro`
 because the pre-recorded API has no 3.6 id. No published accuracy figures
 for 3.6 existed at the time. The installed SDK (1.5.5) already carries the
 id. Not verified live: the development network blocks the vendor.
+Update 2026-10-01: the vendor pages were read later that day
+(assemblyai.com/docs/streaming/select-the-speech-model) and confirm the
+streaming id `universal-3-6-pro` and the 32-language code-switching figure
+(3.5: 19); the $0.45/h price and the "up to 100 keyterms" figure remain
+unverified.

@@ -6,6 +6,8 @@ git history. Read before changing `persistence.py`, the JSON stores,
 `secret_store.py`, transcript history or history audio. "Above/below" refers
 to this file; "Known limitations" is `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-history.md` (original AGENTS.md: `df2642a`).
+
 - **`recordings_max_count` 0 means unlimited**
   (`RECORDINGS_MAX_COUNT_UNLIMITED`, ceiling `RECORDINGS_MAX_COUNT_CEILING`,
   default 10); no schema bump, since older `from_dict` clamped to >= 1. A

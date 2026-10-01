@@ -6,6 +6,8 @@ git history. Read before changing hotkeys, tray icon, updates, taskbar
 identity or Win32 handles. "Above/below" refers to this file; "Known
 limitations" is `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.md` (original AGENTS.md: `df2642a`).
+
 - **Update checks use GitHub Releases directly** (`update_checker.py`): one
   asynchronous check after startup, a tray notification only for a newer
   release, manual checks in Settings and tray (a manual request during the
@@ -53,12 +55,16 @@ limitations" is `docs/agents/known-limitations.md`.
 - **The tray icon is hand-registered (`win_tray_icon.py`) and its menu is a
   native `TrackPopupMenu`; do not move either back to Qt**:
   `QSystemTrayIcon`'s menu closed Windows 11's "hidden icons" flyout, and only
-  both halves native keep it open. `WindowsTrayIcon` mirrors the
+  both halves native keep it open (everything observable at menu time was
+  measured and refuted: `SetForegroundWindow`, window styles and owners,
+  activating our icon window first). `WindowsTrayIcon` mirrors the
   `QSystemTrayIcon` API used (`activated`/`ActivationReason`, `showMessage`,
   `show`, `setContextMenu`, `setToolTip`); `create_tray_icon` falls back to
   `QSystemTrayIcon` off Windows or on Win32 failure. The `QMenu` stays the
   model. Menu width is longest label + 70 px, so labels are the lever;
-  `MNS_NOCHECK` drops the check column while nothing is checkable.
+  `MNS_NOCHECK` drops the check column while nothing is checkable. Anything
+  narrower than that would need owner-drawn items (hover, disabled and
+  dark-mode states drawn by hand): not worth it.
   Invariants: one window class per process routing by HWND; every `ctypes`
   call declares `argtypes`/`restype`; re-add on `TaskbarCreated`; delete the
   icon before its window.

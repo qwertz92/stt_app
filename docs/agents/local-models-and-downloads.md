@@ -8,6 +8,8 @@ evidence; earlier versions and full measurements are in `docs/learning-log.md`
 and git history. Entry order is kept ("above/below" refers to this file);
 "Known limitations" is `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-downloads.md` (original AGENTS.md: `df2642a`).
+
 - **Temp files for audio**: `transcribe_batch` writes a temp WAV because
   `WhisperModel.transcribe()` is most reliable with file paths.
 - **Inventories live in their own JSON cache, not `settings.json`**, so the

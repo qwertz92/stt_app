@@ -7,6 +7,8 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
 `docs/agents/known-limitations.md`. History and full measurements:
 `docs/learning-log.md` and git history.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md` (original AGENTS.md: `df2642a`).
+
 - **`SettingsDialog` is a mixin facade** composed in `settings_dialog.py` from
   `_GeneralTabMixin`, `_AudioTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
   `_RemoteProvidersMixin`, `_HistoryTabMixin`, `_ImportTabMixin`,
@@ -27,7 +29,8 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
   names are unchanged. Build order `_build_general_tab`,
   `_build_hotkeys_tab`, `_build_audio_tab`; the last applies the shared label
   column over `_general_forms`, `_hotkeys_forms` and its own. Eight tabs use
-  797 of 840 px at 9 pt; a ninth needs scroll arrows.
+  771 of 840 px at 9 pt (pinned by `tests/test_settings_dialog_general_ux.py`);
+  a ninth needs scroll arrows.
 - **Tab titles say what the tab is for** (2026-09-20): Transcription, Hotkeys
   && Display, Audio, Models, API Keys, History, Import Audio, Benchmark.
   Module/attribute names keep the old ones (`settings_dialog_general.py`,
@@ -51,8 +54,8 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
   off.
 - **Model selection is on the Transcription tab; Models only manages.** One
   "Model" row hosts `model_selector_stack`: page 0 `model_combo` +
-  `local_model_runtime_warning_label`, page 1 `remote_model_provider_label` /
-  `remote_model_combo` / `remote_model_note_label`, flipped by
+  `local_model_runtime_warning_label`, page 1 `remote_model_combo` /
+  `remote_model_note_label`, flipped by
   `_update_remote_model_selector` via `_update_model_selector_page`. The
   stack's size hint is its largest page, so rows below never shift.
 - **Dialog feedback and refresh state**:
@@ -84,8 +87,10 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
   via a visible parent), and `QTabWidget.minimumSizeHint` covers all pages.
   - A `QScrollArea` reports a fixed 58 px minimum, so
     `_content_minimum_width` adds each page's content minimum plus scrollbar
-    and frame, and the tab bar hint. 2026-09-27: 797 px at 9 pt, 907 at
-    11.25, 1020 at 13.5.
+    and frame, and the tab bar hint: below 771 px at 9 pt the bar hides tabs
+    behind scroll arrows, and the tab a note sends the user to may be the
+    hidden one. 2026-09-27: dialog minimum 797 px at 9 pt, 907 at 11.25, 1020
+    at 13.5.
   - It reads `self.tabs.minimumSizeHint()` plus root margins, never the
     dialog hint: a long failed-save message on the root status line once
     pinned 3077 px for the app's life (test: 400-character text on the status

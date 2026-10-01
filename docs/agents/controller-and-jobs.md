@@ -7,6 +7,8 @@ and review history are in `docs/learning-log.md` and git history. Entry
 order is kept, so "above/below" refers to this file; "Known limitations" is
 `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-jobs.md` (original AGENTS.md: `df2642a`).
+
 - **Empty model text after the silence gate is a failure, not "no speech"**:
   Error, keep the WAV for Retry, leave `_last_transcript`, log `chars=0
   outcome=empty_transcript`. Parakeet TDT returns blank on some 1-2 s clips
@@ -39,8 +41,8 @@ order is kept, so "above/below" refers to this file; "Known limitations" is
 - **Custom vocabulary** (`custom_vocabulary`): `config.parse_custom_vocabulary`
   (newline/comma/semicolon split, case-insensitive dedupe, 100-term cap).
   Wired to faster-whisper `initial_prompt` (batch + rolling streaming),
-  OpenAI/Groq `prompt`, AssemblyAI Universal-3.5 Pro `keyterms_prompt`,
-  Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) with `doseq`.
+  OpenAI/Groq `prompt`, AssemblyAI `keyterms_prompt` (batch Universal-3.5
+  Pro, streaming Universal-3.6 Pro), Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) with `doseq`.
   ElevenLabs, Azure, Fun-ASR, Nemotron, Cohere/Granite ONNX: no input.
 - **Managed audio imports snapshot bytes plus `recording_id`** before
   submitting; completion/failure are compare-and-set, so an old import cannot
@@ -117,8 +119,9 @@ order is kept, so "above/below" refers to this file; "Known limitations" is
   `history` / `cancel`): on a new recording the in-flight job inserts into
   its own captured window plus history / history only / is stopped, a late
   result kept in history.
-  - Batch jobs share the `max_workers=1` executor; the mode changes only
-    delivery. A remote stream finalize has its own worker
+  - Batch jobs share the `max_workers=1` executor and run in FIFO; a
+    foreground result flushes the deferred older ones before pasting its own.
+    The mode changes only delivery. A remote stream finalize has its own worker
     (`_stream_finalize_executor_for`) unless an older job is still working
     (`_has_undelivered_older_job`), else it could paste the later dictation
     first.
@@ -137,7 +140,8 @@ order is kept, so "above/below" refers to this file; "Known limitations" is
   - Queue rows scroll in `_queue_scroll` past `OVERLAY_QUEUE_MAX_HEIGHT`;
     `_apply_queue_scroll_height` keeps `OVERLAY_DETAIL_MIN_HEIGHT` using the
     *layout* sizeHint; `set_transcription_queue` re-asserts size after the
-    loop drains (`_refresh_size_after_queue_change`).
+    loop drains (`_refresh_size_after_queue_change`), and hiding the queue
+    returns the overlay to the normal compact size.
   - Clear the cancel hook after each batch run (cached transcriber).
   - Flush `_deferred_background_results` on every path clearing the blocking
     session: recording start/stop, stream abort and runtime failure (after
@@ -146,18 +150,26 @@ order is kept, so "above/below" refers to this file; "Known limitations" is
     take `ignore_active_transcription`: capture or start/stop always blocks;
     True on explicit cancel (`cancel_current_action` incl. "nothing to
     cancel", `cancel_queued_transcription`, `_abort_streaming_session`),
-    otherwise the `_active_request_token` guard holds.
+    otherwise the `_active_request_token` guard holds. Deferred tokens are
+    always older than the active one, so delivering them first keeps token
+    order; the running transcription delivers itself later, no duplicate.
 - **Every local engine cancels mid-run** via `set_cancel_check`, raising
   `TranscriptionCanceled`; else a canceled job holds the worker, its model
-  and the shared lease.
+  and the shared lease: the next dictation queues behind it, and a later
+  preload waits on that shared lease, so the overlay says "still loading"
+  forever while each dictation quietly pays for its own isolated runtime.
   - `faster-whisper`: between segments. `Nemotron`: per 560 ms chunk.
-    Cohere/Granite Node: reader polls per 0.25 s and kills the child.
+    Cohere/Granite Node: reader polls per 0.25 s and kills the child (the
+    request is already in flight); discarding the loaded model is the point,
+    since freeing CPU and memory is what Cancel is for.
   - `onnx-asr`: `_install_cancel_hooks` wraps each `InferenceSession.run`
     with a per-call app-owned `RunOptions` (ORT never clears `terminate`); a
     watchdog polls every `_CANCEL_POLL_INTERVAL_S` (0.66 s to cancel a 4.46 s
     run). ORT's generic `Fail` maps to `TranscriptionCanceled` only when we
     asked; `transcribe_batch` serializes on `_inference_lock`; `close()`
-    unwraps under `_model_lock` and `_inference_lock`.
+    unwraps under `_model_lock` and `_inference_lock`: removing the wrappers
+    mid-`recognize()` makes the watchdog set `terminate` on a `RunOptions`
+    nobody passes, so the run finishes in full with no log line.
   - Check before the model load, not only before the run.
   - The check lives on `ITranscriber` (`transcriber/base.py`:
     `set_cancel_check`, `_is_cancel_requested` logs a raising check once,

@@ -7,6 +7,8 @@ review history are in `docs/learning-log.md` and git history. Entry order is
 kept, so "above/below" refers to this file; "Known limitations" is
 `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (original AGENTS.md: `df2642a`).
+
 - **No streaming road loses transcribed text**; all read the one reader
   `_current_streaming_partial_text()` before `_reset_streaming_state()`
   wipes it. Abort (`_abort_streaming_session`): history, last transcript for

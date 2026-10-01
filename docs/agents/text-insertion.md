@@ -7,6 +7,8 @@ their order, so "the entry above/below" refers to this file; "Known
 limitations" is `docs/agents/known-limitations.md`. Measurements, rejected
 alternatives and history are in `docs/learning-log.md` and git history.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md` (original AGENTS.md: `df2642a`).
+
 - **`GUITHREADINFO` is defined in both modules on purpose** (self-contained).
 - **A paste is a transaction with a deferred, guarded restore** (F01/F02/F07).
   `TextInserter._paste_text_with_options` always logs one `paste_transaction
@@ -23,7 +25,9 @@ alternatives and history are in `docs/learning-log.md` and git history.
     superseded_changed|busy_rescheduled|abandoned_busy|failed delay_ms=...`;
     failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
     (`SENDINPUT_RESTORE_DELAY_S`) lost pastes into Electron
-    (`probe_wm_null_order.py`: WM_NULL answers before queued input).
+    (`probe_wm_null_order.py`: WM_NULL answers before queued input). Raising
+    the delay was rejected: on the Qt thread a longer sleep froze the UI
+    during a streaming dictation, and any fixed delay only moves the race.
   - A paste during a pending restore takes the record over, keeping the
     *original* previous state while the clipboard still holds the previous
     transcript (streaming pastes every ~350 ms). `flush_pending_restore`
@@ -41,9 +45,12 @@ alternatives and history are in `docs/learning-log.md` and git history.
     unreadable (None) foreground is no change. WM_PASTE skips it.
   - `wait_for_modifier_release` (bounded poll) runs before injecting, or a
     hotkey's held Ctrl/Alt turns Ctrl+V into a no-op. WM_PASTE skips it.
-  - No Windows API says "the target read it"; `WM_RENDERFORMAT` delayed
-    rendering and UI Automation were rejected. `keep_transcript_in_clipboard`
-    skips the restore.
+  - No Windows API says "the target read it". Rejected: `WM_RENDERFORMAT`
+    delayed rendering (needs an owner window with a message pump, and
+    clipboard history and clipboard managers consume it); a UI Automation
+    read-back (heavy and per application); an owner window without a pump
+    (blocks every other program's `EmptyClipboard`).
+    `keep_transcript_in_clipboard` skips the restore.
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,

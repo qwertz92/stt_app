@@ -6,7 +6,7 @@ This document explains how streaming mode is implemented in this project, how it
 
 - `Batch` mode: stable default.
 - `Streaming` mode: implemented for local provider (`faster-whisper` and
-  Nemotron 3.5), AssemblyAI (Universal-3.5 Pro v3 `StreamingClient`), and
+  Nemotron 3.5), AssemblyAI (Universal-3.6 Pro v3 `StreamingClient`), and
   Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - OpenAI and Groq are batch-only in this app. ElevenLabs offers real-time STT publicly, but the current integration is still batch-only.
@@ -107,13 +107,13 @@ Characteristics:
 ### AssemblyAI transcriber
 
 - `AssemblyAITranscriber` implements streaming via Universal-3.6 Pro Realtime
-  (`speech_model="universal-3-5-pro"`) in
+  (`speech_model="universal-3-6-pro"`, `ASSEMBLYAI_STREAMING_MODEL`) in
   `assemblyai.streaming.v3.StreamingClient`; the legacy v2 realtime API was
   retired by AssemblyAI.
-- `start_stream()` uses native 18-language code switching and automatic
-  language detection. Formatting is built into Universal-3.5 Pro rather than
+- `start_stream()` uses native 32-language code switching and automatic
+  language detection. Formatting is built into the streaming model rather than
   enabled with the legacy `format_turns` parameter.
-- Transcription-tab vocabulary is sent through Universal-3.5 Pro
+- Transcription-tab vocabulary is sent through Universal-3.6 Pro
   `keyterms_prompt` (up to 100 app terms); a multi-word phrase remains one
   keyterm.
 - `push_audio_chunk()` enqueues raw PCM16 through `client.stream()` (the SDK

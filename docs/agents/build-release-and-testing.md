@@ -6,6 +6,8 @@ git history. Read before changing packaging, release scripts, CI gates, ruff,
 diagnostics scripts or test-suite invariants. "Above/below" refers to this
 file; "Known limitations" is `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-testing.md` (original AGENTS.md: `df2642a`).
+
 - **Line endings**: LF via `.gitattributes`, mirrored by `.editorconfig`.
 - **Packaging is layered**: PyInstaller `onedir`, wrapped by Inno Setup;
   Actions builds on demand and publishes only on version tags. `v*` tags match
@@ -27,15 +29,6 @@ file; "Known limitations" is `docs/agents/known-limitations.md`.
 - **Ruff's rule set is written out, never inherited**: `pyproject.toml` names
   every rule and every ignore with its reason (defaults checked almost
   nothing). An upgrade may add findings; it must not silently change the gate.
-- **`tests/conftest.py` blocks the real `create_transcriber`**: the isolated
-  arm of `_acquire_transcriber_runtime` calls it directly, past patches of
-  `_get_or_create_transcriber`. Tests patching
-  `stt_app.controller.create_transcriber` still win (`monkeypatch` order).
-- **`_start_streaming_recording` has two capture-failure arms**; failing
-  `_build_audio_capture` reaches only the first. The `AudioCaptureError` arm
-  needs a capture that builds and refuses `start()`. The isolated and shared
-  branches of `_acquire_transcriber_runtime` need separate tests (only the
-  shared one holds `_transcriber_runtime_lock`).
 - **`scripts/smoke_test.py` must never touch the real settings or move the
   data folder**: `SettingsStore.load` writes and quarantines
   (`*.corrupt.<timestamp>`), so it loads a throwaway copy; the model step
@@ -48,12 +41,6 @@ file; "Known limitations" is `docs/agents/known-limitations.md`.
 - **A diagnostic reads the file it proved readable** (`usable_path`), not the
   primary that just raised; with unusable settings `--check-model` checks the
   defaults the app will run on, not nothing.
-- **Hugging Face isolation lives in `pytest_configure`, not a fixture**:
-  `huggingface_hub` freezes `HF_HUB_CACHE` and `HF_HUB_OFFLINE` at import
-  (during collection), and `download_model_snapshot` passes no `cache_dir` for
-  an empty Model Dir. One session directory (`tmp_path_factory` rescans per
-  call). The `_coordinated_download_if_missing` stub is per test;
-  `real_model_prefetch` restores it where the pre-fetch is asserted.
 - **Every string a script can print is ASCII**
   (`tests/test_script_output_is_ascii.py`): redirected Windows output is
   cp1252, so other characters raise `UnicodeEncodeError` (crashed

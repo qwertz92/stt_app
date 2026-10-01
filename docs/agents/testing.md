@@ -7,6 +7,8 @@ release-workflow rule, the `scripts/release_check_*.py` contract, the autouse
 fixtures in `tests/conftest.py` and the CI-runner rules. Read it before adding
 a fixture, a layout test, a subprocess test or a release check.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (original AGENTS.md: `df2642a`).
+
 - **The release workflow tests with `quality.yml`'s command on a real
   desktop** (since 2026-09-18): under `QT_QPA_PLATFORM=offscreen` tests marked
   `pixel_exact` / `platform_dependent` skip and unmarked layout tests rotted
@@ -66,6 +68,21 @@ a fixture, a layout test, a subprocess test or a release check.
     leaked explicit interest `('large-v3', '')`).
   The alphabetical full suite hid the last three leaks; only another file
   order showed them.
+- **`tests/conftest.py` blocks the real `create_transcriber`**: the isolated
+  arm of `_acquire_transcriber_runtime` calls it directly, past patches of
+  `_get_or_create_transcriber`. Tests patching
+  `stt_app.controller.create_transcriber` still win (`monkeypatch` order).
+- **`_start_streaming_recording` has two capture-failure arms**; failing
+  `_build_audio_capture` reaches only the first. The `AudioCaptureError` arm
+  needs a capture that builds and refuses `start()`. The isolated and shared
+  branches of `_acquire_transcriber_runtime` need separate tests (only the
+  shared one holds `_transcriber_runtime_lock`).
+- **Hugging Face isolation lives in `pytest_configure`, not a fixture**:
+  `huggingface_hub` freezes `HF_HUB_CACHE` and `HF_HUB_OFFLINE` at import
+  (during collection), and `download_model_snapshot` passes no `cache_dir` for
+  an empty Model Dir. One session directory (`tmp_path_factory` rescans per
+  call). The `_coordinated_download_if_missing` stub is per test;
+  `real_model_prefetch` restores it where the pre-fetch is asserted.
 - **Gate a push on the printed `N passed` line**, never a pipeline's exit
   code; a chain pushing after a background suite *started* published a red
   suite (2026-09-04).

@@ -6,6 +6,8 @@ git history. Read before changing `overlay_ui.py` or any controller path that
 paints the overlay. "Above/below" refers to this file; "Known limitations" is
 `docs/agents/known-limitations.md`.
 
+Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (original AGENTS.md: `df2642a`).
+
 - **One event's changes go through `OverlayUI.batched_update()`** (geometry
   deferred to the end, resized with painting suppressed); otherwise queue plus
   state resized twice (183 -> 137 -> 269 px) with a stale frame. The
