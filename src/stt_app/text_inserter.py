@@ -14,6 +14,8 @@ from .config import (
     CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES,
     CLIPBOARD_RESTORE_DELAY_S,
     CLIPBOARD_RESTORE_MAX_WAIT_S,
+    CLIPBOARD_RESTORE_RETRY_ATTEMPTS,
+    CLIPBOARD_RESTORE_RETRY_DELAY_S,
     CLIPBOARD_SETTLE_S,
     PASTE_MODIFIER_POLL_INTERVAL_S,
     PASTE_MODIFIER_RELEASE_TIMEOUT_S,
@@ -122,6 +124,20 @@ class _ClipboardOpenFailedError(TextInsertionError):
     """
 
 
+class _ClipboardWriteUnconfirmedError(ClipboardContentionError):
+    """Our write finished and its close was lost, and it could not be read back.
+
+    Contention for the paste: nothing may go out. But the transcript is most
+    likely on the clipboard in place of the user's content, so the transaction
+    hands `marker` (the counter read before the failed read-back) to a later
+    restore, which runs only while the clipboard still holds the transcript.
+    """
+
+    def __init__(self, message: str, marker: int | None) -> None:
+        super().__init__(message)
+        self.marker = marker
+
+
 def _is_clipboard_not_open(exc: BaseException) -> bool:
     """Is this a pywin32 error carrying 1418?
 
@@ -219,11 +235,15 @@ class _PendingRestore:
     transaction_id: int
     previous_state: object
     marker: int | None
-    text: str
+    # What our write left on the clipboard, or None when it left it emptied.
+    text: str | None
     target_hwnd: int | None
     armed_at: float
     deadline: float
     handle: object | None = None
+    # Restores of this record that failed; at `CLIPBOARD_RESTORE_RETRY_ATTEMPTS`
+    # past the first, the failure is reported.
+    failed_attempts: int = 0
 
 
 def _schedule_on_a_daemon_timer(delay_s: float, callback):
@@ -289,6 +309,10 @@ _CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES = (
     "CanUploadToCloudClipboard",
 )
 _CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD = (0).to_bytes(4, "little")
+# Formats Windows synthesizes on demand from another one (CF_TEXT, CF_BITMAP,
+# CF_OEMTEXT, CF_DIB, CF_UNICODETEXT, CF_LOCALE, CF_DIBV5): after a partial
+# restore of ours they may appear without our having written them.
+_CLIPBOARD_SYNTHESIZED_FORMATS = frozenset({1, 2, 7, 8, 13, 16, 17})
 # The range `RegisterClipboardFormat` hands out; below it a format has no name.
 _FIRST_REGISTERED_CLIPBOARD_FORMAT = 0xC000
 # What `SetClipboardData` requires of the block it is given.
@@ -779,9 +803,12 @@ class Win32ClipboardBackend:
         try:
             current = self.get_clipboard_text()
         except Exception as exc:
-            raise ClipboardContentionError(
+            # Most likely our transcript is there and the user's content is
+            # gone: the caller restores it later, once it can be read.
+            raise _ClipboardWriteUnconfirmedError(
                 "The clipboard was closed by another program during the write "
-                "and could not be read back; left it untouched."
+                "and could not be read back; it is put back once it can be read.",
+                marker=sequence,
             ) from exc
         if current != text:
             raise ClipboardContentionError(
@@ -820,33 +847,156 @@ class Win32ClipboardBackend:
         what this method did before formats existed. The text is also written
         separately when `CF_UNICODETEXT` is not among the formats that were
         set, so this can never put back less text than it used to.
+
+        Through `_with_reopen`, and a lost close writes again: the formats go
+        in through ctypes `SetClipboardData`, which answers NULL on a
+        clipboard closed under us without raising, so a manager closing our
+        open after the `EmptyClipboard` left the user with nothing. A
+        reattempt never empties what someone else wrote: before our first
+        `EmptyClipboard` the counter must be unchanged since this call began,
+        and after it the clipboard may hold nothing but our own partial
+        restore (`_holds_only_our_restore`). A restore that wrote nothing it
+        had to write raises `ClipboardEmptiedError`; the transaction retries
+        it later (`TextInserter._finish_restore`).
         """
-        with self._clipboard_opened():
-            win32clipboard.EmptyClipboard()
-            text_restored = self._restore_clipboard_formats(state.formats)
-            if state.has_text and state.text is not None and not text_restored:
-                win32clipboard.SetClipboardText(state.text, win32con.CF_UNICODETEXT)
+        emptied = False
+        wrote_anything = False
+        wants_text = bool(state.has_text and state.text is not None)
+        # Read before the first open: a reattempt that has not emptied yet
+        # must find nobody has written since.
+        sequence_before = self.get_clipboard_sequence_number()
+
+        def _restore_into_open_clipboard() -> None:
+            nonlocal emptied, wrote_anything
+            if emptied:
+                if not self._holds_only_our_restore(state):
+                    raise ClipboardContentionError(
+                        "Another program wrote to the clipboard while it was "
+                        "being restored; left its content untouched."
+                    )
+            elif self.get_clipboard_sequence_number() != sequence_before:
+                raise ClipboardContentionError(
+                    "Another program wrote to the clipboard before it could be "
+                    "restored; left its content untouched."
+                )
+            try:
+                win32clipboard.EmptyClipboard()
+            except Exception as exc:
+                _raise_if_clipboard_not_open(exc)
+                raise
+            emptied = True
+            text_restored, written = self._restore_clipboard_formats(state.formats)
+            if wants_text and not text_restored:
+                try:
+                    win32clipboard.SetClipboardText(
+                        state.text, win32con.CF_UNICODETEXT
+                    )
+                except Exception as exc:
+                    _raise_if_clipboard_not_open(exc)
+                    raise ClipboardEmptiedError(
+                        f"The clipboard was emptied but its text could not be "
+                        f"written back: {exc}"
+                    ) from exc
+                written += 1
+            wrote_anything = written > 0
+
+        def _spent() -> TextInsertionError:
+            message = (
+                "Another program kept closing the clipboard while it was being "
+                "restored (Windows error 1418)"
+            )
+            if emptied:
+                return ClipboardEmptiedError(
+                    f"The clipboard was emptied but could not be restored: {message}."
+                )
+            return ClipboardContentionError(f"{message}; left it untouched.")
+
+        self._with_reopen(
+            "restore",
+            _restore_into_open_clipboard,
+            exhausted_error=_spent,
+            reopen_on_lost_close=True,
+        )
+        if not wrote_anything and (state.formats or wants_text):
+            raise ClipboardEmptiedError(
+                "The clipboard was emptied but none of its content could be "
+                "written back."
+            )
+
+    def clipboard_holds_only(self, state: ClipboardState) -> bool:
+        """Does the clipboard hold nothing but (part of) `state`?
+
+        The guard of a restore written again later: an empty clipboard, or one
+        holding only what a partial restore of ours put there, is still ours
+        to restore; anything else is a copy the user made since.
+        """
+        held, _lost_close = self._with_reopen(
+            "read", lambda: self._holds_only_our_restore(state)
+        )
+        return bool(held)
+
+    def _holds_only_our_restore(self, state: ClipboardState) -> bool:
+        """The open clipboard holds nothing, or only formats of `state`.
+
+        Every present format must match a captured one byte for byte
+        (trailing NULs aside: `GlobalSize` may round a block up), or be one
+        Windows synthesizes from such a format (`_CLIPBOARD_SYNTHESIZED_FORMATS`)
+        -- and at least one must match, because an `EmptyClipboard` by anyone
+        else removes all of ours. A format that cannot be read counts only if
+        `state` has it. Heuristic by nature: a copy of byte-identical content
+        passes, and restoring that is harmless.
+        """
+        format_ids = self._enumerate_clipboard_formats()
+        if not format_ids:
+            return True
+        ours = {
+            format_id: payload.rstrip(b"\x00")
+            for format_id, _name, payload in state.formats
+        }
+        if state.has_text and state.text is not None:
+            ours.setdefault(
+                win32con.CF_UNICODETEXT,
+                str(state.text).encode("utf-16-le").rstrip(b"\x00"),
+            )
+        present = {
+            format_id: payload.rstrip(b"\x00")
+            for format_id, _name, payload in self._copy_clipboard_formats(format_ids)
+        }
+        matched = False
+        for format_id in format_ids:
+            if format_id in present:
+                if ours.get(format_id) == present[format_id]:
+                    matched = True
+                    continue
+                if format_id in ours or format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
+                    return False
+                continue
+            if format_id not in ours and format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
+                return False
+        return matched
 
     def _restore_clipboard_formats(
         self, formats: tuple[tuple[int, str, bytes], ...]
-    ) -> bool:
-        """Set every captured format; answer whether the text was among them.
+    ) -> tuple[bool, int]:
+        """Set every captured format; answer (text among them, formats set).
 
         One format that cannot be set must not cost the user the rest of
         their clipboard, so a refusal is counted and the remaining formats are
         still written. The caller holds the clipboard open and has emptied it.
         """
         failed = 0
+        written = 0
         text_restored = False
         for format_id, name, payload in formats:
             target_id = self._restore_target_format_id(format_id, name)
             if target_id and self._set_clipboard_bytes(target_id, payload):
                 text_restored = text_restored or target_id == win32con.CF_UNICODETEXT
+                written += 1
                 continue
             failed += 1
         if failed:
             _LOGGER.warning("clipboard_restore_partial failed=%s", failed)
-        return text_restored
+        return text_restored, written
 
     def _restore_target_format_id(self, format_id: int, name: str) -> int:
         """Under which id this format has to be set now, or 0 for "cannot".
@@ -1198,8 +1348,16 @@ class TextInserter:
         restore_max_wait_s: float = CLIPBOARD_RESTORE_MAX_WAIT_S,
         schedule_fn=None,
         clock=time.monotonic,
+        restore_retry_attempts: int = CLIPBOARD_RESTORE_RETRY_ATTEMPTS,
+        restore_retry_delay_s: float = CLIPBOARD_RESTORE_RETRY_DELAY_S,
     ) -> None:
         self._backend = backend or Win32ClipboardBackend()
+        self._restore_retry_attempts = max(0, int(restore_retry_attempts))
+        self._restore_retry_delay_s = max(0.0, float(restore_retry_delay_s))
+        # Called with one user-facing sentence when a restore failed for good;
+        # on the restore's timer thread, so the controller hands it to a Qt
+        # signal, whose queued connection reaches the tray on the Qt thread.
+        self._restore_failure_handler = None
         self._sleep_fn = sleep_fn
         self._clipboard_settle_s = clipboard_settle_s
         self._restore_delay_s = restore_delay_s
@@ -1219,6 +1377,10 @@ class TextInserter:
         # lock -- a deferred restore holding the lock on its timer thread must
         # not stall the Qt thread asking this.
         self._last_paste_keystroke_at: float | None = None
+
+    def set_restore_failure_handler(self, handler) -> None:
+        """Who hears of a clipboard restore that failed for good."""
+        self._restore_failure_handler = handler
 
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
         return self.insert_text_with_options(
@@ -1363,6 +1525,9 @@ class TextInserter:
         # set therefore damaged a clipboard this app had never touched and had
         # pasted nothing from.
         clipboard_was_set = False
+        # Whether our transcript reached the clipboard: a restore retried
+        # later must then find it there, or our own partial restore.
+        write_landed = False
         try:
             try:
                 # A transcript the transaction will replace with the user's
@@ -1371,6 +1536,22 @@ class TextInserter:
                 written = self._backend.set_clipboard_text(
                     text, exclude_from_history=restore_clipboard
                 )
+            except _ClipboardWriteUnconfirmedError as unconfirmed:
+                # Contention for the paste, which is refused. The transcript is
+                # most likely where the user's content was, and the clipboard
+                # cannot be read right now: the restore runs once it can, and
+                # only while it still holds the transcript.
+                if restore_clipboard:
+                    self._arm_restore_retry(
+                        transaction_id=transaction_id,
+                        previous_state=previous_state,
+                        marker=unconfirmed.marker,
+                        text=text,
+                        target_hwnd=target_hwnd,
+                        failed_attempts=0,
+                    )
+                    record.restore = "retry"
+                raise
             except ClipboardEmptiedError:
                 # Destructive half done, write half not: the clipboard is
                 # empty and putting it back is the only way the user gets
@@ -1386,6 +1567,7 @@ class TextInserter:
                 restore_previous_state = True
                 raise
             clipboard_was_set = True
+            write_landed = True
             record.restore = "kept"
             clipboard_marker = self._marker_after_write(written)
             record.marker = clipboard_marker
@@ -1481,6 +1663,17 @@ class TextInserter:
                     self._backend.restore_clipboard_state(previous_state)
                 except Exception as exc:
                     restore_error = exc
+                    # Left emptied, or holding the transcript: written again
+                    # later rather than left that way for good.
+                    record.restore = "retry"
+                    self._arm_restore_retry(
+                        transaction_id=transaction_id,
+                        previous_state=previous_state,
+                        marker=clipboard_marker,
+                        text=text if write_landed else None,
+                        target_hwnd=target_hwnd,
+                        failed_attempts=1,
+                    )
 
         combined_error = (
             TextMayHaveBeenPastedError if paste_sent else TextInsertionError
@@ -1637,7 +1830,7 @@ class TextInserter:
             return _NO_INHERITED_STATE
         self._pending_restore = None
         self._cancel_scheduled_restore(record)
-        if self._clipboard_still_holds(record):
+        if self._restore_still_ours(record):
             self._log_restore_outcome(record, "superseded")
             return record.previous_state
         # The user copied something of their own in between, so the older
@@ -1718,27 +1911,120 @@ class TextInserter:
                 return
             self._finish_restore(record)
 
-    def _finish_restore(self, record: _PendingRestore) -> None:
+    def _finish_restore(
+        self, record: _PendingRestore, *, may_retry: bool = True
+    ) -> None:
         """Restore, unless the clipboard is no longer ours to put back.
 
         The caller holds `_insert_lock`. The record is retired first, so a
         paste arriving right after this cannot take over a record that is
         being restored.
+
+        A restore that fails is written again from the captured state, up to
+        `restore_retry_attempts` times `restore_retry_delay_s` apart on the
+        scheduler -- never a sleep on the caller's thread -- and stays the
+        pending record meanwhile, so a new paste takes its state over. Only
+        then is it reported (`set_restore_failure_handler`). Nobody else is
+        waiting for it: the paste was reported long ago.
         """
         self._pending_restore = None
-        if not self._clipboard_still_holds(record):
+        if not self._restore_still_ours(record):
             self._log_restore_outcome(record, "skipped_changed")
             return
         try:
             self._backend.restore_clipboard_state(record.previous_state)
         except Exception:
-            # Nobody is waiting for this: the paste itself was reported as a
-            # success long ago, and there is nowhere left to raise to. The
-            # user keeps the transcript on their clipboard, and the log is the
-            # only place this can be seen.
+            record.failed_attempts += 1
+            if may_retry and record.failed_attempts <= self._restore_retry_attempts:
+                self._pending_restore = record
+                self._log_restore_outcome(record, "failed_retrying")
+                self._schedule_restore_retry(record)
+                return
             self._log_restore_outcome(record, "failed")
+            self._report_restore_failure()
             return
         self._log_restore_outcome(record, "restored")
+
+    def _arm_restore_retry(
+        self,
+        *,
+        transaction_id: int,
+        previous_state: object,
+        marker: int | None,
+        text: str | None,
+        target_hwnd: int | None,
+        failed_attempts: int,
+    ) -> None:
+        """Write the previous clipboard back later. The caller holds the lock."""
+        armed_at = self._clock()
+        record = _PendingRestore(
+            transaction_id=transaction_id,
+            previous_state=previous_state,
+            marker=marker,
+            text=text,
+            target_hwnd=target_hwnd,
+            armed_at=armed_at,
+            deadline=armed_at,
+            failed_attempts=failed_attempts,
+        )
+        if failed_attempts > self._restore_retry_attempts:
+            self._log_restore_outcome(record, "failed")
+            self._report_restore_failure()
+            return
+        self._pending_restore = record
+        self._schedule_restore_retry(record)
+
+    def _schedule_restore_retry(self, record: _PendingRestore) -> None:
+        try:
+            record.handle = self._schedule_fn(
+                self._restore_retry_delay_s,
+                lambda: self._run_restore_retry(record),
+            )
+        except Exception:
+            # Left pending, as `_schedule_restore` does: the next paste takes
+            # it over and `flush_pending_restore` runs it at shutdown.
+            record.handle = None
+            self._log_restore_outcome(record, "failed")
+
+    def _run_restore_retry(self, record: _PendingRestore) -> None:
+        with self._insert_lock:
+            if self._pending_restore is not record:
+                return
+            self._finish_restore(record)
+
+    def _restore_still_ours(self, record: _PendingRestore) -> bool:
+        """May this record's restore write the clipboard now?
+
+        While it still holds our transcript, as always. A record whose write
+        left the clipboard emptied, or whose restore already failed once, also
+        while it holds nothing but our own partial restore
+        (`Win32ClipboardBackend.clipboard_holds_only`). Anything else is a
+        copy someone made since, which a restore never writes over.
+        """
+        if record.text is not None and self._clipboard_still_holds(record):
+            return True
+        if record.text is not None and record.failed_attempts == 0:
+            return False
+        checker = getattr(self._backend, "clipboard_holds_only", None)
+        if not callable(checker):
+            return False
+        try:
+            return bool(checker(record.previous_state))
+        except Exception:
+            return False
+
+    def _report_restore_failure(self) -> None:
+        handler = self._restore_failure_handler
+        if not callable(handler):
+            return
+        try:
+            handler(
+                "Your clipboard could not be put back after a paste: it may "
+                "hold the transcript, or nothing, instead of what you had "
+                "copied. The transcript is in history."
+            )
+        except Exception:
+            _LOGGER.exception("Could not report the failed clipboard restore")
 
     def _clipboard_still_holds(self, record: _PendingRestore) -> bool:
         """Is what this app wrote still on the clipboard?"""
@@ -1769,7 +2055,7 @@ class TextInserter:
             )
 
     def _log_restore_outcome(self, record: _PendingRestore, outcome: str) -> None:
-        log = _LOGGER.warning if outcome == "failed" else _LOGGER.info
+        log = _LOGGER.warning if outcome.startswith("failed") else _LOGGER.info
         log(
             "clipboard_restore id=%s outcome=%s delay_ms=%s",
             record.transaction_id,
@@ -1794,7 +2080,8 @@ class TextInserter:
             if record is None:
                 return
             self._cancel_scheduled_restore(record)
-            self._finish_restore(record)
+            # No retry: the timer thread dies with the process.
+            self._finish_restore(record, may_retry=False)
 
     def _wait_for_modifier_release(self) -> None:
         waiter = getattr(self._backend, "wait_for_modifier_release", None)

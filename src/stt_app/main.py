@@ -135,7 +135,18 @@ def _connect_tray_notifications(tray_icon, controller) -> None:
     controller.background_insertion_failed.connect(
         _notify_background_insertion_failure
     )
+    def _notify_clipboard_restore_failure(message: str) -> None:
+        # The paste itself was reported long before; this is the user's own
+        # clipboard content, which they will reach for next.
+        tray_icon.showMessage(
+            "Clipboard not restored",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
     controller.busy_overlay_error.connect(_notify_busy_overlay_error)
+    controller.clipboard_restore_failed.connect(_notify_clipboard_restore_failure)
 
 
 def run() -> int:

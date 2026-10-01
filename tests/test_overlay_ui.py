@@ -2441,3 +2441,48 @@ def test_both_row_captions_fit_one_button_width_at_a_larger_system_font(point_sc
             overlay.deleteLater()
     finally:
         app.setFont(original_font)
+
+
+def test_the_status_of_every_row_stays_visible_with_real_model_names():
+    """The rows are one elided line, so whatever tells a row's state must sit
+    before the long part. "· Pending insert" at the end was cut off with real
+    model names at the overlay's 470 px (the 2026-10-01 review)."""
+    from types import SimpleNamespace
+
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    jobs = [
+        SimpleNamespace(
+            engine="local",
+            model=model,
+            created_at=datetime(2026, 10, 1, 12, 0, second, tzinfo=UTC),
+            insertion_deferred=True,
+        )
+        for second, model in (
+            (0, "nemotron-3.5-asr-streaming-0.6b-int4"),
+            (5, "granite-speech-5.0-470m-turboctc"),
+        )
+    ]
+    labels = [
+        DictationController._queue_job_label(job, rank=rank, total=len(jobs))
+        for rank, job in enumerate(jobs, start=1)
+    ]
+    _not_inserted, possibly_inserted = _real_undelivered_labels()
+    overlay.set_transcription_queue(
+        [
+            (1, labels[0]),
+            (2, labels[1]),
+            (-1, possibly_inserted, QUEUE_ROW_KIND_UNDELIVERED),
+        ]
+    )
+    QtWidgets.QApplication.processEvents()
+
+    painted = [
+        QtWidgets.QLabel.text(label) for _row, label, _button in _queue_row_parts(overlay)
+    ]
+    assert "Pending insert" in painted[0], painted
+    assert "Pending insert" in painted[1], painted
+    assert painted[2].startswith("Possibly inserted"), painted
+    overlay.close()

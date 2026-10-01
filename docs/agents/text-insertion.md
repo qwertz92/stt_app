@@ -22,8 +22,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     never the counter alone), reschedules while busy, and gives up at
     `CLIPBOARD_RESTORE_MAX_WAIT_S` (10 s) leaving the transcript. Logged as
     `clipboard_restore id=... outcome=restored|skipped_changed|superseded|
-    superseded_changed|busy_rescheduled|abandoned_busy|failed delay_ms=...`;
-    failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
+    superseded_changed|busy_rescheduled|abandoned_busy|failed_retrying|failed
+    delay_ms=...`; failure is WARNING, never raised. Why: a fixed 160 ms Qt-thread sleep
     (`SENDINPUT_RESTORE_DELAY_S`) lost pastes into Electron
     (`probe_wm_null_order.py`: WM_NULL answers before queued input). Raising
     the delay was rejected: on the Qt thread a longer sleep froze the UI
@@ -35,6 +35,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     calls it first. A scheduler that cannot start a thread leaves the record
     pending, never reports a landed paste as failed.
   - WM_PASTE stays synchronous (contention check, raising restore failure).
+  - *A restore that fails is written again, then reported* (2026-10-01).
+    `restore_clipboard_state` runs through `_with_reopen` with
+    `reopen_on_lost_close` (its ctypes `SetClipboardData` answers NULL on a
+    closed clipboard without raising), and raises `ClipboardEmptiedError`
+    when it emptied the clipboard and wrote none of what it had to. A
+    reattempt never empties a foreign write: before our `EmptyClipboard` the
+    counter must be unchanged since the call began, after it the clipboard
+    may hold only our own partial restore (`_holds_only_our_restore`: every
+    format byte-equal to a captured one, trailing NULs aside, or synthesized
+    from one). A restore that still fails -- the immediate one after a failed
+    write, or the deferred one -- stays the pending record and is retried
+    `CLIPBOARD_RESTORE_RETRY_ATTEMPTS` (3) times `CLIPBOARD_RESTORE_RETRY_DELAY_S`
+    (1.0 s) apart on the scheduler from the captured state, each attempt
+    first checking that the clipboard holds our transcript or only our
+    partial restore (`_restore_still_ours`); then it is reported once
+    through `set_restore_failure_handler` -> `clipboard_restore_failed` ->
+    the tray ("Clipboard not restored"). Why: after a reopen failure or a
+    manager closing the restore's open the user's clipboard stayed empty,
+    and nothing tried again. A write whose close was lost and whose
+    read-back could not open (`_ClipboardWriteUnconfirmedError`, contention:
+    nothing pastes) arms the same retry with the counter read before the
+    read-back, because the transcript most likely replaced the user's
+    content. `flush_pending_restore` at shutdown does not retry.
   - *The marker is read inside the write*: `set_clipboard_text` returns a
     `ClipboardMarker` read before it returns; `_clipboard_changed_after_set`
     compares content when readable, the counter only otherwise (each open may
@@ -187,7 +210,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   captions share one reserved width) and a title that counts transcriptions
   and waiting inserts apart. Later results never replace a row; Dismiss
   (`queue_cancel_requested` with the row id) and Clear queue drop it; a
-  successful insert of its text retires it. The tray report appends
+  successful paste built from the row retires it -- by identity, never by
+  text (`_retire_undelivered(entries)`): two dictations of "okay." are two
+  rows, and the overlay's Insert on one retired both (2026-10-01 review).
+  The offer knows its own row (`_insert_action_row`, set by both paths that
+  paint the offer). The tray report appends
   `_undelivered_hint`: the count and how to insert them -- the re-paste
   hotkey only while registered, else the tray's "Insert transcript again".
 - **The overlay's Insert pastes the text that failed** (a streaming
@@ -247,21 +274,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   then races it), during a streaming recording (live inserts write at the
   caret) and during a streaming finalize, whose tail would land behind the
   paste. A failed insert still shows briefly in the tray and stays as a
-  row; a re-paste that inserts exactly that text retires the row.
+  row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
   inserted, never pasted again. A possibly-inserted text is skipped by the
   `_last_transcript` fallback too (`_repaste_last_unless_possibly_inserted`,
-  with the reason shown), and its row is never retired by a paste of the
-  same text: only Dismiss or Clear queue take it away. The no-window refusal
+  with the reason shown), and nothing pastes its row, so only Dismiss or
+  Clear queue take it away. The no-window refusal
   reveals the overlay once (`show_overlay_error` reveals only when it
   paints). The hotkey may not equal the recording, cancel or overlay one.
   Inside the previous paste's restore window a re-paste or the overlay's
   Insert is held as one `_PendingRepaste` (a later request replaces it) and
   `_on_paste_pace_timeout` runs it after the held results, re-checking the
-  refusals and dropping rows dismissed meanwhile (`repaste_paced`). A text
-  already waiting in the paste queue -- the shown transcript the pace holds
-  -- is not pasted by the re-paste (`repaste_skipped reason=queued`): it was
-  pasted twice, once by F10 and once by the timer.
+  refusals and dropping rows dismissed meanwhile (`repaste_paced`). The
+  shown transcript while its own job is still in the paste queue
+  (`_shown_transcript_token`, by identity) is not pasted by the fallback --
+  it was pasted twice, once by F10 and once by the timer -- and the tray
+  says it is about to be inserted (`repaste_skipped reason=queued`). Rows
+  and the Insert offer are never skipped for a held result with the same
+  text: those are other dictations.
 - **`retry_last_transcription` refuses during a recording start, stop or open
   capture** (via the tray), since it stops the running transcription and
   paints Processing. A pending streaming finalize is stopped by design, so

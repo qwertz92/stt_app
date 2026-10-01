@@ -2325,6 +2325,19 @@ CLIPBOARD_RESTORE_DELAY_S = 1.5
 # good: a target this slow has demonstrably not read it yet, and restoring is
 # exactly what turns its eventual paste into the user's old content.
 CLIPBOARD_RESTORE_MAX_WAIT_S = 10.0
+# A restore that fails -- another program held the clipboard for longer than
+# one operation's opens, or closed our open after its `EmptyClipboard` -- is
+# written again from the captured state this many times, this far apart, on
+# the restore's timer thread; only then is it reported through the tray. A
+# restore that found the clipboard emptied by our own write had left the user
+# with nothing at all, and nothing ever tried again. Each attempt is one
+# reopen-guarded operation (about 0.33 s at most), never a sleep on the Qt
+# thread, and every attempt first checks that the clipboard still holds our
+# transcript or our own partial restore, so it never writes over a copy the
+# user made meanwhile. 3 x 1.0 s covers a clipboard manager or an RDP
+# redirection holding the clipboard for a few seconds.
+CLIPBOARD_RESTORE_RETRY_ATTEMPTS = 3
+CLIPBOARD_RESTORE_RETRY_DELAY_S = 1.0
 # Inserts are often triggered straight from a WM_HOTKEY press, so the user's
 # physical Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is injected.
 # The target would then see e.g. Ctrl+Alt+V (AltGr+V) instead of a paste, so

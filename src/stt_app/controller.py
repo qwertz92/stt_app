@@ -296,6 +296,7 @@ class _PendingRepaste:
     text: str
     display_entry: object
     undelivered: tuple[_UndeliveredInsert, ...]
+    offer_row: _UndeliveredInsert | None = None
 
 
 class _TranscriberRuntimeLease:
@@ -482,6 +483,10 @@ class DictationController(QtCore.QObject):
     # An error raised while a recording or a transcription owns the overlay:
     # shown as a tray notification, never painted over the live session.
     busy_overlay_error = QtCore.Signal(str)
+    # The user's clipboard could not be put back after a paste, even after the
+    # inserter's retries. Emitted from the restore's timer thread; the queued
+    # connection carries it to the tray on the Qt thread.
+    clipboard_restore_failed = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
@@ -509,6 +514,11 @@ class DictationController(QtCore.QObject):
         self._repaste_hotkey_manager = repaste_hotkey_manager
         self._overlay = overlay
         self._text_inserter = text_inserter
+        register_restore_failure = getattr(
+            text_inserter, "set_restore_failure_handler", None
+        )
+        if callable(register_restore_failure):
+            register_restore_failure(self.clipboard_restore_failed.emit)
         self._logger = logger
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
         self._secret_store = secret_store
@@ -605,6 +615,16 @@ class DictationController(QtCore.QObject):
         # that create it: `_last_insert_may_have_pasted` below is per insert
         # attempt, and one flush pastes several queued transcripts.
         self._insert_offer_may_have_pasted = False
+        # The listed row of the failure the offer is about, so the overlay's
+        # Insert retires that row and no other: two dictations with the same
+        # text are two rows.
+        self._insert_action_row: _UndeliveredInsert | None = None
+        # The job whose result is the shown transcript, so a re-paste of it
+        # can tell that this very result is still held in the paste queue.
+        self._shown_transcript_token: int | None = None
+        # Whether the last `_insert_text_at_target` call painted the Insert
+        # offer, so the caller can attach the row it records for that failure.
+        self._last_insert_offered = False
         # `(state, detail)` the offer painter wrote last, None once a plain
         # status replaced it. The preload progress poll compares it with
         # what the overlay shows, to tell the painter's own Error from a
@@ -3211,6 +3231,7 @@ class DictationController(QtCore.QObject):
         # partial, an edit, a takeover -- goes through here.
         self._shown_transcript = text
         self._delivered_after_shown = None
+        self._shown_transcript_token = None
 
     def _set_last_transcript(
         self,
@@ -3497,8 +3518,8 @@ class DictationController(QtCore.QObject):
         # this text and wrote the edit into the previous dictation's entry.
         self._set_last_transcript(partial, entry)
 
+    @staticmethod
     def _queue_job_label(
-        self,
         job: _TranscriptionJob,
         *,
         rank: int,
@@ -3513,8 +3534,12 @@ class DictationController(QtCore.QObject):
             rank_label = f"{rank_label} Newest"
         timestamp = job.created_at.strftime("%H:%M:%S")
         provider = f"{engine} · {model}" if model else engine
-        status = " · Pending insert" if job.insertion_deferred else ""
-        return f"{rank_label} · {timestamp} · {provider}{status}"
+        # Before the provider and model: the overlay row is one elided line,
+        # and with real model names a status at the end was cut off -- the one
+        # word that tells a finished result waiting to be pasted from a
+        # running transcription.
+        status = "Pending insert · " if job.insertion_deferred else ""
+        return f"{rank_label} · {status}{timestamp} · {provider}"
 
     @staticmethod
     def _undelivered_row_label(entry: _UndeliveredInsert) -> str:
@@ -3576,21 +3601,20 @@ class DictationController(QtCore.QObject):
         may_have_pasted: bool,
         created_at: datetime,
         history_entry: TranscriptHistoryEntry | None,
-    ) -> None:
+    ) -> _UndeliveredInsert | None:
         """Keep a failed paste listed until it is inserted or dismissed."""
         transcript = text.strip()
         if not transcript or self._shutdown_started:
-            return
+            return None
         self._undelivered_row_counter += 1
-        self._undelivered_inserts.append(
-            _UndeliveredInsert(
-                row_id=-self._undelivered_row_counter,
-                text=transcript,
-                may_have_pasted=may_have_pasted,
-                created_at=created_at,
-                history_entry=history_entry,
-            )
+        entry = _UndeliveredInsert(
+            row_id=-self._undelivered_row_counter,
+            text=transcript,
+            may_have_pasted=may_have_pasted,
+            created_at=created_at,
+            history_entry=history_entry,
         )
+        self._undelivered_inserts.append(entry)
         self._logger.info(
             "undelivered_insert_recorded row=%d may_have_pasted=%s chars=%d "
             "waiting=%d",
@@ -3600,34 +3624,27 @@ class DictationController(QtCore.QObject):
             len(self._insertable_undelivered()),
         )
         self._update_queue_overlay()
+        return entry
 
     def _insertable_undelivered(self) -> list[_UndeliveredInsert]:
         """The waiting transcripts the re-paste may paste: never one whose
         keystroke already went out."""
         return [entry for entry in self._undelivered_inserts if not entry.may_have_pasted]
 
-    def _retire_undelivered(
-        self,
-        pasted_text: str,
-        entries: Sequence[_UndeliveredInsert] = (),
-    ) -> None:
-        """Drop the rows a successful paste delivered.
+    def _retire_undelivered(self, entries: Sequence[_UndeliveredInsert]) -> None:
+        """Drop exactly the rows a successful paste was built from.
 
-        ``entries`` are the rows the paste was built from; besides them, a
-        row whose text is exactly what was pasted is delivered as well --
-        the overlay's Insert on the failed paste's Error, or a re-paste of
-        the same transcript. Never a "possibly inserted" row: whether its
-        own paste landed is the user's to check, so it stays listed until
-        they dismiss it.
+        By identity, never by text: two dictations of "okay." are two rows,
+        and the overlay's Insert on one of them retired both (the 2026-10-01
+        review). A "possibly inserted" row is never among them -- nothing
+        pastes it -- so it stays listed until the user dismisses it.
         """
-        pasted = " ".join(pasted_text.split())
         delivered = {id(entry) for entry in entries}
         before = len(self._undelivered_inserts)
         self._undelivered_inserts = [
             entry
             for entry in self._undelivered_inserts
             if id(entry) not in delivered
-            and (entry.may_have_pasted or " ".join(entry.text.split()) != pasted)
         ]
         if len(self._undelivered_inserts) != before:
             self._update_queue_overlay()
@@ -5671,6 +5688,7 @@ class DictationController(QtCore.QObject):
         # already gets this right.
         if text.strip():
             self._last_transcript = text
+            self._shown_transcript_token = job.token if job is not None else None
 
         if not text.strip():
             self._mark_last_recording_completed(job, text)
@@ -5730,7 +5748,8 @@ class DictationController(QtCore.QObject):
             ):
                 # The Error with its Insert is replaced by the next
                 # recording; the row keeps the transcript visible after that.
-                self._record_undelivered_insert(
+                offered = self._last_insert_offered
+                entry = self._record_undelivered_insert(
                     text,
                     may_have_pasted=self._last_insert_may_have_pasted,
                     created_at=(
@@ -5740,6 +5759,8 @@ class DictationController(QtCore.QObject):
                     ),
                     history_entry=history_entry,
                 )
+                if offered:
+                    self._insert_action_row = entry
                 self._reveal_overlay_result(is_error=True)
                 self._mark_last_recording_completed(job, text)
                 self._last_transcribe_settings = None
@@ -5817,14 +5838,6 @@ class DictationController(QtCore.QObject):
             for job, _text in self._deferred_background_results
         )
 
-    def _queued_for_paste(self, text: str) -> bool:
-        """Is ``text`` one of the results waiting in the paste queue?"""
-        folded = " ".join(text.split())
-        return bool(folded) and any(
-            " ".join(queued.split()) == folded
-            for _job, queued in self._deferred_background_results
-        )
-
     def _paste_pace_wait_s(self) -> float:
         """Seconds until the previous paste's clipboard-restore window ends.
 
@@ -5886,7 +5899,16 @@ class DictationController(QtCore.QObject):
                     still_waiting[0].history_entry if len(still_waiting) == 1 else None
                 )
             undelivered = tuple(still_waiting)
-        self._repaste(text, display_entry=display_entry, undelivered=undelivered)
+        offer_row = pending.offer_row
+        if offer_row is not None and offer_row not in self._insertable_undelivered():
+            # Dismissed meanwhile: the Insert still pastes its text.
+            offer_row = None
+        self._repaste(
+            text,
+            display_entry=display_entry,
+            undelivered=undelivered,
+            offer_row=offer_row,
+        )
 
     def _handle_background_transcription_ready(
         self,
@@ -6133,7 +6155,7 @@ class DictationController(QtCore.QObject):
         # it: the overlay's single offer below is replaced by the next
         # failure and the next recording, and is not painted at all while a
         # session owns the overlay.
-        self._record_undelivered_insert(
+        entry = self._record_undelivered_insert(
             text,
             may_have_pasted=may_have_pasted,
             created_at=job.created_at,
@@ -6158,6 +6180,7 @@ class DictationController(QtCore.QObject):
             transcript, job.history_entry if job_count == 1 else None
         )
         self._insert_action_text = transcript
+        self._insert_action_row = entry
         self._insert_offer_may_have_pasted = may_have_pasted
         detail = f"{message}\n\n{transcript}" if transcript else message
         # One value for Copy and Insert; a raw `text` here and the stripped
@@ -7026,6 +7049,7 @@ class DictationController(QtCore.QObject):
     def _retire_insert_offer(self) -> None:
         """Drop the pending Insert offer, its flag and its painted record."""
         self._insert_action_text = ""
+        self._insert_action_row = None
         self._insert_offer_may_have_pasted = False
         self._offer_painted = None
 
@@ -7116,6 +7140,7 @@ class DictationController(QtCore.QObject):
         insertion_text = str(text)
         self._last_insert_may_have_pasted = False
         self._last_insert_error_text = ""
+        self._last_insert_offered = False
         try:
             if restore_focus and handle:
                 try:
@@ -7224,7 +7249,9 @@ class DictationController(QtCore.QObject):
                 # re-transcribes) has nothing to work with; offer inserting the
                 # transcript again instead.
                 self._insert_action_text = insertion_text
+                self._insert_action_row = None
                 self._insert_offer_may_have_pasted = False
+                self._last_insert_offered = True
                 self._overlay.set_state(
                     "Error",
                     detail,
@@ -7310,6 +7337,19 @@ class DictationController(QtCore.QObject):
         the fallback would put it in the document twice.
         """
         text = self._last_transcript
+        held = self._shown_transcript_token
+        if held is not None and any(
+            job.token == held for job, _text in self._deferred_background_results
+        ):
+            # This very result is still in the paste queue -- the pace holds
+            # it -- and pasting it now as well put it in the document twice.
+            # Told through the tray: the overlay shows that result as Done.
+            self._logger.info("repaste_skipped reason=queued token=%d", held)
+            self.busy_overlay_error.emit(
+                "The last transcript is about to be inserted; it is not "
+                "inserted a second time."
+            )
+            return
         folded = " ".join(text.split())
         if folded and any(
             entry.may_have_pasted and " ".join(entry.text.split()) == folded
@@ -7338,7 +7378,11 @@ class DictationController(QtCore.QObject):
         is also why the fallback below is safe.
         """
         if self._insert_action_text:
-            self._repaste(self._insert_action_text)
+            row = self._insert_action_row
+            self._repaste(
+                self._insert_action_text,
+                offer_row=row if row in self._insertable_undelivered() else None,
+            )
             return
         self._repaste_last_unless_possibly_inserted()
 
@@ -7350,6 +7394,7 @@ class DictationController(QtCore.QObject):
         *,
         display_entry=_KEEP_DISPLAY,
         undelivered: Sequence[_UndeliveredInsert] = (),
+        offer_row: _UndeliveredInsert | None = None,
     ) -> None:
         """Paste ``text`` into the focused window on the user's request.
 
@@ -7358,6 +7403,9 @@ class DictationController(QtCore.QObject):
         on screen then shows it, and Copy and Edit move to it with that entry
         (None for a joined text, so Edit refuses). ``undelivered`` are the
         listed rows the text was built from; a successful paste retires them.
+        ``offer_row`` is the overlay Insert's own row: retired on success like
+        them, without making this a queued paste (its failure still copies
+        the text, as the Insert always did).
         """
         if not text.strip():
             self.show_overlay_error("No transcript available to insert yet.")
@@ -7400,12 +7448,6 @@ class DictationController(QtCore.QObject):
                 f"{what}."
             )
             return
-        if self._queued_for_paste(text):
-            # The shown transcript the pace still holds: it is pasted when the
-            # restore window ends, and pasting it now as well put it in the
-            # document twice.
-            self._logger.info("repaste_skipped reason=queued chars=%d", len(text))
-            return
         wait_s = self._paste_pace_wait_s()
         if wait_s > 0.0:
             # Through the pace like every other paste: a second paste inside
@@ -7416,6 +7458,7 @@ class DictationController(QtCore.QObject):
                 text=text,
                 display_entry=display_entry,
                 undelivered=tuple(undelivered),
+                offer_row=offer_row,
             )
             self._logger.info(
                 "repaste_paced wait_ms=%d rows=%d", _pace_ms(wait_s), len(undelivered)
@@ -7468,10 +7511,11 @@ class DictationController(QtCore.QObject):
             target_signature=signature,
             may_carry_offer=True,
         )
+        rows = [*undelivered, *([offer_row] if offer_row is not None else [])]
         if not inserted:
-            if undelivered and self._last_insert_may_have_pasted:
+            if rows and self._last_insert_may_have_pasted:
                 # The keystroke went out: listed still, never offered again.
-                for entry in undelivered:
+                for entry in rows:
                     entry.may_have_pasted = True
                 self._update_queue_overlay()
             if session:
@@ -7479,7 +7523,7 @@ class DictationController(QtCore.QObject):
             else:
                 self._reveal_overlay_result(is_error=True)
             return
-        self._retire_undelivered(text, undelivered)
+        self._retire_undelivered(rows)
         carried = self._paste_carried_the_offer(text)
         if carried:
             self._retire_insert_offer()

@@ -2102,7 +2102,9 @@ def test_a_not_inserted_row_survives_the_next_recording_and_insert_retires_it(
 
     A foreground paste that failed shows its Error with Insert, which the
     next recording replaces. The row keeps the text visible after that, and
-    the overlay's own Insert, once it succeeds, retires the row it inserted.
+    the re-paste, once it succeeds, retires the row it inserted. (The Insert
+    retires its own row, by identity: `test_the_overlay_insert_retires_only_
+    its_own_row`.)
     """
 
     class FakeClipboard:
@@ -2127,10 +2129,9 @@ def test_a_not_inserted_row_survives_the_next_recording_and_insert_retires_it(
         assert len(_not_inserted_rows(overlay)) == 1
         controller.cancel_current_action()
 
-        controller._insert_action_text = "transcript A."
         inserter.fail = set()
         inserter.now += 10.0
-        controller.insert_failed_text()
+        controller.repaste_last_transcript()
 
         assert inserter.calls[-1] == ("transcript A.", 321, "auto")
         assert _not_inserted_rows(overlay) == []
@@ -3234,7 +3235,11 @@ def test_re_paste_skips_a_possibly_inserted_last_transcript(monkeypatch, tmp_pat
 def test_a_paste_of_the_same_text_leaves_a_possibly_inserted_row_listed(
     monkeypatch, tmp_path
 ):
-    """Only the user's Dismiss takes a possibly-landed row away."""
+    """Only the user's Dismiss takes a possibly-landed row away.
+
+    A later dictation with the same text fails before its keystroke; the
+    overlay's Insert on it retires its own row, never the possibly-landed one.
+    """
     _fake_clipboard(monkeypatch)
     inserter = SelectiveTextInserter()
     inserter.maybe = {"transcript A."}
@@ -3244,12 +3249,21 @@ def test_a_paste_of_the_same_text_leaves_a_possibly_inserted_row_listed(
     try:
         token_a = _record_and_stop(controller)
         controller._on_transcription_ready("transcript A.", request_token=token_a)
-        rows = _not_inserted_rows(overlay)
-        assert len(rows) == 1
+        possibly = _not_inserted_rows(overlay)
+        assert len(possibly) == 1 and "Possibly inserted" in possibly[0][1]
+        inserter.maybe = set()
+        inserter.fail = {"transcript A."}
+        inserter.now += 10.0
+        token_b = _record_and_stop(controller)
+        controller._on_transcription_ready("transcript A.", request_token=token_b)
+        assert len(_not_inserted_rows(overlay)) == 2
+        inserter.fail = set()
+        inserter.now += 10.0
 
-        controller._retire_undelivered("transcript A.")
+        controller.insert_failed_text()
 
-        assert _not_inserted_rows(overlay) == rows
+        assert [call[0] for call in inserter.calls][-1] == "transcript A."
+        assert _not_inserted_rows(overlay) == possibly
     finally:
         controller.shutdown()
     _ = app
@@ -3390,6 +3404,147 @@ def test_a_re_paste_during_a_batch_recording_waits_for_the_pace(
         controller._on_paste_pace_timeout()
         assert [call[0] for call in inserter.calls][2:] == ["transcript A."]
         assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_clipboard_restore_that_failed_for_good_reaches_the_tray(
+    monkeypatch, tmp_path
+):
+    """The inserter reports on its restore's timer thread; the controller
+    hands that to a signal, which main.py shows in the tray."""
+
+    class ReportingInserter(PacedTextInserter):
+        def __init__(self):
+            super().__init__()
+            self.restore_failure_handler = None
+
+        def set_restore_failure_handler(self, handler):
+            self.restore_failure_handler = handler
+
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=ReportingInserter()
+    )
+    reported: list[tuple[str, bool]] = []
+    controller.clipboard_restore_failed.connect(
+        lambda message: reported.append(
+            (message, QtCore.QThread.currentThread() is app.thread())
+        )
+    )
+    try:
+        assert callable(inserter.restore_failure_handler)
+
+        # Called from the restore's timer thread, as the inserter does.
+        worker = threading.Thread(
+            target=inserter.restore_failure_handler,
+            args=("Your clipboard could not be put back.",),
+        )
+        worker.start()
+        worker.join(timeout=5)
+        deadline = time.monotonic() + 5
+        while not reported and time.monotonic() < deadline:
+            app.processEvents()
+
+        # Delivered on the Qt thread, where the tray may be touched.
+        assert reported == [("Your clipboard could not be put back.", True)]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+# -- Rows and held results are identified by identity, never by text --------
+
+
+def test_the_overlay_insert_retires_only_its_own_row(monkeypatch, tmp_path):
+    """Two dictations "okay." both fail: two rows. Insert pastes the one the
+    offer is about, and the other dictation is still not inserted."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_1 = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token_1)
+        token_2 = _record_and_stop(controller)
+        controller._on_transcription_ready("okay.", request_token=token_2)
+        rows = _not_inserted_rows(overlay)
+        assert len(rows) == 2
+        inserter.fail = set()
+        inserter.now += 10.0
+
+        controller.insert_failed_text()
+
+        assert [call[0] for call in inserter.calls] == ["okay.", "okay.", "okay."]
+        # The offer is the newest failure's: its row goes, the older stays.
+        assert _not_inserted_rows(overlay) == [rows[0]]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_f10_pastes_a_row_whose_text_a_held_result_shares(monkeypatch, tmp_path):
+    """A listed row "okay." and a pace-held foreground result "okay." are two
+    dictations: F10 inserts the row after the held one, both go in."""
+    _fake_clipboard(monkeypatch)
+    inserter = SelectiveTextInserter()
+    inserter.fail = {"okay."}
+    controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    try:
+        token_1 = _record_and_stop(controller)
+        inserter.now = 990.0
+        controller._on_transcription_ready("okay.", request_token=token_1)
+        assert len(_not_inserted_rows(overlay)) == 1
+        inserter.fail = set()
+        token_2 = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("first.", request_token=token_2)
+        token_3 = _record_and_stop(controller)
+        inserter.now = 1000.4
+        controller._on_transcription_ready("okay.", request_token=token_3)
+        inserter.now = 1000.5
+
+        controller.repaste_last_transcript()
+
+        for now in (1001.7, 1003.5):
+            inserter.now = now
+            controller._on_paste_pace_timeout()
+        assert [call[0] for call in inserter.calls] == [
+            "okay.",
+            "first.",
+            "okay.",
+            "okay.",
+        ]
+        assert _not_inserted_rows(overlay) == []
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_f10_on_a_held_shown_transcript_says_so_in_the_tray(monkeypatch, tmp_path):
+    """Skipped for a real reason -- it is about to be pasted -- and told."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
+    )
+    busy: list[str] = []
+    controller.busy_overlay_error.connect(busy.append)
+    try:
+        token_a = _record_and_stop(controller)
+        inserter.now = 1000.0
+        controller._on_transcription_ready("transcript A.", request_token=token_a)
+        token_b = _record_and_stop(controller)
+        inserter.now = 1000.5
+        controller._on_transcription_ready("transcript B.", request_token=token_b)
+        inserter.now = 1000.8
+
+        controller.repaste_last_transcript()
+
+        assert len(busy) == 1 and "about to be inserted" in busy[0], busy
+        assert controller._pending_repaste is None
     finally:
         controller.shutdown()
     _ = app
