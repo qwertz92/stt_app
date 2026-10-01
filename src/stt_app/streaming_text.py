@@ -298,9 +298,7 @@ def _join_at_seam(
             best_overlap = overlap
     if not best_overlap:
         return None
-    return " ".join(
-        base_words + current_words[best_skip + best_overlap :]
-    ).strip()
+    return " ".join(base_words + current_words[best_skip + best_overlap :]).strip()
 
 
 def merge_rolling_window(
@@ -325,9 +323,7 @@ def merge_rolling_window(
         # A measured pause longer than the window: this audio shares nothing
         # with what came before, so there is no seam to find. Appended on
         # trust, and reported as NOT aligned -- nothing corroborated it.
-        return RollingMergeResult(
-            stream_join_text(previous, current), aligned=False
-        )
+        return RollingMergeResult(stream_join_text(previous, current), aligned=False)
 
     merged = append_only_stream_partial_candidate(
         previous,
@@ -357,10 +353,7 @@ def merge_rolling_window(
     # previous word, so the floor's last word gains a "." on the very call
     # that pins it, the word check fails, and the whole dictation is
     # replaced. Raw-only misses a provider that re-cases a committed word.
-    if not (
-        previous.startswith(protected)
-        or stream_text_extends(protected, previous)
-    ):
+    if not (previous.startswith(protected) or stream_text_extends(protected, previous)):
         return RollingMergeResult(current, aligned=False)
     # The window may already contain the floor (a provider that re-emits from
     # the start). Joining then duplicates it.
@@ -405,6 +398,7 @@ def merge_rolling_window(
         return RollingMergeResult(spliced_past_boundary, aligned=False)
     return RollingMergeResult(stream_join_text(protected, current), aligned=False)
 
+
 def merge_rolling_window_transcript(
     previous_text: str,
     current_text: str,
@@ -447,6 +441,7 @@ def merge_rolling_window_transcript(
         new_segment=new_segment,
         protected_prefix=protected_prefix,
     ).text
+
 
 def compute_stream_locked_prefix(
     committed: str,

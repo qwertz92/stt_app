@@ -764,9 +764,7 @@ def _runners_that_record_their_calls(monkeypatch) -> list[str]:
     return called
 
 
-def test_an_english_only_model_is_not_run_in_another_language(
-    tmp_path, monkeypatch
-):
+def test_an_english_only_model_is_not_run_in_another_language(tmp_path, monkeypatch):
     """The Granite CTC graph takes no language input: asked for German it
     fell back to Auto with a log line, decoded English, and the stored run
     said `de` -- a German measurement that never happened (2026-09-19,
@@ -799,7 +797,14 @@ def test_an_english_only_model_is_not_run_in_another_language(
 
 @pytest.mark.parametrize(
     ("given", "received"),
-    [(None, None), ("", None), ("  ", None), ("\t", None), (" de ", "de"), ("en", "en")],
+    [
+        (None, None),
+        ("", None),
+        ("  ", None),
+        ("\t", None),
+        (" de ", "de"),
+        ("en", "en"),
+    ],
 )
 def test_a_blank_language_is_no_language(tmp_path, monkeypatch, given, received):
     """`--language " "` is a truthy string, so `language or default` kept it:
@@ -1094,8 +1099,7 @@ def test_a_long_faster_whisper_run_can_be_canceled_between_segments(
         )
 
     assert len(consumed) <= stop_after + 2, (
-        f"the whole recording was decoded before the cancel: {len(consumed)} "
-        "segments"
+        f"the whole recording was decoded before the cancel: {len(consumed)} segments"
     )
 
 
@@ -1121,8 +1125,7 @@ def test_the_download_script_default_follows_the_app_default():
 
     assert f"default: {DEFAULT_MODEL_SIZE}" in result.stdout, result.stdout
     assert DEFAULT_MODEL_SIZE in MODEL_REPO_MAP, (
-        f"the default model {DEFAULT_MODEL_SIZE!r} is not one the script can "
-        "download"
+        f"the default model {DEFAULT_MODEL_SIZE!r} is not one the script can download"
     )
 
 
@@ -1156,9 +1159,9 @@ def test_a_second_ctrl_c_is_not_swallowed_by_the_wind_down_wait():
         real_join(worker, 5.0)
 
     assert len(joins) >= 2, f"the wait was not a poll loop: {joins}"
-    assert all(
-        timeout is not None and timeout <= 0.2 for timeout in joins
-    ), f"a single long join swallows further interrupts: {joins}"
+    assert all(timeout is not None and timeout <= 0.2 for timeout in joins), (
+        f"a single long join swallows further interrupts: {joins}"
+    )
 
 
 def test_a_case_that_finished_as_the_interrupt_arrived_is_kept():

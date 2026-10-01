@@ -130,13 +130,17 @@ def _certificate_failure() -> Exception:
     [
         (
             "mirrored ONNX model, Hugging Face refused",
-            ("Model download for 'onnx-community/x' failed: {cause}. "
-             "See docs/models.md."),
+            (
+                "Model download for 'onnx-community/x' failed: {cause}. "
+                "See docs/models.md."
+            ),
         ),
         (
             "both sources failed",
-            ("Model download for 'onnx-community/x' failed on Hugging Face "
-             "({cause}) and on the ModelScope mirror (connection timed out)."),
+            (
+                "Model download for 'onnx-community/x' failed on Hugging Face "
+                "({cause}) and on the ModelScope mirror (connection timed out)."
+            ),
         ),
     ],
 )
@@ -225,9 +229,7 @@ def test_the_manual_steps_fetch_the_commit_a_pinned_model_is_pinned_to(capsys):
 
     module._print_ssl_help("parakeet-tdt-0.6b-v3-ultra")
     pinned = capsys.readouterr().err
-    assert (
-        f"git -C parakeet-tdt-0.6b-v3-ultra-onnx checkout {revision}" in pinned
-    )
+    assert f"git -C parakeet-tdt-0.6b-v3-ultra-onnx checkout {revision}" in pinned
     assert (
         "https://huggingface.co/Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx/"
         f"tree/{revision}" in pinned

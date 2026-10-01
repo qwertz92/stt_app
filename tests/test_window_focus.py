@@ -39,9 +39,7 @@ class _FakeUser32:
         return self.foreground
 
     def GetWindowThreadProcessId(self, hwnd, lp) -> int:
-        lp._obj.value = (
-            self.own_process_id if hwnd in self.own_windows else 4242
-        )
+        lp._obj.value = self.own_process_id if hwnd in self.own_windows else 4242
         return 1
 
     def GetWindowLongW(self, hwnd, _index) -> int:

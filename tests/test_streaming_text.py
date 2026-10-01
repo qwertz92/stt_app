@@ -90,7 +90,10 @@ def test_rolling_window_merge_replaces_rather_than_appends_when_unalignable():
     ):
         accumulated = merge_rolling_window_transcript(accumulated, hallucination)
 
-    assert len(accumulated.split()) <= len(["so", "this", "is", "the", "real", "dictation", "i", "spoke"]) + 5
+    assert (
+        len(accumulated.split())
+        <= len(["so", "this", "is", "the", "real", "dictation", "i", "spoke"]) + 5
+    )
 
 
 def test_rolling_window_merge_still_stitches_a_normal_overlap():
@@ -187,8 +190,7 @@ def test_new_segment_window_is_appended_not_aligned():
     )
 
     assert merged == (
-        "the first thing i said before the pause "
-        "and now something completely different"
+        "the first thing i said before the pause and now something completely different"
     )
 
 
@@ -301,9 +303,7 @@ def test_the_protected_prefix_never_duplicates_text():
     )
     # And a window that does NOT contain the floor still gets it back.
     assert (
-        merge_rolling_window_transcript(
-            previous, "zeta eta", protected_prefix=floor
-        )
+        merge_rolling_window_transcript(previous, "zeta eta", protected_prefix=floor)
         == f"{floor} zeta eta"
     )
 
@@ -500,9 +500,7 @@ def test_a_seam_that_discards_more_than_it_explains_is_refused(junk_words):
     junk = " ".join(f"j{index}" for index in range(junk_words))
     window = f"{junk} ist noch nicht fertig und wird".strip()
 
-    merged = merge_rolling_window_transcript(
-        _DRIFTED, window, protected_prefix=_FLOOR
-    )
+    merged = merge_rolling_window_transcript(_DRIFTED, window, protected_prefix=_FLOOR)
     assert merged.startswith(_FLOOR), merged
     assert merged.endswith("und wird"), merged
     assert junk in merged, "the window was dropped instead of welded on"
@@ -626,8 +624,7 @@ def test_a_trailing_window_still_merges_on_one_real_word():
     least one real word.
     """
     previous = (
-        "die spracherkennung wandelt sprache in text um und das ist sehr "
-        "praktisch ..."
+        "die spracherkennung wandelt sprache in text um und das ist sehr praktisch ..."
     )
 
     merged = merge_rolling_window_transcript(
@@ -645,10 +642,7 @@ def test_the_default_caller_semantics_are_the_safe_ones():
     parameter defaults to the whole-text reading rather than the other way
     round.
     """
-    assert (
-        append_only_stream_partial_candidate("Ja ...", "Ja . wir")
-        == "Ja . wir"
-    )
+    assert append_only_stream_partial_candidate("Ja ...", "Ja . wir") == "Ja . wir"
     assert (
         append_only_stream_partial_candidate(
             "Ja ...", "Ja . wir", current_is_a_trailing_window=True

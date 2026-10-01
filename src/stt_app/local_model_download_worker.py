@@ -10,6 +10,7 @@ directory was not good enough, is in `model_download_progress`.
 A worker that reports nothing is a supported case: the parent simply keeps
 measuring the directory, which is what every build before this one did.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,9 +84,7 @@ class ProgressReporter:
                 return
             # A changed total is published at once: it is what the percentage
             # is measured against, and it settles in the first second.
-            total_changed = (
-                self._emitted is not None and sample[1] != self._emitted[1]
-            )
+            total_changed = self._emitted is not None and sample[1] != self._emitted[1]
             if (
                 self._emitted is not None
                 and not total_changed

@@ -305,7 +305,6 @@ def transcribe_in_parts(
     close_gap(start)
     if not texts and empty_with_sound:
         raise TranscriptionError(
-            f"No part of the {count} returned text, although the recording "
-            "holds sound."
+            f"No part of the {count} returned text, although the recording holds sound."
         )
     return " ".join(pieces)

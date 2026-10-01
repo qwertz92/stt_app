@@ -38,8 +38,8 @@ def _no_real_tray_icon(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "create_tray_icon",
-        lambda parent, icon, tooltip=None, logger=None: (
-            QtWidgets.QSystemTrayIcon(icon, parent)
+        lambda parent, icon, tooltip=None, logger=None: QtWidgets.QSystemTrayIcon(
+            icon, parent
         ),
     )
 
@@ -840,9 +840,7 @@ def test_restore_overlay_after_settings_save_applies_corner_and_compacts():
     assert overlay.moved_to == "top-right"
     assert overlay.always_on_top_values == [True]
     assert overlay.compact_policy_calls == 1
-    assert overlay.compact_calls == 0, (
-        "the save path compacts unconditionally again"
-    )
+    assert overlay.compact_calls == 0, "the save path compacts unconditionally again"
 
 
 def test_restore_after_system_resume_refreshes_hotkeys_and_overlay():
@@ -999,11 +997,14 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     )
     legacy_state = SimpleNamespace(recording_id="", created_at="")
 
-    assert _last_recording_already_transcribed(
-        store,
-        history,
-        state=legacy_state,
-    ) is True
+    assert (
+        _last_recording_already_transcribed(
+            store,
+            history,
+            state=legacy_state,
+        )
+        is True
+    )
     assert store.has_recoverable_recording() is False
 
 
@@ -1105,14 +1106,18 @@ def test_the_overlay_insert_action_reaches_the_failed_text_slot_not_the_tray_re_
     from stt_app.overlay_ui import OverlayUI
 
     assert set(vars(_OverlaySignals)) >= {
-        name for name, value in vars(OverlayUI).items() if isinstance(value, QtCore.Signal)
+        name
+        for name, value in vars(OverlayUI).items()
+        if isinstance(value, QtCore.Signal)
     }
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = _OverlaySignals()
     controller = FakeController()
     history_opened = []
 
-    main_module._connect_overlay_actions(overlay, controller, lambda: history_opened.append(1))
+    main_module._connect_overlay_actions(
+        overlay, controller, lambda: history_opened.append(1)
+    )
     overlay.insert_again_requested.emit()
     overlay.record_toggle_requested.emit()
     overlay.history_requested.emit()
@@ -1228,7 +1233,7 @@ def test_a_legacy_match_with_a_gap_does_not_complete_its_recording(tmp_path):
     )
     legacy_state = SimpleNamespace(recording_id="", created_at="")
 
-    assert _last_recording_already_transcribed(
-        store, history, state=legacy_state
-    ) is True
+    assert (
+        _last_recording_already_transcribed(store, history, state=legacy_state) is True
+    )
     assert store.audio_path.is_file()

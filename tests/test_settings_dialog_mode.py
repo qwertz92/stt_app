@@ -786,8 +786,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     assert dialog.remote_model_combo.isEnabled() is False
     assert "Universal-3.6 Pro Realtime" in dialog.remote_model_note_label.text()
     assert (
-        "batch transcription and audio imports"
-        in dialog.remote_model_note_label.text()
+        "batch transcription and audio imports" in dialog.remote_model_note_label.text()
     )
     _ = app
 
@@ -933,8 +932,10 @@ def test_settings_history_list_formats_utc_display_timezone(tmp_path):
     dialog._refresh_history_list()
 
     assert dialog.history_timezone_combo.currentData() == "utc"
-    assert dialog.history_list.item(0).text().startswith(
-        "2026-06-24 16:45:00 UTC | local/small"
+    assert (
+        dialog.history_list.item(0)
+        .text()
+        .startswith("2026-06-24 16:45:00 UTC | local/small")
     )
     _ = app
 
@@ -1311,9 +1312,7 @@ def test_settings_history_export_writes_file(monkeypatch, tmp_path):
     _ = app
 
 
-def test_settings_history_clear_empties_store_after_confirmation(
-    monkeypatch, tmp_path
-):
+def test_settings_history_clear_empties_store_after_confirmation(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
     history_store.save([_history_entry("alpha"), _history_entry("beta")])
@@ -1388,9 +1387,7 @@ def test_settings_history_import_appends_entries(monkeypatch, tmp_path):
     _ = app
 
 
-def test_settings_history_import_overflow_switches_to_unlimited(
-    monkeypatch, tmp_path
-):
+def test_settings_history_import_overflow_switches_to_unlimited(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
     history_store.save([_history_entry("old-1"), _history_entry("old-2")])
@@ -1592,8 +1589,7 @@ def test_settings_tab_widths_stay_stable_when_selection_changes():
 
     tab_bar = dialog.tabs.tabBar()
     initial_widths = [
-        tab_bar.tabRect(index).width()
-        for index in range(dialog.tabs.count())
+        tab_bar.tabRect(index).width() for index in range(dialog.tabs.count())
     ]
     for index in range(dialog.tabs.count()):
         dialog.tabs.setCurrentIndex(index)
@@ -1724,10 +1720,9 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     )
     monkeypatch.setattr(
         "stt_app.settings_dialog.delete_cached_model",
-        lambda _model_name, _model_dir="": calls.__setitem__(
-            "delete", calls["delete"] + 1
-        )
-        or 1,
+        lambda _model_name, _model_dir="": (
+            calls.__setitem__("delete", calls["delete"] + 1) or 1
+        ),
     )
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
@@ -2100,9 +2095,7 @@ def test_a_crashed_benchmark_child_keeps_the_cases_it_already_streamed(
             "Benchmark worker exited with code 1 after streaming 1 completed case(s)"
         )
 
-    monkeypatch.setattr(
-        "stt_app.settings_dialog.run_benchmark_cases", _crashing_run
-    )
+    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", _crashing_run)
 
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -2301,12 +2294,9 @@ def test_a_language_the_user_really_changed_still_wins():
         AppSettings(model_size="small", language_mode="auto")
     )
     choices = [
-        dialog.language_combo.itemData(i)
-        for i in range(dialog.language_combo.count())
+        dialog.language_combo.itemData(i) for i in range(dialog.language_combo.count())
     ]
-    picked = [
-        str(choice) for choice in choices if choice and str(choice) != "auto"
-    ]
+    picked = [str(choice) for choice in choices if choice and str(choice) != "auto"]
     # Two *different* options. Taking the first one and hardcoding "de" for the
     # store made both equal (the list starts "auto", "de", "en"), so the mutant
     # that defers unconditionally returned the expected value and survived.
@@ -2314,9 +2304,7 @@ def test_a_language_the_user_really_changed_still_wins():
     assert explicit != overlay_pick
     dialog.language_combo.setCurrentIndex(dialog.language_combo.findData(explicit))
     # And the overlay picks something else at the same time.
-    store._settings = dataclasses.replace(
-        store._settings, language_mode=overlay_pick
-    )
+    store._settings = dataclasses.replace(store._settings, language_mode=overlay_pick)
 
     dialog._save()
 
@@ -3108,7 +3096,9 @@ def test_benchmark_tab_is_last():
     _ = app
 
 
-def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(monkeypatch):
+def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(
+    monkeypatch,
+):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -3297,7 +3287,10 @@ def test_settings_dialog_treats_empty_persistent_cache_as_valid(monkeypatch):
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     _wait_for_the_deferred_local_refresh(dialog, scan_finishes=False)
 
-    assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
+    assert (
+        "Showing the last known local models"
+        in dialog.local_models_scan_status_label.text()
+    )
     _ = app
 
 
@@ -3360,8 +3353,7 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
         " - Not downloaded, ONNX/WebGPU q4, batch only"
     )
     assert rows["nemotron-3.5-asr-streaming-0.6b-int4"].endswith(
-        " - Not downloaded, ORT GenAI INT4, 560 ms streaming, "
-        "batch and true streaming"
+        " - Not downloaded, ORT GenAI INT4, 560 ms streaming, batch and true streaming"
     )
     # The faster-whisper sizes stream and carry no runtime label.
     assert rows["small"].endswith(" - Not downloaded")
@@ -3419,9 +3411,7 @@ def test_local_model_refresh_preserves_current_selection_and_scroll():
     restored_items = [
         dialog.local_models_list.item(index)
         for index in range(dialog.local_models_list.count())
-        if str(
-            dialog.local_models_list.item(index).data(QtCore.Qt.UserRole) or ""
-        )
+        if str(dialog.local_models_list.item(index).data(QtCore.Qt.UserRole) or "")
         == target_model
     ]
     assert len(restored_items) == 1
@@ -3479,10 +3469,19 @@ def test_benchmark_controls_explain_their_options():
     assert "Cohere, Granite 4.0/4.1 and Nemotron" in device_tooltip
     assert "Granite Speech 5.0" not in device_tooltip
     assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
-    assert "Beam size controls decoding breadth" in dialog.benchmark_beam_size_spin.toolTip()
-    assert "fixed language removes one source of model guesswork" in dialog.benchmark_language_combo.toolTip()
+    assert (
+        "Beam size controls decoding breadth"
+        in dialog.benchmark_beam_size_spin.toolTip()
+    )
+    assert (
+        "fixed language removes one source of model guesswork"
+        in dialog.benchmark_language_combo.toolTip()
+    )
     assert "first-run caches" in dialog.benchmark_warmup_checkbox.toolTip()
-    assert "Filters silence before transcription" in dialog.benchmark_vad_checkbox.toolTip()
+    assert (
+        "Filters silence before transcription"
+        in dialog.benchmark_vad_checkbox.toolTip()
+    )
     _ = app
 
 
@@ -3577,14 +3576,8 @@ def test_remote_provider_rows_limit_key_and_badge_growth():
 
     assert dialog.assemblyai_key_edit.maximumWidth() == 16777215
     expected_width = dialog._provider_status_badge_width()
-    assert (
-        dialog._provider_status_labels["assemblyai"].maximumWidth()
-        == expected_width
-    )
-    assert (
-        dialog._provider_status_labels["assemblyai"].minimumWidth()
-        == expected_width
-    )
+    assert dialog._provider_status_labels["assemblyai"].maximumWidth() == expected_width
+    assert dialog._provider_status_labels["assemblyai"].minimumWidth() == expected_width
     _ = app
 
 
@@ -3907,10 +3900,7 @@ def test_save_persists_optional_show_overlay_hotkey():
     )
 
     # The overlay hotkey ships preset for the out-of-the-box experience.
-    assert (
-        dialog.show_overlay_hotkey_edit.keySequence().toString()
-        == "Ctrl+Alt+F11"
-    )
+    assert dialog.show_overlay_hotkey_edit.keySequence().toString() == "Ctrl+Alt+F11"
 
     # Clearing the field disables the hotkey: it must save as empty, not
     # fall back to any default combo.
@@ -3919,9 +3909,7 @@ def test_save_persists_optional_show_overlay_hotkey():
     assert store.saved is not None
     assert store.saved.show_overlay_hotkey == ""
 
-    dialog.show_overlay_hotkey_edit.setKeySequence(
-        QtGui.QKeySequence("Ctrl+Alt+F10")
-    )
+    dialog.show_overlay_hotkey_edit.setKeySequence(QtGui.QKeySequence("Ctrl+Alt+F10"))
     dialog._save()
     assert store.saved.show_overlay_hotkey == "Ctrl+Alt+F10"
     _ = app
@@ -3994,17 +3982,13 @@ def test_save_rejects_show_overlay_hotkey_conflicts(monkeypatch):
     )
 
     # Conflicts with the main recording hotkey (default Ctrl+Alt+Space).
-    dialog.show_overlay_hotkey_edit.setKeySequence(
-        QtGui.QKeySequence("Ctrl+Alt+Space")
-    )
+    dialog.show_overlay_hotkey_edit.setKeySequence(QtGui.QKeySequence("Ctrl+Alt+Space"))
     dialog._save()
     assert errors == ["Hotkey conflict"]
     assert store.saved is None
 
     # Conflicts with the cancel hotkey (default Ctrl+Alt+F12).
-    dialog.show_overlay_hotkey_edit.setKeySequence(
-        QtGui.QKeySequence("Ctrl+Alt+F12")
-    )
+    dialog.show_overlay_hotkey_edit.setKeySequence(QtGui.QKeySequence("Ctrl+Alt+F12"))
     dialog._save()
     assert errors == ["Hotkey conflict", "Hotkey conflict"]
     assert store.saved is None
@@ -4068,10 +4052,7 @@ def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
             continue
         assert isinstance(widget, QtWidgets.QScrollArea)
         assert widget.widgetResizable() is True
-        assert (
-            widget.sizeAdjustPolicy()
-            == QtWidgets.QAbstractScrollArea.AdjustIgnored
-        )
+        assert widget.sizeAdjustPolicy() == QtWidgets.QAbstractScrollArea.AdjustIgnored
         assert widget.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
 
     assert dialog.tabs.tabBar().usesScrollButtons() is True
@@ -4516,9 +4497,7 @@ def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
         def setText(self, text: str) -> None:
             copied.append(text)
 
-    monkeypatch.setattr(
-        QtGui.QGuiApplication, "clipboard", lambda: _FakeClipboard()
-    )
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _FakeClipboard())
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings(history_max_items=20)),
         secret_store=_FakeSecretStore(),
@@ -4575,7 +4554,7 @@ def test_waiting_downloads_show_their_place_in_the_queue():
 
 
 def test_a_single_waiting_download_shows_no_place_number():
-    """"Queued, 1 of 1" is noise; the number only helps when there is an order."""
+    """ "Queued, 1 of 1" is noise; the number only helps when there is an order."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -4649,7 +4628,7 @@ def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(
 
 
 def test_the_delete_prompt_names_every_folder_it_will_remove(monkeypatch, tmp_path):
-    """"Removes downloaded files from disk" did not say which disk.
+    """ "Removes downloaded files from disk" did not say which disk.
 
     The inventory searches the Model Dir *and* the default Hugging Face cache,
     so a model listed once can live in either, and the shared default cache
@@ -4750,9 +4729,7 @@ def test_a_real_change_still_saves_next_to_an_overlay_one():
     )
     emitted: list[int] = []
     dialog.settings_changed.connect(lambda: emitted.append(1))
-    store._settings = dataclasses.replace(
-        store._settings, overlay_opacity_percent=55
-    )
+    store._settings = dataclasses.replace(store._settings, overlay_opacity_percent=55)
     dialog.keep_clipboard_checkbox.setChecked(True)
 
     dialog._save()
@@ -4881,9 +4858,7 @@ def test_the_merge_still_holds_on_the_second_save_of_one_session(monkeypatch):
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
         "question",
-        lambda _p, _t, text, *a, **k: (
-            asked.append(text) or QtWidgets.QMessageBox.Yes
-        ),
+        lambda _p, _t, text, *a, **k: asked.append(text) or QtWidgets.QMessageBox.Yes,
     )
 
     # Two unrelated edits, one per save. Neither says anything about history.
@@ -4913,9 +4888,7 @@ def test_an_edit_taken_back_in_the_same_session_is_still_written():
     the second save finds the box agreeing with the dialog-open value again,
     calls it no edit, and leaves the first save's value on disk.
     """
-    dialog, store, app = _dialog_with_store(
-        AppSettings(tray_middle_click_toggle=True)
-    )
+    dialog, store, app = _dialog_with_store(AppSettings(tray_middle_click_toggle=True))
 
     dialog.tray_middle_click_checkbox.setChecked(False)
     dialog._save()

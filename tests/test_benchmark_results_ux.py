@@ -1,4 +1,5 @@
 """Benchmark results: run-order column, three-state sorting, no layout jump."""
+
 from __future__ import annotations
 
 import json
@@ -349,9 +350,7 @@ def test_the_benchmark_tab_addresses_the_panels_own_widgets():
     assert dialog.benchmark_results_table is panel.results_table
     assert dialog.benchmark_summary_text is panel.details_view
     assert dialog.benchmark_results_splitter is panel.splitter
-    assert (
-        dialog.benchmark_transcripts_table is panel.details_view.transcripts_table
-    )
+    assert dialog.benchmark_transcripts_table is panel.details_view.transcripts_table
     assert dialog.benchmark_transcript_text is panel.details_view.transcript_text
     _ = app
 

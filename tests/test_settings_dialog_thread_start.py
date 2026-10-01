@@ -112,8 +112,7 @@ def test_a_model_scan_that_cannot_start_does_not_leave_the_tab_scanning(monkeypa
     # The scan's own status line. It used to write the shared action label,
     # which belongs to the download -- see the download test below.
     assert (
-        "Could not start the model scan"
-        in dialog.local_models_scan_status_label.text()
+        "Could not start the model scan" in dialog.local_models_scan_status_label.text()
     )
 
 

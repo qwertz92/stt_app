@@ -37,7 +37,9 @@ def test_a_second_downloader_waits_instead_of_racing_the_first():
     thread.start()
     started.wait(timeout=2)
     time.sleep(0.3)
-    assert outcome == [], "second downloader must not run while the first holds the slot"
+    assert outcome == [], (
+        "second downloader must not run while the first holds the slot"
+    )
 
     coordinator.release("m", "", succeeded=True)
     thread.join(timeout=5)
@@ -50,9 +52,7 @@ def test_waiting_for_the_same_model_joins_instead_of_downloading_twice():
 
     outcome: list[str] = []
     thread = threading.Thread(
-        target=lambda: outcome.append(
-            coordinator.acquire("same", "", explicit=True)
-        ),
+        target=lambda: outcome.append(coordinator.acquire("same", "", explicit=True)),
         daemon=True,
     )
     thread.start()
@@ -69,9 +69,7 @@ def test_a_failed_download_does_not_let_the_waiter_skip_its_own():
 
     outcome: list[str] = []
     thread = threading.Thread(
-        target=lambda: outcome.append(
-            coordinator.acquire("same", "", explicit=True)
-        ),
+        target=lambda: outcome.append(coordinator.acquire("same", "", explicit=True)),
         daemon=True,
     )
     thread.start()
@@ -255,9 +253,7 @@ def test_cancelling_while_waiting_for_another_process_frees_the_slot(
         def release(self):  # pragma: no cover - never reached
             raise AssertionError("released a lock that was never acquired")
 
-    monkeypatch.setattr(
-        coordinator_module, "CrossProcessLock", _NeverAvailableLock
-    )
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _NeverAvailableLock)
     coordinator = coordinator_module.ModelDownloadCoordinator()
 
     with pytest.raises(coordinator_module.ModelDownloadCanceled):
@@ -316,6 +312,7 @@ def test_an_unlockable_filesystem_still_allows_downloads(monkeypatch, tmp_path):
     assert ran == [True]
     assert coordinator.active() is None
 
+
 def test_waiting_for_another_process_is_observable_and_clears(monkeypatch, tmp_path):
     """The UI must be able to say why nothing is happening.
 
@@ -357,9 +354,7 @@ def test_waiting_for_another_process_is_observable_and_clears(monkeypatch, tmp_p
     assert coordinator.waiting_for_other_process() is False
 
 
-def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(
-    monkeypatch, tmp_path
-):
+def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(monkeypatch, tmp_path):
     from stt_app import model_download_coordinator as coordinator_module
 
     monkeypatch.setattr(
@@ -380,14 +375,17 @@ def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(
     coordinator = coordinator_module.ModelDownloadCoordinator()
 
     with pytest.raises(coordinator_module.ModelDownloadCanceled):
-        coordinator.acquire("m", r"C:\models", explicit=False,
-                            cancel_check=lambda: True)
+        coordinator.acquire(
+            "m", r"C:\models", explicit=False, cancel_check=lambda: True
+        )
 
     assert coordinator.waiting_for_other_process() is False
     assert coordinator.active() is None
 
 
-def test_a_raise_while_publishing_the_held_lock_still_releases_it(monkeypatch, tmp_path):
+def test_a_raise_while_publishing_the_held_lock_still_releases_it(
+    monkeypatch, tmp_path
+):
     """An OS lock that is held but not stored is stranded for the whole user.
 
     `acquire()` one frame up gives the in-process slot back on any exception,

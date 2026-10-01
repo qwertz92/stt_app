@@ -188,9 +188,7 @@ def download_destination_dir(model_name: str, model_dir: str = "") -> Path | Non
         return None
 
     base_dir = (
-        model_dir.strip()
-        if model_dir and model_dir.strip()
-        else default_hf_cache_dir()
+        model_dir.strip() if model_dir and model_dir.strip() else default_hf_cache_dir()
     )
     return Path(base_dir) / f"models--{repo_id.replace('/', '--')}"
 
@@ -663,9 +661,7 @@ def _download_faster_whisper_via_modelscope(
         ) from hf_error
 
     cache_dir = (
-        model_dir.strip()
-        if model_dir and model_dir.strip()
-        else default_hf_cache_dir()
+        model_dir.strip() if model_dir and model_dir.strip() else default_hf_cache_dir()
     )
     logger.warning(
         "Hugging Face download failed for %s (%s); trying ModelScope mirror.",
@@ -1317,7 +1313,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # Do not decode silence. faster-whisper invents words from it — that is
         # why the batch silence gate exists — and here every invented window is
         # unalignable, so it used to replace the whole accumulated transcript.
-        new_audio = bytes(session.pcm_buffer[session.result.last_partial_size:])
+        new_audio = bytes(session.pcm_buffer[session.result.last_partial_size :])
         quiet_slice = self._stream_slice_is_quiet(new_audio)
         self._warn_once_if_the_room_is_never_quiet(session, quiet_slice)
         if quiet_slice:
@@ -1452,11 +1448,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         #   linearly with the pause. A repeat leaves the text unchanged, so
         #   requiring growth skips exactly that case while real speech, which
         #   adds words, advances normally.
-        if (
-            previous_text
-            and merge.aligned
-            and merge.text != previous_text
-        ):
+        if previous_text and merge.aligned and merge.text != previous_text:
             session.result.segment_floor = previous_text
 
         # Emit the *merged* transcript, not the raw window. The controller kept
@@ -1623,9 +1615,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         )
         if not self._pcm_has_enough_speech_to_append(snapshot):
             return False
-        return not (
-            confirm_with_speech_model and self._speech_model_refuses(snapshot)
-        )
+        return not (confirm_with_speech_model and self._speech_model_refuses(snapshot))
 
     def _decoded_window_has_speech(self, session: _StreamingSession) -> bool:
         """The same question about the window that was ALREADY decoded.
@@ -1751,6 +1741,4 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # overlap where there is none.
         session.result.last_window_start = window_start
         session.result.last_window_end = window_end
-        return self.transcribe_batch(
-            pcm16_wav_bytes(snapshot, self.stream_sample_rate)
-        )
+        return self.transcribe_batch(pcm16_wav_bytes(snapshot, self.stream_sample_rate))

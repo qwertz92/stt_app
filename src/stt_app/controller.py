@@ -135,9 +135,7 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
 # silence. The silence gate already skipped true quiet recordings. Treat the
 # empty result as a failure so Retry keeps the audio and the overlay does not
 # look like the recording never happened.
-_EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
-    "The model returned no text for this recording."
-)
+_EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording."
 
 # The last-recording error for a transcript with a gap marker. The recording
 # is kept rather than completed, so the stretch the marker names can still be
@@ -594,9 +592,9 @@ class DictationController(QtCore.QObject):
         # with its single history entry or None for a coalesced paste. The
         # re-paste pastes this one: it is the last text that reached a
         # window, while Copy and Edit keep the shown transcript.
-        self._delivered_after_shown: tuple[str, TranscriptHistoryEntry | None] | None = (
-            None
-        )
+        self._delivered_after_shown: (
+            tuple[str, TranscriptHistoryEntry | None] | None
+        ) = None
         # Finished transcripts whose paste failed or could not be confirmed,
         # oldest first; see `_UndeliveredInsert`.
         self._undelivered_inserts: list[_UndeliveredInsert] = []
@@ -897,9 +895,7 @@ class DictationController(QtCore.QObject):
             try:
                 executor.shutdown(wait=False, cancel_futures=True)
             except BaseException:
-                self._logger.exception(
-                    "Failed to shut down the %s executor", name
-                )
+                self._logger.exception("Failed to shut down the %s executor", name)
 
     def _flush_pending_clipboard_restore(self) -> None:
         """Put the user's clipboard back before the process goes away.
@@ -1102,8 +1098,7 @@ class DictationController(QtCore.QObject):
         if not self._repaste_hotkey_registration_ok:
             self._paint_status_keeping_offer(
                 "Error",
-                self._repaste_hotkey_notice
-                or "Re-paste hotkey registration failed.",
+                self._repaste_hotkey_notice or "Re-paste hotkey registration failed.",
             )
             return
         if self._preload_owns_overlay():
@@ -1964,10 +1959,7 @@ class DictationController(QtCore.QObject):
         self,
         capture: AudioCapture | None = None,
     ) -> None:
-        if (
-            capture is not None
-            and self._audio_callback_watchdog_capture is not capture
-        ):
+        if capture is not None and self._audio_callback_watchdog_capture is not capture:
             return
         self._audio_callback_watchdog_timer.stop()
         self._audio_callback_watchdog_capture = None
@@ -2036,8 +2028,7 @@ class DictationController(QtCore.QObject):
                 try:
                     self._last_recording_store.mark_failed(
                         detail,
-                        expected_recording_id=self._last_persisted_recording_id
-                        or None,
+                        expected_recording_id=self._last_persisted_recording_id or None,
                     )
                 except Exception:
                     self._logger.exception("Failed to mark stalled recording")
@@ -2069,9 +2060,7 @@ class DictationController(QtCore.QObject):
                 min_speech_ms=VAD_MIN_SPEECH_MS,
                 max_silence_ms=VAD_MAX_SILENCE_MS,
             )
-        input_device_name = str(
-            getattr(self._settings, "input_device_name", "") or ""
-        )
+        input_device_name = str(getattr(self._settings, "input_device_name", "") or "")
         return AudioCapture(
             sample_rate=AUDIO_SAMPLE_RATE,
             channels=AUDIO_CHANNELS,
@@ -2382,9 +2371,7 @@ class DictationController(QtCore.QObject):
             # ended; demoted behind a newer recording, its completion
             # deleted that recording's audio and state (the wave-18 reach
             # lens, on the real store).
-            source_recording_id = (
-                self._last_persisted_recording_id if persisted else ""
-            )
+            source_recording_id = self._last_persisted_recording_id if persisted else ""
 
             if self._streaming_recording:
                 self._focus_poll_timer.stop()
@@ -2506,8 +2493,7 @@ class DictationController(QtCore.QObject):
         if enabled and peak_level >= threshold:
             speech, speech_note = self._measure_speech_for_silence_gate(wav_bytes)
         self._logger.info(
-            "recording_peak_level level=%.4f silence_gate_enabled=%s "
-            "threshold=%.4f %s",
+            "recording_peak_level level=%.4f silence_gate_enabled=%s threshold=%.4f %s",
             peak_level,
             enabled,
             threshold,
@@ -2518,8 +2504,7 @@ class DictationController(QtCore.QObject):
         kept = (
             "the recording is kept"
             if persisted
-            else "the recording could not be kept as the last recording (see "
-            "the log)"
+            else "the recording could not be kept as the last recording (see the log)"
         )
         if peak_level < threshold:
             reason = "level"
@@ -2559,8 +2544,7 @@ class DictationController(QtCore.QObject):
             try:
                 self._last_recording_store.mark_canceled(
                     store_text,
-                    expected_recording_id=self._last_persisted_recording_id
-                    or None,
+                    expected_recording_id=self._last_persisted_recording_id or None,
                 )
             except Exception:
                 self._logger.exception("Failed to mark silence-gated recording")
@@ -3142,9 +3126,7 @@ class DictationController(QtCore.QObject):
         try:
             self._restart_warm_microphone_stream_after_resume()
         except BaseException:
-            self._logger.exception(
-                "Failed to restart the warm microphone after resume"
-            )
+            self._logger.exception("Failed to restart the warm microphone after resume")
 
     def _close_cached_transcriber(self, transcriber) -> None:
         if transcriber is None or not hasattr(transcriber, "close"):
@@ -3325,9 +3307,7 @@ class DictationController(QtCore.QObject):
         write)."""
         if job is not None and not job.marks_last_recording:
             return
-        expected = (
-            job.source_recording_id if job is not None else session_recording_id
-        )
+        expected = job.source_recording_id if job is not None else session_recording_id
         try:
             self._last_recording_store.mark_failed(
                 error_text,
@@ -3575,9 +3555,7 @@ class DictationController(QtCore.QObject):
         # listed, it flashed the panel open and shut under a "Transcribing"
         # title for a paste the overlay already showed as Done.
         visible_jobs = [
-            job
-            for job in self._jobs.values()
-            if not job.aborting and not job.pace_held
+            job for job in self._jobs.values() if not job.aborting and not job.pace_held
         ]
         total = len(visible_jobs)
         items = [
@@ -3622,8 +3600,7 @@ class DictationController(QtCore.QObject):
         )
         self._undelivered_inserts.append(entry)
         self._logger.info(
-            "undelivered_insert_recorded row=%d may_have_pasted=%s chars=%d "
-            "waiting=%d",
+            "undelivered_insert_recorded row=%d may_have_pasted=%s chars=%d waiting=%d",
             -self._undelivered_row_counter,
             may_have_pasted,
             len(transcript),
@@ -3635,16 +3612,16 @@ class DictationController(QtCore.QObject):
     def _insertable_undelivered(self) -> list[_UndeliveredInsert]:
         """The waiting transcripts the re-paste may paste: never one whose
         keystroke already went out."""
-        return [entry for entry in self._undelivered_inserts if not entry.may_have_pasted]
+        return [
+            entry for entry in self._undelivered_inserts if not entry.may_have_pasted
+        ]
 
     def _still_insertable(
         self, rows: Sequence[_UndeliveredInsert]
     ) -> tuple[_UndeliveredInsert, ...]:
         """Those of `rows` still listed and insertable, by identity."""
         insertable = self._insertable_undelivered()
-        return tuple(
-            row for row in rows if any(row is entry for entry in insertable)
-        )
+        return tuple(row for row in rows if any(row is entry for entry in insertable))
 
     def _retire_undelivered(self, entries: Sequence[_UndeliveredInsert]) -> None:
         """Drop exactly the rows a successful paste was built from.
@@ -3657,9 +3634,7 @@ class DictationController(QtCore.QObject):
         delivered = {id(entry) for entry in entries}
         before = len(self._undelivered_inserts)
         self._undelivered_inserts = [
-            entry
-            for entry in self._undelivered_inserts
-            if id(entry) not in delivered
+            entry for entry in self._undelivered_inserts if id(entry) not in delivered
         ]
         if len(self._undelivered_inserts) != before:
             self._update_queue_overlay()
@@ -3983,9 +3958,7 @@ class DictationController(QtCore.QObject):
         """
         if settings.engine == DEFAULT_ENGINE:
             return self._executor
-        if request_token is not None and self._has_undelivered_older_job(
-            request_token
-        ):
+        if request_token is not None and self._has_undelivered_older_job(request_token):
             return self._executor
         return self._stream_finalize_executor
 
@@ -4776,9 +4749,7 @@ class DictationController(QtCore.QObject):
                 # forever and every dictation would quietly build its own
                 # isolated multi-gigabyte runtime.
                 try:
-                    self._set_transcriber_cancel_check(
-                        runtime_lease.transcriber, None
-                    )
+                    self._set_transcriber_cancel_check(runtime_lease.transcriber, None)
                 except BaseException:
                     self._logger.exception(
                         "Failed to clear the preload transcriber cancel hook"
@@ -4937,9 +4908,7 @@ class DictationController(QtCore.QObject):
                 self._set_transcriber_cancel_check(transcriber, lambda: job.aborting)
             transcribe_started_at = time.perf_counter()
             text = transcriber.transcribe_batch(wav_bytes)
-            if not str(text or "").strip() and (
-                job is None or job.mode != "streaming"
-            ):
+            if not str(text or "").strip() and (job is None or job.mode != "streaming"):
                 outcome = "empty_transcript"
                 terminal_kind = "failed"
                 terminal_payload = _EMPTY_MODEL_TRANSCRIPT_MESSAGE
@@ -4995,9 +4964,7 @@ class DictationController(QtCore.QObject):
             # reporting it is strictly better than letting it vanish into the
             # Future.
             outcome = "unexpected_error"
-            self._logger.exception(
-                "Transcription worker raised %s", type(exc).__name__
-            )
+            self._logger.exception("Transcription worker raised %s", type(exc).__name__)
             terminal_kind = "failed"
             terminal_payload = (
                 f"Unexpected transcription error: {type(exc).__name__}: {exc}"
@@ -5020,15 +4987,15 @@ class DictationController(QtCore.QObject):
                     if transcribe_started_at is not None
                     else 0
                 )
-                total_elapsed_ms = round((time.perf_counter() - worker_started_at) * 1000)
+                total_elapsed_ms = round(
+                    (time.perf_counter() - worker_started_at) * 1000
+                )
                 runtime_device = str(getattr(transcriber, "runtime_device", "") or "")
                 gpu_available = getattr(transcriber, "gpu_available", "")
                 runtime_details = str(
                     getattr(transcriber, "runtime_details_text", "") or ""
                 )
-                result_chars = (
-                    len(terminal_payload) if terminal_kind == "ready" else 0
-                )
+                result_chars = len(terminal_payload) if terminal_kind == "ready" else 0
                 self._logger.info(
                     "transcription_timing engine=%s model=%s init_ms=%d "
                     "transcribe_ms=%d total_ms=%d audio_bytes=%d chars=%d "
@@ -5054,11 +5021,15 @@ class DictationController(QtCore.QObject):
                     try:
                         self._set_transcriber_cancel_check(transcriber, None)
                     except BaseException:
-                        self._logger.exception("Failed to clear transcriber cancel hook")
+                        self._logger.exception(
+                            "Failed to clear transcriber cancel hook"
+                        )
                     try:
                         self._set_transcriber_progress_callback(transcriber, None)
                     except BaseException:
-                        self._logger.exception("Failed to clear transcriber progress hook")
+                        self._logger.exception(
+                            "Failed to clear transcriber progress hook"
+                        )
             except BaseException:
                 self._logger.exception("Transcription bookkeeping failed")
             finally:
@@ -5491,9 +5462,7 @@ class DictationController(QtCore.QObject):
         return _TranscriberIdentity(
             engine=engine,
             custom_vocabulary=vocabulary,
-            remote_model=str(
-                getattr(settings, _ENGINE_MODEL_FIELDS[engine], "") or ""
-            ),
+            remote_model=str(getattr(settings, _ENGINE_MODEL_FIELDS[engine], "") or ""),
             azure_endpoint=(
                 getattr(settings, "azure_endpoint", "") if engine == "azure" else ""
             ),
@@ -5561,9 +5530,7 @@ class DictationController(QtCore.QObject):
             # transcribe with a stale language. Every provider implements this
             # through ITranscriber; the lookup keeps duck-typed transcribers
             # (tests, future in-process adapters) working.
-            apply_language = getattr(
-                self._transcriber_cache, "set_language_mode", None
-            )
+            apply_language = getattr(self._transcriber_cache, "set_language_mode", None)
             if callable(apply_language):
                 apply_language(settings.language_mode)
             return self._transcriber_cache
@@ -5689,8 +5656,7 @@ class DictationController(QtCore.QObject):
             rescued = self._current_streaming_partial_text()
             if rescued:
                 self._logger.info(
-                    "streaming_finalize_empty: keeping the live transcript "
-                    "(%d chars).",
+                    "streaming_finalize_empty: keeping the live transcript (%d chars).",
                     len(rescued),
                 )
                 text = rescued
@@ -6344,9 +6310,7 @@ class DictationController(QtCore.QObject):
         pending: list[tuple[_TranscriptionJob, str]],
         *,
         single_group: bool = False,
-    ) -> list[
-        tuple[list[tuple[_TranscriptionJob, str]], str, tuple[object, object]]
-    ]:
+    ) -> list[tuple[list[tuple[_TranscriptionJob, str]], str, tuple[object, object]]]:
         """Group token-ordered deferred results by their insertion target.
 
         Each group is ``(its results, their joined text, its target key)``.
@@ -6655,8 +6619,7 @@ class DictationController(QtCore.QObject):
                         )
                         return
                     self._logger.debug(
-                        "Live insert failed (%d/%d); retrying on the next "
-                        "partial.",
+                        "Live insert failed (%d/%d); retrying on the next partial.",
                         self._stream_insert_failures,
                         STREAMING_LIVE_INSERT_RETRY_LIMIT,
                     )
@@ -7219,9 +7182,7 @@ class DictationController(QtCore.QObject):
                 # copying it over the clipboard is pointless when the paste
                 # itself succeeded -- only the cleanup failed. Report it and
                 # leave the transcript alone.
-                self._logger.warning(
-                    "Insertion reported a post-paste failure: %s", exc
-                )
+                self._logger.warning("Insertion reported a post-paste failure: %s", exc)
                 self._last_insert_error_text = (
                     f"{exc} The text was most likely inserted; check the "
                     "target window before inserting it again."
@@ -7332,9 +7293,7 @@ class DictationController(QtCore.QObject):
         if waiting:
             self._repaste(
                 _join_transcripts([entry.text for entry in waiting]),
-                display_entry=(
-                    waiting[0].history_entry if len(waiting) == 1 else None
-                ),
+                display_entry=(waiting[0].history_entry if len(waiting) == 1 else None),
                 undelivered=waiting,
             )
             return
@@ -7465,8 +7424,7 @@ class DictationController(QtCore.QObject):
             # tail past the text already in the document; a paste in between
             # would land in front of it.
             self.show_overlay_error(
-                f"Wait for the streaming transcript to finish before inserting "
-                f"{what}."
+                f"Wait for the streaming transcript to finish before inserting {what}."
             )
             return
         wait_s = self._paste_pace_wait_s()
@@ -7696,9 +7654,7 @@ class DictationController(QtCore.QObject):
         # Not a session result: the overlay Edit button's confirmation
         # (there is no tray Edit action), painted plainly, hid a pending
         # offer exactly as the refusals above did.
-        self._paint_status_keeping_offer(
-            "Done", self._last_transcript, compact=False
-        )
+        self._paint_status_keeping_offer("Done", self._last_transcript, compact=False)
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
         return True
@@ -7838,9 +7794,7 @@ class DictationController(QtCore.QObject):
                         **conditional_transition,
                     )
                 else:
-                    self._last_recording_store.mark_completed(
-                        **conditional_transition
-                    )
+                    self._last_recording_store.mark_completed(**conditional_transition)
             return True, text
         except Exception as exc:
             self._logger.exception("Failed to transcribe imported file")
@@ -7957,8 +7911,7 @@ class DictationController(QtCore.QObject):
                 try:
                     self._last_recording_store.mark_canceled(
                         "Recording canceled before transcription.",
-                        expected_recording_id=self._last_persisted_recording_id
-                        or None,
+                        expected_recording_id=self._last_persisted_recording_id or None,
                     )
                 except Exception:
                     self._logger.exception("Failed to mark canceled recording")
@@ -8239,9 +8192,7 @@ class DictationController(QtCore.QObject):
                         # for this model in the Local tab: that request is
                         # waiting to resume from them, and wiping them made a
                         # multi-gigabyte download restart from zero.
-                        if not coordinator.has_explicit_interest(
-                            model_name, model_dir
-                        ):
+                        if not coordinator.has_explicit_interest(model_name, model_dir):
                             from .transcriber.local_faster_whisper import (
                                 cleanup_incomplete_model_download,
                             )
@@ -8287,9 +8238,7 @@ class DictationController(QtCore.QObject):
             self._stop_hotkey_reclaim()
             return True
         except (HotkeyRegistrationError, ValueError) as exc:
-            self._logger.warning(
-                "Preferred hotkey %s unavailable: %s", preferred, exc
-            )
+            self._logger.warning("Preferred hotkey %s unavailable: %s", preferred, exc)
 
         # Never take a combination the user has assigned to one of this
         # app's own optional hotkeys. `_register_hotkey_with_fallback` runs
@@ -8489,9 +8438,7 @@ class DictationController(QtCore.QObject):
                 manager.unregister()
                 return True
             except HotkeyRegistrationError:
-                self._logger.exception(
-                    "Failed to unregister disabled re-paste hotkey"
-                )
+                self._logger.exception("Failed to unregister disabled re-paste hotkey")
                 self._repaste_hotkey_notice = (
                     "The disabled re-paste hotkey could not be unregistered. "
                     "Restart the app before reusing that key combination."
@@ -8593,9 +8540,7 @@ class DictationController(QtCore.QObject):
         self._release_all_global_hotkeys()
         self._hotkey_registration_ok = self._register_hotkey_with_fallback()
         self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
-        self._show_overlay_hotkey_registration_ok = (
-            self._register_show_overlay_hotkey()
-        )
+        self._show_overlay_hotkey_registration_ok = self._register_show_overlay_hotkey()
         self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
         return (
             self._hotkey_registration_ok

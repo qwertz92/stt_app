@@ -82,8 +82,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "Groq API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "Groq API key is missing. Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._model = model or DEFAULT_GROQ_MODEL
@@ -221,17 +220,14 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
             exc_type = type(exc).__name__
             if "AuthenticationError" in exc_type:
                 raise TranscriptionError(
-                    "Groq: Authentication failed — the API key is invalid "
-                    "or expired."
+                    "Groq: Authentication failed — the API key is invalid or expired."
                 ) from exc
             if "RateLimitError" in exc_type:
                 raise TranscriptionError(
                     "Groq: Rate limit exceeded. Wait a moment and try again, "
                     "or upgrade your Groq plan."
                 ) from exc
-            raise TranscriptionError(
-                f"Groq transcription failed: {exc}"
-            ) from exc
+            raise TranscriptionError(f"Groq transcription failed: {exc}") from exc
         finally:
             if temp_path is not None:
                 try:

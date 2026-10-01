@@ -116,7 +116,12 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
                 filename = path.name or "audio.wav"
             body, content_type = multipart_form_data(
                 fields=self._request_fields(),
-                file_field=("file", filename, audio_bytes, audio_content_type(filename)),
+                file_field=(
+                    "file",
+                    filename,
+                    audio_bytes,
+                    audio_content_type(filename),
+                ),
             )
             request = urllib.request.Request(
                 f"{MISTRAL_API_BASE}/audio/transcriptions", data=body, method="POST"
@@ -190,10 +195,16 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
     def push_audio_chunk(
         self, chunk: bytes, *, block_timeout_s: float | None = None
     ) -> None:
-        raise NotImplementedError("Mistral streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Mistral streaming is not implemented in this project."
+        )
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("Mistral streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Mistral streaming is not implemented in this project."
+        )
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("Mistral streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Mistral streaming is not implemented in this project."
+        )

@@ -405,9 +405,13 @@ def test_overlay_control_signals_are_emitted():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     got = {"history": 0, "retry": 0, "cancel": 0}
-    overlay.history_requested.connect(lambda: got.__setitem__("history", got["history"] + 1))
+    overlay.history_requested.connect(
+        lambda: got.__setitem__("history", got["history"] + 1)
+    )
     overlay.retry_requested.connect(lambda: got.__setitem__("retry", got["retry"] + 1))
-    overlay.cancel_requested.connect(lambda: got.__setitem__("cancel", got["cancel"] + 1))
+    overlay.cancel_requested.connect(
+        lambda: got.__setitem__("cancel", got["cancel"] + 1)
+    )
 
     overlay.set_state("Error", "failed")
     overlay._history_button.click()
@@ -817,16 +821,19 @@ def test_overlay_language_button_selects_supported_language():
     assert overlay._language_button.text() == "Lang: German"
     assert overlay._language_button.isEnabled() is True
     german_action = next(
-        action for action in overlay._language_menu.actions()
+        action
+        for action in overlay._language_menu.actions()
         if action.text() == "German"
     )
     german_action.trigger()
     assert next(
-        action for action in overlay._language_menu.actions()
+        action
+        for action in overlay._language_menu.actions()
         if action.text() == "German"
     ).isChecked()
     english_action = next(
-        action for action in overlay._language_menu.actions()
+        action
+        for action in overlay._language_menu.actions()
         if action.text() == "English"
     )
     english_action.trigger()
@@ -862,14 +869,15 @@ def test_overlay_language_button_draws_centered_chevron_and_opens_menu(monkeypat
     assert arrow_pixels
     assert all(arrow_rect.contains(point) for point in arrow_pixels)
     assert arrow_rect.center().y() == button.contentsRect().center().y()
-    assert abs(
-        min(point.y() for point in arrow_pixels)
-        + max(point.y() for point in arrow_pixels)
-        - 2 * arrow_rect.center().y()
-    ) <= 1
-    assert popup_positions == [
-        button.mapToGlobal(QtCore.QPoint(0, button.height()))
-    ]
+    assert (
+        abs(
+            min(point.y() for point in arrow_pixels)
+            + max(point.y() for point in arrow_pixels)
+            - 2 * arrow_rect.center().y()
+        )
+        <= 1
+    )
+    assert popup_positions == [button.mapToGlobal(QtCore.QPoint(0, button.height()))]
 
 
 @pytest.mark.pixel_exact
@@ -903,9 +911,7 @@ def test_overlay_record_button_indicator_stays_centered_in_both_states():
         assert points, state
         ys = [point.y() for point in points]
         xs = [point.x() for point in points]
-        boxes.append(
-            ((min(ys) + max(ys)) / 2, max(ys) - min(ys), max(xs) - min(xs))
-        )
+        boxes.append(((min(ys) + max(ys)) / 2, max(ys) - min(ys), max(xs) - min(xs)))
 
     # Vertically centred in both states...
     assert boxes[0][0] == (button.height() - 1) / 2
@@ -1033,6 +1039,7 @@ def test_a_short_compact_status_keeps_the_compact_size():
     finally:
         overlay.close()
 
+
 @pytest.mark.pixel_exact
 def test_the_compact_baseline_never_absorbs_the_grow_to_fit_overflow(monkeypatch):
     """The baseline must be the structural height, at every font size.
@@ -1061,9 +1068,7 @@ def test_the_compact_baseline_never_absorbs_the_grow_to_fit_overflow(monkeypatch
         font = QtGui.QFont(original_font)
         font.setPointSize(point_size)
         app.setFont(font)
-        monkeypatch.setattr(
-            overlay_ui_module, "OVERLAY_INITIAL_DETAIL", initial_detail
-        )
+        monkeypatch.setattr(overlay_ui_module, "OVERLAY_INITIAL_DETAIL", initial_detail)
         overlay = OverlayUI()
         overlay.show()
         app.processEvents()
@@ -1090,7 +1095,7 @@ def test_the_compact_baseline_never_absorbs_the_grow_to_fit_overflow(monkeypatch
 
 
 def test_the_no_action_error_state_shows_neither_retry_nor_insert():
-    """"No action" needs its own value; None is not it.
+    """ "No action" needs its own value; None is not it.
 
     The slot treats anything that is not Insert as Retry, so passing None gave
     the user a Retry button on a transcript that had already been inserted --
@@ -1563,8 +1568,7 @@ def test_the_compact_policy_never_shrinks_around_a_result(
         assert overlay._compact_mode is expect_compact, label
         if not expect_compact:
             assert overlay.height() == height_before, (
-                f"{label}: the window shrank from {height_before} to "
-                f"{overlay.height()}"
+                f"{label}: the window shrank from {height_before} to {overlay.height()}"
             )
             assert overlay._detail_scroll.height() == detail_before, label
             assert overlay._detail_scroll.verticalScrollBar().maximum() == 0, (
@@ -1704,8 +1708,8 @@ def test_no_overlay_button_clips_its_caption_at_a_larger_system_font(point_scale
                             )
                 finally:
                     button.setText(previous)
-            assert not clipped, (
-                f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(clipped)
+            assert not clipped, f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(
+                clipped
             )
         finally:
             overlay.deleteLater()
@@ -1749,9 +1753,7 @@ def test_the_queue_buttons_do_not_clip_at_a_larger_system_font(point_scale):
         overlay = OverlayUI()
         try:
             overlay.set_transcription_queue([(1, "recording one")])
-            row_cancel = overlay._queue_rows_widget.findChild(
-                QtWidgets.QPushButton
-            )
+            row_cancel = overlay._queue_rows_widget.findChild(QtWidgets.QPushButton)
             assert row_cancel is not None
             clear = overlay._queue_clear_button
 
@@ -1759,8 +1761,7 @@ def test_the_queue_buttons_do_not_clip_at_a_larger_system_font(point_scale):
             hint = row_cancel.sizeHint()
             if hint.width() > row_cancel.width():
                 clipped.append(
-                    f"row Cancel: {row_cancel.width()} px wide, "
-                    f"needs {hint.width()} px"
+                    f"row Cancel: {row_cancel.width()} px wide, needs {hint.width()} px"
                 )
             if hint.height() > row_cancel.height():
                 clipped.append(
@@ -1772,8 +1773,8 @@ def test_the_queue_buttons_do_not_clip_at_a_larger_system_font(point_scale):
                     f"Clear queue: {clear.height()} px tall, "
                     f"needs {clear.sizeHint().height()} px"
                 )
-            assert not clipped, (
-                f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(clipped)
+            assert not clipped, f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(
+                clipped
             )
             if point_scale == 1.0:
                 # The shipped layout must not move. Growing is only allowed to
@@ -1809,8 +1810,7 @@ def test_the_header_flanks_stay_equal_at_a_larger_system_font():
         overlay = OverlayUI()
         try:
             left = (
-                overlay._record_button.width()
-                + overlay._always_on_top_button.width()
+                overlay._record_button.width() + overlay._always_on_top_button.width()
             )
             right = overlay._clear_button.width() + overlay._copy_button.width()
 
@@ -2167,7 +2167,9 @@ def test_the_detail_keeps_its_rest_through_a_relayout_unless_the_user_scrolled()
     assert scrollbar.value() == scrollbar.maximum()
     overlay.set_transcription_queue(rows)
     QtWidgets.QApplication.processEvents()
-    assert scrollbar.value() == scrollbar.maximum(), "the paint did not supersede the scroll"
+    assert scrollbar.value() == scrollbar.maximum(), (
+        "the paint did not supersede the scroll"
+    )
     assert overlay.detail_is_being_read is False
     overlay.close()
 
@@ -2294,7 +2296,10 @@ def test_a_waiting_insert_row_offers_dismiss_and_reads_as_not_inserted():
         ([(1, "a"), (2, "b")], "Transcribing 2 files"),
         ([(-1, "x", QUEUE_ROW_KIND_UNDELIVERED)], "1 transcript not inserted"),
         (
-            [(-1, "x", QUEUE_ROW_KIND_UNDELIVERED), (-2, "y", QUEUE_ROW_KIND_UNDELIVERED)],
+            [
+                (-1, "x", QUEUE_ROW_KIND_UNDELIVERED),
+                (-2, "y", QUEUE_ROW_KIND_UNDELIVERED),
+            ],
             "2 transcripts not inserted",
         ),
         (
@@ -2480,7 +2485,8 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
     QtWidgets.QApplication.processEvents()
 
     painted = [
-        QtWidgets.QLabel.text(label) for _row, label, _button in _queue_row_parts(overlay)
+        QtWidgets.QLabel.text(label)
+        for _row, label, _button in _queue_row_parts(overlay)
     ]
     assert "Pending insert" in painted[0], painted
     assert "Pending insert" in painted[1], painted

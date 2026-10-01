@@ -92,8 +92,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "Deepgram API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "Deepgram API key is missing. Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._host = DEEPGRAM_API_HOSTS[normalize_deepgram_region(region)]
@@ -316,9 +315,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (
-                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
-            )
+            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
         except Exception as exc:
             if _is_ssl_error(exc):
                 return False, (
@@ -405,8 +402,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._apply_vocabulary_params(params)
 
         url = (
-            f"wss://{self._host}/v1/listen?"
-            f"{urllib.parse.urlencode(params, doseq=True)}"
+            f"wss://{self._host}/v1/listen?{urllib.parse.urlencode(params, doseq=True)}"
         )
 
         with self._stream_lock:
@@ -851,17 +847,17 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             closed = self._stream_closed
 
             if ws is None or thread is None or self._stream_state != "active":
-            # Refusing is not enough while the handshake is still running.
-            # `start_stream` would then finish, find the state still
-            # "starting", publish the session as "active" -- and nobody owns
-            # it: the caller has already been told the stop failed and has
-            # torn its own state down. Every later dictation is then refused
-            # with "Streaming session already active" for the rest of the
-            # app's life, and the remote socket stays open and billed.
-            # Marking it retiring is exactly what `abort_stream` does, and
-            # both handshakes already have the branch that tears the client
-            # down when they come back to a state that is no longer
-            # "starting".
+                # Refusing is not enough while the handshake is still running.
+                # `start_stream` would then finish, find the state still
+                # "starting", publish the session as "active" -- and nobody owns
+                # it: the caller has already been told the stop failed and has
+                # torn its own state down. Every later dictation is then refused
+                # with "Streaming session already active" for the rest of the
+                # app's life, and the remote socket stays open and billed.
+                # Marking it retiring is exactly what `abort_stream` does, and
+                # both handshakes already have the branch that tears the client
+                # down when they come back to a state that is no longer
+                # "starting".
                 if self._stream_state == "starting":
                     self._stream_state = "retiring"
                     self._stream_on_partial = None
@@ -1023,9 +1019,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 thread.join(timeout=0.2)
         finally:
             with self._stream_lock:
-                if ws is None or self._stream_session_matches_locked(
-                    generation, ws
-                ):
+                if ws is None or self._stream_session_matches_locked(generation, ws):
                     self._reset_stream_state_locked()
 
     def _handle_stream_message(self, generation: int, ws, message) -> None:

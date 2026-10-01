@@ -245,12 +245,12 @@ def test_every_fallback_is_a_registrable_combination():
 @pytest.mark.parametrize(
     ("character", "would_have_bound"),
     [
-        (".", 0x2E),   # VK_DELETE
-        ("-", 0x2D),   # VK_INSERT
-        ("#", 0x23),   # VK_END
-        ("'", 0x27),   # VK_RIGHT
-        ("/", 0x2F),   # VK_HELP, which no PC keyboard has
-        (";", 0x3B),   # no virtual key at all
+        (".", 0x2E),  # VK_DELETE
+        ("-", 0x2D),  # VK_INSERT
+        ("#", 0x23),  # VK_END
+        ("'", 0x27),  # VK_RIGHT
+        ("/", 0x2F),  # VK_HELP, which no PC keyboard has
+        (";", 0x3B),  # no virtual key at all
         ("\u00c4", 0xC4),  # no virtual key at all
     ],
 )

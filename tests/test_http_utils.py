@@ -85,12 +85,16 @@ def test_the_error_detail_is_what_the_provider_said_not_the_status_phrase():
     Deepgram's rejected parameter -- and four providers built theirs that way
     while Azure alone read the body.
     """
-    assert read_http_error_detail(
-        _http_error(b'{"error": {"message": "Invalid file format."}}')
-    ) == "Invalid file format."
-    assert read_http_error_detail(
-        _http_error(b'{"error": "model not found"}')
-    ) == "model not found"
+    assert (
+        read_http_error_detail(
+            _http_error(b'{"error": {"message": "Invalid file format."}}')
+        )
+        == "Invalid file format."
+    )
+    assert (
+        read_http_error_detail(_http_error(b'{"error": "model not found"}'))
+        == "model not found"
+    )
     assert read_http_error_detail(_http_error(b'{"message": "Quota exceeded"}')) == (
         "Quota exceeded"
     )
@@ -110,9 +114,7 @@ def test_a_non_json_error_body_is_passed_through_and_capped():
 def test_an_unreadable_or_empty_body_falls_back_to_the_status_phrase():
     assert read_http_error_detail(_http_error(b"")) == ""
     assert http_error_suffix(_http_error(b"")) == ": Bad Request"
-    assert http_error_suffix(
-        _http_error(b'{"error": {"message": "nope"}}')
-    ) == ": nope"
+    assert http_error_suffix(_http_error(b'{"error": {"message": "nope"}}')) == ": nope"
 
 
 def test_reading_a_body_that_raises_is_not_an_error_of_its_own():
@@ -147,9 +149,7 @@ def test_a_huge_error_body_is_not_pulled_into_memory_whole():
     from stt_app.transcriber._http_utils import _MAX_ERROR_BODY_BYTES
 
     body = _CountingBody(50_000_000)
-    exc = urllib.error.HTTPError(
-        "https://api.example/x", 400, "Bad Request", {}, body
-    )
+    exc = urllib.error.HTTPError("https://api.example/x", 400, "Bad Request", {}, body)
 
     detail = read_http_error_detail(exc)
 
@@ -164,8 +164,7 @@ def test_a_normal_json_error_body_is_still_read_and_unwrapped():
 
     padding = "a" * 4000
     body = (
-        '{"padding": "' + padding + '", '
-        '"error": {"message": "Invalid file format"}}'
+        '{"padding": "' + padding + '", "error": {"message": "Invalid file format"}}'
     ).encode("utf-8")
     assert len(body) < _MAX_ERROR_BODY_BYTES
 
@@ -183,7 +182,7 @@ def test_a_message_nested_under_detail_is_unwrapped_not_stringified():
     body = (
         b'{"detail": {"type": "validation_error", "code": "invalid_parameters", '
         b'"message": "The \'keyterms\' parameter is only supported with the '
-        b'\'scribe_v2\' model. You specified \'scribe_v1\'.", '
+        b"'scribe_v2' model. You specified 'scribe_v1'.\", "
         b'"status": "invalid_parameters", "request_id": "3c807fc4c3a1705f9638ecc7", '
         b'"param": "keyterms"}}'
     )
@@ -209,7 +208,9 @@ def test_a_detail_object_without_a_message_still_shows_something_readable():
 
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():
-    assert read_http_error_detail(_http_error(b'{"detail": "Not Found"}')) == "Not Found"
+    assert (
+        read_http_error_detail(_http_error(b'{"detail": "Not Found"}')) == "Not Found"
+    )
 
 
 def test_a_status_phrase_under_error_keeps_the_detail_beside_it():

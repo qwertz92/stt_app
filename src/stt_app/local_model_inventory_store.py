@@ -36,11 +36,7 @@ def _normalize_model_dir(model_dir: str | None) -> str:
 def _normalize_cached_models(raw: Any) -> list[str]:
     if not isinstance(raw, list):
         return []
-    requested = {
-        str(value).strip()
-        for value in raw
-        if str(value).strip()
-    }
+    requested = {str(value).strip() for value in raw if str(value).strip()}
     return [model_name for model_name in VALID_MODEL_SIZES if model_name in requested]
 
 
@@ -87,8 +83,7 @@ class LocalModelInventoryState:
         return {
             "schema_version": _CURRENT_SCHEMA_VERSION,
             "entries": {
-                model_dir: entry.to_dict()
-                for model_dir, entry in self.entries.items()
+                model_dir: entry.to_dict() for model_dir, entry in self.entries.items()
             },
         }
 
@@ -182,9 +177,7 @@ class LocalModelInventoryStore:
 
         raw = dict(payload)
         state = LocalModelInventoryState.from_dict(raw)
-        if not primary_unreadable and (
-            source == "backup" or raw != state.to_dict()
-        ):
+        if not primary_unreadable and (source == "backup" or raw != state.to_dict()):
             # Guarded: the state is already in hand. This write is a
             # convenience -- a republish after a backup recovery, or
             # persisting the normalised shape -- and letting it escape

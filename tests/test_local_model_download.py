@@ -185,7 +185,7 @@ def _malformed_stdout():
     return _worker_stdout(
         {"event": "bytes", "done": 5, "total": 9},
         f"{DOWNLOAD_EVENT_PREFIX}{{not json",
-        f"{DOWNLOAD_EVENT_PREFIX}{{\"event\": \"bytes\", \"done\": \"x\"}}",
+        f'{DOWNLOAD_EVENT_PREFIX}{{"event": "bytes", "done": "x"}}',
         {"event": "bytes", "done": -7, "total": 9},
     )
 
@@ -233,8 +233,7 @@ def test_the_unknown_sentinel_drops_the_sample():
 def test_model_download_process_progress_tolerates_a_process_without_one():
     assert local_model_download.model_download_process_progress(None) is None
     assert (
-        local_model_download.model_download_process_progress(SimpleNamespace())
-        is None
+        local_model_download.model_download_process_progress(SimpleNamespace()) is None
     )
 
 

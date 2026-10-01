@@ -61,7 +61,9 @@ def test_local_onnx_model_has_a_layout_and_a_download_destination(model_name: st
 def test_a_model_that_cannot_stream_is_declared_batch_only():
     """`supports_streaming` drives the UI; a model whose runtime has no
     streaming path must say so or the Mode picker offers a mode that fails."""
-    for model_name in config.LOCAL_WEBGPU_MODEL_SIZES + config.LOCAL_ONNX_ASR_MODEL_SIZES:
+    for model_name in (
+        config.LOCAL_WEBGPU_MODEL_SIZES + config.LOCAL_ONNX_ASR_MODEL_SIZES
+    ):
         assert config.supports_streaming("local", model_name) is False, model_name
 
 

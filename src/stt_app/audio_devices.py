@@ -261,9 +261,7 @@ def try_refresh_input_devices(logger: logging.Logger | None = None) -> bool:
         live = live_stream_count()
         if live > 0:
             if logger is not None:
-                logger.info(
-                    "audio_device_refresh_skipped live_streams=%d", live
-                )
+                logger.info("audio_device_refresh_skipped live_streams=%d", live)
             return False
         try:
             sd._terminate()

@@ -375,7 +375,7 @@ def measure_speech_pcm16(
     )
     try:
         for first in range(0, frames.shape[0], BLOCK_WINDOWS):
-            block = frames[first:first + BLOCK_WINDOWS]
+            block = frames[first : first + BLOCK_WINDOWS]
             probabilities, state, tail = _run(session, block, state, tail)
             scanned_windows += block.shape[0]
             max_probability = max(max_probability, float(probabilities.max()))

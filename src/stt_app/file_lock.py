@@ -113,9 +113,7 @@ class CrossProcessLock:
             # Windows it is the same value as EACCES.
             if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                 return False
-            raise FileLockUnavailable(
-                f"Locking {self._path} failed: {exc}"
-            ) from exc
+            raise FileLockUnavailable(f"Locking {self._path} failed: {exc}") from exc
 
     def acquire(
         self,

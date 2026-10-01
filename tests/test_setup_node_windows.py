@@ -80,9 +80,7 @@ def test_download_verifies_published_checksum(monkeypatch, tmp_path):
     assert destination.read_bytes() == archive
 
 
-def test_download_rejects_mismatched_checksums_from_all_mirrors(
-    monkeypatch, tmp_path
-):
+def test_download_rejects_mismatched_checksums_from_all_mirrors(monkeypatch, tmp_path):
     module = _load_setup_node_module()
     archive = b"not-the-published-archive"
 
@@ -122,9 +120,7 @@ def test_safe_extract_rejects_parent_traversal(tmp_path):
 def test_safe_extract_allows_expected_node_layout(tmp_path):
     module = _load_setup_node_module()
     archive_path = tmp_path / "node.zip"
-    archive_path.write_bytes(
-        _zip_bytes({"node-v24.18.0-win-x64/node.exe": b"node"})
-    )
+    archive_path.write_bytes(_zip_bytes({"node-v24.18.0-win-x64/node.exe": b"node"}))
     target = tmp_path / "target"
 
     with zipfile.ZipFile(archive_path) as archive:
@@ -241,9 +237,7 @@ def test_a_half_extracted_node_is_not_reported_as_ready(monkeypatch, tmp_path):
     assert module._missing_node_files(node_root) == []
 
 
-def test_force_keeps_the_working_install_when_the_download_fails(
-    monkeypatch, tmp_path
-):
+def test_force_keeps_the_working_install_when_the_download_fails(monkeypatch, tmp_path):
     """Deleting first turned a repair into a destruction.
 
     The audience for this script is a machine whose network blocks

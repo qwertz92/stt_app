@@ -276,18 +276,18 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._worst_case_notes = tuple(
             " ".join(
                 (
-                    (f"This entry was recorded with '{entry_label}', which "
-                     f"this version no longer offers, so {chosen} was "
-                     f"chosen instead."),
+                    (
+                        f"This entry was recorded with '{entry_label}', which "
+                        f"this version no longer offers, so {chosen} was "
+                        f"chosen instead."
+                    ),
                     _LANGUAGE_SUBSTITUTION_NOTE.format(
                         requested="auto", selected="auto"
                     ),
                     _CANARY_LANGUAGE_WARNING,
                 )
             )
-            for chosen in dict.fromkeys(
-                (*_SUBSTITUTABLE_MODEL_NAMES, entry_label)
-            )
+            for chosen in dict.fromkeys((*_SUBSTITUTABLE_MODEL_NAMES, entry_label))
         )
         language_box = QtWidgets.QWidget()
         language_layout = QtWidgets.QVBoxLayout(language_box)
@@ -592,9 +592,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
     def _on_engine_changed(self) -> None:
         # Keep the entry's model when the user returns to its engine.
         preferred = (
-            self._entry_model
-            if self.selected_engine() == self._entry_engine
-            else ""
+            self._entry_model if self.selected_engine() == self._entry_engine else ""
         )
         self._populate_models(preferred=preferred)
         self._populate_languages(preferred=self.selected_language_mode())
@@ -665,9 +663,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._run_button.setEnabled(enabled)
         self._engine_combo.setEnabled(enabled)
         self._model_combo.setEnabled(enabled and self._model_combo.count() > 1)
-        self._language_combo.setEnabled(
-            enabled and self._language_combo.count() > 1
-        )
+        self._language_combo.setEnabled(enabled and self._language_combo.count() > 1)
 
     def _tick_elapsed(self) -> None:
         self._elapsed_seconds += 1

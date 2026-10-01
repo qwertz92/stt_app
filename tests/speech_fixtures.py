@@ -92,7 +92,7 @@ def typing(wpm: int, seconds: float = 3.0) -> np.ndarray:
         clack = rng.standard_normal(n) * decay
         clack = clack / np.abs(clack).max() * 0.3 * 32768
         start = int((t + rng.uniform(-0.2, 0.2) * gap) * RATE)
-        audio[start:start + n] += clack[: max(0, audio.size - start)]
+        audio[start : start + n] += clack[: max(0, audio.size - start)]
         t += gap
     return np.clip(audio, -32768, 32767).astype(np.int16)
 

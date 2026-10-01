@@ -223,6 +223,7 @@ def test_transcribe_batch_aborts_between_segments_on_cancel():
         language_mode="auto",
         model_factory=lambda *args, **kwargs: model,
     )
+
     # Keyed on decoding progress, not on a call count, so the cancel lands
     # between segments wherever the earlier checks happen to fall. Note this
     # test therefore says nothing about the check *before* the model load --
@@ -841,6 +842,7 @@ def test_streaming_silence_after_speech_cannot_overwrite_the_transcript():
         stream_final_full_pass=False,
         model_factory=lambda *args, **kwargs: _CountingModel(),
     )
+
     def _wait_for(predicate, what):
         deadline = time.monotonic() + 10.0
         while time.monotonic() < deadline:
@@ -867,8 +869,10 @@ def test_streaming_silence_after_speech_cannot_overwrite_the_transcript():
         transcriber.push_audio_chunk(silent)
     expected_bytes = len(_build_pcm16_chunk(1600)) + silent_chunks * len(silent)
     _wait_for(
-        lambda: transcriber._stream_session is not None
-        and len(transcriber._stream_session.pcm_buffer) >= expected_bytes,
+        lambda: (
+            transcriber._stream_session is not None
+            and len(transcriber._stream_session.pcm_buffer) >= expected_bytes
+        ),
         "the silence to reach the worker",
     )
 
@@ -970,6 +974,7 @@ def test_a_transient_after_a_long_pause_cannot_replace_or_extend_the_transcript(
     assert transcriber.stop_stream().strip() == "hello world"
     assert decoded == ["hello world"], "a transient must not be decoded"
 
+
 def _ms(milliseconds, amplitude, sample_rate=16000):
     return _tone(int(sample_rate * milliseconds / 1000), amplitude)
 
@@ -1015,8 +1020,7 @@ def test_only_real_speech_after_a_pause_extends_the_transcript(
     transcriber.push_audio_chunk(_ms(100, 6000))
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline and not (
-        transcriber._stream_session
-        and transcriber._stream_session.result.merged_text
+        transcriber._stream_session and transcriber._stream_session.result.merged_text
     ):
         time.sleep(0.01)
     assert transcriber._stream_session.result.merged_text == "hello world"
@@ -1102,8 +1106,7 @@ def test_the_segment_floor_is_wired_into_the_real_stream_worker():
     transcriber.push_audio_chunk(_ms(300, 6000))
     deadline = time.monotonic() + 10.0
     while time.monotonic() < deadline and not (
-        transcriber._stream_session
-        and transcriber._stream_session.result.merged_text
+        transcriber._stream_session and transcriber._stream_session.result.merged_text
     ):
         time.sleep(0.01)
     spoken = transcriber._stream_session.result.merged_text
@@ -1179,9 +1182,8 @@ def test_a_noise_floor_above_the_gate_is_reported(
     finally:
         transcriber.stop_stream()
 
-    assert warned is expected, (
-        f"{label}: warned={warned}, expected {expected}"
-    )
+    assert warned is expected, f"{label}: warned={warned}, expected {expected}"
+
 
 def _stream_with(model_texts, *, silence_gate_enabled=True):
     outputs = iter(list(model_texts) + ["x"] * 200)
@@ -1367,8 +1369,7 @@ def test_importing_one_transcriber_does_not_pull_in_every_provider_sdk():
         "stt_app.transcriber.openai_provider",
     }
     assert loaded & providers == set(), (
-        "importing one local transcriber dragged in "
-        f"{sorted(loaded & providers)}"
+        f"importing one local transcriber dragged in {sorted(loaded & providers)}"
     )
     assert "stt_app.transcriber.local_faster_whisper" in loaded
 
@@ -1517,8 +1518,7 @@ def test_a_decode_slower_than_the_window_keeps_the_earlier_transcript():
         transcriber.stop_stream()
 
     assert merged == "erster teil der nachricht und dann kam etwas ganz anderes", (
-        f"the disjoint window replaced the transcript instead of appending: "
-        f"{merged!r}"
+        f"the disjoint window replaced the transcript instead of appending: {merged!r}"
     )
     assert warned, "a machine that cannot keep up was never reported"
 
@@ -1559,9 +1559,7 @@ def test_a_disjoint_window_of_silence_is_not_appended_on_trust():
     finally:
         transcriber.stop_stream()
 
-    assert merged != (
-        "erster teil der nachricht Untertitel von Stephanie Geiges"
-    ), (
+    assert merged != ("erster teil der nachricht Untertitel von Stephanie Geiges"), (
         "a hallucination decoded from eight seconds of silence was appended on "
         f"trust: {merged!r}"
     )
@@ -1597,7 +1595,7 @@ def test_the_decoded_window_is_measured_by_its_recorded_range():
 
 
 def test_audio_that_cannot_be_measured_is_never_appended_on_trust():
-    """"Cannot tell" must fall back to the safe aligning path.
+    """ "Cannot tell" must fall back to the safe aligning path.
 
     Appending is the risky direction: it is what grew a transcript to 896
     invented words during two minutes of an open microphone. The meter
@@ -1666,9 +1664,9 @@ def test_the_speech_check_refuses_most_sounds_the_energy_run_admits(
     refused = []
     for seed in _ROOM_TONE_SEEDS:
         pcm = pcm_bytes(after_a_pause(event(), seed=seed))
-        assert (
-            _energy_run_s(transcriber, pcm) >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-        ), f"precondition: the energy run alone admits {label} (seed {seed})"
+        assert _energy_run_s(transcriber, pcm) >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+            f"precondition: the energy run alone admits {label} (seed {seed})"
+        )
         refused.append(
             not transcriber._stream_window_has_speech(
                 _window(pcm), confirm_with_speech_model=True
@@ -1699,7 +1697,7 @@ def test_the_speech_check_admits_every_recorded_word_after_a_pause(real_silero):
 
 
 def test_an_unavailable_speech_check_leaves_the_energy_answer_standing():
-    """"Could not measure" must never gate: without the graph (the suite-wide
+    """ "Could not measure" must never gate: without the graph (the suite-wide
     stub answers None, exactly as a missing faster_whisper asset does) the
     thump the speech check refuses is admitted again on energy alone."""
     transcriber = _slow_decode_stream(["x"])
@@ -1779,10 +1777,8 @@ def test_the_real_stream_worker_appends_speech_after_a_pause_and_not_a_thump(
 
         pause = room_tone(transcriber.stream_partial_window_s + 2.5, seed=7)
         for start in range(0, pause.size, 1600):
-            _push_and_decode(transcriber, pcm_bytes(pause[start:start + 1600]))
-        _push_and_decode(
-            transcriber, pcm_bytes(concat(tail(), room_tone(0.3, seed=8)))
-        )
+            _push_and_decode(transcriber, pcm_bytes(pause[start : start + 1600]))
+        _push_and_decode(transcriber, pcm_bytes(concat(tail(), room_tone(0.3, seed=8))))
         merged = transcriber._stream_session.result.merged_text
     finally:
         transcriber.stop_stream()
@@ -1926,9 +1922,7 @@ def test_with_the_gate_off_a_thump_after_decoded_silence_still_appends(real_sile
         # before the thump, so the final trailing window is exactly the one
         # measured for that seed.
         _push_and_wait(transcriber, pcm_bytes(room_tone(1.0, seed=50)))
-        _push_and_wait(
-            transcriber, pcm_bytes(room_tone(7.5, seed=_TYPICAL_THUMP_SEED))
-        )
+        _push_and_wait(transcriber, pcm_bytes(room_tone(7.5, seed=_TYPICAL_THUMP_SEED)))
         transcriber._stream_session.result.silent_seconds = (
             transcriber.stream_partial_window_s + 0.5
         )
@@ -1948,9 +1942,7 @@ def test_with_the_gate_off_a_thump_after_decoded_silence_still_appends(real_sile
     finally:
         transcriber.stop_stream()
 
-    assert merged == "erster teil der nachricht Untertitel von Stephanie Geiges", (
-        merged
-    )
+    assert merged == "erster teil der nachricht Untertitel von Stephanie Geiges", merged
 
 
 def test_a_disjoint_final_window_of_silence_is_not_appended_on_trust():
@@ -1978,9 +1970,7 @@ def test_a_disjoint_final_window_of_silence_is_not_appended_on_trust():
         )
         # Exactly one window of new audio, so the finalizer's window starts
         # where the partial's ended: disjoint, with nothing shared.
-        _push_and_wait(
-            transcriber, _ms(20, 6000) + _ms(7980, 0)
-        )
+        _push_and_wait(transcriber, _ms(20, 6000) + _ms(7980, 0))
         final_text = transcriber.stop_stream()
     finally:
         transcriber.abort_stream()
@@ -2001,9 +1991,7 @@ def test_a_final_window_that_shares_no_audio_keeps_the_dictation():
     finalization replaced the whole dictation with its last few seconds --
     a single step, at the moment the text is handed over.
     """
-    transcriber = _slow_decode_stream(
-        ["erster teil der nachricht", "der letzte satz"]
-    )
+    transcriber = _slow_decode_stream(["erster teil der nachricht", "der letzte satz"])
     transcriber.start_stream(on_partial=lambda text: None)
     try:
         _push_and_wait(transcriber, _ms(9000, 6000))
@@ -2029,9 +2017,7 @@ def test_overlapping_windows_still_merge_by_alignment():
     Treating an ordinary rolling window as a new segment would append the
     words the two windows share, duplicating them at every partial.
     """
-    transcriber = _slow_decode_stream(
-        ["das ist der erste", "das ist der erste teil"]
-    )
+    transcriber = _slow_decode_stream(["das ist der erste", "das ist der erste teil"])
     transcriber.start_stream(on_partial=lambda text: None)
     try:
         _push_and_wait(transcriber, _ms(1000, 6000))
@@ -2112,9 +2098,7 @@ def test_a_dying_stream_worker_is_reported_instead_of_vanishing():
         raise MemoryError("the meter died")
 
     reported: list[str] = []
-    transcriber.start_stream(
-        on_partial=lambda text: None, on_error=reported.append
-    )
+    transcriber.start_stream(on_partial=lambda text: None, on_error=reported.append)
     try:
         transcriber._stream_slice_is_quiet = _boom
         _push_and_wait(transcriber, _ms(400, 6000))

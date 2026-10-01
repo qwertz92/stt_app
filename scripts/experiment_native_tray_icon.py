@@ -29,6 +29,7 @@ Both icons appear in the tray (generic application icon; their tooltips say
 which is which). Move them into the hidden-icons flyout if needed, then
 right-click each one and watch whether the flyout stays open.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -158,9 +159,7 @@ def _add_icon(hwnd: int, icon_id: int, tip: str) -> NOTIFYICONDATAW:
     data.hIcon = user32.LoadIconW(None, ctypes.c_wchar_p(IDI_APPLICATION))
     data.szTip = tip
     if not shell32.Shell_NotifyIconW(NIM_ADD, ctypes.byref(data)):
-        raise OSError(
-            f"Shell_NotifyIconW(NIM_ADD) failed: {ctypes.get_last_error()}"
-        )
+        raise OSError(f"Shell_NotifyIconW(NIM_ADD) failed: {ctypes.get_last_error()}")
     data.uVersion = NOTIFYICON_VERSION_4
     shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(data))
     return data

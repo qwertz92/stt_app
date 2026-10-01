@@ -32,7 +32,9 @@ _URL = "https://api.mistral.ai/v1/audio/transcriptions"
 
 class _Recorder:
     def __init__(self, answer=None):
-        self.answer = answer if answer is not None else json_response({"text": " Hallo Welt. "})
+        self.answer = (
+            answer if answer is not None else json_response({"text": " Hallo Welt. "})
+        )
         self.requests = []
 
     def __call__(self, request, timeout=None, context=None):
@@ -78,8 +80,20 @@ def test_a_chosen_language_is_sent_and_auto_is_not(recorder):
 
 def test_the_thirteen_documented_languages_are_offered():
     assert MISTRAL_LANGUAGE_MODES == (
-        "auto", "en", "zh", "hi", "es", "ar", "fr", "pt", "ru", "de", "ja", "ko",
-        "it", "nl",
+        "auto",
+        "en",
+        "zh",
+        "hi",
+        "es",
+        "ar",
+        "fr",
+        "pt",
+        "ru",
+        "de",
+        "ja",
+        "ko",
+        "it",
+        "nl",
     )
     assert language_modes_for_selection("mistral") == MISTRAL_LANGUAGE_MODES
 

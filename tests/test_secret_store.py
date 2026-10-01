@@ -429,9 +429,7 @@ def test_insecure_store_preserves_parallel_provider_updates(tmp_path, monkeypatc
 
     assert all(not thread.is_alive() for thread in threads)
     payload = json.loads(stores[0]._insecure_path.read_text(encoding="utf-8"))
-    assert payload == {
-        f"provider-{index}": f"secret-{index}" for index in range(8)
-    }
+    assert payload == {f"provider-{index}": f"secret-{index}" for index in range(8)}
 
 
 def _damaged_store(tmp_path, monkeypatch, damage):

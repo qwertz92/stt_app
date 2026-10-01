@@ -87,9 +87,7 @@ def test_controller_falls_back_to_safe_hotkey():
     assert controller._active_hotkey == FALLBACK_HOTKEY
     assert any("used by another program" in detail for _s, detail in overlay.states)
     # The idle line must name the key that actually works, not the stored one.
-    assert any(
-        f"Hotkey: {FALLBACK_HOTKEY}" in detail for _s, detail in overlay.states
-    )
+    assert any(f"Hotkey: {FALLBACK_HOTKEY}" in detail for _s, detail in overlay.states)
 
     controller.shutdown()
     _ = app
@@ -787,9 +785,7 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     suspends insertion and delivers the rest at stop -- so this has to
     ask for the old behaviour explicitly.
     """
-    monkeypatch.setattr(
-        "stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True
-    )
+    monkeypatch.setattr("stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
@@ -850,9 +846,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     suspends insertion and delivers the rest at stop -- so this has to
     ask for the old behaviour explicitly.
     """
-    monkeypatch.setattr(
-        "stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True
-    )
+    monkeypatch.setattr("stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
@@ -2305,9 +2299,9 @@ def test_a_save_that_changes_the_runtime_drops_the_loaded_model(change):
     controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
 
     saved = replace(settings, **change)
-    assert controller._transcriber_identity(
-        saved
-    ) != controller._transcriber_identity(settings)
+    assert controller._transcriber_identity(saved) != controller._transcriber_identity(
+        settings
+    )
     controller._settings_store._settings = saved
     controller.on_settings_changed()
 
@@ -2429,11 +2423,7 @@ _LOCAL_RUNTIME_FIELDS = [
     ),
     (
         "granite-speech-5.0-470m-turboctc",
-        {
-            "onnx_auto_preferred_devices": {
-                "granite-speech-5.0-470m-turboctc": "cpu"
-            }
-        },
+        {"onnx_auto_preferred_devices": {"granite-speech-5.0-470m-turboctc": "cpu"}},
         False,
     ),
 ]
@@ -2442,9 +2432,7 @@ _LOCAL_RUNTIME_FIELDS = [
 @pytest.mark.parametrize(
     ("model_size", "change", "reloads"),
     _LOCAL_RUNTIME_FIELDS,
-    ids=[
-        f"{model}-{next(iter(change))}" for model, change, _ in _LOCAL_RUNTIME_FIELDS
-    ],
+    ids=[f"{model}-{next(iter(change))}" for model, change, _ in _LOCAL_RUNTIME_FIELDS],
 )
 def test_a_local_identity_reads_only_what_its_own_runtime_takes(
     model_size, change, reloads
@@ -2458,9 +2446,7 @@ def test_a_local_identity_reads_only_what_its_own_runtime_takes(
     # make the "no reload" half pass without testing anything.
     assert saved != settings
 
-    controller, app, preloads, closed, cached = _controller_with_loaded_model(
-        settings
-    )
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
     controller._settings_store._settings = saved
     controller.on_settings_changed()
 
@@ -2505,9 +2491,7 @@ def test_nemotron_reloads_only_when_the_resolved_provider_order_changes(
     saved = replace(settings, local_onnx_device=second)
     assert saved != settings
 
-    controller, app, preloads, closed, cached = _controller_with_loaded_model(
-        settings
-    )
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
     controller._settings_store._settings = saved
     controller.on_settings_changed()
 
@@ -2733,7 +2717,11 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("groq", {"openai_model": "gpt-4o-transcribe"}, False),
         ("groq", {"model_size": "medium"}, False),
         ("groq", {"has_groq_key": True}, True),
-        ("azure", {"azure_endpoint": "https://other.cognitiveservices.azure.com"}, True),
+        (
+            "azure",
+            {"azure_endpoint": "https://other.cognitiveservices.azure.com"},
+            True,
+        ),
         ("azure", {"azure_speech_model": "mai-transcribe-1"}, True),
         ("azure", {"groq_model": "whisper-large-v3"}, False),
         ("azure", {"allow_insecure_key_storage": True}, True),
@@ -2747,7 +2735,11 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("custom", {"custom_key_command": "token-helper --print"}, True),
         ("custom", {"custom_model": "gemini-2.5-flash"}, True),
         ("custom", {"custom_vocabulary": "Kubernetes"}, True),
-        ("custom", {"azure_endpoint": "https://other.cognitiveservices.azure.com"}, False),
+        (
+            "custom",
+            {"azure_endpoint": "https://other.cognitiveservices.azure.com"},
+            False,
+        ),
         ("groq", {"custom_key_command": "token-helper --print"}, False),
         # The engines that split a long recording judge an empty part by it.
         ("openai", {"silence_gate_threshold": 0.02}, True),
@@ -2789,9 +2781,7 @@ def test_a_remote_identity_reads_only_the_fields_that_engine_uses(
     # the "no reload" half pass without testing anything.
     assert saved != settings
 
-    controller, app, preloads, closed, cached = _controller_with_loaded_model(
-        settings
-    )
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
     controller._settings_store._settings = saved
     controller.on_settings_changed()
 
@@ -3022,7 +3012,9 @@ def test_a_rescued_streaming_partial_moves_the_edit_target_with_the_text(
     _patch_edit_dialog(monkeypatch, lambda parent, text: "edited partial")
     try:
         controller._on_transcription_ready("transcript A.")
-        job = controller._register_transcription_job(5, controller._settings, "streaming")
+        job = controller._register_transcription_job(
+            5, controller._settings, "streaming"
+        )
         job.stashed_partial = "rescued partial"
         controller._finish_transcription_job(5)
 
@@ -3425,8 +3417,18 @@ def test_an_edit_is_refused_on_the_overlay_when_history_cannot_be_read(
 @pytest.mark.parametrize(
     ("setter", "value", "field", "what"),
     [
-        ("set_overlay_opacity_percent", 40, "overlay_opacity_percent", "The overlay opacity"),
-        ("set_overlay_always_on_top", False, "overlay_always_on_top", "The overlay pin mode"),
+        (
+            "set_overlay_opacity_percent",
+            40,
+            "overlay_opacity_percent",
+            "The overlay opacity",
+        ),
+        (
+            "set_overlay_always_on_top",
+            False,
+            "overlay_always_on_top",
+            "The overlay pin mode",
+        ),
         ("set_language_mode", "de", "language_mode", "The language selection"),
     ],
 )
@@ -3475,8 +3477,18 @@ def test_an_overlay_setting_the_store_refuses_to_save_is_reported_on_the_overlay
 @pytest.mark.parametrize(
     ("setter", "value", "field", "what"),
     [
-        ("set_overlay_opacity_percent", 40, "overlay_opacity_percent", "The overlay opacity"),
-        ("set_overlay_always_on_top", False, "overlay_always_on_top", "The overlay pin mode"),
+        (
+            "set_overlay_opacity_percent",
+            40,
+            "overlay_opacity_percent",
+            "The overlay opacity",
+        ),
+        (
+            "set_overlay_always_on_top",
+            False,
+            "overlay_always_on_top",
+            "The overlay pin mode",
+        ),
         ("set_language_mode", "de", "language_mode", "The language selection"),
     ],
 )
@@ -3765,8 +3777,9 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
         release.set()
         _pump_until(
             app,
-            lambda: token_a not in controller._jobs
-            and token_retry not in controller._jobs,
+            lambda: (
+                token_a not in controller._jobs and token_retry not in controller._jobs
+            ),
         )
 
         assert transcriber.calls == 3
@@ -3905,11 +3918,16 @@ def test_w15_a_queued_failures_audio_survives_the_next_dictations_success(
         )
         assert controller._last_failed_recording_id == q_id
         assert controller.retry_last_transcription() is True
-        assert controller._jobs[controller._active_request_token].source_recording_id == q_id
+        assert (
+            controller._jobs[controller._active_request_token].source_recording_id
+            == q_id
+        )
         _pump_until(
             app,
-            lambda: [e.text for e in history_store.load()]
-            == ["X succeeded.", "retry of Q succeeded."],
+            lambda: (
+                [e.text for e in history_store.load()]
+                == ["X succeeded.", "retry of Q succeeded."]
+            ),
         )
         assert overlay.states[-1] == ("Done", "retry of Q succeeded.")
         assert controller._last_failed_wav_bytes == b""
@@ -4073,9 +4091,7 @@ def test_the_measured_map_growing_only_reloads_when_the_selected_model_moves():
     controller.shutdown()
 
     # The selected model's own entry changing is the one case that must.
-    controller, _app, preloads, closed, cached = _controller_with_loaded_model(
-        settings
-    )
+    controller, _app, preloads, closed, cached = _controller_with_loaded_model(settings)
     controller._settings_store._settings = replace(
         settings, onnx_auto_preferred_devices={_COHERE: "dml", _GRANITE: "dml"}
     )
@@ -4098,9 +4114,9 @@ def test_a_key_command_counts_as_a_custom_endpoint_key():
 
     assert controller._transcriber_identity(no_key).has_api_key is False
     assert controller._transcriber_identity(command).has_api_key is True
-    assert controller._selected_model_name(
-        replace(command, custom_model="whisper-1")
-    ) == "whisper-1"
+    assert (
+        controller._selected_model_name(replace(command, custom_model="whisper-1"))
+        == "whisper-1"
+    )
     controller.shutdown()
     _ = app
-

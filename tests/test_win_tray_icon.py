@@ -4,6 +4,7 @@ The Win32 layer is injected, so nothing here touches the real notification
 area; what is verified is the message dispatch, the native menu rendering and
 the lifecycle that Qt used to handle for us.
 """
+
 from __future__ import annotations
 
 import pytest
@@ -78,6 +79,7 @@ def qapp_events():
             QtTest.QTest.qWait(1)
 
     return drain
+
 
 def _send(icon: WindowsTrayIcon, event: int, x: int = 0, y: int = 0) -> None:
     """Deliver a notification-icon callback message the way the shell does.
@@ -451,9 +453,7 @@ def test_a_refused_icon_is_retried_until_the_shell_accepts_it(
     assert icon._visible is True
 
 
-def test_the_retries_stop_after_the_schedule_is_exhausted(
-    instant_retries, qapp_events
-):
+def test_the_retries_stop_after_the_schedule_is_exhausted(instant_retries, qapp_events):
     api = RefusingAddApi(refusals=99)
     icon = _make_icon(api)
 

@@ -1,4 +1,5 @@
 """The Run Benchmark case list and the Benchmark tab's run progress bar."""
+
 from __future__ import annotations
 
 import threading
@@ -151,9 +152,7 @@ def test_the_german_refusal_names_the_english_only_models_that_were_selected(
     settings id `granite-speech-5.0-470m-turboctc` appears nowhere on
     screen, so a sentence built from it sent the user looking for a row
     that does not exist."""
-    dialog, app = _dialog(
-        tmp_path, ["small", "granite-speech-5.0-470m-turboctc"]
-    )
+    dialog, app = _dialog(tmp_path, ["small", "granite-speech-5.0-470m-turboctc"])
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
     dialog._set_benchmark_audio_path(str(audio_path))
@@ -183,9 +182,7 @@ def test_a_selection_of_one_model_is_announced_in_the_singular(tmp_path):
 
 def test_a_run_marks_each_case_running_then_done_or_error(tmp_path):
     dialog, app = _dialog(tmp_path, ["small", "tiny"])
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
 
     assert _statuses(dialog) == ["Pending", "Pending"]
@@ -216,9 +213,7 @@ def test_a_run_marks_each_case_running_then_done_or_error(tmp_path):
 def test_a_canceled_run_marks_every_unfinished_case_skipped(tmp_path):
     dialog, app = _dialog(tmp_path, ["small", "tiny"])
     dialog._current_benchmark_options = _options(["small", "tiny"])
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
@@ -248,9 +243,7 @@ def test_a_finished_run_leaves_the_case_list_alone_until_the_selection_changes(
     tmp_path,
 ):
     dialog, app = _dialog(tmp_path, ["small"])
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/1] small (auto/int8)")
     dialog._on_benchmark_case_finished(_case("small", "cpu"))
@@ -282,9 +275,7 @@ def test_a_finished_run_leaves_the_case_list_alone_until_the_selection_changes(
 def test_a_model_list_refresh_during_a_run_does_not_redraw_the_plan(tmp_path):
     """The plan comes from the options snapshotted at the run's start."""
     dialog, app = _dialog(tmp_path, ["small", "tiny"])
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
     dialog._on_benchmark_case_finished(_case("small", "cpu"))
@@ -425,9 +416,7 @@ def _armed_dialog(monkeypatch, tmp_path, models: list[str]):
     return dialog, app
 
 
-def test_starting_a_run_arms_the_case_list_and_the_progress_bar(
-    monkeypatch, tmp_path
-):
+def test_starting_a_run_arms_the_case_list_and_the_progress_bar(monkeypatch, tmp_path):
     """The real start path, not the writers called by hand."""
     seen: list[tuple[str, list[str]]] = []
 
@@ -495,9 +484,7 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
     """
     dialog, app = _dialog(tmp_path, ["small", "tiny"])
     dialog._current_benchmark_options = _options(["small", "tiny"])
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
@@ -607,9 +594,7 @@ def test_a_dropped_case_event_does_not_shift_the_done_marks(tmp_path):
     models = ["tiny", "base", "small"]
     dialog, app = _dialog(tmp_path, models)
     dialog._current_benchmark_options = _options(models)
-    dialog._set_benchmark_plan_rows(
-        dialog._planned_benchmark_cases_from_widgets()
-    )
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 3)
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/3] tiny (auto/int8)")

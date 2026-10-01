@@ -1,4 +1,5 @@
 """Settings dialog: general mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import threading
@@ -100,8 +101,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
     ),
     # Enhanced and Standard only; Melia 1 gets the "ignores" sentence.
     "speechmatics": (
-        "{name} uses the custom vocabulary as its additional vocabulary "
-        "(batch only)."
+        "{name} uses the custom vocabulary as its additional vocabulary (batch only)."
     ),
     "mistral": (
         "{name} uses the custom vocabulary as context bias, tuned for "
@@ -119,6 +119,7 @@ _LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models t
 # the Fun-ASR note needed 45 px of the 42 reserved at the dialog's minimum
 # width, and "this provider" repeats what the row already shows.
 _REMOTE_MODEL_KEY_POINTER = "The API key is set on the API Keys tab."
+
 
 class _GeneralTabMixin:
     _GENERAL_FORM_ROW_SPACING_PX = 10
@@ -180,7 +181,9 @@ class _GeneralTabMixin:
         )
         engine_hint.setWordWrap(True)
         self._style_field_hint_label(engine_hint)
-        engine_form.addRow("Engine", self._field_with_hint(self.engine_combo, engine_hint))
+        engine_form.addRow(
+            "Engine", self._field_with_hint(self.engine_combo, engine_hint)
+        )
 
         # --- Unified model selector: one "Model" row, one page per engine kind ---
         # The stack naturally sizes to its largest page (Qt keeps every page's
@@ -258,9 +261,7 @@ class _GeneralTabMixin:
 
         self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
-            self.language_combo.addItem(
-                LANGUAGE_MODE_LABELS.get(value, value), value
-            )
+            self.language_combo.addItem(LANGUAGE_MODE_LABELS.get(value, value), value)
         self.language_note_label = QtWidgets.QLabel("")
         self.language_note_label.setWordWrap(True)
         self._style_field_hint_label(self.language_note_label)
@@ -362,9 +363,7 @@ class _GeneralTabMixin:
 
         self.paste_mode_combo = _WheelPassthroughComboBox()
         for value in VALID_PASTE_MODES:
-            self.paste_mode_combo.addItem(
-                _PASTE_MODE_LABELS.get(value, value), value
-            )
+            self.paste_mode_combo.addItem(_PASTE_MODE_LABELS.get(value, value), value)
         self.paste_mode_combo.setToolTip(
             "Auto tries SendInput first and falls back to WM_PASTE. "
             "SendInput simulates the real Ctrl+V keyboard shortcut. "
@@ -437,7 +436,10 @@ class _GeneralTabMixin:
         if normalized == "custom":
             # Free text: the endpoint, not a roster, decides what is valid.
             return value.strip()
-        valid_values = {item_value for item_value, _label in _REMOTE_MODEL_CHOICES.get(normalized, ())}
+        valid_values = {
+            item_value
+            for item_value, _label in _REMOTE_MODEL_CHOICES.get(normalized, ())
+        }
         if value not in valid_values:
             return fallback
         return value
@@ -473,8 +475,7 @@ class _GeneralTabMixin:
         fallback = _REMOTE_MODEL_DEFAULTS.get(normalized, "")
         value = str(self._import_model_values.get(normalized, fallback) or fallback)
         valid_values = {
-            item_value
-            for item_value, _label in self._import_model_choices(normalized)
+            item_value for item_value, _label in self._import_model_choices(normalized)
         }
         if value not in valid_values:
             return fallback
@@ -717,9 +718,7 @@ class _GeneralTabMixin:
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
             # Only the Granite models reach here: Cohere and Canary have their
             # own branches above, and both of those really do lack Auto.
-            return (
-                "This model supports Auto plus the languages documented for it."
-            )
+            return "This model supports Auto plus the languages documented for it."
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
             return (
@@ -802,9 +801,7 @@ class _GeneralTabMixin:
         )
         self.language_note_label.setText(note or default_note)
         self.language_combo.setEnabled(len(supported_modes) > 1)
-        self.language_combo.setToolTip(
-            note or default_note
-        )
+        self.language_combo.setToolTip(note or default_note)
 
     def _on_local_onnx_device_changed(self, _index: int) -> None:
         self._update_local_onnx_device_row()
@@ -1015,9 +1012,7 @@ class _GeneralTabMixin:
             text = f"{text} {_LOCAL_MODEL_DOWNLOAD_POINTER}"
         self.local_model_runtime_warning_label.setStyleSheet(style)
         self.local_model_runtime_warning_label.setText(text)
-        self.local_model_runtime_warning_label.setToolTip(
-            text if text.strip() else ""
-        )
+        self.local_model_runtime_warning_label.setToolTip(text if text.strip() else "")
 
     def _update_custom_vocabulary_note(self) -> None:
         """Say whether the selected model is sent the custom vocabulary.
@@ -1046,17 +1041,13 @@ class _GeneralTabMixin:
         if not supports_custom_vocabulary(engine, model):
             # Amber, not the #b71c1c of a real failure: nothing is broken and
             # the terms stay stored for the next model.
-            self.vocabulary_support_label.setStyleSheet(
-                "color: #b26a00; padding: 0;"
-            )
+            self.vocabulary_support_label.setStyleSheet("color: #b26a00; padding: 0;")
             text = (
                 f"{name} ignores the custom vocabulary. Models that use it: "
                 f"{CUSTOM_VOCABULARY_SUPPORTED_SUMMARY}."
             )
         else:
-            self.vocabulary_support_label.setStyleSheet(
-                "color: #555; padding: 0;"
-            )
+            self.vocabulary_support_label.setStyleSheet("color: #555; padding: 0;")
             text = _VOCABULARY_SUPPORTED_NOTES.get(engine, "").format(name=name)
 
         self.vocabulary_support_label.setText(text)
@@ -1317,7 +1308,9 @@ class _GeneralTabMixin:
         )
 
     @QtCore.Slot(int, bool, object)
-    def _on_custom_models_fetched(self, fetch_id: int, ok: bool, result: object) -> None:
+    def _on_custom_models_fetched(
+        self, fetch_id: int, ok: bool, result: object
+    ) -> None:
         if fetch_id != self._custom_models_fetch_id:
             return
         self._active_custom_models_fetch_thread = None
@@ -1399,4 +1392,6 @@ class _GeneralTabMixin:
         language = str(
             self.import_language_combo.currentData() or DEFAULT_LANGUAGE_MODE
         )
-        self._import_language_values[self._import_language_key(engine, model)] = language
+        self._import_language_values[self._import_language_key(engine, model)] = (
+            language
+        )

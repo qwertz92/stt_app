@@ -124,12 +124,9 @@ if sys.platform == "win32":
                 ),
             ]
 
-        _CLSID_MMDeviceEnumerator = GUID(
-            "{BCDE0395-E52F-467C-8E3D-C4579291692E}"
-        )
+        _CLSID_MMDeviceEnumerator = GUID("{BCDE0395-E52F-467C-8E3D-C4579291692E}")
 
         class _NotificationClient(COMObject):
-
             # list from the class dict when it builds the COM vtable.
             _com_interfaces_ = [IMMNotificationClient]  # noqa: RUF012
 
@@ -148,9 +145,7 @@ if sys.platform == "win32":
                     self._on_change(kind)
                 except Exception:
                     if self._logger is not None:
-                        self._logger.exception(
-                            "Audio device change callback failed"
-                        )
+                        self._logger.exception("Audio device change callback failed")
 
             def OnDeviceStateChanged(self, pwstrDeviceId, dwNewState):
                 self._emit(CHANGE_TOPOLOGY)

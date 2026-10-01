@@ -936,9 +936,7 @@ def test_silence_gate_skips_transcription_of_silent_recording(
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
-    controller._settings = replace(
-        controller._settings, silence_gate_enabled=True
-    )
+    controller._settings = replace(controller._settings, silence_gate_enabled=True)
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav_file:
         wav_file.setnchannels(1)
@@ -969,9 +967,7 @@ def test_silence_gate_passes_recording_with_speech(monkeypatch, tmp_path):
     controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
-    controller._settings = replace(
-        controller._settings, silence_gate_enabled=True
-    )
+    controller._settings = replace(controller._settings, silence_gate_enabled=True)
 
     audio = np.zeros(16000, dtype=np.float32)
     audio[:1600] = 0.05  # whisper-level burst above the default threshold
@@ -1004,7 +1000,9 @@ def test_silence_gate_passes_recording_with_speech(monkeypatch, tmp_path):
 # LibriSpeech excerpts.
 
 
-def _gated_controller(monkeypatch, tmp_path, *, enabled=True, wait_for_speech_model=True):
+def _gated_controller(
+    monkeypatch, tmp_path, *, enabled=True, wait_for_speech_model=True
+):
     # The gate is in the settings the controller starts with, so its start
     # loads the speech model in the background as the app's does.
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
@@ -1085,7 +1083,8 @@ def _speech_recordings():
 
 
 @pytest.mark.parametrize(
-    "samples", [case[1] for case in _speech_recordings()],
+    "samples",
+    [case[1] for case in _speech_recordings()],
     ids=[case[0] for case in _speech_recordings()],
 )
 def test_the_speech_check_never_skips_a_recorded_word(
@@ -1209,7 +1208,9 @@ def test_the_speech_check_runs_only_when_its_answer_can_skip(
         return real_check(*args, **kwargs)
 
     monkeypatch.setattr(silero_vad, "check_speech_wav", counting_check)
-    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path, enabled=enabled)
+    controller, app, _overlay = _gated_controller(
+        monkeypatch, tmp_path, enabled=enabled
+    )
     caplog.set_level(logging.INFO)
 
     _stop_with(controller, wav_bytes(make()))
@@ -1379,9 +1380,7 @@ def test_insert_target_current_window_pastes_at_focus_at_insert_time(
     controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
-    controller._settings = replace(
-        controller._settings, insert_target="current_window"
-    )
+    controller._settings = replace(controller._settings, insert_target="current_window")
 
     token_a = _record_and_stop(controller)
     # The user moves to another window before the transcript is ready.
@@ -1815,7 +1814,7 @@ def test_shutdown_stops_the_paste_pace_timer(monkeypatch, tmp_path):
 def test_a_re_paste_after_a_background_success_pastes_that_jobs_text(
     monkeypatch, tmp_path
 ):
-    """"Insert transcript again" means the text that reached a window last.
+    """ "Insert transcript again" means the text that reached a window last.
 
     A queued result pasted in the background is the last thing that landed
     in a document, while the overlay keeps showing the foreground result:
@@ -1963,7 +1962,9 @@ def test_the_re_paste_inserts_every_waiting_transcript_while_a_job_runs(
         token_a, token_b, token_c, token_d = _record_several(controller, 4)
         for token, name in zip((token_a, token_b, token_c), "ABC", strict=True):
             inserter.now += 10.0
-            controller._on_transcription_ready(f"transcript {name}.", request_token=token)
+            controller._on_transcription_ready(
+                f"transcript {name}.", request_token=token
+            )
         assert len(_not_inserted_rows(overlay)) == 2
         painted = list(overlay.states)
         inserter.fail = set()
@@ -2706,9 +2707,7 @@ def _streaming_controller_with_live_text(monkeypatch, tmp_path, text):
         pytest.param(
             lambda c, token: c.cancel_queued_transcription(token), id="queue-row-x"
         ),
-        pytest.param(
-            lambda c, _token: c.clear_transcription_queue(), id="clear-queue"
-        ),
+        pytest.param(lambda c, _token: c.clear_transcription_queue(), id="clear-queue"),
     ],
 )
 def test_cancelling_a_pending_stream_finalize_keeps_the_dictation(
@@ -2832,8 +2831,7 @@ def test_the_preload_poll_does_not_paint_over_a_finished_result(
     controller._on_preload_progress_poll()
 
     assert len(overlay.states) == before, (
-        f"the poll overwrote the {finished_state} state with "
-        f"{overlay.states[-1]!r}"
+        f"the poll overwrote the {finished_state} state with {overlay.states[-1]!r}"
     )
     controller._preload_future = None
     controller.shutdown()
@@ -2916,7 +2914,7 @@ def _streaming_session_with_a_pending_finalize(controller):
 def test_a_dying_runtime_stashes_the_partial_for_a_finalize_that_delivers_nothing(
     monkeypatch, tmp_path
 ):
-    """"A finalize will deliver this" is not "a finalize did deliver".
+    """ "A finalize will deliver this" is not "a finalize did deliver".
 
     The guard exists so one dictation does not get two history entries, and it
     is right about that. But the reset that follows wiped the live text, and
@@ -2945,9 +2943,7 @@ def test_a_dying_runtime_stashes_the_partial_for_a_finalize_that_delivers_nothin
     # the only remaining copy.
     controller._finish_transcription_job(999)
 
-    assert [e.text for e in history.load()] == [
-        "ein ganzer satz den ich diktiert habe"
-    ]
+    assert [e.text for e in history.load()] == ["ein ganzer satz den ich diktiert habe"]
     controller.shutdown()
     _ = app
 
@@ -3324,9 +3320,9 @@ def test_a_result_the_pace_holds_is_not_listed_in_the_queue(monkeypatch, tmp_pat
             "transcript B.",
         ]
         assert overlay.queue_updates[updates_before:], "precondition"
-        assert all(
-            update == [] for update in overlay.queue_updates[updates_before:]
-        ), overlay.queue_updates[updates_before:]
+        assert all(update == [] for update in overlay.queue_updates[updates_before:]), (
+            overlay.queue_updates[updates_before:]
+        )
     finally:
         controller.shutdown()
     _ = app
@@ -3377,9 +3373,7 @@ def test_a_re_paste_during_a_batch_recording_inserts_the_waiting_rows(
     _ = app
 
 
-def test_a_re_paste_during_a_batch_recording_waits_for_the_pace(
-    monkeypatch, tmp_path
-):
+def test_a_re_paste_during_a_batch_recording_waits_for_the_pace(monkeypatch, tmp_path):
     _fake_clipboard(monkeypatch)
     inserter = SelectiveTextInserter()
     inserter.fail = {"transcript A."}

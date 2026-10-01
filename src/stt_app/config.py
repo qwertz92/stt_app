@@ -460,6 +460,7 @@ def nemotron_provider_order(
         effective_preferred_device(device_policy, preferred_device, order),
     )
 
+
 LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
     "auto": ("auto",),
     "gpu": ("gpu",),
@@ -484,9 +485,7 @@ MODEL_REPO_MAP: dict[str, str] = {
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     "cohere-transcribe-03-2026": "onnx-community/cohere-transcribe-03-2026-ONNX",
     "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
-    NEMOTRON_MODEL_SIZE: (
-        "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"
-    ),
+    NEMOTRON_MODEL_SIZE: ("onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"),
     PARAKEET_MODEL_SIZE: "istupakov/parakeet-tdt-0.6b-v3-onnx",
     # An ONNX export of Moondream's `moondream/parakeet-ultra` by Olicorne,
     # fetched at one pinned revision (see its layout in `local_webgpu_asr`).
@@ -880,8 +879,31 @@ PARAKEET_LANGUAGE_MODES = ("auto",)
 # English rather than transcribing it. The 25 trained locales only; the vocab
 # carries ~180 ISO codes and an untrained one raises KeyError.
 CANARY_LANGUAGE_MODES = (
-    "de", "en", "bg", "cs", "da", "el", "es", "et", "fi", "fr", "hr", "hu",
-    "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+    "de",
+    "en",
+    "bg",
+    "cs",
+    "da",
+    "el",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "hr",
+    "hu",
+    "it",
+    "lt",
+    "lv",
+    "mt",
+    "nl",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "uk",
 )
 GRANITE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt", "ja")
 # Bare app language codes for Nemotron's transcription-ready and broad-coverage
@@ -1373,7 +1395,11 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("speechmatics", "enhanced"): SPEECHMATICS_LANGUAGE_MODES,
     ("speechmatics", "standard"): SPEECHMATICS_LANGUAGE_MODES,
 }
-STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
+STREAMING_ENGINES = (
+    "local",
+    "assemblyai",
+    "deepgram",
+)  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 
@@ -1383,7 +1409,10 @@ def supports_streaming(engine: str, model_size: str = "") -> bool:
     normalized_model = str(model_size or "").strip()
     if normalized_engine not in STREAMING_ENGINES:
         return False
-    return not (normalized_engine == DEFAULT_ENGINE and normalized_model in LOCAL_BATCH_ONLY_MODELS)
+    return not (
+        normalized_engine == DEFAULT_ENGINE
+        and normalized_model in LOCAL_BATCH_ONLY_MODELS
+    )
 
 
 def language_modes_for_selection(
@@ -1465,10 +1494,7 @@ def supports_custom_vocabulary(engine: str, model: str = "") -> bool:
             normalized_engine,
             str(model or "").strip(),
         ) not in CUSTOM_VOCABULARY_EXCLUDED_MODELS
-    if (
-        normalized_engine in VALID_ENGINES
-        and normalized_engine != DEFAULT_ENGINE
-    ):
+    if normalized_engine in VALID_ENGINES and normalized_engine != DEFAULT_ENGINE:
         return False
     # `local`, and any unknown engine: `create_transcriber` falls back to the
     # local runtimes for those, and an unknown *model* falls through to
@@ -1505,6 +1531,7 @@ def parse_custom_vocabulary(raw: str) -> list[str]:
         if len(terms) >= CUSTOM_VOCABULARY_MAX_TERMS:
             break
     return terms
+
 
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
@@ -1588,7 +1615,11 @@ ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
 ASSEMBLYAI_REGION_AUTO = "auto"
 ASSEMBLYAI_REGION_US = "us"
 ASSEMBLYAI_REGION_EU = "eu"
-ASSEMBLYAI_REGIONS = (ASSEMBLYAI_REGION_AUTO, ASSEMBLYAI_REGION_US, ASSEMBLYAI_REGION_EU)
+ASSEMBLYAI_REGIONS = (
+    ASSEMBLYAI_REGION_AUTO,
+    ASSEMBLYAI_REGION_US,
+    ASSEMBLYAI_REGION_EU,
+)
 DEFAULT_ASSEMBLYAI_REGION = ASSEMBLYAI_REGION_AUTO
 ASSEMBLYAI_API_BASE_URLS = {
     ASSEMBLYAI_REGION_AUTO: "https://api.assemblyai.com",
@@ -1627,6 +1658,7 @@ def normalize_assemblyai_region(value: object) -> str:
 def normalize_deepgram_region(value: object) -> str:
     return _known_region(value, DEEPGRAM_REGIONS, DEFAULT_DEEPGRAM_REGION)
 
+
 # Total time one batch job may stay queued/processing before the app gives
 # up on it. The SDK's own `wait_for_completion` is `while True:` with no
 # bound, so a job AssemblyAI never finishes holds the single transcription
@@ -1640,9 +1672,7 @@ def normalize_deepgram_region(value: object) -> str:
 # can be retrieved from the AssemblyAI dashboard.
 ASSEMBLYAI_BATCH_MAX_WAIT_S = 1800.0
 
-ELEVENLABS_MODELS = (
-    "scribe_v2",
-)
+ELEVENLABS_MODELS = ("scribe_v2",)
 DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
 
 # Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
@@ -1673,9 +1703,7 @@ DEFAULT_AZURE_ENDPOINT = ""
 
 # Alibaba Fun-ASR (DashScope Model Studio). Remote, cloud-only; driven over the
 # real-time WebSocket API in a batch fashion. Needs only a DashScope API key.
-FUNASR_MODELS = (
-    "fun-asr-realtime",
-)
+FUNASR_MODELS = ("fun-asr-realtime",)
 DEFAULT_FUNASR_MODEL = "fun-asr-realtime"
 # International (Singapore) DashScope inference WebSocket endpoint.
 FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
@@ -1888,6 +1916,7 @@ def remote_batch_part_limit(
         seconds=seconds,
         max_bytes=REMOTE_BATCH_MAX_REQUEST_BYTES[normalized_engine],
     )
+
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

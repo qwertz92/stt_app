@@ -57,9 +57,7 @@ def _set_windows_app_user_model_id() -> None:
     try:
         import ctypes
 
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            APP_USER_MODEL_ID
-        )
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception:
         pass
 
@@ -132,9 +130,8 @@ def _connect_tray_notifications(tray_icon, controller) -> None:
         )
 
     controller.background_transcription_failed.connect(_notify_background_failure)
-    controller.background_insertion_failed.connect(
-        _notify_background_insertion_failure
-    )
+    controller.background_insertion_failed.connect(_notify_background_insertion_failure)
+
     def _notify_clipboard_restore_failure(message: str) -> None:
         # The paste itself was reported long before; this is the user's own
         # clipboard content, which they will reach for next.
@@ -451,9 +448,7 @@ def _create_tray_icon(
     def check_for_updates_from_tray() -> None:
         checker = getattr(tray_icon, "_update_checker", None)
         if checker is None:
-            checker = _TrayUpdateChecker(
-                tray_icon=tray_icon, parent_widget=overlay
-            )
+            checker = _TrayUpdateChecker(tray_icon=tray_icon, parent_widget=overlay)
             tray_icon._update_checker = checker
         checker.start(manual=True, action=check_updates_action)
 
@@ -753,8 +748,7 @@ def _prompt_recoverable_last_recording(
     description = "A previous recording is still available."
     if state is not None and state.created_at:
         description = (
-            "A previous recording from "
-            f"{state.created_at} is still available."
+            f"A previous recording from {state.created_at} is still available."
         )
     if state is not None and state.status == "failed" and state.error:
         description = f"{description}\n\nLast error: {state.error}"

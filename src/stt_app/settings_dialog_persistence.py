@@ -1,4 +1,5 @@
 """Settings dialog: persistence mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import dataclasses
@@ -64,14 +65,10 @@ class _PersistenceMixin:
         # See `_dialog_edits_over_stored` for what that cost.
         self._populated_settings = settings
         self.hotkey_edit.setKeySequence(
-            QtGui.QKeySequence(
-                _app_hotkey_to_qt_hotkey_text(settings.hotkey)
-            )
+            QtGui.QKeySequence(_app_hotkey_to_qt_hotkey_text(settings.hotkey))
         )
         self.cancel_hotkey_edit.setKeySequence(
-            QtGui.QKeySequence(
-                _app_hotkey_to_qt_hotkey_text(settings.cancel_hotkey)
-            )
+            QtGui.QKeySequence(_app_hotkey_to_qt_hotkey_text(settings.cancel_hotkey))
         )
         self.show_overlay_hotkey_edit.setKeySequence(
             QtGui.QKeySequence(
@@ -144,9 +141,7 @@ class _PersistenceMixin:
             str(getattr(settings, "display_timezone", DEFAULT_DISPLAY_TIMEZONE)),
         )
         self._select_combo_data(self.overlay_corner_combo, settings.overlay_corner)
-        self.keep_clipboard_checkbox.setChecked(
-            settings.keep_transcript_in_clipboard
-        )
+        self.keep_clipboard_checkbox.setChecked(settings.keep_transcript_in_clipboard)
         self.insecure_key_storage_checkbox.setChecked(
             bool(getattr(settings, "allow_insecure_key_storage", False))
         )
@@ -246,9 +241,7 @@ class _PersistenceMixin:
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_model_selector()
-            self._update_import_language_selector(
-                preferred_mode=settings.language_mode
-            )
+            self._update_import_language_selector(preferred_mode=settings.language_mode)
             self._update_import_engine_note()
 
         if not self._prime_local_model_views_from_available_cache():
@@ -259,9 +252,7 @@ class _PersistenceMixin:
         self._refresh_benchmark_history_list()
         self._restore_provider_connection_test_labels()
 
-    def _select_combo_data(
-        self, combo: QtWidgets.QComboBox, value: str
-    ) -> None:
+    def _select_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
@@ -481,9 +472,8 @@ class _PersistenceMixin:
             # the controller drops a transcriber holding the previous key even
             # when the rest of this save fails.
             self.provider_keys_changed.emit(list(changed))
-        metadata_changed = (
-            self.insecure_key_storage_checkbox.isChecked()
-            != bool(getattr(self._loaded_settings, "allow_insecure_key_storage", False))
+        metadata_changed = self.insecure_key_storage_checkbox.isChecked() != bool(
+            getattr(self._loaded_settings, "allow_insecure_key_storage", False)
         )
         self._show_key_storage_result(
             key_storage_errors, bool(changed) or metadata_changed
@@ -536,8 +526,7 @@ class _PersistenceMixin:
             # Saving API keys says nothing about the language, so an overlay
             # pick made while the dialog was open must survive it. This path
             # reverted one with no dialog edit at all.
-            language_mode=self._stored_language_mode()
-            or widget_settings.language_mode,
+            language_mode=self._stored_language_mode() or widget_settings.language_mode,
         )
         # What is on disk, not `_loaded_settings` -- that is the dialog-open
         # snapshot, and the three fields above were just read back from the
@@ -764,13 +753,9 @@ class _PersistenceMixin:
             custom_vocabulary=self.custom_vocabulary_edit.toPlainText(),
             vad_enabled=self.vad_checkbox.isChecked(),
             input_device_name=str(self.microphone_combo.currentData() or ""),
-            keep_microphone_warm=(
-                self.keep_microphone_warm_checkbox.isChecked()
-            ),
+            keep_microphone_warm=(self.keep_microphone_warm_checkbox.isChecked()),
             silence_gate_enabled=self.silence_gate_checkbox.isChecked(),
-            silence_gate_threshold=float(
-                self.silence_gate_threshold_spin.value()
-            ),
+            silence_gate_threshold=float(self.silence_gate_threshold_spin.value()),
             vad_energy_threshold=float(self.vad_threshold_spin.value()),
             save_last_wav=self.save_wav_checkbox.isChecked(),
             save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
@@ -828,9 +813,7 @@ class _PersistenceMixin:
             immediate_background_insert=(
                 selected_concurrent_mode == _CONCURRENT_MODE_IMMEDIATE_UI_VALUE
             ),
-            paste_mode=str(
-                self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
-            ),
+            paste_mode=str(self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE),
             insert_target=str(
                 self.insert_target_combo.currentData() or DEFAULT_INSERT_TARGET
             ),
@@ -864,10 +847,7 @@ class _PersistenceMixin:
         )
 
     def _custom_api_mode_shown(self) -> str:
-        return str(
-            self.custom_api_mode_combo.currentData() or DEFAULT_CUSTOM_API_MODE
-        )
-
+        return str(self.custom_api_mode_combo.currentData() or DEFAULT_CUSTOM_API_MODE)
 
     def _build_current_settings(
         self,
@@ -895,9 +875,7 @@ class _PersistenceMixin:
         )
 
     def _save(self) -> None:
-        hotkey = _qt_hotkey_sequence_to_app_hotkey(
-            self.hotkey_edit.keySequence()
-        )
+        hotkey = _qt_hotkey_sequence_to_app_hotkey(self.hotkey_edit.keySequence())
         hotkey = hotkey or DEFAULT_HOTKEY
         cancel_hotkey = _qt_hotkey_sequence_to_app_hotkey(
             self.cancel_hotkey_edit.keySequence()
@@ -982,13 +960,12 @@ class _PersistenceMixin:
 
         requested_history_limit = int(self.history_max_spin.value())
         current_history_count = self._history_store.count()
-        history_limit_changed = (
-            requested_history_limit != int(self._populated_settings.history_max_items)
+        history_limit_changed = requested_history_limit != int(
+            self._populated_settings.history_max_items
         )
         if (
             history_limit_changed
-            and
-            requested_history_limit > 0
+            and requested_history_limit > 0
             and current_history_count > requested_history_limit
         ):
             to_delete = current_history_count - requested_history_limit
@@ -1012,9 +989,7 @@ class _PersistenceMixin:
         if key_storage_changed:
             self.provider_keys_changed.emit(list(key_storage_changed))
         if key_storage_errors or key_storage_changed:
-            self._show_key_storage_result(
-                key_storage_errors, bool(key_storage_changed)
-            )
+            self._show_key_storage_result(key_storage_errors, bool(key_storage_changed))
         if key_storage_errors:
             if key_storage_changed:
                 self.settings_changed.emit()

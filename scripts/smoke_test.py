@@ -192,7 +192,9 @@ def main() -> int:
         try:
             import sounddevice as sd
 
-            input_devices = [d for d in sd.query_devices() if d.get("max_input_channels", 0) > 0]
+            input_devices = [
+                d for d in sd.query_devices() if d.get("max_input_channels", 0) > 0
+            ]
             print(f"Found {len(input_devices)} input device(s)")
             if not input_devices:
                 optional_failures.append("No input devices detected.")

@@ -55,8 +55,7 @@ def test_hugging_face_resolved_its_cache_constants_from_the_isolated_environment
         "before pytest_configure ran."
     )
     assert _under(constants.HF_HUB_CACHE, expected_root), (
-        f"HF_HUB_CACHE is {constants.HF_HUB_CACHE}, expected it under "
-        f"{expected_root}"
+        f"HF_HUB_CACHE is {constants.HF_HUB_CACHE}, expected it under {expected_root}"
     )
 
 

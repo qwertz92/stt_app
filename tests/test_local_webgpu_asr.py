@@ -449,7 +449,9 @@ def test_granite_ctc_fetches_the_int8_graph_and_neither_of_the_other_two():
     assert "onnx/model.onnx" not in fetched
     assert "onnx/model_fp16.onnx" not in fetched
     # The conversion scripts and the parity reports are not part of the model.
-    assert not {name for name in fetched if name.startswith(("conversion/", "reports/"))}
+    assert not {
+        name for name in fetched if name.startswith(("conversion/", "reports/"))
+    }
     assert set(layout.required_files) <= fetched
 
 
@@ -559,7 +561,9 @@ def test_parakeet_ultra_fetches_the_four_files_it_runs_by_name():
     how hub filters, so only exact names keep the download at 668 MB."""
     layout = local_webgpu_asr._MODEL_LAYOUTS[PARAKEET_ULTRA_MODEL_SIZE]
 
-    assert not [pattern for pattern in layout.allow_patterns if set(pattern) & set("*?[")]
+    assert not [
+        pattern for pattern in layout.allow_patterns if set(pattern) & set("*?[")
+    ]
     assert set(layout.allow_patterns) == set(layout.required_files) | {
         ".gitattributes",
         "README.md",
@@ -570,12 +574,18 @@ def test_parakeet_ultra_fetches_the_four_files_it_runs_by_name():
 def test_the_inventory_finds_parakeet_ultra_where_the_download_puts_it(tmp_path):
     root = _write_ultra_download(tmp_path)
 
-    assert resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) == root
+    assert (
+        resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
+        == root
+    )
     assert PARAKEET_ULTRA_MODEL_SIZE in find_cached_webgpu_models(str(tmp_path))
 
     (root / "int8" / "decoder_joint-model.int8.onnx").unlink()
 
-    assert resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) is None
+    assert (
+        resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
+        is None
+    )
     assert PARAKEET_ULTRA_MODEL_SIZE not in find_cached_webgpu_models(str(tmp_path))
 
 
@@ -677,7 +687,9 @@ def test_a_layout_without_an_inference_subdir_loads_from_its_root(tmp_path):
         (root / relative).write_bytes(relative.encode())
     before = _tree(root)
 
-    assert local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_MODEL_SIZE, root) == root
+    assert (
+        local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_MODEL_SIZE, root) == root
+    )
     assert _tree(root) == before
 
 
@@ -1478,11 +1490,17 @@ def test_an_extensible_wav_is_decoded_by_its_subformat_not_by_its_format_tag(tmp
     assert "error" not in decoded["extensible_float"], decoded["extensible_float"]
     classic = decoded["classic_float"]["samples"]
     assert (
-        max(abs(left - right) for left, right in zip(classic, _WAV_FLOAT_SAMPLES, strict=True))
+        max(
+            abs(left - right)
+            for left, right in zip(classic, _WAV_FLOAT_SAMPLES, strict=True)
+        )
         < 1e-6
     )
     extensible = decoded["extensible_float"]["samples"]
-    assert max(abs(left - right) for left, right in zip(extensible, classic, strict=True)) < 1e-6
+    assert (
+        max(abs(left - right) for left, right in zip(extensible, classic, strict=True))
+        < 1e-6
+    )
     assert decoded["extensible_pcm16"]["samples"] == pcm16_expected
 
 
@@ -1607,36 +1625,40 @@ _IMPORT_SPECIFIER = re.compile(
 )
 
 # Forms kept out of the parametrize list so the test source stays scannable.
-_MULTILINE_IMPORT = '''import {
+_MULTILINE_IMPORT = """import {
   a,
   b,
-} from "pkg-b";'''
-_MULTILINE_DYNAMIC_IMPORT = '''const m = await import(
+} from "pkg-b";"""
+_MULTILINE_DYNAMIC_IMPORT = """const m = await import(
   "pkg-x"
-);'''
-_COMMENTED_OUT_IMPORT = '''/*
+);"""
+_COMMENTED_OUT_IMPORT = """/*
 import "old-pkg";
 */
-import "pkg-y";'''
-_STRING_THAT_LOOKS_LIKE_AN_IMPORT = '''export default 1;
-const s = " from 'ghost'";'''
+import "pkg-y";"""
+_STRING_THAT_LOOKS_LIKE_AN_IMPORT = """export default 1;
+const s = " from 'ghost'";"""
 # Discriminating on purpose. A URL in a string does not test string handling:
 # without it the `//` is eaten as a line comment, but the damage stops at the
 # newline and the next line's import is still found. On one line it does.
-_COMMENT_MARKER_IN_A_STRING = '''const u = "a//b"; import "pkg-u";'''
+_COMMENT_MARKER_IN_A_STRING = """const u = "a//b"; import "pkg-u";"""
 # Likewise, a template literal inside `export function f()` is already blocked
 # by the `(` in the named-import bound, so it proves nothing about blanking.
 _TEMPLATE_LITERAL_BANNER = (
-    '''export const banner = ''' + BACKTICK + '''built from "nowhere"''' + BACKTICK + ''';'''
+    """export const banner = """
+    + BACKTICK
+    + '''built from "nowhere"'''
+    + BACKTICK
+    + """;"""
 )
 # A regex literal holding `/*` starts a block comment for a naive lexer, which
 # then swallows everything up to the next real `*/` -- including the import.
-_REGEX_WITH_A_COMMENT_MARKER = '''const token = /[/*]/;
+_REGEX_WITH_A_COMMENT_MARKER = """const token = /[/*]/;
 import "pkg-r";
-/* an ordinary block comment further down */'''
-_TEMPLATE_LITERAL_FROM = '''export function f() {
+/* an ordinary block comment further down */"""
+_TEMPLATE_LITERAL_FROM = """export function f() {
   return `copied from "not-a-pkg"`;
-}'''
+}"""
 
 
 def _runner_imports() -> set[str]:
@@ -1646,11 +1668,7 @@ def _runner_imports() -> set[str]:
     )
     source = _strip_js_comments(runner.read_text(encoding="utf-8"))
     specifiers = set(_IMPORT_SPECIFIER.findall(source))
-    return {
-        name
-        for name in specifiers
-        if not name.startswith(("node:", ".", "/"))
-    }
+    return {name for name in specifiers if not name.startswith(("node:", ".", "/"))}
 
 
 def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
@@ -1664,7 +1682,9 @@ def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
     reinstall could never fix it.
     """
     root = Path(__file__).resolve().parents[1]
-    declared = set(json.loads((root / "package.json").read_text("utf-8"))["dependencies"])
+    declared = set(
+        json.loads((root / "package.json").read_text("utf-8"))["dependencies"]
+    )
     probed = _probe_imports(monkeypatch)
 
     # An empty set is a subset of everything, so both halves are asserted.
@@ -1761,9 +1781,12 @@ def test_a_model_in_the_default_cache_is_found_with_a_model_dir_set(
     )
     # ...while the download destination stays the configured Model Dir, so a
     # progress bar still measures the directory a download writes into.
-    assert local_webgpu_asr.webgpu_download_destination(
-        PARAKEET_MODEL_SIZE, str(model_dir)
-    ) == model_dir / "parakeet-tdt-0.6b-v3-onnx"
+    assert (
+        local_webgpu_asr.webgpu_download_destination(
+            PARAKEET_MODEL_SIZE, str(model_dir)
+        )
+        == model_dir / "parakeet-tdt-0.6b-v3-onnx"
+    )
 
 
 def test_a_machine_without_a_gpu_stops_restarting_the_child(monkeypatch, tmp_path):
@@ -1952,7 +1975,9 @@ def test_the_stdout_reader_finishes_even_when_nobody_drains_it():
         f"the pipe held open; it stopped at {snapshot[-1]!r}"
     )
     assert len(snapshot) == 128, f"the bound was not kept: {len(snapshot)}"
-    assert snapshot[0] == lines[-128], f"more than the oldest was dropped: {snapshot[0]!r}"
+    assert snapshot[0] == lines[-128], (
+        f"more than the oldest was dropped: {snapshot[0]!r}"
+    )
 
 
 def _started_command(monkeypatch, tmp_path, **kwargs) -> list[str]:
@@ -2043,9 +2068,7 @@ def test_the_transcriber_keeps_only_a_preference_that_changes_something(
     assert transcriber.preferred_device == expected
 
 
-def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(
-    monkeypatch, tmp_path
-):
+def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(monkeypatch, tmp_path):
     """The old text says the GPU "was not available or did not load". With CPU
     measured as the fastest device for this model the runtime never tried a GPU
     at all, so that sentence would be false and its red warning misleading."""

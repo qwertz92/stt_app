@@ -148,8 +148,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "AssemblyAI API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "AssemblyAI API key is missing. Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._region = normalize_assemblyai_region(region)
@@ -299,8 +298,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 f"(status: {transcript.status})."
             )
         interval = float(
-            getattr(getattr(aai, "settings", None), "polling_interval", 3.0)
-            or 3.0
+            getattr(getattr(aai, "settings", None), "polling_interval", 3.0) or 3.0
         )
         interval = min(max(interval, 0.5), 10.0)
         return poll_job(
@@ -420,9 +418,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (
-                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
-            )
+            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
         except Exception as exc:
             if _is_ssl_error(exc):
                 # The shared message, which names SSL_CERT_FILE too:
@@ -577,9 +573,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     StreamingClientOptions(
                         api_key=self._api_key,
                         api_host=ASSEMBLYAI_STREAMING_HOSTS[self._region],
-                        terminate_timeout=(
-                            ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S
-                        ),
+                        terminate_timeout=(ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S),
                     )
                 )
             with self._stream_lock:
@@ -736,17 +730,17 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             client = self._stream_client
             generation = self._stream_generation
             if client is None or self._stream_state != "active":
-            # Refusing is not enough while the handshake is still running.
-            # `start_stream` would then finish, find the state still
-            # "starting", publish the session as "active" -- and nobody owns
-            # it: the caller has already been told the stop failed and has
-            # torn its own state down. Every later dictation is then refused
-            # with "Streaming session already active" for the rest of the
-            # app's life, and the remote socket stays open and billed.
-            # Marking it retiring is exactly what `abort_stream` does, and
-            # both handshakes already have the branch that tears the client
-            # down when they come back to a state that is no longer
-            # "starting".
+                # Refusing is not enough while the handshake is still running.
+                # `start_stream` would then finish, find the state still
+                # "starting", publish the session as "active" -- and nobody owns
+                # it: the caller has already been told the stop failed and has
+                # torn its own state down. Every later dictation is then refused
+                # with "Streaming session already active" for the rest of the
+                # app's life, and the remote socket stays open and billed.
+                # Marking it retiring is exactly what `abort_stream` does, and
+                # both handshakes already have the branch that tears the client
+                # down when they come back to a state that is no longer
+                # "starting".
                 if self._stream_state == "starting":
                     self._stream_state = "retiring"
                     self._stream_on_partial = None

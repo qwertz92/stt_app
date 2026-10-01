@@ -53,9 +53,7 @@ class _FakeSecretStore:
     def set_api_key(self, provider: str, api_key: str) -> None:
         self.set_calls.append((provider, api_key))
         self._values[provider] = api_key
-        self._sources[provider] = (
-            "insecure" if self._insecure_enabled else "keyring"
-        )
+        self._sources[provider] = "insecure" if self._insecure_enabled else "keyring"
 
     def delete_api_key(self, provider: str) -> None:
         self.delete_calls.append(provider)
@@ -354,9 +352,9 @@ def test_provider_connection_test_result_persists_between_dialogs(tmp_path):
     assert (
         reopened._provider_last_test_labels["openai"].text()
     ) == "Last test (2026-06-19 17:30:00): \u2713 OpenAI OK"
-    assert "color: #1b5e20" in reopened._provider_last_test_labels[
-        "openai"
-    ].styleSheet()
+    assert (
+        "color: #1b5e20" in reopened._provider_last_test_labels["openai"].styleSheet()
+    )
     _ = app
 
 
@@ -617,8 +615,7 @@ def test_every_settings_field_is_either_built_or_deliberately_exempt():
     This lists what may be absent and why, so adding a field forces a choice.
     """
     source = (
-        Path(settings_dialog_module.__file__).parent
-        / "settings_dialog_persistence.py"
+        Path(settings_dialog_module.__file__).parent / "settings_dialog_persistence.py"
     ).read_text(encoding="utf-8")
     tree = ast.parse(source)
     passed: set[str] = set()
@@ -785,9 +782,7 @@ def test_a_benchmark_failure_does_not_widen_the_settings_dialog():
     assert label.text() == _LONG_BENCHMARK_FAILURE, "text() must report what was set"
     assert label.toolTip() == _LONG_BENCHMARK_FAILURE
     shown = QtWidgets.QLabel.text(label)
-    assert shown.endswith("\u2026"), (
-        f"the truncation has to be visible, got {shown!r}"
-    )
+    assert shown.endswith("\u2026"), f"the truncation has to be visible, got {shown!r}"
     dialog.hide()
 
 

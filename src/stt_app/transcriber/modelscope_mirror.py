@@ -323,11 +323,7 @@ def _download_file(
                 else:
                     incomplete.unlink(missing_ok=True)
                     return
-            elif (
-                sha256
-                and final_size < expected_size
-                and not incomplete.exists()
-            ):
+            elif sha256 and final_size < expected_size and not incomplete.exists():
                 # An older version of this module published its partials at
                 # the final name, so a short file there may be a resumable
                 # prefix of ours. It may equally be somebody else's truncated

@@ -822,8 +822,7 @@ class TestDeepgramStreaming:
             t.stop_stream()
 
         assert t._stream_state == "retiring", (
-            "the handshake will publish this session as active and nobody "
-            "will own it"
+            "the handshake will publish this session as active and nobody will own it"
         )
         assert t._stream_on_partial is None
         assert t._stream_on_error is None
@@ -921,9 +920,7 @@ class TestDeepgramStreaming:
             _FakeWebSocketApp.binary_send_started = None
             _FakeWebSocketApp.release_binary_send = None
 
-    def test_a_blocking_push_still_fails_when_the_drain_never_comes(
-        self, monkeypatch
-    ):
+    def test_a_blocking_push_still_fails_when_the_drain_never_comes(self, monkeypatch):
         """A stalled sender still fails the stream; it only takes longer.
 
         Waiting forever would hang the connect worker, and with it the
@@ -1114,8 +1111,7 @@ class TestSettingsStoreDeepgram:
 
 def _deepgram_log_records(caplog):
     return [
-        r for r in caplog.records
-        if r.name == "stt_app.transcriber.deepgram_provider"
+        r for r in caplog.records if r.name == "stt_app.transcriber.deepgram_provider"
     ]
 
 

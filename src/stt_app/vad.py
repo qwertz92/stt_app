@@ -91,13 +91,14 @@ def measure_longest_speech_run_s(
     longest = 0
     current = 0
     for start in range(0, samples.size, window):
-        chunk = samples[start:start + window]
+        chunk = samples[start : start + window]
         if float(np.sqrt(np.mean(chunk * chunk))) >= threshold:
             current += chunk.size
             longest = max(longest, current)
         else:
             current = 0
     return longest / float(sample_rate)
+
 
 def measure_peak_windowed_rms_pcm(
     pcm_bytes: bytes,
@@ -120,7 +121,7 @@ def measure_peak_windowed_rms_pcm(
     window = max(1, int(sample_rate * (max(1, window_ms) / 1000.0)))
     peak = 0.0
     for start in range(0, samples.size, window):
-        chunk = samples[start:start + window]
+        chunk = samples[start : start + window]
         rms = float(np.sqrt(np.mean(chunk * chunk)))
         if rms > peak:
             peak = rms

@@ -194,7 +194,11 @@ def _coerce_run_field(annotation: object, value: Any) -> Any:
     own constructor. `field.type` is the annotation's text under
     `from __future__ import annotations`.
     """
-    kind = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", "")
+    kind = (
+        annotation
+        if isinstance(annotation, str)
+        else getattr(annotation, "__name__", "")
+    )
     if isinstance(value, bool):
         return _RUN_FIELD_EMPTY.get(kind, value)
     if kind == "float":
@@ -467,9 +471,7 @@ def _run_onnx_case(
         _raise_if_canceled(cancel_check)
         runtime_device = transcriber.runtime_device or "auto"
         final_runtime_device = runtime_device
-        runtime_details = str(
-            getattr(transcriber, "runtime_details_text", "") or ""
-        )
+        runtime_details = str(getattr(transcriber, "runtime_details_text", "") or "")
 
         if progress_callback is not None:
             progress_callback(
@@ -505,9 +507,7 @@ def _run_onnx_case(
                 getattr(transcriber, "runtime_details_text", "") or runtime_details
             )
 
-            transcript_words = len(
-                [piece for piece in transcript.split(" ") if piece]
-            )
+            transcript_words = len([piece for piece in transcript.split(" ") if piece])
             rtf = elapsed / duration_hint if duration_hint > 0 else math.nan
 
             all_runs.append(
@@ -767,9 +767,7 @@ def run_benchmark_cases(
     language = (str(language).strip() or None) if language is not None else None
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
-    planned = planned_benchmark_cases(
-        model_names, webgpu_devices, device, compute_type
-    )
+    planned = planned_benchmark_cases(model_names, webgpu_devices, device, compute_type)
     total_cases = len(planned)
     for case_index, planned_case in enumerate(planned, start=1):
         _raise_if_canceled(cancel_check)
@@ -783,10 +781,9 @@ def run_benchmark_cases(
                 f"{model_name} ({device_target}/{display_compute_type})"
             )
         try:
-            if (
-                model_name in LOCAL_ENGLISH_ONLY_MODELS
-                and (language or "auto").lower() not in {"auto", "en"}
-            ):
+            if model_name in LOCAL_ENGLISH_ONLY_MODELS and (
+                language or "auto"
+            ).lower() not in {"auto", "en"}:
                 # The Run Benchmark window refuses this before the run; the
                 # CLI and every other caller arrive here. The Granite CTC
                 # graph takes no language input, so it decoded English and
@@ -907,8 +904,7 @@ def format_benchmark_summary(
     if details:
         lines.extend(["Benchmark details:"])
         lines.extend(
-            f"- {key}: {_format_detail_value(value)}"
-            for key, value in details.items()
+            f"- {key}: {_format_detail_value(value)}" for key, value in details.items()
         )
         lines.append("")
     if environment is not None:
@@ -954,9 +950,11 @@ def format_benchmark_summary(
     if best_rtf is not None:
         lines.extend(
             [
-                ("Best real-time factor: "
-                 f"{best_rtf.model} on {best_rtf.device} "
-                 f"({_format_number(best_rtf.avg_rtf)})"),
+                (
+                    "Best real-time factor: "
+                    f"{best_rtf.model} on {best_rtf.device} "
+                    f"({_format_number(best_rtf.avg_rtf)})"
+                ),
                 "RTF < 1.0 means faster than real-time.",
             ]
         )

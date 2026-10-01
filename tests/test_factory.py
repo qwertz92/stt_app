@@ -68,6 +68,7 @@ def test_factory_assemblyai_returns_assemblyai_transcriber():
 
 def test_factory_openai_returns_openai_transcriber():
     settings = AppSettings(engine="openai")
+
     class FakeSecretStore:
         def get_api_key(self, name):
             return "openai-test-key"
@@ -276,17 +277,13 @@ def test_a_pinned_device_ignores_the_measurement_on_both_runtimes():
     nemotron_base = AppSettings(
         engine="local",
         model_size="nemotron-3.5-asr-streaming-0.6b-int4",
-        onnx_auto_preferred_devices={
-            "nemotron-3.5-asr-streaming-0.6b-int4": "cpu"
-        },
+        onnx_auto_preferred_devices={"nemotron-3.5-asr-streaming-0.6b-int4": "cpu"},
     )
 
     for device in ("gpu", "webgpu", "dml", "cpu"):
         node = create_transcriber(replace(node_base, local_onnx_device=device))
         assert node.preferred_device == "", device
-        nemotron = create_transcriber(
-            replace(nemotron_base, local_onnx_device=device)
-        )
+        nemotron = create_transcriber(replace(nemotron_base, local_onnx_device=device))
         assert nemotron.provider_order == nemotron_provider_order(device), device
 
 
@@ -300,9 +297,7 @@ def test_a_measured_device_reorders_nemotrons_provider_order():
     measured = create_transcriber(
         replace(
             base,
-            onnx_auto_preferred_devices={
-                "nemotron-3.5-asr-streaming-0.6b-int4": "cpu"
-            },
+            onnx_auto_preferred_devices={"nemotron-3.5-asr-streaming-0.6b-int4": "cpu"},
         )
     )
 

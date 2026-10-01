@@ -383,17 +383,17 @@ class AppSettings:
             max(SILENCE_GATE_THRESHOLD_MIN, silence_gate_threshold),
         )
 
-        insert_target = str(
-            merged.get("insert_target", DEFAULT_INSERT_TARGET)
-        ).strip().lower()
+        insert_target = (
+            str(merged.get("insert_target", DEFAULT_INSERT_TARGET)).strip().lower()
+        )
         if insert_target not in VALID_INSERT_TARGETS:
             insert_target = DEFAULT_INSERT_TARGET
 
         # Read from raw (not merged) so an absent key can fall back to the
         # earlier boolean before defaulting.
-        concurrent_transcription_mode = str(
-            raw.get("concurrent_transcription_mode", "")
-        ).strip().lower()
+        concurrent_transcription_mode = (
+            str(raw.get("concurrent_transcription_mode", "")).strip().lower()
+        )
         if concurrent_transcription_mode not in VALID_CONCURRENT_TRANSCRIPTION_MODES:
             # Migrate the earlier boolean: True meant "queue + insert", while
             # False meant the old discard-on-supersede behavior, now "cancel".
@@ -426,9 +426,7 @@ class AppSettings:
         hotkey = str(merged.get("hotkey", DEFAULT_HOTKEY))
         hotkey = _normalize_hotkey(hotkey, default=DEFAULT_HOTKEY)
         cancel_hotkey = str(merged.get("cancel_hotkey", DEFAULT_CANCEL_HOTKEY))
-        cancel_hotkey = _normalize_hotkey(
-            cancel_hotkey, default=DEFAULT_CANCEL_HOTKEY
-        )
+        cancel_hotkey = _normalize_hotkey(cancel_hotkey, default=DEFAULT_CANCEL_HOTKEY)
         # Optional hotkeys: an empty stored value is a deliberate "disabled"
         # and must stay empty; only invalid non-empty values fall back to the
         # respective default.
@@ -473,14 +471,13 @@ class AppSettings:
         deepgram_model = str(merged.get("deepgram_model", DEFAULT_DEEPGRAM_MODEL))
         if deepgram_model not in DEEPGRAM_MODELS:
             deepgram_model = DEFAULT_DEEPGRAM_MODEL
-        assemblyai_model = str(
-            merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL)
-        )
-        if assemblyai_model == "universal-3-pro" or assemblyai_model not in ASSEMBLYAI_MODELS:
+        assemblyai_model = str(merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL))
+        if (
+            assemblyai_model == "universal-3-pro"
+            or assemblyai_model not in ASSEMBLYAI_MODELS
+        ):
             assemblyai_model = DEFAULT_ASSEMBLYAI_MODEL
-        elevenlabs_model = str(
-            merged.get("elevenlabs_model", DEFAULT_ELEVENLABS_MODEL)
-        )
+        elevenlabs_model = str(merged.get("elevenlabs_model", DEFAULT_ELEVENLABS_MODEL))
         if elevenlabs_model not in ELEVENLABS_MODELS:
             elevenlabs_model = DEFAULT_ELEVENLABS_MODEL
         azure_speech_model = str(
@@ -510,24 +507,26 @@ class AppSettings:
         mistral_model = _text_setting(merged.get("mistral_model"))
         if mistral_model not in MISTRAL_MODELS:
             mistral_model = DEFAULT_MISTRAL_MODEL
-        custom_api_mode = str(
-            merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)
-        ).strip().lower()
+        custom_api_mode = (
+            str(merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)).strip().lower()
+        )
         if custom_api_mode not in CUSTOM_API_MODES:
             custom_api_mode = DEFAULT_CUSTOM_API_MODE
-        start_beep_tone = str(
-            merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)
-        ).strip().lower()
+        start_beep_tone = (
+            str(merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)).strip().lower()
+        )
         if start_beep_tone not in VALID_START_BEEP_TONES:
             start_beep_tone = DEFAULT_START_BEEP_TONE
-        completion_beep_tone = str(
-            merged.get("completion_beep_tone", DEFAULT_COMPLETION_BEEP_TONE)
-        ).strip().lower()
+        completion_beep_tone = (
+            str(merged.get("completion_beep_tone", DEFAULT_COMPLETION_BEEP_TONE))
+            .strip()
+            .lower()
+        )
         if completion_beep_tone not in VALID_START_BEEP_TONES:
             completion_beep_tone = DEFAULT_COMPLETION_BEEP_TONE
-        overlay_corner = str(
-            merged.get("overlay_corner", DEFAULT_OVERLAY_CORNER)
-        ).strip().lower()
+        overlay_corner = (
+            str(merged.get("overlay_corner", DEFAULT_OVERLAY_CORNER)).strip().lower()
+        )
         if overlay_corner not in VALID_OVERLAY_CORNERS:
             overlay_corner = DEFAULT_OVERLAY_CORNER
         # `_exact_int_or_none`, not `int()`: truncation toward zero turned
@@ -549,9 +548,7 @@ class AppSettings:
         # unusable value here.
         if recordings_max_count < RECORDINGS_MAX_COUNT_UNLIMITED:
             recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
-        recordings_max_count = min(
-            RECORDINGS_MAX_COUNT_CEILING, recordings_max_count
-        )
+        recordings_max_count = min(RECORDINGS_MAX_COUNT_CEILING, recordings_max_count)
         raw_history_max_items = merged.get(
             "history_max_items",
             DEFAULT_HISTORY_MAX_ITEMS,
@@ -587,9 +584,11 @@ class AppSettings:
             # on carries the current schema and is kept.
             silence_gate_enabled = DEFAULT_SILENCE_GATE_ENABLED
 
-        display_timezone = str(
-            merged.get("display_timezone", DEFAULT_DISPLAY_TIMEZONE)
-        ).strip().lower()
+        display_timezone = (
+            str(merged.get("display_timezone", DEFAULT_DISPLAY_TIMEZONE))
+            .strip()
+            .lower()
+        )
         if display_timezone not in VALID_DISPLAY_TIMEZONES:
             display_timezone = DEFAULT_DISPLAY_TIMEZONE
         try:
@@ -751,9 +750,7 @@ class AppSettings:
             has_azure_key=parse_json_bool(merged.get("has_azure_key")),
             has_funasr_key=parse_json_bool(merged.get("has_funasr_key")),
             has_custom_key=parse_json_bool(merged.get("has_custom_key")),
-            has_speechmatics_key=parse_json_bool(
-                merged.get("has_speechmatics_key")
-            ),
+            has_speechmatics_key=parse_json_bool(merged.get("has_speechmatics_key")),
             has_mistral_key=parse_json_bool(merged.get("has_mistral_key")),
             groq_model=groq_model,
             openai_model=openai_model,
@@ -910,8 +907,7 @@ class SettingsStore:
             # refreshed its `.bak` -- on the Qt thread, and destroying the one
             # older copy a backup exists to be.
             if not primary_unreadable and (
-                source == "backup"
-                or raw != self._payload_for_save(settings, unknown)
+                source == "backup" or raw != self._payload_for_save(settings, unknown)
             ):
                 # Guarded: the settings are already parsed and correct.
                 # This write only persists the normalisation, so letting it

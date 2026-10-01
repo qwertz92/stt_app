@@ -28,13 +28,21 @@ def _silence(*, sample_rate: int, duration_s: float) -> np.ndarray:
 def create_sample_audio(sample_rate: int = 16_000) -> np.ndarray:
     parts = [
         _silence(sample_rate=sample_rate, duration_s=0.2),
-        _tone(sample_rate=sample_rate, frequency_hz=220.0, duration_s=0.35, amplitude=0.25),
+        _tone(
+            sample_rate=sample_rate, frequency_hz=220.0, duration_s=0.35, amplitude=0.25
+        ),
         _silence(sample_rate=sample_rate, duration_s=0.08),
-        _tone(sample_rate=sample_rate, frequency_hz=260.0, duration_s=0.25, amplitude=0.22),
+        _tone(
+            sample_rate=sample_rate, frequency_hz=260.0, duration_s=0.25, amplitude=0.22
+        ),
         _silence(sample_rate=sample_rate, duration_s=0.08),
-        _tone(sample_rate=sample_rate, frequency_hz=310.0, duration_s=0.32, amplitude=0.23),
+        _tone(
+            sample_rate=sample_rate, frequency_hz=310.0, duration_s=0.32, amplitude=0.23
+        ),
         _silence(sample_rate=sample_rate, duration_s=0.12),
-        _tone(sample_rate=sample_rate, frequency_hz=270.0, duration_s=0.24, amplitude=0.21),
+        _tone(
+            sample_rate=sample_rate, frequency_hz=270.0, duration_s=0.24, amplitude=0.21
+        ),
         _silence(sample_rate=sample_rate, duration_s=0.45),
     ]
     return np.concatenate(parts)

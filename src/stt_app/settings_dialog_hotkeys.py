@@ -6,6 +6,7 @@ the tray middle-click toggle -- so the Transcription tab holds only what
 changes during daily dictation (engine, model, language, mode, insertion) and
 fits without scrolling.
 """
+
 from __future__ import annotations
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -20,7 +21,11 @@ from .settings_dialog_helpers import (
 # The widest chord a hotkey field has to show: all four modifiers and a
 # two-digit function key, in the text the field itself renders.
 _WIDEST_HOTKEY_TEXT = QtGui.QKeySequence(
-    QtCore.Qt.CTRL | QtCore.Qt.ALT | QtCore.Qt.SHIFT | QtCore.Qt.META | QtCore.Qt.Key_F12
+    QtCore.Qt.CTRL
+    | QtCore.Qt.ALT
+    | QtCore.Qt.SHIFT
+    | QtCore.Qt.META
+    | QtCore.Qt.Key_F12
 ).toString(QtGui.QKeySequence.NativeText)
 # Room beside that text for the field's frame, text margins and clear button.
 _HOTKEY_FIELD_EXTRA_PX = 48
@@ -52,7 +57,9 @@ class _HotkeysTabMixin:
         # the page's minimum width.
         hotkey_hint.setWordWrap(True)
         self._style_field_hint_label(hotkey_hint)
-        hotkey_form.addRow("Hotkey", self._field_with_hint(self.hotkey_edit, hotkey_hint))
+        hotkey_form.addRow(
+            "Hotkey", self._field_with_hint(self.hotkey_edit, hotkey_hint)
+        )
 
         self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
         self.cancel_hotkey_edit.setMaximumSequenceLength(1)

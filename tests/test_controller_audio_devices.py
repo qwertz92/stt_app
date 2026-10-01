@@ -57,9 +57,7 @@ def test_disabling_warm_stream_defers_close_instead_of_hard_close():
     controller, app = make_controller()
     stub = _StubWarmStream()
     controller._warm_mic_stream = stub
-    controller._settings = replace(
-        controller._settings, keep_microphone_warm=False
-    )
+    controller._settings = replace(controller._settings, keep_microphone_warm=False)
 
     controller._sync_warm_microphone_stream()
 

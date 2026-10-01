@@ -157,8 +157,7 @@ def transcript_from_json(
             else type(parsed).__name__
         )
         raise TranscriptionError(
-            f"{prefix}: the answer has no 'text' field "
-            f"(it holds: {keys or 'nothing'})."
+            f"{prefix}: the answer has no 'text' field (it holds: {keys or 'nothing'})."
         )
     return normalize_transcript_text(value)
 

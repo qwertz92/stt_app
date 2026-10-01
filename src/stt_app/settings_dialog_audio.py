@@ -8,6 +8,7 @@ Transcription tab stays focused on what changes during daily dictation
 The mixin and its attributes keep the names they were split out under; only
 the visible tab titles were shortened.
 """
+
 from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
@@ -406,6 +407,4 @@ class _AudioTabMixin:
         self._microphone_repopulate_timer.start()
 
     def _on_microphone_repopulate_timeout(self) -> None:
-        self._populate_microphone_combo(
-            str(self.microphone_combo.currentData() or "")
-        )
+        self._populate_microphone_combo(str(self.microphone_combo.currentData() or ""))

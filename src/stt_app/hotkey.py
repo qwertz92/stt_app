@@ -126,6 +126,7 @@ def _supported_key_names() -> str:
     the map holds. Modifier names are left out because the check below rejects
     them anyway.
     """
+
     def is_function_key(name: str) -> bool:
         return name.startswith("F") and name[1:].isdigit()
 
@@ -341,7 +342,6 @@ if QtCore is not None:
 
             return False, 0
 
-
     class QtPowerResumeEventFilter(QtCore.QAbstractNativeEventFilter):
         def __init__(self, callback) -> None:
             super().__init__()
@@ -361,13 +361,10 @@ if QtCore is not None:
             except Exception:
                 return False, 0
 
-            if (
-                msg.message == WM_POWERBROADCAST
-                and int(msg.wParam) in {
-                    PBT_APMRESUMESUSPEND,
-                    PBT_APMRESUMEAUTOMATIC,
-                }
-            ):
+            if msg.message == WM_POWERBROADCAST and int(msg.wParam) in {
+                PBT_APMRESUMESUSPEND,
+                PBT_APMRESUMEAUTOMATIC,
+            }:
                 self._callback()
 
             return False, 0
@@ -381,7 +378,6 @@ else:
 
         def nativeEventFilter(self, event_type, message):
             return False, 0
-
 
     class QtPowerResumeEventFilter:  # pragma: no cover - fallback outside Qt runtime
         def __init__(self, callback) -> None:

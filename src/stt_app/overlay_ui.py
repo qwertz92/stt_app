@@ -190,9 +190,7 @@ class _OverlayLanguageButton(QtWidgets.QPushButton):
         painter.setRenderHint(QtGui.QPainter.Antialiasing)
         painter.setPen(
             QtGui.QPen(
-                self._ARROW_COLOR
-                if self.isEnabled()
-                else self._DISABLED_ARROW_COLOR,
+                self._ARROW_COLOR if self.isEnabled() else self._DISABLED_ARROW_COLOR,
                 1.5,
             )
         )
@@ -434,9 +432,7 @@ class OverlayUI(QtWidgets.QWidget):
         # fixed 130 px offered only 94 px of caption area and clipped the
         # longest language names (Luxembourgish, Northern Sotho, ...), which
         # faster-whisper's ~100 languages expose by default.
-        self._language_button.setFixedSize(
-            self._widest_language_caption_width(), 22
-        )
+        self._language_button.setFixedSize(self._widest_language_caption_width(), 22)
         self._language_menu = QtWidgets.QMenu(self._language_button)
         self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
@@ -914,9 +910,7 @@ class OverlayUI(QtWidgets.QWidget):
         # last failed recording -- wrong for an error whose transcript already
         # exists, and actively harmful when that recording is a different one.
         show_retry = (
-            is_error
-            and not show_insert
-            and error_action != OVERLAY_ERROR_ACTION_NONE
+            is_error and not show_insert and error_action != OVERLAY_ERROR_ACTION_NONE
         )
         self._retry_button.setEnabled(show_retry)
         self._insert_button.setEnabled(show_insert)
@@ -960,8 +954,7 @@ class OverlayUI(QtWidgets.QWidget):
         """
         scrollbar = self._detail_scroll.verticalScrollBar()
         scrolled = (
-            self._detail_user_scrolled
-            or scrollbar.value() != self._detail_rest_value()
+            self._detail_user_scrolled or scrollbar.value() != self._detail_rest_value()
         )
         return scrolled or self._detail_label.hasSelectedText()
 
@@ -1133,9 +1126,7 @@ class OverlayUI(QtWidgets.QWidget):
     def _rebuild_language_menu(self) -> None:
         self._language_menu.clear()
         for mode in self._language_modes:
-            action = self._language_menu.addAction(
-                LANGUAGE_MODE_LABELS.get(mode, mode)
-            )
+            action = self._language_menu.addAction(LANGUAGE_MODE_LABELS.get(mode, mode))
             action.setCheckable(True)
             action.setChecked(mode == self._language_mode)
             action.triggered.connect(
@@ -1184,9 +1175,7 @@ class OverlayUI(QtWidgets.QWidget):
         if self._language_change_blocked:
             tooltip = "Language can be changed after the current operation finishes."
         elif not has_choices:
-            tooltip = (
-                f"Language is fixed to {label} for the selected engine and model."
-            )
+            tooltip = f"Language is fixed to {label} for the selected engine and model."
         else:
             tooltip = f"Current language: {label}. Click to change it."
         self._language_button.setToolTip(tooltip)
@@ -1333,19 +1322,21 @@ class OverlayUI(QtWidgets.QWidget):
             )
             set_window_pos.restype = ctypes.wintypes.BOOL
             hwnd = ctypes.wintypes.HWND(int(self.winId()))
-            insert_after = ctypes.wintypes.HWND(-1 if (
-                self._always_on_top or self._temporary_foreground_active
-            ) else -2)
+            insert_after = ctypes.wintypes.HWND(
+                -1 if (self._always_on_top or self._temporary_foreground_active) else -2
+            )
             flags = 0x0001 | 0x0002 | 0x0010 | 0x0040
-            return bool(set_window_pos(
-                hwnd,
-                insert_after,
-                0,
-                0,
-                0,
-                0,
-                flags,
-            ))
+            return bool(
+                set_window_pos(
+                    hwnd,
+                    insert_after,
+                    0,
+                    0,
+                    0,
+                    0,
+                    flags,
+                )
+            )
         except Exception:
             return False
 
@@ -1362,7 +1353,9 @@ class OverlayUI(QtWidgets.QWidget):
             super().mousePressEvent(event)
             return
         self._drag_active = True
-        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        self._drag_offset = (
+            event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        )
         event.accept()
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -1510,9 +1503,7 @@ class OverlayUI(QtWidgets.QWidget):
         if content_height + 6 > shown_detail_height:
             # The vertical scrollbar will appear; re-wrap once at the final
             # (narrower) width so the layout is stable from the start.
-            scrollbar_width = (
-                self._detail_scroll.verticalScrollBar().sizeHint().width()
-            )
+            scrollbar_width = self._detail_scroll.verticalScrollBar().sizeHint().width()
             narrowed_width = max(80, wrap_width - scrollbar_width)
             if narrowed_width != wrap_width:
                 self._detail_label.setFixedWidth(narrowed_width)
@@ -1685,9 +1676,7 @@ class OverlayUI(QtWidgets.QWidget):
     def _target_window_width(self) -> int:
         margins = self._layout.contentsMargins()
         frame = self._container_frame_margins()
-        chrome_width = (
-            frame.left() + frame.right() + margins.left() + margins.right()
-        )
+        chrome_width = frame.left() + frame.right() + margins.left() + margins.right()
         content_width = max(
             OVERLAY_WIDTH - chrome_width,
             self._header_widget.sizeHint().width(),
@@ -1786,9 +1775,7 @@ class OverlayUI(QtWidgets.QWidget):
                 widget.setParent(None)
                 widget.deleteLater()
 
-    def _build_queue_row(
-        self, token: int, label: str, kind: str
-    ) -> QtWidgets.QWidget:
+    def _build_queue_row(self, token: int, label: str, kind: str) -> QtWidgets.QWidget:
         row = QtWidgets.QWidget()
         row_layout = QtWidgets.QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
@@ -2049,6 +2036,4 @@ class OverlayUI(QtWidgets.QWidget):
         # queued transcription delivering inside that one event-loop turn puts
         # a transcript on screen, and an unconditional `ensure_compact_size`
         # then shrinks the box around it. The policy call re-checks.
-        QtCore.QTimer.singleShot(
-            0, self.ensure_compact_size_unless_showing_a_result
-        )
+        QtCore.QTimer.singleShot(0, self.ensure_compact_size_unless_showing_a_result)

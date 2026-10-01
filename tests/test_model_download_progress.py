@@ -193,9 +193,7 @@ def test_a_burst_after_a_flat_stretch_is_not_reported_as_its_own_rate():
         at = step * 0.5
         # 64 MB lands every 4 s, nothing in between.
         landed = (step // 8) * 64_000_000
-        seen.append(
-            tracker.measure("small", landed, now=at).speed_bytes_per_second
-        )
+        seen.append(tracker.measure("small", landed, now=at).speed_bytes_per_second)
 
     measured = [rate for rate in seen if rate is not None]
     assert measured, "no rate was ever published"
@@ -330,11 +328,13 @@ def test_the_baseline_counts_the_flat_layout_without_its_partials(tmp_path):
         destination / ".cache" / "huggingface" / "download" / "tok.json.incomplete",
         900_000,
     )
-    _write(destination / ".cache" / "huggingface" / "download" / "tok.json.metadata", 80)
-
-    assert completed_download_bytes("granite-speech-5.0-470m-turboctc", destination) == (
-        4_001_148
+    _write(
+        destination / ".cache" / "huggingface" / "download" / "tok.json.metadata", 80
     )
+
+    assert completed_download_bytes(
+        "granite-speech-5.0-470m-turboctc", destination
+    ) == (4_001_148)
 
 
 def test_the_baseline_skips_partial_blobs(tmp_path):
@@ -518,9 +518,7 @@ class _HubDriver:
                 unit_scale=True,
                 name=f"{HUB_SNAPSHOT_PROGRESS_BAR_NAME}.transfer",
             )
-        self.files = tqdm_class(
-            [], desc="Fetching 2 files", total=2, disable=True
-        )
+        self.files = tqdm_class([], desc="Fetching 2 files", total=2, disable=True)
 
     def start_file(self, total, initial=0):
         self.aggregate.total = (self.aggregate.total or 0) + total
@@ -590,9 +588,7 @@ def test_a_resume_of_a_nearly_finished_download_reads_as_nearly_finished():
     """
     baseline = 551_294_349
     report = _Recorder()
-    driver = _HubDriver(
-        hub_progress_tqdm_class(offset_progress_hook(report, baseline))
-    )
+    driver = _HubDriver(hub_progress_tqdm_class(offset_progress_hook(report, baseline)))
 
     driver.start_file(1_148)
     driver.chunk(1_148)
@@ -728,9 +724,7 @@ def test_report_unknown_download_progress_is_silent_and_optional():
     report_unknown_download_progress(None)
     report_unknown_download_progress(report)
 
-    assert report.seen == [
-        (DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN)
-    ]
+    assert report.seen == [(DOWNLOAD_PROGRESS_UNKNOWN, DOWNLOAD_PROGRESS_UNKNOWN)]
 
 
 def test_a_slow_transfer_rate_reads_in_kilobytes_not_as_zero_megabytes():

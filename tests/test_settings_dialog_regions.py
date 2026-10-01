@@ -110,7 +110,9 @@ def test_the_new_engines_have_a_label_models_and_a_key_row(tmp_path):
             assert engine in dialog._provider_key_edits
             assert dialog.test_conn_target_combo.findData(engine) >= 0
 
-        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("speechmatics"))
+        dialog.engine_combo.setCurrentIndex(
+            dialog.engine_combo.findData("speechmatics")
+        )
         offered = [
             dialog.remote_model_combo.itemData(i)
             for i in range(dialog.remote_model_combo.count())
@@ -150,6 +152,7 @@ def test_each_region_choice_says_what_it_guarantees(tmp_path):
     it is not labelled US; Deepgram's default endpoint is "global"."""
     dialog, _store, app = _dialog(tmp_path, AppSettings())
     try:
+
         def choices(provider: str) -> list[tuple[str, str, str]]:
             combo = dialog._provider_region_combos[provider]
             return [
@@ -290,13 +293,12 @@ def test_the_vocabulary_note_follows_the_speechmatics_model(tmp_path):
     models differ was described by a model it does not run."""
     dialog, _store, app = _dialog(tmp_path, AppSettings(engine="speechmatics"))
     try:
+
         def pick(model: str) -> str:
             dialog.remote_model_combo.setCurrentIndex(
                 dialog.remote_model_combo.findData(model)
             )
-            dialog._on_remote_model_activated(
-                dialog.remote_model_combo.currentIndex()
-            )
+            dialog._on_remote_model_activated(dialog.remote_model_combo.currentIndex())
             return dialog.vocabulary_support_label.text()
 
         assert "ignores the custom vocabulary" in pick("melia-1")

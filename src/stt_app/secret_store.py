@@ -89,9 +89,7 @@ class KeyringSecretStore:
         """Log the damaged file once per store and answer that it is damaged."""
         if not self._reported_damaged_insecure_store:
             self._reported_damaged_insecure_store = True
-            logger.warning(
-                "insecure_key_store_unreadable path=%s", self._insecure_path
-            )
+            logger.warning("insecure_key_store_unreadable path=%s", self._insecure_path)
         return True
 
     def _read_insecure_store(self) -> dict[str, str]:

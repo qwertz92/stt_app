@@ -19,6 +19,7 @@ The context menu stays a ``QMenu``: it is the model (labels, order, enabled
 state, callbacks) and is only *rendered* natively, so menu construction and its
 tests are unaffected.
 """
+
 from __future__ import annotations
 
 import ctypes
@@ -376,8 +377,7 @@ class Win32TrayApi:
             # read out of the wrong fields. Reported rather than raised,
             # because raising here would leave an icon nobody deletes.
             raise SetIconVersionError(
-                f"Shell_NotifyIconW(NIM_SETVERSION) failed: "
-                f"{ctypes.get_last_error()}"
+                f"Shell_NotifyIconW(NIM_SETVERSION) failed: {ctypes.get_last_error()}"
             )
 
     def update_tooltip(self, hwnd: int, tooltip: str) -> None:
@@ -579,9 +579,7 @@ class WindowsTrayIcon(QtCore.QObject):
                 delay,
                 exc_info=True,
             )
-            QtCore.QTimer.singleShot(
-                delay, lambda: self._attempt_add(generation)
-            )
+            QtCore.QTimer.singleShot(delay, lambda: self._attempt_add(generation))
             return
         self._visible = True
         self._add_attempt = 0
@@ -688,9 +686,7 @@ class WindowsTrayIcon(QtCore.QObject):
         elif event == WM_CONTEXTMENU:
             self.activated.emit(QtWidgets.QSystemTrayIcon.Context)
             # Signed: these are screen coordinates, not a message id.
-            self._show_context_menu(
-                signed_word(wparam), signed_word(int(wparam) >> 16)
-            )
+            self._show_context_menu(signed_word(wparam), signed_word(int(wparam) >> 16))
         return True
 
     def _show_context_menu(self, x: int, y: int) -> None:
@@ -699,7 +695,9 @@ class WindowsTrayIcon(QtCore.QObject):
             return
         actions = list(menu.actions())
         entries = [
-            (None, False, None) if action.isSeparator() else (
+            (None, False, None)
+            if action.isSeparator()
+            else (
                 action.text(),
                 action.isEnabled(),
                 action.isChecked() if action.isCheckable() else None,

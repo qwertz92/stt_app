@@ -103,13 +103,13 @@ def test_unmeasurable_audio_is_not_reported_as_silence():
     silence = _wav_bytes_from_float(np.zeros(16000, dtype=np.float32))
     assert measure_peak_windowed_rms(silence) == 0.0
 
+
 def _pcm(milliseconds, amplitude, sample_rate=16000):
     count = int(sample_rate * milliseconds / 1000)
     return b"".join(
         struct.pack("<h", int(amplitude * math.sin(index / 8.0)))
         for index in range(count)
     )
-
 
 
 def _run(pcm):
@@ -140,9 +140,7 @@ def test_unmeasurable_audio_is_never_reported_as_silence():
     """Callers must not skip audio they could not measure."""
     window = STREAMING_SPEECH_RUN_WINDOW_MS
     assert measure_longest_speech_run_s(b"", 16000, 0.004, window_ms=window) is None
-    assert (
-        measure_longest_speech_run_s(b"\x00", 16000, 0.004, window_ms=window) is None
-    )
+    assert measure_longest_speech_run_s(b"\x00", 16000, 0.004, window_ms=window) is None
     assert (
         measure_longest_speech_run_s(_pcm(100, 6000), 0, 0.004, window_ms=window)
         is None
@@ -159,6 +157,7 @@ def test_the_bucket_size_has_to_be_named_at_the_call_site():
     """
     with pytest.raises(TypeError):
         measure_longest_speech_run_s(_pcm(100, 6000), 16000, 0.004)
+
 
 _SAMPLE_WAV = Path(__file__).resolve().parents[1] / "samples" / "benchmark_sample.wav"
 
@@ -188,7 +187,7 @@ def _real_speech_runs():
     samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
     bucket = rate * STREAMING_SPEECH_RUN_WINDOW_MS // 1000
     loud = [
-        float(np.sqrt(np.mean(samples[i:i + bucket] ** 2)))
+        float(np.sqrt(np.mean(samples[i : i + bucket] ** 2)))
         >= DEFAULT_SILENCE_GATE_THRESHOLD
         for i in range(0, len(samples) - bucket, bucket)
     ]
@@ -197,10 +196,10 @@ def _real_speech_runs():
         if is_loud and start is None:
             start = index
         elif not is_loud and start is not None:
-            runs.append(raw[start * bucket * 2:index * bucket * 2])
+            runs.append(raw[start * bucket * 2 : index * bucket * 2])
             start = None
     if start is not None:
-        runs.append(raw[start * bucket * 2:])
+        runs.append(raw[start * bucket * 2 :])
     return rate, runs
 
 
@@ -298,6 +297,7 @@ def test_the_gate_does_not_pretend_to_filter_keyboard_noise():
         f"a key clack measures {clack:.3f}s and a short word {spoken:.3f}s -- "
         "if these have genuinely separated, the gate could be tightened"
     )
+
 
 def test_the_overlap_between_short_speech_and_transients_is_acknowledged():
     """Pin the fact that the classes overlap, so nobody "fixes" it by raising

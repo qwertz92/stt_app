@@ -103,7 +103,9 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert loaded[0].environment.memory_modules == _MEMORY_MODULES
     assert loaded[0].cases[0].avg_rtf == 0.6
     assert loaded[0].cases[0].runs[0].transcript == "hello world"
-    assert loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
+    assert (
+        loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
+    )
 
 
 def test_benchmark_options_parse_explicit_string_booleans():
@@ -547,7 +549,9 @@ def test_the_csv_still_neutralises_a_formula(tmp_path):
 
 
 @pytest.mark.parametrize("suffix", [".csv", ".md", ".xlsx"])
-def test_only_the_atomic_writer_touches_the_export_target(suffix, tmp_path, monkeypatch):
+def test_only_the_atomic_writer_touches_the_export_target(
+    suffix, tmp_path, monkeypatch
+):
     """Building the bytes first is half of it; the write itself must also not
     truncate. `path.write_bytes` and `zipfile.ZipFile(path, "w")` empty the file
     before the first byte goes in, so a disk that fills up or a permission that
@@ -574,6 +578,8 @@ def test_only_the_atomic_writer_touches_the_export_target(suffix, tmp_path, monk
     assert target.read_bytes() == before, (
         "something wrote to the target directly, around the atomic writer"
     )
+
+
 def test_a_carriage_return_never_splits_a_markdown_table_row(tmp_path):
     """Only `\n` was folded into `<br>`, and the sanitiser permits `\r`.
 

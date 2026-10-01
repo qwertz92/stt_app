@@ -65,9 +65,7 @@ def test_conditional_transition_does_not_modify_a_newer_recording(tmp_path):
         )
         is False
     )
-    assert (
-        store.mark_completed(expected_recording_id=snapshot.recording_id) is False
-    )
+    assert store.mark_completed(expected_recording_id=snapshot.recording_id) is False
     assert (
         store.mark_canceled(
             "stale cancel",

@@ -54,8 +54,9 @@ cover all measured runs of that case.
 
 ```python
 tokens = re.findall(r"\w+", transcript.lower())
-difflib.SequenceMatcher(None, reference_tokens, candidate_tokens,
-                        autojunk=False).ratio()
+difflib.SequenceMatcher(
+    None, reference_tokens, candidate_tokens, autojunk=False
+).ratio()
 ```
 
 Every detail there is load-bearing and was got wrong once. `autojunk=False`

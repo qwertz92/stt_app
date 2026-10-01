@@ -172,9 +172,10 @@ def _download(version: str, dest_zip: Path) -> None:
         archive_url = f"{root_url}/{archive_name}"
         print(f"Downloading {archive_url} ...")
         try:
-            with _open_download(archive_url, timeout=120) as response, open(
-                dest_zip, "wb"
-            ) as handle:
+            with (
+                _open_download(archive_url, timeout=120) as response,
+                open(dest_zip, "wb") as handle,
+            ):
                 shutil.copyfileobj(response, handle)
             if dest_zip.stat().st_size <= 0:
                 raise RuntimeError("downloaded archive is empty")
@@ -365,7 +366,9 @@ def main() -> int:
         default=None,
         help=r"Install directory (default: %USERPROFILE%\programs).",
     )
-    parser.add_argument("--force", action="store_true", help="Install even if Node exists.")
+    parser.add_argument(
+        "--force", action="store_true", help="Install even if Node exists."
+    )
     parser.add_argument(
         "--skip-ca",
         action="store_true",
@@ -387,7 +390,9 @@ def main() -> int:
 
     if args.check:
         existing = _existing_node()
-        print(f"STT_APP_NODE_PATH={os.environ.get('STT_APP_NODE_PATH', '') or '(unset)'}")
+        print(
+            f"STT_APP_NODE_PATH={os.environ.get('STT_APP_NODE_PATH', '') or '(unset)'}"
+        )
         print(f"Detected Node.js: {existing or '(none)'}")
         return 0 if existing else 1
 

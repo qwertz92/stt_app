@@ -254,16 +254,14 @@ def test_recent_entries_change_plan_detects_prepend_delete_and_update():
     prepend = recent_entries_change_plan([second, first], [third, second, first])
 
     assert [
-        (change.kind, change.previous_start, change.current_start)
-        for change in prepend
+        (change.kind, change.previous_start, change.current_start) for change in prepend
     ] == [("insert", 0, 0)]
     assert map_recent_entry_rows(prepend, [0, 1]) == [1, 2]
 
     delete = recent_entries_change_plan([third, second, first], [third, first])
 
     assert [
-        (change.kind, change.previous_start, change.previous_stop)
-        for change in delete
+        (change.kind, change.previous_start, change.previous_stop) for change in delete
     ] == [("delete", 1, 2)]
     assert map_recent_entry_rows(delete, [0, 1, 2]) == [0, 1]
 
@@ -277,8 +275,7 @@ def test_recent_entries_change_plan_detects_prepend_delete_and_update():
     update = recent_entries_change_plan([second, first], [edited_second, first])
 
     assert [
-        (change.kind, change.previous_start, change.current_start)
-        for change in update
+        (change.kind, change.previous_start, change.current_start) for change in update
     ] == [("update", 0, 0)]
     assert map_recent_entry_rows(update, [0, 1]) == [0, 1]
 
@@ -309,8 +306,7 @@ def test_recent_entries_change_plan_replaces_identity_changes():
     plan = recent_entries_change_plan([second, first], [different_entry, first])
 
     assert [
-        (change.kind, change.previous_start, change.current_start)
-        for change in plan
+        (change.kind, change.previous_start, change.current_start) for change in plan
     ] == [("replace", 0, 0)]
     assert map_recent_entry_rows(plan, [0, 1]) == [1]
 
@@ -487,9 +483,7 @@ def test_importing_a_file_that_is_not_utf8_says_so_in_words(tmp_path):
     export.write_bytes(
         # `ensure_ascii=False` is the point: the default escapes the
         # umlauts back to ASCII, and those bytes decode as UTF-8 fine.
-        json.dumps([{"text": "Grüße"}], ensure_ascii=False).encode(
-            "cp1252"
-        )
+        json.dumps([{"text": "Grüße"}], ensure_ascii=False).encode("cp1252")
     )
 
     try:
@@ -500,9 +494,7 @@ def test_importing_a_file_that_is_not_utf8_says_so_in_words(tmp_path):
         raise AssertionError("a file that is not UTF-8 was imported anyway")
 
     assert "UTF-8" in message, f"the message does not name the problem: {message}"
-    assert "codec" not in message, (
-        f"the raw decoder error reached the user: {message}"
-    )
+    assert "codec" not in message, f"the raw decoder error reached the user: {message}"
 
 
 def _dated(created_at: str, text: str) -> TranscriptHistoryEntry:
@@ -624,5 +616,7 @@ def test_a_cleared_history_is_not_mistaken_for_damage(tmp_path):
     assert store.load() == []
     assert store.load() == [], "the second load resurrected the cleared entries"
     assert path.is_file(), "a cleared history was quarantined as damaged"
-    assert backup_path(path).is_file(), "the backup of a cleared history was moved aside"
+    assert backup_path(path).is_file(), (
+        "the backup of a cleared history was moved aside"
+    )
     assert not [item for item in tmp_path.iterdir() if ".corrupt." in item.name]

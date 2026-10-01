@@ -420,13 +420,13 @@ def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
         assert "Canary" in note.text(), note.text()
 
         for width in (dialog.width(), 600, dialog.minimumWidth()):
-                dialog.resize(width, dialog.height())
-                app.processEvents()
-                assert note.heightForWidth(note.width()) <= note.height(), (
-                    f"at dialog width {width} the note needs "
-                    f"{note.heightForWidth(note.width())} px but has "
-                    f"{note.height()}"
-                )
+            dialog.resize(width, dialog.height())
+            app.processEvents()
+            assert note.heightForWidth(note.width()) <= note.height(), (
+                f"at dialog width {width} the note needs "
+                f"{note.heightForWidth(note.width())} px but has "
+                f"{note.height()}"
+            )
     finally:
         dialog.close()
 

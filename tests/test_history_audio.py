@@ -50,9 +50,7 @@ def test_missing_stored_audio_path_falls_back_to_last_recording(tmp_path):
         source_audio_path=str(tmp_path / "deleted.wav"),
         source_recording_id="rec-1",
     )
-    store = _FakeLastRecordingStore(
-        _FakeLastRecordingState("rec-1", str(managed))
-    )
+    store = _FakeLastRecordingStore(_FakeLastRecordingState("rec-1", str(managed)))
 
     assert resolve_history_audio_path(entry, store) == managed
 
@@ -61,9 +59,7 @@ def test_last_recording_of_another_entry_is_not_offered(tmp_path):
     managed = tmp_path / "last_recording.wav"
     managed.write_bytes(b"RIFF")
     entry = _entry(source_recording_id="rec-1")
-    store = _FakeLastRecordingStore(
-        _FakeLastRecordingState("rec-2", str(managed))
-    )
+    store = _FakeLastRecordingStore(_FakeLastRecordingState("rec-2", str(managed)))
 
     assert resolve_history_audio_path(entry, store) is None
 
@@ -71,7 +67,9 @@ def test_last_recording_of_another_entry_is_not_offered(tmp_path):
 def test_unreadable_last_recording_store_is_not_fatal(tmp_path):
     entry = _entry(source_recording_id="rec-1")
 
-    assert resolve_history_audio_path(entry, _FakeLastRecordingStore(raises=True)) is None
+    assert (
+        resolve_history_audio_path(entry, _FakeLastRecordingStore(raises=True)) is None
+    )
 
 
 def test_entry_without_any_audio_reference_resolves_to_none():

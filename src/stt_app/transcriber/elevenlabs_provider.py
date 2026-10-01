@@ -173,13 +173,10 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "ElevenLabs API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "ElevenLabs API key is missing. Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
-        self._model = (
-            model if model in ELEVENLABS_MODELS else DEFAULT_ELEVENLABS_MODEL
-        )
+        self._model = model if model in ELEVENLABS_MODELS else DEFAULT_ELEVENLABS_MODEL
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self._request_timeout_s = max(5, int(request_timeout_s))
@@ -286,9 +283,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
             # The body, not `exc.reason`: that is only the status
             # phrase, and ElevenLabs puts the quota and format
             # reasons in the body.
-            detail = read_http_error_detail(exc) or exc.reason or (
-                "unknown error"
-            )
+            detail = read_http_error_detail(exc) or exc.reason or ("unknown error")
             raise TranscriptionError(
                 f"ElevenLabs transcription failed (HTTP {exc.code}): {detail}"
             ) from exc
@@ -316,9 +311,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (
-                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
-            )
+            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from ElevenLabs API."

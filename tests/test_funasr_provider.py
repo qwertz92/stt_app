@@ -17,8 +17,9 @@ from stt_app.transcriber.funasr_provider import (
 )
 
 
-def _wav_bytes(pcm: bytes = b"\x00\x00" * 1600, sample_rate: int = 16000,
-               channels: int = 1) -> bytes:
+def _wav_bytes(
+    pcm: bytes = b"\x00\x00" * 1600, sample_rate: int = 16000, channels: int = 1
+) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wav:
         wav.setnchannels(channels)
@@ -28,8 +29,12 @@ def _wav_bytes(pcm: bytes = b"\x00\x00" * 1600, sample_rate: int = 16000,
     return buf.getvalue()
 
 
-def _event(event: str, sentence_text: str | None = None,
-           sentence_end: bool = False, error_message: str | None = None) -> str:
+def _event(
+    event: str,
+    sentence_text: str | None = None,
+    sentence_end: bool = False,
+    error_message: str | None = None,
+) -> str:
     header: dict = {"event": event, "task_id": "t"}
     if error_message is not None:
         header["error_message"] = error_message
@@ -109,12 +114,14 @@ class TestFunAsrInit:
 
 class TestFunAsrBatch:
     def test_transcribe_combines_finalized_sentences(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "Hello", True),
-            _event("result-generated", "world", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "Hello", True),
+                _event("result-generated", "world", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             out = t.transcribe_batch(_wav_bytes())
@@ -132,11 +139,13 @@ class TestFunAsrBatch:
         assert ws.closed
 
     def test_auto_language_omits_hint(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "ok", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "ok", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="auto")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             t.transcribe_batch(_wav_bytes())
@@ -144,22 +153,26 @@ class TestFunAsrBatch:
         assert "language_hints" not in run["payload"]["parameters"]
 
     def test_partial_then_final_sentence(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "Hel", False),
-            _event("result-generated", "Hello", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "Hel", False),
+                _event("result-generated", "Hello", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "Hello"
 
     def test_unfinished_current_sentence_still_returned(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "partial only", False),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "partial only", False),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "partial only"
@@ -174,11 +187,13 @@ class TestFunAsrBatch:
             t.transcribe_batch(_wav_bytes())
 
     def test_progress_callback(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "hi", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "hi", True),
+                _event("task-finished"),
+            ]
+        )
         progress: list[str] = []
         t = FunAsrTranscriber(api_key="sk")
         t.set_progress_callback(progress.append)
@@ -187,11 +202,13 @@ class TestFunAsrBatch:
         assert progress and "Fun-ASR" in progress[0]
 
     def test_stereo_input_is_downmixed(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "ok", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "ok", True),
+                _event("task-finished"),
+            ]
+        )
         stereo = _wav_bytes(pcm=b"\x01\x00\x02\x00" * 800, channels=2)
         t = FunAsrTranscriber(api_key="sk")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
@@ -253,7 +270,9 @@ class TestFunAsrStreamEndsEarly:
         return [
             _event("task-started"),
             _event("result-generated", sentence_text="Erster Satz.", sentence_end=True),
-            _event("result-generated", sentence_text="Zweiter Satz.", sentence_end=True),
+            _event(
+                "result-generated", sentence_text="Zweiter Satz.", sentence_end=True
+            ),
         ]
 
     def _fail(self, tail_events, tail_exception=None):
@@ -290,7 +309,8 @@ class TestFunAsrStreamEndsEarly:
 
     def test_a_dropped_connection_still_names_what_arrived(self):
         message = self._fail(
-            [], tail_exception=ConnectionResetError("Connection to remote host was lost")
+            [],
+            tail_exception=ConnectionResetError("Connection to remote host was lost"),
         )
 
         assert "Erster Satz. Zweiter Satz." in message, message
@@ -380,9 +400,7 @@ class TestFunAsrTotalBudget:
             excinfo.value
         )
 
-    def test_the_socket_timeout_is_pulled_in_as_the_budget_runs_out(
-        self, monkeypatch
-    ):
+    def test_the_socket_timeout_is_pulled_in_as_the_budget_runs_out(self, monkeypatch):
         """A per-read timeout that a keep-alive restarts cannot bound anything.
 
         So the remaining budget is handed to the socket: the last read cannot
@@ -415,12 +433,14 @@ class TestFunAsrSentenceEnd:
     """An empty final must not throw away the partial that preceded it."""
 
     def test_an_empty_sentence_end_keeps_the_pending_partial(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "Hallo", False),
-            _event("result-generated", "", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "Hallo", False),
+                _event("result-generated", "", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             out = t.transcribe_batch(_wav_bytes())
@@ -428,13 +448,15 @@ class TestFunAsrSentenceEnd:
         assert out == "Hallo"
 
     def test_an_empty_sentence_end_mid_stream_keeps_the_order(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "Hallo", False),
-            _event("result-generated", "", True),
-            _event("result-generated", "Welt.", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "Hallo", False),
+                _event("result-generated", "", True),
+                _event("result-generated", "Welt.", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             out = t.transcribe_batch(_wav_bytes())
@@ -442,12 +464,14 @@ class TestFunAsrSentenceEnd:
         assert out == "Hallo Welt."
 
     def test_a_final_with_text_replaces_the_partial_it_refines(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "Hallo", False),
-            _event("result-generated", "Hallo Welt.", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "Hallo", False),
+                _event("result-generated", "Hallo Welt.", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             out = t.transcribe_batch(_wav_bytes())
@@ -469,7 +493,10 @@ class TestFunAsrFailureMessage:
         ):
             t.transcribe_batch(_wav_bytes())
         message = str(excinfo.value)
-        assert "Fun-ASR task failed: " + "x" * provider._FAILURE_DETAIL_MAX_CHARS in message
+        assert (
+            "Fun-ASR task failed: " + "x" * provider._FAILURE_DETAIL_MAX_CHARS
+            in message
+        )
         assert "x" * (provider._FAILURE_DETAIL_MAX_CHARS + 1) not in message
 
     def test_a_nested_error_object_is_unwrapped_not_stringified(self):
@@ -478,19 +505,23 @@ class TestFunAsrFailureMessage:
         already refuse. The unwrapping order is shared with
         `read_http_error_detail` (`nested_error_text`), so the two cannot
         drift."""
-        ws = FakeWS([
-            json.dumps({
-                "header": {
-                    "event": "task-failed",
-                    "task_id": "t",
-                    "error_message": {
-                        "code": "Throttling",
-                        "message": "quota exceeded",
-                        "request_id": "abc",
-                    },
-                },
-            }),
-        ])
+        ws = FakeWS(
+            [
+                json.dumps(
+                    {
+                        "header": {
+                            "event": "task-failed",
+                            "task_id": "t",
+                            "error_message": {
+                                "code": "Throttling",
+                                "message": "quota exceeded",
+                                "request_id": "abc",
+                            },
+                        },
+                    }
+                ),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -507,15 +538,19 @@ class TestFunAsrFailureMessage:
         """The last resort is the JSON text, as it is for an HTTP body:
         `str()` would print `{'trace': ['a', 'b']}`, which is Python and not
         what the service sent."""
-        ws = FakeWS([
-            json.dumps({
-                "header": {
-                    "event": "task-failed",
-                    "task_id": "t",
-                    "error_message": {"trace": ["a", "b"]},
-                },
-            }),
-        ])
+        ws = FakeWS(
+            [
+                json.dumps(
+                    {
+                        "header": {
+                            "event": "task-failed",
+                            "task_id": "t",
+                            "error_message": {"trace": ["a", "b"]},
+                        },
+                    }
+                ),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -523,9 +558,7 @@ class TestFunAsrFailureMessage:
         ):
             t.transcribe_batch(_wav_bytes())
 
-        assert str(excinfo.value) == (
-            'Fun-ASR task failed: {"trace": ["a", "b"]}'
-        )
+        assert str(excinfo.value) == ('Fun-ASR task failed: {"trace": ["a", "b"]}')
 
     def test_a_plain_string_error_message_is_unchanged(self):
         ws = FakeWS([_event("task-failed", error_message="bad request")])
@@ -547,12 +580,14 @@ class TestFunAsrFieldTypes:
         events = [
             _event("task-started"),
             _event("result-generated", "Hallo", False),
-            json.dumps({
-                "header": {"event": "result-generated", "task_id": "t"},
-                "payload": {
-                    "output": {"sentence": {"text": "", "sentence_end": "false"}}
-                },
-            }),
+            json.dumps(
+                {
+                    "header": {"event": "result-generated", "task_id": "t"},
+                    "payload": {
+                        "output": {"sentence": {"text": "", "sentence_end": "false"}}
+                    },
+                }
+            ),
             _event("result-generated", "Hallo Welt.", True),
             _event("task-finished"),
         ]
@@ -566,12 +601,14 @@ class TestFunAsrFieldTypes:
         events = [
             _event("task-started"),
             _event("result-generated", "Hallo", False),
-            json.dumps({
-                "header": {"event": "result-generated", "task_id": "t"},
-                "payload": {
-                    "output": {"sentence": {"text": None, "sentence_end": True}}
-                },
-            }),
+            json.dumps(
+                {
+                    "header": {"event": "result-generated", "task_id": "t"},
+                    "payload": {
+                        "output": {"sentence": {"text": None, "sentence_end": True}}
+                    },
+                }
+            ),
             _event("task-finished"),
         ]
         ws = FakeWS(events)
@@ -591,10 +628,12 @@ class TestFunAsrHeartbeat:
 
     @staticmethod
     def _sentence(fields: dict) -> str:
-        return json.dumps({
-            "header": {"event": "result-generated", "task_id": "t"},
-            "payload": {"output": {"sentence": fields}},
-        })
+        return json.dumps(
+            {
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {"output": {"sentence": fields}},
+            }
+        )
 
     @pytest.mark.parametrize(
         "heartbeat_fields",
@@ -625,7 +664,9 @@ class TestFunAsrHeartbeat:
         events = [
             _event("task-started"),
             _event("result-generated", "Hallo", False),
-            self._sentence({"text": "Welt", "sentence_end": False, "heartbeat": "false"}),
+            self._sentence(
+                {"text": "Welt", "sentence_end": False, "heartbeat": "false"}
+            ),
             _event("task-finished"),
         ]
         ws = FakeWS(events)
@@ -660,12 +701,14 @@ class TestFunAsrUnusableFrames:
 
     def test_junk_frames_before_an_event_are_skipped(self):
         junk = [b"\x00\x01", "not json", "[1, 2]", "42"] * 50
-        ws = FakeWS([
-            _event("task-started"),
-            *junk,
-            _event("result-generated", "ok", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *junk,
+                _event("result-generated", "ok", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "ok"
@@ -673,11 +716,13 @@ class TestFunAsrUnusableFrames:
     def test_a_flood_of_unusable_frames_fails_instead_of_pinning_a_core(self):
         from stt_app.transcriber import funasr_provider as provider
 
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "so far", True),
-            *(["not json"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "so far", True),
+                *(["not json"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -707,15 +752,17 @@ class TestFunAsrUnusableFrames:
         from stt_app.transcriber import funasr_provider as provider
 
         junk = ["not json"] * provider._MAX_UNUSABLE_FRAMES
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "so far", True),
-            *junk,
-            filler,
-            *junk,
-            filler,
-            *junk,
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "so far", True),
+                *junk,
+                filler,
+                *junk,
+                filler,
+                *junk,
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -732,10 +779,12 @@ class TestFunAsrUnusableFrames:
     def test_a_flood_of_empty_objects_fails_too(self):
         from stt_app.transcriber import funasr_provider as provider
 
-        ws = FakeWS([
-            _event("task-started"),
-            *(["{}"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *(["{}"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -748,15 +797,17 @@ class TestFunAsrUnusableFrames:
         from stt_app.transcriber import funasr_provider as provider
 
         junk = ["not json"] * (provider._MAX_UNUSABLE_FRAMES - 1)
-        ws = FakeWS([
-            _event("task-started"),
-            *junk,
-            _event("result-generated", "eins", False),
-            *junk,
-            _event("result-generated", "eins zwei", True),
-            *junk,
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *junk,
+                _event("result-generated", "eins", False),
+                *junk,
+                _event("result-generated", "eins zwei", True),
+                *junk,
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "eins zwei"
@@ -827,14 +878,26 @@ class TestFunAsrUnusableFrames:
         from stt_app.transcriber import funasr_provider as provider
 
         limit = provider._MAX_UNUSABLE_FRAMES
-        at_the_bound = [_event("task-started"), *([frame] * limit), _event("task-finished")]
+        at_the_bound = [
+            _event("task-started"),
+            *([frame] * limit),
+            _event("task-finished"),
+        ]
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
-        with patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(at_the_bound)):
+        with patch.object(
+            FunAsrTranscriber, "_connect", return_value=FakeWS(at_the_bound)
+        ):
             assert t.transcribe_batch(_wav_bytes()) == ""
 
-        past_the_bound = [_event("task-started"), *([frame] * (limit + 1)), _event("task-finished")]
+        past_the_bound = [
+            _event("task-started"),
+            *([frame] * (limit + 1)),
+            _event("task-finished"),
+        ]
         with (
-            patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(past_the_bound)),
+            patch.object(
+                FunAsrTranscriber, "_connect", return_value=FakeWS(past_the_bound)
+            ),
             pytest.raises(TranscriptionError) as excinfo,
         ):
             t.transcribe_batch(_wav_bytes())
@@ -861,15 +924,20 @@ class TestFunAsrUnusableFrames:
         "frame",
         [
             json.dumps({"header": {"event": "result-generated", "task_id": "t"}}),
-            json.dumps({
-                "header": {"event": "result-generated", "task_id": "t"},
-                "payload": 7,
-            }),
-            json.dumps({
-                "header": {"event": "result-generated", "task_id": "t"},
-                "payload": {"output": {"sentence": {"text": "",
-                                                    "sentence_end": False}}},
-            }),
+            json.dumps(
+                {
+                    "header": {"event": "result-generated", "task_id": "t"},
+                    "payload": 7,
+                }
+            ),
+            json.dumps(
+                {
+                    "header": {"event": "result-generated", "task_id": "t"},
+                    "payload": {
+                        "output": {"sentence": {"text": "", "sentence_end": False}}
+                    },
+                }
+            ),
         ],
         ids=["no-payload", "payload-not-an-object", "empty-partial"],
     )
@@ -920,14 +988,16 @@ class TestFunAsrUnusableFrames:
 
         junk = ["not json"] * provider._MAX_UNUSABLE_FRAMES
         empty = json.dumps({"header": {"event": "result-generated", "task_id": "t"}})
-        ws = FakeWS([
-            _event("task-started"),
-            *junk,
-            empty,
-            *junk,
-            empty,
-            *junk,
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *junk,
+                empty,
+                *junk,
+                empty,
+                *junk,
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -947,17 +1017,22 @@ class TestFunAsrUnusableFrames:
         them."""
         from stt_app.transcriber import funasr_provider as provider
 
-        heartbeat = json.dumps({
-            "header": {"event": "result-generated", "task_id": "t"},
-            "payload": {"output": {"sentence": {"heartbeat": True,
-                                                "sentence_id": 0}}},
-        })
-        ws = FakeWS([
-            _event("task-started"),
-            *([heartbeat] * (provider._MAX_UNUSABLE_FRAMES * 2 + 1)),
-            _event("result-generated", "endlich", True),
-            _event("task-finished"),
-        ])
+        heartbeat = json.dumps(
+            {
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {
+                    "output": {"sentence": {"heartbeat": True, "sentence_id": 0}}
+                },
+            }
+        )
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *([heartbeat] * (provider._MAX_UNUSABLE_FRAMES * 2 + 1)),
+                _event("result-generated", "endlich", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "endlich"
@@ -973,11 +1048,13 @@ class TestFunAsrUnusableFrames:
                 request_transcription_shutdown()
                 return super().recv()
 
-        ws = _ShutdownOnFirstRecv([
-            _event("task-started"),
-            _event("result-generated", "so far", True),
-            *(["not json"] * 50),
-        ])
+        ws = _ShutdownOnFirstRecv(
+            [
+                _event("task-started"),
+                _event("result-generated", "so far", True),
+                *(["not json"] * 50),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         try:
             with (
@@ -1002,12 +1079,14 @@ class TestFunAsrUnusableFrames:
 
         monkeypatch.setattr(provider.time, "monotonic", _monotonic)
         monkeypatch.setattr(provider, "FUNASR_BATCH_MAX_WAIT_S", 5.0)
-        ws = FakeWS([
-            _event("task-started"),
-            *(["not json"] * 20),
-            _event("result-generated", "late", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *(["not json"] * 20),
+                _event("result-generated", "late", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -1023,18 +1102,18 @@ class TestFunAsrTranscriptSize:
     instant fake, 111 MB of Python heap in 2.5 s and ~100 GB extrapolated
     over the thirty-minute budget."""
 
-    def test_a_flood_of_finalized_sentences_fails_instead_of_growing(
-        self, monkeypatch
-    ):
+    def test_a_flood_of_finalized_sentences_fails_instead_of_growing(self, monkeypatch):
         from stt_app.transcriber import funasr_provider as provider
 
         monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
         sentence = _event("result-generated", "zehnzeichen", True)
-        ws = FakeWS([
-            _event("task-started"),
-            *([sentence] * 100),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                *([sentence] * 100),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -1055,11 +1134,13 @@ class TestFunAsrTranscriptSize:
         from stt_app.transcriber import funasr_provider as provider
 
         monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "w" * 200, False),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "w" * 200, False),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with (
             patch.object(FunAsrTranscriber, "_connect", return_value=ws),
@@ -1084,11 +1165,13 @@ class TestFunAsrTranscriptSize:
 
 class TestFunAsrRunTask:
     def test_the_run_task_asks_for_the_documented_heartbeat(self):
-        ws = FakeWS([
-            _event("task-started"),
-            _event("result-generated", "ok", True),
-            _event("task-finished"),
-        ])
+        ws = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "ok", True),
+                _event("task-finished"),
+            ]
+        )
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             t.transcribe_batch(_wav_bytes())
@@ -1155,7 +1238,11 @@ class TestFunAsrWave5Boundaries:
     @pytest.mark.parametrize(
         ("error_message", "error_code", "expected"),
         [
-            ("   ", "Throttling.RateQuota", "Fun-ASR task failed: Throttling.RateQuota"),
+            (
+                "   ",
+                "Throttling.RateQuota",
+                "Fun-ASR task failed: Throttling.RateQuota",
+            ),
             ("\n", "Throttling.RateQuota", "Fun-ASR task failed: Throttling.RateQuota"),
             (
                 {"message": ""},
@@ -1227,10 +1314,12 @@ class TestFunAsrWave6Boundaries:
 
     @staticmethod
     def _heartbeat():
-        return json.dumps({
-            "header": {"event": "result-generated", "task_id": "t"},
-            "payload": {"output": {"sentence": {"heartbeat": True}}},
-        })
+        return json.dumps(
+            {
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {"output": {"sentence": {"heartbeat": True}}},
+            }
+        )
 
     @pytest.mark.parametrize(
         "shape",
@@ -1241,7 +1330,9 @@ class TestFunAsrWave6Boundaries:
             "heartbeats without end",
         ],
     )
-    def test_a_flood_of_event_bearing_frames_is_bounded_in_total(self, monkeypatch, shape):
+    def test_a_flood_of_event_bearing_frames_is_bounded_in_total(
+        self, monkeypatch, shape
+    ):
         """The frame bound counts *consecutive* unusable frames, so every
         frame that counts as an event resets it: the same partial repeated,
         two partials alternating, a real final after each thousand junk

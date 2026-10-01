@@ -5,6 +5,7 @@ siblings (settings_dialog_*.py). This module composes them into the public
 SettingsDialog and keeps the dialog lifecycle/shared-UI code. Names re-
 exported here stay importable/patchable as stt_app.settings_dialog.<name>.
 """
+
 from __future__ import annotations
 
 import logging
@@ -100,25 +101,25 @@ if TYPE_CHECKING:
     from .controller import DictationController
 
 __all__ = [
-    '_DEFAULT_SETTINGS_DIALOG_SIZE',
-    '_LOCAL_MODEL_SCAN_SESSION_CACHE',
-    '_LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS',
-    '_PROVIDER_STATUS_BADGE_TEXTS',
-    'SettingsDialog',
-    'TranscriptEditDialog',
-    '_app_hotkey_to_qt_hotkey_text',
-    '_hotkey_token_set',
-    '_hotkeys_conflict',
-    '_qt_hotkey_sequence_to_app_hotkey',
-    '_qt_hotkey_text_to_app_hotkey',
-    '_scan_cached_models',
-    'cleanup_incomplete_model_download',
-    'delete_cached_model',
-    'estimate_cached_model_bytes',
-    'run_benchmark_cases',
-    'start_model_download_process',
-    'threading',
-    'time',
+    "_DEFAULT_SETTINGS_DIALOG_SIZE",
+    "_LOCAL_MODEL_SCAN_SESSION_CACHE",
+    "_LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS",
+    "_PROVIDER_STATUS_BADGE_TEXTS",
+    "SettingsDialog",
+    "TranscriptEditDialog",
+    "_app_hotkey_to_qt_hotkey_text",
+    "_hotkey_token_set",
+    "_hotkeys_conflict",
+    "_qt_hotkey_sequence_to_app_hotkey",
+    "_qt_hotkey_text_to_app_hotkey",
+    "_scan_cached_models",
+    "cleanup_incomplete_model_download",
+    "delete_cached_model",
+    "estimate_cached_model_bytes",
+    "run_benchmark_cases",
+    "start_model_download_process",
+    "threading",
+    "time",
 ]
 
 
@@ -177,9 +178,9 @@ class SettingsDialog(
         self._controller = controller
         self._history_store = TranscriptHistoryStore()
         self._history_entries: list[TranscriptHistoryEntry] = []
-        self._history_reload_signature: tuple[
-            HistoryStorageSignature, int, str
-        ] | None = None
+        self._history_reload_signature: (
+            tuple[HistoryStorageSignature, int, str] | None
+        ) = None
         self._benchmark_history_store = BenchmarkHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
         self._local_model_inventory_store = local_model_inventory_store
@@ -282,9 +283,7 @@ class SettingsDialog(
         self._import_progress_started_at: float | None = None
         self._import_progress_timer = QtCore.QTimer(self)
         self._import_progress_timer.setInterval(1000)
-        self._import_progress_timer.timeout.connect(
-            self._refresh_import_progress_label
-        )
+        self._import_progress_timer.timeout.connect(self._refresh_import_progress_label)
         self._history_copy_feedback_timer = QtCore.QTimer(self)
         self._history_copy_feedback_timer.setSingleShot(True)
         self._history_copy_feedback_timer.setInterval(900)
@@ -465,9 +464,7 @@ class SettingsDialog(
         self._reserve_feedback_button_widths()
 
     def _set_bottom_status(self, text: str, color: str = "#2e7d32") -> None:
-        self._save_status_label.setStyleSheet(
-            f"color: {color}; font-weight: bold;"
-        )
+        self._save_status_label.setStyleSheet(f"color: {color}; font-weight: bold;")
         # The label's own `setText` carries the whole message into its tooltip.
         self._save_status_label.setText(text)
 
@@ -638,8 +635,7 @@ class SettingsDialog(
     def _provider_status_badge_width(self) -> int:
         metrics = self.fontMetrics()
         text_width = max(
-            metrics.horizontalAdvance(text)
-            for text in _PROVIDER_STATUS_BADGE_TEXTS
+            metrics.horizontalAdvance(text) for text in _PROVIDER_STATUS_BADGE_TEXTS
         )
         return text_width + _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX
 
@@ -658,7 +654,9 @@ class SettingsDialog(
                 "Connection Target",
             )
         )
-        text_width = max(self.fontMetrics().horizontalAdvance(text) for text in candidates)
+        text_width = max(
+            self.fontMetrics().horizontalAdvance(text) for text in candidates
+        )
         return text_width + _REMOTE_PROVIDER_LABEL_EXTRA_PX
 
     def _apply_shared_form_label_width(
@@ -786,9 +784,7 @@ class SettingsDialog(
                 QtWidgets.QSizePolicy.Expanding,
             )
         if adjust_to_contents:
-            widget.setSizeAdjustPolicy(
-                QtWidgets.QAbstractScrollArea.AdjustToContents
-            )
+            widget.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustToContents)
 
     @staticmethod
     def _compact_list_item_size(widget: QtWidgets.QListWidget) -> QtCore.QSize:

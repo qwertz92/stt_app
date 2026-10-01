@@ -181,9 +181,7 @@ class TestGroqTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake wav data")
 
         assert result == "done"
-        assert progress == [
-            "Uploading audio to Groq and waiting for transcription..."
-        ]
+        assert progress == ["Uploading audio to Groq and waiting for transcription..."]
 
     def test_transcribe_empty_result(self):
         """Empty transcript text returns empty string."""
@@ -292,7 +290,9 @@ class _RecordingTranscriptions:
     def create(self, **kwargs):
         _name, handle = kwargs["file"]
         self.files.append(handle.read())
-        self.calls.append({key: value for key, value in kwargs.items() if key != "file"})
+        self.calls.append(
+            {key: value for key, value in kwargs.items() if key != "file"}
+        )
         return self._answers[len(self.calls) - 1]
 
 
@@ -415,9 +415,7 @@ class TestGroqErrorHandling:
                             {
                                 "create": staticmethod(
                                     lambda **kw: (_ for _ in ()).throw(
-                                        Exception(
-                                            "ssl: certificate_verify_failed"
-                                        )
+                                        Exception("ssl: certificate_verify_failed")
                                     )
                                 )
                             },
@@ -501,9 +499,7 @@ class TestGroqConnectionTest:
                     (),
                     {
                         "list": staticmethod(
-                            lambda: (_ for _ in ()).throw(
-                                ConnectionError("timeout")
-                            )
+                            lambda: (_ for _ in ()).throw(ConnectionError("timeout"))
                         )
                     },
                 )()

@@ -44,6 +44,7 @@ def _centre_dialog_buttons(box: QtWidgets.QMessageBox) -> None:
             widget.setCenterButtons(True)
             return
 
+
 def show_update_status_dialog(
     *,
     title: str,

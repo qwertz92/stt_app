@@ -44,9 +44,7 @@ def _fake_response(payload: bytes | str, status: int = 200):
 
 def _http_error(code: int, body: bytes | None = None):
     fp = io.BytesIO(body) if body is not None else None
-    return urllib.error.HTTPError(
-        url="", code=code, msg="err", hdrs={}, fp=fp
-    )
+    return urllib.error.HTTPError(url="", code=code, msg="err", hdrs={}, fp=fp)
 
 
 class TestEndpointNormalization:
@@ -57,9 +55,9 @@ class TestEndpointNormalization:
         assert normalize_azure_endpoint(_ENDPOINT + "/") == _ENDPOINT
 
     def test_bare_host_gets_https(self):
-        assert normalize_azure_endpoint(
-            "my-res.cognitiveservices.azure.com"
-        ) == _ENDPOINT
+        assert (
+            normalize_azure_endpoint("my-res.cognitiveservices.azure.com") == _ENDPOINT
+        )
 
     def test_resource_name_expands_to_full_host(self):
         assert normalize_azure_endpoint("my-res") == _ENDPOINT
@@ -86,8 +84,7 @@ class TestEndpointNormalization:
 
     def test_full_transcription_path_and_api_version_are_allowed(self):
         endpoint = (
-            f"{_ENDPOINT}/speechtotext/transcriptions:transcribe"
-            "?api-version=2025-10-15"
+            f"{_ENDPOINT}/speechtotext/transcriptions:transcribe?api-version=2025-10-15"
         )
         assert normalize_azure_endpoint(endpoint) == endpoint
 
@@ -97,9 +94,7 @@ class TestEndpointNormalization:
 
     def test_build_transcribe_url_appends_path_and_version(self):
         url = build_transcribe_url(_ENDPOINT)
-        assert url.startswith(
-            f"{_ENDPOINT}/speechtotext/transcriptions:transcribe"
-        )
+        assert url.startswith(f"{_ENDPOINT}/speechtotext/transcriptions:transcribe")
         assert "api-version=" in url
 
 
@@ -123,9 +118,7 @@ class TestAzureInit:
         assert t._model == "mai-transcribe-1"
 
     def test_unknown_model_falls_back_to_default(self):
-        t = AzureLlmSpeechTranscriber(
-            api_key="key", endpoint=_ENDPOINT, model="nope"
-        )
+        t = AzureLlmSpeechTranscriber(api_key="key", endpoint=_ENDPOINT, model="nope")
         assert t._model == DEFAULT_AZURE_SPEECH_MODEL
 
     def test_invalid_language_mode_falls_back_to_auto(self):
@@ -160,19 +153,113 @@ class TestAzureInit:
 # updated 2026-09-10), in Azure's own codes.
 _DOCUMENTED_MAI_2 = frozenset(
     {
-        "af", "ar", "as", "az", "bg", "bn", "bs", "ca", "cs", "da", "de", "el",
-        "en", "es", "et", "fa", "fi", "fil", "fr", "gl", "gu", "he", "hi", "hu",
-        "hy", "id", "is", "it", "ja", "kk", "kn", "ko", "lt", "lv", "mk", "ml",
-        "mr", "ms", "nb", "ne", "nl", "or", "pa", "pl", "pt", "ro", "ru", "sk",
-        "sl", "sv", "sw", "ta", "te", "th", "tr", "uk", "ur", "vi", "yue", "zh",
+        "af",
+        "ar",
+        "as",
+        "az",
+        "bg",
+        "bn",
+        "bs",
+        "ca",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "fa",
+        "fi",
+        "fil",
+        "fr",
+        "gl",
+        "gu",
+        "he",
+        "hi",
+        "hu",
+        "hy",
+        "id",
+        "is",
+        "it",
+        "ja",
+        "kk",
+        "kn",
+        "ko",
+        "lt",
+        "lv",
+        "mk",
+        "ml",
+        "mr",
+        "ms",
+        "nb",
+        "ne",
+        "nl",
+        "or",
+        "pa",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sl",
+        "sv",
+        "sw",
+        "ta",
+        "te",
+        "th",
+        "tr",
+        "uk",
+        "ur",
+        "vi",
+        "yue",
+        "zh",
     }
 )
 _DOCUMENTED_MAI_1_5 = frozenset(
     {
-        "ar", "as", "bg", "bn", "ca", "cs", "da", "de", "el", "en", "es", "et",
-        "fi", "fr", "gu", "hi", "hu", "id", "it", "ja", "kn", "ko", "lt", "ml",
-        "mr", "nb", "nl", "or", "pa", "pl", "pt", "ro", "ru", "sk", "sl", "sv",
-        "ta", "te", "th", "tr", "uk", "vi", "zh",
+        "ar",
+        "as",
+        "bg",
+        "bn",
+        "ca",
+        "cs",
+        "da",
+        "de",
+        "el",
+        "en",
+        "es",
+        "et",
+        "fi",
+        "fr",
+        "gu",
+        "hi",
+        "hu",
+        "id",
+        "it",
+        "ja",
+        "kn",
+        "ko",
+        "lt",
+        "ml",
+        "mr",
+        "nb",
+        "nl",
+        "or",
+        "pa",
+        "pl",
+        "pt",
+        "ro",
+        "ru",
+        "sk",
+        "sl",
+        "sv",
+        "ta",
+        "te",
+        "th",
+        "tr",
+        "uk",
+        "vi",
+        "zh",
     }
 )
 
@@ -279,9 +366,7 @@ class TestAzureBatchTranscription:
     @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
     def test_multiple_combined_phrases_joined(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
-            json.dumps(
-                {"combinedPhrases": [{"text": "Hello"}, {"text": "world"}]}
-            )
+            json.dumps({"combinedPhrases": [{"text": "Hello"}, {"text": "world"}]})
         )
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
 

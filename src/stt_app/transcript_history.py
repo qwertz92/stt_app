@@ -30,6 +30,7 @@ DISPLAY_TIMEZONE_LOCAL = "local"
 DISPLAY_TIMEZONE_UTC = "utc"
 VALID_HISTORY_DISPLAY_TIMEZONES = (DISPLAY_TIMEZONE_LOCAL, DISPLAY_TIMEZONE_UTC)
 
+
 @dataclass(frozen=True, slots=True)
 class HistoryEntryListChange:
     kind: str
@@ -428,9 +429,7 @@ class TranscriptHistoryStore:
             try:
                 cls(path=path).save(entries)
             except OSError:
-                _LOGGER.exception(
-                    "Could not republish %s from its backup", path
-                )
+                _LOGGER.exception("Could not republish %s from its backup", path)
         return entries, primary_unreadable
 
 
@@ -495,9 +494,13 @@ def recent_entries_change_plan(
         autojunk=False,
     )
     changes: list[HistoryEntryListChange] = []
-    for tag, previous_start, previous_stop, current_start, current_stop in (
-        matcher.get_opcodes()
-    ):
+    for (
+        tag,
+        previous_start,
+        previous_stop,
+        current_start,
+        current_stop,
+    ) in matcher.get_opcodes():
         if tag == "equal":
             continue
         kind = str(tag)

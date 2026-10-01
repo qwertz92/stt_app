@@ -446,8 +446,10 @@ def _gpu_labels() -> list[str]:
             "powershell",
             "-NoProfile",
             "-Command",
-            ('Get-CimInstance Win32_VideoController | ForEach-Object { '
-             '"$($_.Name) (driver $($_.DriverVersion))" }'),
+            (
+                "Get-CimInstance Win32_VideoController | ForEach-Object { "
+                '"$($_.Name) (driver $($_.DriverVersion))" }'
+            ),
         ],
         timeout=4.0,
     )

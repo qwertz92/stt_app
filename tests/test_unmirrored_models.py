@@ -33,15 +33,18 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
     commit. The two raw-graph Granite 4.1 variants that were also in this set
     were retired on 2026-08-26.
     """
-    assert frozenset(
-        {
-            "distil-large-v3.5",
-            "parakeet-tdt-0.6b-v3",
-            "parakeet-tdt-0.6b-v3-ultra",
-            "canary-1b-v2",
-            "granite-speech-5.0-470m-turboctc",
-        }
-    ) == MODELS_WITHOUT_MODELSCOPE_MIRROR
+    assert (
+        frozenset(
+            {
+                "distil-large-v3.5",
+                "parakeet-tdt-0.6b-v3",
+                "parakeet-tdt-0.6b-v3-ultra",
+                "canary-1b-v2",
+                "granite-speech-5.0-470m-turboctc",
+            }
+        )
+        == MODELS_WITHOUT_MODELSCOPE_MIRROR
+    )
 
 
 @pytest.mark.parametrize(
@@ -127,8 +130,12 @@ def test_download_is_not_called_finished_without_the_weights(tmp_path):
     """
     layout = local_webgpu_asr._MODEL_LAYOUTS["cohere-transcribe-03-2026"]
     # Everything the mirror does carry, and nothing it does not.
-    for relative in ("config.json", "preprocessor_config.json",
-                     "processor_config.json", "tokenizer.json"):
+    for relative in (
+        "config.json",
+        "preprocessor_config.json",
+        "processor_config.json",
+        "tokenizer.json",
+    ):
         (tmp_path / relative).write_text("{}", encoding="utf-8")
 
     with pytest.raises(RuntimeError) as excinfo:

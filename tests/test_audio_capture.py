@@ -306,9 +306,11 @@ def test_warm_restart_is_deferred_while_a_recording_is_attached(monkeypatch):
     capture.stop()
     # Detach executes the deferred restart on a worker thread.
     assert _wait_until(
-        lambda: len(FakeInputStream.instances) == 2
-        and FakeInputStream.instances[0].closed
-        and FakeInputStream.instances[1].started
+        lambda: (
+            len(FakeInputStream.instances) == 2
+            and FakeInputStream.instances[0].closed
+            and FakeInputStream.instances[1].started
+        )
     )
     assert warm.is_running is True
     warm.close()
@@ -366,9 +368,11 @@ def test_warm_restart_reresolves_the_device(monkeypatch):
     warm.request_restart()
 
     assert _wait_until(
-        lambda: len(FakeInputStream.instances) == 2
-        and FakeInputStream.instances[0].closed
-        and warm.opened_device_key == "mic-b"
+        lambda: (
+            len(FakeInputStream.instances) == 2
+            and FakeInputStream.instances[0].closed
+            and warm.opened_device_key == "mic-b"
+        )
     )
     assert FakeInputStream.instances[1].kwargs["device"] == 5
     warm.close()
@@ -1368,7 +1372,9 @@ def test_warm_close_if_idle_budgets_the_wait_after_its_own_close(monkeypatch):
     _TimedCloseStream.close_delays = []
 
 
-def test_warm_close_if_idle_re_arms_the_budget_after_a_wait_then_an_own_close(monkeypatch):
+def test_warm_close_if_idle_re_arms_the_budget_after_a_wait_then_an_own_close(
+    monkeypatch,
+):
     """The budget is armed when the first wait starts, so an own close that
     comes *before* any wait is covered by that alone (the test above). Armed
     once and never again, a wait, then an own close longer than the budget,
@@ -1440,7 +1446,9 @@ def test_warm_close_if_idle_re_arms_the_budget_after_a_wait_then_an_own_close(mo
     _TimedCloseStream.close_delays = []
 
 
-def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(monkeypatch):
+def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(
+    monkeypatch,
+):
     """The re-arm ran after every pass through the retiring branch, whether
     or not this call closed anything -- and a stream a helper popped in the
     gap between the branch and `_close_retiring` is that helper's close,
@@ -1463,7 +1471,9 @@ def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(monk
         helper = threading.Thread(target=real_close_retiring, daemon=True)
         helper.start()
         helpers.append(helper)
-        assert _wait_until(lambda: not warm._retiring), "the helper did not take the stream"
+        assert _wait_until(lambda: not warm._retiring), (
+            "the helper did not take the stream"
+        )
         return real_close_retiring()
 
     monkeypatch.setattr(warm, "_close_retiring", _a_helper_gets_there_first)
@@ -1495,6 +1505,8 @@ def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(monk
         for helper in helpers:
             helper.join(timeout=5)
 
-    assert answer is False, f"answered True after {elapsed:.2f}s with hand-overs every 0.3 s"
+    assert answer is False, (
+        f"answered True after {elapsed:.2f}s with hand-overs every 0.3 s"
+    )
     assert elapsed < 1.0, f"the hand-overs re-armed the budget: {elapsed:.2f}s"
     assert len(helpers) >= 1, "no hand-over reached the retiring branch"

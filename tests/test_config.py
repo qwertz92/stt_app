@@ -73,9 +73,7 @@ def test_effective_preferred_device_speaks_only_for_the_auto_policy(
     policy, preferred, expected
 ):
     assert (
-        effective_preferred_device(
-            policy, preferred, LOCAL_WEBGPU_AUTO_DEVICE_ORDER
-        )
+        effective_preferred_device(policy, preferred, LOCAL_WEBGPU_AUTO_DEVICE_ORDER)
         == expected
     )
 

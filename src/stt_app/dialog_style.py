@@ -94,9 +94,7 @@ def make_label_selectable(label: QtWidgets.QLabel) -> None:
     These carry provider and runtime errors verbatim, which is exactly the text
     worth pasting into a bug report.
     """
-    label.setTextInteractionFlags(
-        label.textInteractionFlags() | SELECTABLE_TEXT_FLAGS
-    )
+    label.setTextInteractionFlags(label.textInteractionFlags() | SELECTABLE_TEXT_FLAGS)
 
 
 def make_message_text_selectable(box: QtWidgets.QMessageBox) -> None:
@@ -162,7 +160,8 @@ def styled_message_box(
     icon: QtWidgets.QMessageBox.Icon,
     title: str,
     text: str,
-    buttons: QtWidgets.QMessageBox.StandardButtons | QtWidgets.QMessageBox.StandardButton,
+    buttons: QtWidgets.QMessageBox.StandardButtons
+    | QtWidgets.QMessageBox.StandardButton,
     default_button: QtWidgets.QMessageBox.StandardButton,
     parent: QtWidgets.QWidget | None = None,
 ) -> QtWidgets.QMessageBox:

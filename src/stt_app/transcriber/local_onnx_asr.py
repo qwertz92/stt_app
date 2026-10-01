@@ -298,8 +298,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         # transcript may have been translated when nothing of the sort can
         # happen.
         translation_warning = (
-            " A wrong language makes this model translate rather than "
-            "transcribe."
+            " A wrong language makes this model translate rather than transcribe."
             if self.model_size in LOCAL_EXPLICIT_LANGUAGE_MODELS
             else ""
         )

@@ -165,9 +165,9 @@ class Win32WindowFocusHelper:
 
     def _is_possible_target_window(self, hwnd: int) -> bool:
         """Could this window plausibly receive a pasted transcript?"""
-        return not self._is_own_non_target_window(
+        return not self._is_own_non_target_window(hwnd) and not self._is_shell_surface(
             hwnd
-        ) and not self._is_shell_surface(hwnd)
+        )
 
     def _window_class_name(self, hwnd: int) -> str:
         get_class_name = getattr(self._user32, "GetClassNameW", None)
@@ -218,7 +218,9 @@ class Win32WindowFocusHelper:
         focus, caret = self._read_gui_thread_info(foreground)
         return caret or focus or foreground
 
-    def _read_gui_thread_info(self, foreground: int | None) -> tuple[int | None, int | None]:
+    def _read_gui_thread_info(
+        self, foreground: int | None
+    ) -> tuple[int | None, int | None]:
         if not foreground:
             return None, None
 
@@ -265,4 +267,3 @@ class GUITHREADINFO(ctypes.Structure):
         ("hwndCaret", ctypes.wintypes.HWND),
         ("rcCaret", ctypes.wintypes.RECT),
     ]
-

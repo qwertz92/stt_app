@@ -273,9 +273,7 @@ class WarmMicrophoneStream:
                 NoInputDeviceError,
             ) as exc:
                 if self._logger is not None:
-                    self._logger.warning(
-                        "Warm microphone stream not started: %s", exc
-                    )
+                    self._logger.warning("Warm microphone stream not started: %s", exc)
             except Exception:
                 if self._logger is not None:
                     self._logger.exception("Failed to start warm microphone stream")
@@ -315,8 +313,7 @@ class WarmMicrophoneStream:
             return self.ensure_started(generation=retry_generation)
         if accepted and self._logger is not None:
             self._logger.info(
-                "warm_microphone_stream_started sample_rate=%d block_size=%d "
-                "device=%s",
+                "warm_microphone_stream_started sample_rate=%d block_size=%d device=%s",
                 self.sample_rate,
                 self.block_size,
                 opened_key or "default",
@@ -377,7 +374,9 @@ class WarmMicrophoneStream:
                     self._pending_restart = False
                     restart = self._restart_locked()
         if action == "close":
-            self._spawn_or_run(self.close, "stt_app_warm_mic_close", fallback=self.close)
+            self._spawn_or_run(
+                self.close, "stt_app_warm_mic_close", fallback=self.close
+            )
         elif restart is not None:
             restart()
 
@@ -809,7 +808,9 @@ class AudioCapture:
                 if generation == self._capture_generation:
                     self._accepting_audio = False
                     self._active_callback = None
-            raise AudioCaptureError(f"Failed to start microphone capture: {exc}") from exc
+            raise AudioCaptureError(
+                f"Failed to start microphone capture: {exc}"
+            ) from exc
 
     def stop(self) -> bytes:
         with self._lock:

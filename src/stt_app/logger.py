@@ -16,7 +16,9 @@ from .config import (
 
 
 class AppLogger:
-    def __init__(self, root_dir: Path | None = None, file_name: str = LOG_FILE_NAME) -> None:
+    def __init__(
+        self, root_dir: Path | None = None, file_name: str = LOG_FILE_NAME
+    ) -> None:
         self._root_dir = root_dir or logs_dir()
         self._root_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = self._root_dir / file_name
@@ -84,7 +86,8 @@ class AppLogger:
         root_logger.setLevel(logging.INFO)
 
         if not any(
-            isinstance(handler, RotatingFileHandler) and handler.baseFilename == str(self._log_path)
+            isinstance(handler, RotatingFileHandler)
+            and handler.baseFilename == str(self._log_path)
             for handler in root_logger.handlers
         ):
             handler = RotatingFileHandler(

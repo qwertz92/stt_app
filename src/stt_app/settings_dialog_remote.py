@@ -1,4 +1,5 @@
 """Settings dialog: remote mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import threading
@@ -167,8 +168,7 @@ def _build_connection_tester(
         if not snapshot.azure_endpoint:
             return (
                 None,
-                ("No Azure endpoint entered. "
-                 "Enter the resource endpoint above first."),
+                ("No Azure endpoint entered. Enter the resource endpoint above first."),
             )
         kwargs["endpoint"] = snapshot.azure_endpoint
     if "custom" in extra_fields:
@@ -239,9 +239,7 @@ class _RemoteProvidersMixin:
             )
 
             status_badge = QtWidgets.QLabel("Not configured")
-            status_badge.setAlignment(
-                QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter
-            )
+            status_badge.setAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
             status_badge.setFixedWidth(status_badge_width)
             status_badge.setSizePolicy(
                 QtWidgets.QSizePolicy.Fixed,
@@ -303,14 +301,14 @@ class _RemoteProvidersMixin:
             combo = _WheelPassthroughComboBox()
             for value, label, guarantee in choices:
                 combo.addItem(label, value)
-                combo.setItemData(
-                    combo.count() - 1, guarantee, QtCore.Qt.ToolTipRole
-                )
+                combo.setItemData(combo.count() - 1, guarantee, QtCore.Qt.ToolTipRole)
             combo.setToolTip(
                 f"Where {_remote_provider_label(provider)} processes the "
                 "audio. Dictation, audio imports and the connection test all "
                 "use this region.\n"
-                + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
+                + "\n".join(
+                    f"{label}: {guarantee}" for _value, label, guarantee in choices
+                )
             )
             region_label = QtWidgets.QLabel(region_row_label(provider))
             region_label.setFixedWidth(provider_label_width)
@@ -358,9 +356,7 @@ class _RemoteProvidersMixin:
         self._style_note_label(azure_endpoint_hint)
         azure_endpoint_label = QtWidgets.QLabel("Azure Endpoint")
         azure_endpoint_label.setFixedWidth(provider_label_width)
-        azure_endpoint_label.setAlignment(
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
-        )
+        azure_endpoint_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         provider_grid.addWidget(
             azure_endpoint_label,
             grid_row,
@@ -487,9 +483,7 @@ class _RemoteProvidersMixin:
             "all-configured",
         )
         for provider in _REMOTE_PROVIDERS:
-            self.test_conn_target_combo.addItem(
-                f"{provider.title} only", provider.name
-            )
+            self.test_conn_target_combo.addItem(f"{provider.title} only", provider.name)
         self.test_conn_target_combo.setToolTip(
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
@@ -726,11 +720,7 @@ class _RemoteProvidersMixin:
         credential_issue = self._import_engine_credential_issue(engine)
         if credential_issue is None:
             self.import_engine_note.setStyleSheet("color: #555;")
-            model_text = (
-                f" using model '{selected_model}'."
-                if selected_model
-                else "."
-            )
+            model_text = f" using model '{selected_model}'." if selected_model else "."
             self.import_engine_note.setText(
                 f"Import transcription will use {self._provider_label(engine)}{model_text}"
             )
@@ -740,9 +730,7 @@ class _RemoteProvidersMixin:
 
     def _test_connection(self) -> None:
         """Test connectivity for one provider or all configured providers."""
-        target = str(
-            self.test_conn_target_combo.currentData() or "all-configured"
-        )
+        target = str(self.test_conn_target_combo.currentData() or "all-configured")
         providers = self._providers_for_connection_target(target)
         if not providers:
             self._set_test_connection_feedback(
@@ -819,8 +807,7 @@ class _RemoteProvidersMixin:
                 if key_field is None:
                     continue
                 if self._resolve_api_key(provider, key_field) or (
-                    provider == "custom"
-                    and self.custom_key_command_edit.text().strip()
+                    provider == "custom" and self.custom_key_command_edit.text().strip()
                 ):
                     configured.append(provider)
             return configured
@@ -855,9 +842,7 @@ class _RemoteProvidersMixin:
                         self.custom_api_mode_combo.currentData()
                         or DEFAULT_CUSTOM_API_MODE
                     ),
-                    "custom_key_command": (
-                        self.custom_key_command_edit.text().strip()
-                    ),
+                    "custom_key_command": (self.custom_key_command_edit.text().strip()),
                 }
                 if provider == "custom"
                 else {}

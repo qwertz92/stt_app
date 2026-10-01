@@ -19,6 +19,7 @@ Then, while it runs:
 The timeline is printed and written to ``tray_flyout_diagnosis.txt`` in the
 system temp directory.
 """
+
 from __future__ import annotations
 
 import ctypes

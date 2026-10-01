@@ -141,6 +141,7 @@ def strip_language_tags(text: str) -> str:
         return text
     return re.sub(r"[ 	]{2,}", " ", cleaned)
 
+
 class ITranscriber(ABC):
     #: Polled while the transcriber waits for something interruptible. Every
     #: engine now needs one, not just the ones that can stop mid-decode: since

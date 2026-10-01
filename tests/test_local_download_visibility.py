@@ -97,6 +97,7 @@ def test_empty_model_name_is_not_treated_as_a_download():
 
 def test_non_string_controller_answer_is_ignored():
     """Test doubles return stand-ins; only a real model name may match."""
+
     class _MockLike:
         def preload_downloading_model(self):
             return object()
@@ -108,6 +109,7 @@ def test_non_string_controller_answer_is_ignored():
 
 def test_watch_timer_only_runs_while_the_local_tab_is_in_front():
     """A timer left running for the dialog's lifetime fires on every dialog."""
+
     class _Timer:
         def __init__(self):
             self.running = False
@@ -144,8 +146,7 @@ def test_a_download_into_another_model_dir_does_not_suppress_this_one():
     assert dialog._preload_downloading_model() is None
     assert dialog._local_model_download_state("cohere-transcribe-03-2026") == ""
     assert (
-        "cohere-transcribe-03-2026"
-        not in dialog._local_model_download_pending_names()
+        "cohere-transcribe-03-2026" not in dialog._local_model_download_pending_names()
     )
 
 

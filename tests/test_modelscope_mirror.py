@@ -363,8 +363,8 @@ def test_onnx_falls_back_to_modelscope(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "repo_available", lambda *a, **k: True)
 
     model_name = "nemotron-3.5-asr-streaming-0.6b-int4"
-    destination = tmp_path / "onnx-community" / (
-        "nemotron-3.5-asr-streaming-0.6b-onnx-int4"
+    destination = (
+        tmp_path / "onnx-community" / ("nemotron-3.5-asr-streaming-0.6b-onnx-int4")
     )
     monkeypatch.setattr(
         local_webgpu_asr,
@@ -404,6 +404,7 @@ def test_onnx_fallback_rejects_a_weightless_mirror(monkeypatch, tmp_path):
     has no ``onnx/`` directory, so the fallback "succeeded" and left an
     unloadable model behind.
     """
+
     def boom(*args, **kwargs):
         raise OSError("huggingface blocked by proxy")
 
@@ -418,8 +419,12 @@ def test_onnx_fallback_rejects_a_weightless_mirror(monkeypatch, tmp_path):
     )
 
     def metadata_only(repo_id, dest_dir, allow_patterns=None, **kwargs):
-        for relative in ("config.json", "preprocessor_config.json",
-                         "processor_config.json", "tokenizer.json"):
+        for relative in (
+            "config.json",
+            "preprocessor_config.json",
+            "processor_config.json",
+            "tokenizer.json",
+        ):
             target = Path(dest_dir) / relative
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("{}", encoding="utf-8")

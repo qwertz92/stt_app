@@ -84,7 +84,9 @@ def test_reading_the_settings_creates_nothing_on_a_fresh_machine(
     assert list(appdata.iterdir()) == []
 
 
-def test_a_corrupt_settings_file_is_reported_and_left_alone(smoke_test, monkeypatch, tmp_path):
+def test_a_corrupt_settings_file_is_reported_and_left_alone(
+    smoke_test, monkeypatch, tmp_path
+):
     """Silence here is worse than the quarantine it replaced.
 
     Loading a throwaway copy repairs the copy and returns defaults, so the
@@ -103,7 +105,9 @@ def test_a_corrupt_settings_file_is_reported_and_left_alone(smoke_test, monkeypa
 
     assert settings is None
     assert problem and "cannot be read" in problem
-    assert _tree(tmp_path) == before, "the real settings file was rewritten or quarantined"
+    assert _tree(tmp_path) == before, (
+        "the real settings file was rewritten or quarantined"
+    )
 
 
 def test_valid_settings_that_need_normalizing_are_not_rewritten(

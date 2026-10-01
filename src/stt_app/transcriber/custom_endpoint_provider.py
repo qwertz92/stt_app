@@ -161,7 +161,11 @@ _DISPLAY_URL_MAX_CHARS = 200
 def _origin(url: str) -> tuple[str, str, int | None]:
     parts = urllib.parse.urlsplit(url)
     scheme = parts.scheme.lower()
-    return scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme)
+    return (
+        scheme,
+        (parts.hostname or "").lower(),
+        parts.port or _DEFAULT_PORTS.get(scheme),
+    )
 
 
 def _redirect_keeps_origin(old_url: str, new_url: str) -> bool:
@@ -423,7 +427,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             return self._api_key
         with self._token_lock:
             now = time.monotonic()
-            if refresh or not self._cached_token or now >= self._cached_token_expires_at:
+            if (
+                refresh
+                or not self._cached_token
+                or now >= self._cached_token_expires_at
+            ):
                 self._cached_token = self._run_key_command()
                 self._cached_token_expires_at = now + CUSTOM_KEY_COMMAND_TTL_S
             return self._cached_token
@@ -574,7 +582,9 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             mode = mode.strip().lower() if isinstance(mode, str) else ""
             if mode in _UNUSABLE_MODEL_MODES:
                 continue
-            models.setdefault(model_id.strip(), CustomEndpointModel(model_id.strip(), mode))
+            models.setdefault(
+                model_id.strip(), CustomEndpointModel(model_id.strip(), mode)
+            )
         return sorted(
             models.values(),
             key=lambda model: (
@@ -671,12 +681,13 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             )
         ]
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
-            language = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)
+            language = LANGUAGE_MODE_LABELS.get(
+                self._language_mode, self._language_mode
+            )
             parts.append(f"The speech is in {language}.")
         if self._terms:
             parts.append(
-                "Spell these terms exactly as written: "
-                f"{', '.join(self._terms)}."
+                f"Spell these terms exactly as written: {', '.join(self._terms)}."
             )
         parts.append("If the audio contains no speech, reply with nothing.")
         return " ".join(parts)
@@ -771,7 +782,9 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             )
         if isinstance(content, list):
             parts = [part for part in content if isinstance(part, dict)]
-            texts = [part["text"] for part in parts if isinstance(part.get("text"), str)]
+            texts = [
+                part["text"] for part in parts if isinstance(part.get("text"), str)
+            ]
             refusals = [
                 part["refusal"]
                 for part in parts
@@ -779,8 +792,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             ]
             if not texts and refusals:
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: "
-                    f"{body_excerpt(refusals[0])}"
+                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusals[0])}"
                 )
             content = " ".join(texts)
         if not isinstance(content, str):

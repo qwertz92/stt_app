@@ -105,7 +105,7 @@ def test_one_device_says_nothing_about_the_others():
 
 
 def test_the_same_device_measured_twice_is_still_one_device():
-    """"All explicit targets" and a GPU comparison can both resolve onto CPU on
+    """ "All explicit targets" and a GPU comparison can both resolve onto CPU on
     a machine with no usable GPU, and two CPU rows are not a comparison."""
     cases = [_case(_COHERE, "cpu", 0.30), _case(_COHERE, "cpu", 0.10)]
 
@@ -298,8 +298,7 @@ def test_parakeet_ultra_is_benchmarked_once_on_the_cpu_like_parakeet(
         [PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE], "all", "auto", "int8"
     )
     assert [
-        (case.model, case.device_target, case.display_compute_type)
-        for case in planned
+        (case.model, case.device_target, case.display_compute_type) for case in planned
     ] == [
         (PARAKEET_MODEL_SIZE, "auto", "onnx-int8"),
         (PARAKEET_ULTRA_MODEL_SIZE, "auto", "onnx-int8"),

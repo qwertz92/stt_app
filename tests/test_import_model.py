@@ -1,4 +1,5 @@
 """Tests for scripts/import_model.py — LFS pointer detection and model validation."""
+
 from __future__ import annotations
 
 import importlib.util
@@ -88,9 +89,7 @@ class TestValidateModelFiles:
         module = _load_import_module()
         model_dir = self._create_valid_model_dir(tmp_path / "model")
         assert module.validate_model_files(model_dir, "small")[0] is True
-        is_valid, _found, missing = module.validate_model_files(
-            model_dir, "large-v3"
-        )
+        is_valid, _found, missing = module.validate_model_files(model_dir, "large-v3")
         assert is_valid is False
         assert missing == ["preprocessor_config.json"]
         (model_dir / "preprocessor_config.json").write_text("{}")
@@ -390,7 +389,9 @@ def test_a_model_this_script_cannot_import_says_so_before_listing_files(
     output = capsys.readouterr()
     combined = output.out + output.err
     assert "download_model.py" in combined
-    assert "'parakeet-tdt-0.6b-v3' is not a CTranslate2/faster-whisper model" in combined, (
+    assert (
+        "'parakeet-tdt-0.6b-v3' is not a CTranslate2/faster-whisper model" in combined
+    ), (
         "the folder name must resolve to the model it names, so the message "
         "says the model is out of scope instead of asking for a --model that "
         f"is then rejected: {combined}"
@@ -444,7 +445,9 @@ def test_a_faster_whisper_folder_under_an_odd_name_is_not_sent_to_the_other_scri
         (source / name).write_text("{}", encoding="utf-8")
     (source / "model.bin").write_bytes(b"x" * 64)
 
-    monkeypatch.setattr(sys, "argv", ["import_model.py", str(source), "--validate-only"])
+    monkeypatch.setattr(
+        sys, "argv", ["import_model.py", str(source), "--validate-only"]
+    )
     with pytest.raises(SystemExit) as excinfo:
         module.main()
 
@@ -475,7 +478,9 @@ def test_validate_only_still_reports_the_files_when_the_name_is_unresolved(
     source.mkdir()
     (source / "config.json").write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(sys, "argv", ["import_model.py", str(source), "--validate-only"])
+    monkeypatch.setattr(
+        sys, "argv", ["import_model.py", str(source), "--validate-only"]
+    )
     with pytest.raises(SystemExit) as excinfo:
         module.main()
 
@@ -567,7 +572,9 @@ def test_an_empty_model_argument_does_not_print_a_nameless_model_line(
         ),
         (
             "an incomplete one",
-            lambda source: [(source / "config.json").write_text("{}", encoding="utf-8")],
+            lambda source: [
+                (source / "config.json").write_text("{}", encoding="utf-8")
+            ],
             "FAILED: required files are missing",
         ),
     ],
@@ -629,8 +636,7 @@ def test_a_folder_holding_another_runtimes_model_is_not_told_what_to_download(
     assert excinfo.value.code == 1
     combined = "".join(capsys.readouterr())
     assert "MISSING FILES" not in combined, (
-        "the script listed files to download for a model it cannot import:\n"
-        f"{combined}"
+        f"the script listed files to download for a model it cannot import:\n{combined}"
     )
     assert "Could not auto-detect" in combined, combined
 

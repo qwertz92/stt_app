@@ -46,6 +46,7 @@ logger = logging.getLogger(__name__)
 _STREAM_SENTINEL = object()
 _DEFAULT_CHUNK_SAMPLES = 8_960
 
+
 @dataclass
 class _InferenceSession:
     processor: Any

@@ -6,6 +6,7 @@ they track/persist the active history limit. This module holds the flow logic ex
 once; each caller only supplies the small bits that differ (feedback presentation,
 limit persistence, limit widget updates).
 """
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -58,11 +59,9 @@ def prompt_import_overflow(
     box.setWindowTitle("Import exceeds history size")
     box.setIcon(QtWidgets.QMessageBox.Question)
     box.setText(
-        
-            f"Import contains {import_count} entries, but only {free_slots} "
-            f"slot{'s' if free_slots != 1 else ''} are free "
-            f"(current max: {max_items})."
-        
+        f"Import contains {import_count} entries, but only {free_slots} "
+        f"slot{'s' if free_slots != 1 else ''} are free "
+        f"(current max: {max_items})."
     )
     box.setInformativeText(
         "Choose whether to import only free slots or switch to unlimited storage."

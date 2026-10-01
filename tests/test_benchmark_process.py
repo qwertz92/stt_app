@@ -65,7 +65,7 @@ def test_worker_emits_progress_case_and_done(monkeypatch, capsys):
         if line.startswith(benchmark_worker.BENCHMARK_EVENT_PREFIX)
     ]
     events = [
-        json.loads(line[len(benchmark_worker.BENCHMARK_EVENT_PREFIX):])
+        json.loads(line[len(benchmark_worker.BENCHMARK_EVENT_PREFIX) :])
         for line in lines
     ]
     kinds = [event["event"] for event in events]
@@ -90,7 +90,7 @@ def test_worker_emits_error_event_on_failure(monkeypatch, capsys):
         if line.startswith(benchmark_worker.BENCHMARK_EVENT_PREFIX)
     ]
     events = [
-        json.loads(line[len(benchmark_worker.BENCHMARK_EVENT_PREFIX):])
+        json.loads(line[len(benchmark_worker.BENCHMARK_EVENT_PREFIX) :])
         for line in lines
     ]
     assert events == [{"event": "error", "message": "worker blew up"}]
@@ -107,14 +107,17 @@ def test_worker_parses_explicit_string_booleans(monkeypatch, capsys):
         benchmark_worker, "run_benchmark_cases", fake_run_benchmark_cases
     )
 
-    assert benchmark_worker.run_from_options(
-        {
-            "audio_path": "x.wav",
-            "model_names": ["small"],
-            "vad_filter": "false",
-            "warmup": "true",
-        }
-    ) == 0
+    assert (
+        benchmark_worker.run_from_options(
+            {
+                "audio_path": "x.wav",
+                "model_names": ["small"],
+                "vad_filter": "false",
+                "warmup": "true",
+            }
+        )
+        == 0
+    )
 
     assert captured["vad_filter"] is False
     assert captured["warmup"] is True
@@ -202,11 +205,13 @@ def _case_payload():
 
 
 def test_stream_cleanup_runs_when_callback_raises(monkeypatch, tmp_path):
-    process = _FakeProcess(
-        [_event_line({"event": "progress", "text": "loading"})]
+    process = _FakeProcess([_event_line({"event": "progress", "text": "loading"})])
+    monkeypatch.setattr(
+        benchmark_process, "start_benchmark_process", lambda _p: process
     )
-    monkeypatch.setattr(benchmark_process, "start_benchmark_process", lambda _p: process)
-    monkeypatch.setattr(benchmark_process, "_terminate_process_tree", lambda p: p.terminate())
+    monkeypatch.setattr(
+        benchmark_process, "_terminate_process_tree", lambda p: p.terminate()
+    )
 
     with pytest.raises(RuntimeError, match="callback failed"):
         benchmark_process._stream_benchmark_process(
@@ -226,7 +231,9 @@ def test_nonzero_exit_is_error_even_after_streamed_case(monkeypatch, tmp_path):
         [_event_line({"event": "case", "case": _case_payload()})],
         return_code=7,
     )
-    monkeypatch.setattr(benchmark_process, "start_benchmark_process", lambda _p: process)
+    monkeypatch.setattr(
+        benchmark_process, "start_benchmark_process", lambda _p: process
+    )
 
     with pytest.raises(RuntimeError, match=r"code 7.*1 completed case"):
         benchmark_process._stream_benchmark_process(
@@ -596,9 +603,7 @@ def test_a_case_event_without_a_case_is_skipped_not_fatal(monkeypatch, caplog):
 
 
 @pytest.mark.parametrize("canceled", [False, True])
-def test_an_error_event_without_a_message_reads_as_the_fallback(
-    monkeypatch, canceled
-):
+def test_an_error_event_without_a_message_reads_as_the_fallback(monkeypatch, canceled):
     """`str(None)` is the word None, a non-empty string, so the
     `or "Benchmark failed."` behind it never fell through for a null
     message: the user would have read a RuntimeError saying "None". Both

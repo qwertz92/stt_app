@@ -210,11 +210,15 @@ def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> N
 
         # And the sentence fits the area reserved for it rather than clipping.
         label = dialog.vocabulary_support_label
-        required = label.fontMetrics().boundingRect(
-            QtCore.QRect(0, 0, label.width(), 1000),
-            QtCore.Qt.TextWordWrap,
-            label.text(),
-        ).height()
+        required = (
+            label.fontMetrics()
+            .boundingRect(
+                QtCore.QRect(0, 0, label.width(), 1000),
+                QtCore.Qt.TextWordWrap,
+                label.text(),
+            )
+            .height()
+        )
         assert required <= label.height(), (engine, model, label.text())
 
 
@@ -360,9 +364,7 @@ def test_dynamic_notes_fit_their_reserved_area(
             "funasr",
             "custom",
         ):
-            dialog.engine_combo.setCurrentIndex(
-                dialog.engine_combo.findData(engine)
-            )
+            dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
             app.processEvents()
             model_note = (
                 dialog.local_model_runtime_warning_label
@@ -374,11 +376,15 @@ def test_dynamic_notes_fit_their_reserved_area(
                 dialog.language_note_label,
                 dialog.vocabulary_support_label,
             ):
-                required_height = label.fontMetrics().boundingRect(
-                    QtCore.QRect(0, 0, label.width(), 1000),
-                    QtCore.Qt.TextWordWrap,
-                    label.text(),
-                ).height()
+                required_height = (
+                    label.fontMetrics()
+                    .boundingRect(
+                        QtCore.QRect(0, 0, label.width(), 1000),
+                        QtCore.Qt.TextWordWrap,
+                        label.text(),
+                    )
+                    .height()
+                )
                 assert required_height <= label.height(), (
                     width,
                     engine,
@@ -417,11 +423,15 @@ def test_every_local_model_note_fits_the_two_lines_reserved_for_it(
             dialog.local_model_runtime_warning_label,
             dialog.language_note_label,
         ):
-            required_height = label.fontMetrics().boundingRect(
-                QtCore.QRect(0, 0, label.width(), 1000),
-                QtCore.Qt.TextWordWrap,
-                label.text(),
-            ).height()
+            required_height = (
+                label.fontMetrics()
+                .boundingRect(
+                    QtCore.QRect(0, 0, label.width(), 1000),
+                    QtCore.Qt.TextWordWrap,
+                    label.text(),
+                )
+                .height()
+            )
             assert required_height <= label.height(), (model, label.text())
 
 
@@ -801,7 +811,9 @@ def test_microphone_picker_does_not_call_a_device_disconnected_when_portaudio_di
     for the window between the refresh worker's terminate/initialize and the
     dialog's repopulate timer. The selection itself must still survive.
     """
-    monkeypatch.setattr("stt_app.audio_devices.query_input_devices", lambda: ([], False))
+    monkeypatch.setattr(
+        "stt_app.audio_devices.query_input_devices", lambda: ([], False)
+    )
 
     dialog._populate_microphone_combo("Headset Microphone (Jabra)")
 
@@ -879,13 +891,9 @@ def test_microphone_refresh_requests_controller_reenumeration(
     dialog: SettingsDialog,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr(
-        "stt_app.audio_devices.query_input_devices", lambda: ([], True)
-    )
+    monkeypatch.setattr("stt_app.audio_devices.query_input_devices", lambda: ([], True))
     requests: list[bool] = []
-    dialog.audio_device_refresh_requested.connect(
-        lambda: requests.append(True)
-    )
+    dialog.audio_device_refresh_requested.connect(lambda: requests.append(True))
 
     dialog._on_microphone_refresh_clicked()
 

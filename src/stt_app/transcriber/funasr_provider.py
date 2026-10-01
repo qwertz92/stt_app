@@ -107,8 +107,7 @@ class _UnusableFrameBudget:
         self.count += 1
         if self.count > _MAX_UNUSABLE_FRAMES:
             raise _FunAsrInterrupted(
-                f"Fun-ASR sent {self.count} frames in a row that were not "
-                "events."
+                f"Fun-ASR sent {self.count} frames in a row that were not events."
             )
 
     def reset(self) -> None:
@@ -312,9 +311,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 "as a WAV file."
             ) from exc
         if sampwidth != 2:
-            raise TranscriptionError(
-                "Fun-ASR expects 16-bit PCM audio."
-            )
+            raise TranscriptionError("Fun-ASR expects 16-bit PCM audio.")
         if n_channels > 1:
             import numpy as np
 
@@ -325,9 +322,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
 
     # -- Event handling ---------------------------------------------------------
 
-    def _recv_event(
-        self, ws, deadline: float, budget: _UnusableFrameBudget
-    ) -> dict:
+    def _recv_event(self, ws, deadline: float, budget: _UnusableFrameBudget) -> dict:
         """Receive one JSON object, skipping frames that cannot be one.
 
         Bounded in total, and the socket timeout is tightened to whatever is
@@ -473,10 +468,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 header.get("error_message"), header.get("error_code")
             )
             if detail:
-                return (
-                    "Fun-ASR task failed: "
-                    f"{detail[:_FAILURE_DETAIL_MAX_CHARS]}"
-                )
+                return f"Fun-ASR task failed: {detail[:_FAILURE_DETAIL_MAX_CHARS]}"
         return "Fun-ASR task failed."
 
     # -- Batch transcription ----------------------------------------------------
@@ -528,9 +520,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         except Exception as exc:
             if _is_ssl_error(exc):
                 raise TranscriptionError(format_ssl_error_message("Fun-ASR")) from exc
-            raise TranscriptionError(
-                f"Fun-ASR transcription failed: {exc}"
-            ) from exc
+            raise TranscriptionError(f"Fun-ASR transcription failed: {exc}") from exc
         finally:
             try:
                 ws.close()
@@ -659,8 +649,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             )
         if status == 429:
             return TranscriptionError(
-                "Fun-ASR: Rate limit exceeded (HTTP 429). "
-                "Wait a moment and try again."
+                "Fun-ASR: Rate limit exceeded (HTTP 429). Wait a moment and try again."
             )
         if _is_ssl_error(exc):
             return TranscriptionError(format_ssl_error_message("Fun-ASR"))

@@ -1,4 +1,5 @@
 """Shared widgets, constants and pure helpers for the settings dialog."""
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -146,9 +147,7 @@ class ElidingLabel(QtWidgets.QLabel):
             super().setText(single_line)
             return
         super().setText(
-            self.fontMetrics().elidedText(
-                single_line, QtCore.Qt.ElideRight, available
-            )
+            self.fontMetrics().elidedText(single_line, QtCore.Qt.ElideRight, available)
         )
 
 
@@ -215,7 +214,9 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
 
 
 _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
-    "groq": tuple((value, _REMOTE_MODEL_LABELS.get(value, value)) for value in GROQ_MODELS),
+    "groq": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in GROQ_MODELS
+    ),
     "openai": tuple(
         (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in OPENAI_MODELS
     ),
@@ -223,28 +224,22 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
         (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in DEEPGRAM_MODELS
     ),
     "assemblyai": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in ASSEMBLYAI_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in ASSEMBLYAI_MODELS
     ),
     "elevenlabs": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in ELEVENLABS_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in ELEVENLABS_MODELS
     ),
     "azure": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in AZURE_SPEECH_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in AZURE_SPEECH_MODELS
     ),
     "funasr": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in FUNASR_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in FUNASR_MODELS
     ),
     "speechmatics": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in SPEECHMATICS_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in SPEECHMATICS_MODELS
     ),
     "mistral": tuple(
-        (value, _REMOTE_MODEL_LABELS.get(value, value))
-        for value in MISTRAL_MODELS
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in MISTRAL_MODELS
     ),
 }
 
@@ -344,7 +339,9 @@ def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> N
     """
     remote = [engine for engine in engines if engine != DEFAULT_ENGINE]
     if DEFAULT_ENGINE in engines:
-        combo.addItem(_ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE)
+        combo.addItem(
+            _ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE
+        )
         if remote:
             combo.insertSeparator(combo.count())
     if remote:
@@ -412,7 +409,7 @@ def onnx_device_label(device: str) -> str:
 
 
 def onnx_device_order_text(order: tuple[str, ...]) -> str:
-    """"WebGPU, then DirectML, then CPU" -- one rendering of a device chain."""
+    """ "WebGPU, then DirectML, then CPU" -- one rendering of a device chain."""
     return ", then ".join(onnx_device_label(device) for device in order)
 
 
@@ -523,7 +520,9 @@ _RETIRED_MODEL_LABELS: dict[str, str] = {
 def _build_local_model_labels() -> dict[str, str]:
     labels: dict[str, str] = {}
     for name, (display, note) in _LOCAL_MODEL_NAMES_AND_NOTES.items():
-        details = ", ".join(part for part in (_approximate_size_text(name), note) if part)
+        details = ", ".join(
+            part for part in (_approximate_size_text(name), note) if part
+        )
         labels[name] = f"{display} ({details})" if details else display
     labels.update(_RETIRED_MODEL_LABELS)
     return labels
@@ -571,13 +570,9 @@ def model_choices_for_engine(
     """
     normalized = str(engine or "").strip().lower()
     if normalized == DEFAULT_ENGINE:
-        return tuple(
-            (value, local_model_label(value)) for value in VALID_MODEL_SIZES
-        )
+        return tuple((value, local_model_label(value)) for value in VALID_MODEL_SIZES)
     if normalized == "custom":
-        values = dict.fromkeys(
-            str(model or "").strip() for model in custom_models
-        )
+        values = dict.fromkeys(str(model or "").strip() for model in custom_models)
         return tuple((value, value) for value in values if value)
     return _REMOTE_MODEL_CHOICES.get(normalized, ())
 
@@ -885,7 +880,5 @@ def _hotkeys_conflict(first: str, second: str) -> bool:
 
 def _hotkey_token_set(value: str) -> set[str]:
     return {
-        token.strip().upper()
-        for token in str(value or "").split("+")
-        if token.strip()
+        token.strip().upper() for token in str(value or "").split("+") if token.strip()
     }

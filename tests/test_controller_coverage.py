@@ -614,7 +614,7 @@ def test_start_recording_waits_to_invite_speech_until_capture_started(monkeypatc
             "Listening",
             "Starting dictation. Please wait for the 'Speak now' message.",
         ),
-        ("Listening", "Speak now. Press hotkey again to stop.")
+        ("Listening", "Speak now. Press hotkey again to stop."),
     ]
     controller.shutdown()
     _ = app
@@ -645,9 +645,10 @@ def test_start_streaming_waits_to_invite_speech_until_capture_started(monkeypatc
     # because this fake connects instantly; a 5 ms delay was enough to make
     # it flake, and every real remote provider takes far longer.
     deadline = time.monotonic() + 10.0
-    while time.monotonic() < deadline and len(
-        [state for state in overlay.states if state[0] == "Listening"]
-    ) < 2:
+    while (
+        time.monotonic() < deadline
+        and len([state for state in overlay.states if state[0] == "Listening"]) < 2
+    ):
         app.processEvents()
         time.sleep(0.01)
 
@@ -943,8 +944,7 @@ def test_a_queued_preload_does_not_claim_to_be_downloading(monkeypatch):
 
     assert submitted
     assert (
-        controller._current_preload_phase()
-        == controller_module._PRELOAD_PHASE_QUEUED
+        controller._current_preload_phase() == controller_module._PRELOAD_PHASE_QUEUED
     )
     assert controller._preload_phase_word() == "waiting for another model to finish"
     detail = controller._preload_progress_detail()
@@ -1446,7 +1446,8 @@ def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
     FakeCapture.instances = []
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
-        "stt_app.controller.create_transcriber", lambda _settings, **_kwargs: transcriber
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
     )
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -1461,7 +1462,9 @@ def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
     assert transcriber.aborted is True
     assert controller._audio_capture is None
     assert overlay.states[-1][0] == "Error"
-    assert "Microphone capture started but did not deliver audio" in overlay.states[-1][1]
+    assert (
+        "Microphone capture started but did not deliver audio" in overlay.states[-1][1]
+    )
     assert "audio_capture_callback_timeout mode=streaming" in caplog.text
     controller.shutdown()
     _ = app
@@ -2001,9 +2004,7 @@ def test_stop_recording_persists_last_recording_and_marks_transcribing(monkeypat
     assert last_recording_store.saved == [(b"RIFF", False)]
     # The default model, whatever it is -- this test is about the recording
     # being persisted and marked, not about which model transcribes it.
-    assert last_recording_store.transcribing == [
-        ("local", DEFAULT_MODEL_SIZE, "batch")
-    ]
+    assert last_recording_store.transcribing == [("local", DEFAULT_MODEL_SIZE, "batch")]
     assert submitted == [(1, b"RIFF", "batch", DEFAULT_MODEL_SIZE)]
     controller.shutdown()
     _ = app
@@ -2186,7 +2187,9 @@ class _StoreWithIds(FakeLastRecordingStore):
 @pytest.mark.parametrize(
     ("recording_id", "expected_marks", "expected_ids"),
     [
-        pytest.param("rec-7", ["Transcription canceled by user."], ["rec-7"], id="known id"),
+        pytest.param(
+            "rec-7", ["Transcription canceled by user."], ["rec-7"], id="known id"
+        ),
         pytest.param("", [], [], id="unknown id"),
     ],
 )
@@ -2402,14 +2405,10 @@ def test_the_watchdog_abort_keeps_an_older_failure_when_nothing_arrived_late(
 
 
 @pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
-def test_a_stream_runtime_failure_retains_the_sessions_own_id(
-    monkeypatch, persisted
-):
+def test_a_stream_runtime_failure_retains_the_sessions_own_id(monkeypatch, persisted):
     """The audio a dying stream runtime keeps for Retry carries the id the
     teardown's persist handed back, and no id when that write failed."""
-    settings = AppSettings(
-        hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small"
-    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
     store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
     transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
     FakeCapture.instances = []
@@ -2721,7 +2720,7 @@ def test_a_byte_identical_recordings_success_leaves_the_promoted_failure_retryab
 
 
 def test_a_retry_of_an_unknown_identity_still_retires_the_slot():
-    """"" is an identity as well: a retry of bytes the store never received
+    """ "" is an identity as well: a retry of bytes the store never received
     carries it, and its success retires the slot as a known id's does."""
     controller, app = _make_controller(last_recording_store=_StoreWithIds("rec-A"))
     controller._executor = ImmediateExecutor()
@@ -2806,9 +2805,7 @@ def _stop_a_streaming_session(
     capture_cls=FakeCapture,
     before_stop=None,
 ):
-    settings = AppSettings(
-        hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small"
-    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
     FakeCapture.instances = []
     monkeypatch.setattr("stt_app.controller.AudioCapture", capture_cls)
     monkeypatch.setattr(
@@ -2849,7 +2846,6 @@ def test_the_streaming_finalize_keeps_its_sessions_audio_for_retry(monkeypatch):
     _ = app
 
 
-
 def test_the_streaming_finalize_marks_transcribing_keyed_by_its_jobs_recording(
     monkeypatch,
 ):
@@ -2867,7 +2863,6 @@ def test_the_streaming_finalize_marks_transcribing_keyed_by_its_jobs_recording(
     assert store.completed_ids == ["saved-1"]
     controller.shutdown()
     _ = app
-
 
 
 def test_a_finalize_whose_persist_failed_marks_nothing_and_its_retry_spares_the_slot(
@@ -4014,9 +4009,7 @@ def test_repaste_last_transcript_inserts_into_current_window(monkeypatch):
         window_focus_helper=focus_helper,
     )
     beeps: list[bool] = []
-    monkeypatch.setattr(
-        controller, "_play_completion_beep", lambda: beeps.append(True)
-    )
+    monkeypatch.setattr(controller, "_play_completion_beep", lambda: beeps.append(True))
     controller._last_transcript = "hello again"
 
     controller.repaste_last_transcript()
@@ -4155,9 +4148,7 @@ def test_a_re_paste_that_fails_during_a_transcription_reports_through_the_tray(
     inserter = FakeTextInserter(should_fail=True)
     controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
     beeps: list[bool] = []
-    monkeypatch.setattr(
-        controller, "_play_completion_beep", lambda: beeps.append(True)
-    )
+    monkeypatch.setattr(controller, "_play_completion_beep", lambda: beeps.append(True))
     controller._last_transcript = "hello again"
     controller._active_request_token = 7
     tray: list[str] = []
@@ -4224,8 +4215,7 @@ def test_retry_last_transcription_blocked_while_the_microphone_is_open(microphon
     assert store.transcribing_ids == []
     assert controller._last_failed_wav_bytes == b"wav-W"
     assert tray == [
-        ("Finish the current recording before retrying the last failed "
-         "transcription.")
+        ("Finish the current recording before retrying the last failed transcription.")
     ]
     controller._recording_start_in_progress = False
     controller._recording_stop_in_progress = False
@@ -4455,8 +4445,8 @@ def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
         transcriber.start_stream = slow_start
         # The flush passes a wait budget (`block_timeout_s`), so the
         # replacement has to accept the keyword the interface declares.
-        transcriber.push_audio_chunk = (
-            lambda chunk, *, block_timeout_s=None: pushed.append(chunk)
+        transcriber.push_audio_chunk = lambda chunk, *, block_timeout_s=None: (
+            pushed.append(chunk)
         )
         return transcriber
 
@@ -5276,9 +5266,9 @@ def test_a_handshake_the_finalize_outlives_ends_in_a_reported_failure(monkeypatc
 
         errors = [detail for state, detail in overlay.states if state == "Error"]
         assert len(errors) == 1, errors
-        assert errors[0].startswith("The speech service was still connecting"), (
-            errors[0]
-        )
+        assert errors[0].startswith("The speech service was still connecting"), errors[
+            0
+        ]
         assert "not active" not in errors[0]
         assert delivered == []
         assert transcriber.aborted is True
@@ -5469,7 +5459,7 @@ def test_a_new_dictation_leaves_a_parked_finalizes_handshake_failure_alone(
 
 
 def test_a_late_connected_signal_after_a_stop_does_not_repaint_the_overlay(monkeypatch):
-    """"Finalizing streaming transcript..." must survive the handshake landing.
+    """ "Finalizing streaming transcript..." must survive the handshake landing.
 
     Once the generation is no longer retired at stop, the connect thread's
     completion signal passes `_on_stream_connect_finished`'s generation check,
@@ -5841,8 +5831,7 @@ def test_a_fallback_never_steals_the_users_own_other_hotkeys():
         registered.clear()
         assert controller._register_hotkey_with_fallback() is True
         assert registered == [FALLBACK_HOTKEYS[1]], (
-            f"took {registered}, but {FALLBACK_HOTKEYS[0]} is the user's "
-            "cancel hotkey"
+            f"took {registered}, but {FALLBACK_HOTKEYS[0]} is the user's cancel hotkey"
         )
     finally:
         controller.shutdown()
@@ -6119,9 +6108,7 @@ def test_a_cancelled_recording_follows_the_archive_setting(
         capture = FakeCapture.instances[-1]
         archived_path = getattr(capture, "last_saved_path", None)
         if archive_enabled:
-            assert archived_path is not None, (
-                "the cancelled recording was not archived"
-            )
+            assert archived_path is not None, "the cancelled recording was not archived"
             assert str(tmp_path / "recordings") in str(archived_path)
         else:
             assert archived_path is None, (
@@ -6242,7 +6229,9 @@ def test_a_foreground_post_paste_failure_also_offers_no_action(monkeypatch):
         def insert_text(self, *args, **kwargs):
             raise TextMayHaveBeenPastedError("Text pasted but restore failed")
 
-    controller, app = _make_controller(overlay=overlay, text_inserter=_PastedThenFailed())
+    controller, app = _make_controller(
+        overlay=overlay, text_inserter=_PastedThenFailed()
+    )
     try:
         assert controller._insert_text_at_target("hallo welt", restore_focus=False) is (
             False
@@ -6282,12 +6271,12 @@ def test_a_slow_handshake_is_still_aborted_when_the_microphone_fails(monkeypatch
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(
             AppSettings(
-        hotkey=FALLBACK_HOTKEY,
-        mode="streaming",
-        # A faster-whisper size explicitly: the default local model is
-        # the batch-only Parakeet, which the controller refuses to stream.
-        model_size="small",
-    )
+                hotkey=FALLBACK_HOTKEY,
+                mode="streaming",
+                # A faster-whisper size explicitly: the default local model is
+                # the batch-only Parakeet, which the controller refuses to stream.
+                model_size="small",
+            )
         ),
         overlay=FakeOverlay(),
     )
@@ -6751,9 +6740,9 @@ def test_a_raising_cancel_hook_clear_still_releases_the_runtime(
 
     assert calls[-1] is None, "the clear was never attempted"
     assert released == [True], "the runtime lease was stranded"
-    assert any(
-        "cancel hook" in record.getMessage() for record in caplog.records
-    ), "the failed clear was swallowed without a log line"
+    assert any("cancel hook" in record.getMessage() for record in caplog.records), (
+        "the failed clear was swallowed without a log line"
+    )
     controller.shutdown()
     _ = app
 
@@ -8068,9 +8057,7 @@ def test_a_capture_failure_re_enumerates_only_when_that_can_repair_it(
 
     class _RefusingCapture(FakeCapture):
         def start(self):
-            raise AudioCaptureError(
-                label, audio_system_unavailable=repairable
-            )
+            raise AudioCaptureError(label, audio_system_unavailable=repairable)
 
     monkeypatch.setattr(
         controller, "_build_audio_capture", lambda **_kwargs: _RefusingCapture()
@@ -8163,7 +8150,9 @@ def test_a_batch_job_that_cannot_be_scheduled_is_reported():
     try:
         controller._executor = _RefusingExecutor()
 
-        controller._submit_batch_transcription(b"RIFFaudio", AppSettings(engine="local"))
+        controller._submit_batch_transcription(
+            b"RIFFaudio", AppSettings(engine="local")
+        )
 
         assert controller._jobs == {}, "the queue row was left behind"
         assert controller._active_request_token is None
@@ -8966,7 +8955,9 @@ def test_a_new_recording_retires_the_failed_insert_offer(monkeypatch):
     )
     controller._last_transcript = "erster teil zweiter teil"
     inserter.should_fail = True
-    assert controller._insert_text_at_target(" zweiter teil", restore_focus=True) is False
+    assert (
+        controller._insert_text_at_target(" zweiter teil", restore_focus=True) is False
+    )
     assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
     inserter.should_fail = False
 
@@ -9630,9 +9621,7 @@ def test_a_settings_save_that_leaves_local_names_the_partials_a_scanner_holds(
     _ = app
 
 
-def test_a_model_switch_logs_the_partials_the_retired_preload_left(
-    monkeypatch, caplog
-):
+def test_a_model_switch_logs_the_partials_the_retired_preload_left(monkeypatch, caplog):
     """A different local model chosen in Settings retires the generation, so
     its completion is stale and paints nothing -- the new preload's progress
     line owns the overlay. The count was popped and discarded with it; it is
@@ -9647,9 +9636,7 @@ def test_a_model_switch_logs_the_partials_the_retired_preload_left(
     painted = len(overlay.states)
 
     with caplog.at_level(logging.WARNING, logger="test.controller"):
-        controller._on_model_preload_done(
-            generation, False, "Model download canceled."
-        )
+        controller._on_model_preload_done(generation, False, "Model download canceled.")
 
     assert len(overlay.states) == painted
     assert controller._preload_cleanup_notes == {}

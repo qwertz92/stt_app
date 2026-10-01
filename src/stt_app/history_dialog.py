@@ -64,9 +64,9 @@ class HistoryDialog(QtWidgets.QDialog):
         self._last_recording_store = last_recording_store
         self._controller = controller
         self._entries: list[TranscriptHistoryEntry] = []
-        self._history_reload_signature: tuple[
-            HistoryStorageSignature, int
-        ] | None = None
+        self._history_reload_signature: tuple[HistoryStorageSignature, int] | None = (
+            None
+        )
         self._last_total_entries = 0
         self._copy_feedback_timer = QtCore.QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
@@ -132,9 +132,7 @@ class HistoryDialog(QtWidgets.QDialog):
             18,
         )
         self._table.verticalHeader().setMinimumSectionSize(compact_row_height)
-        self._table.verticalHeader().setDefaultSectionSize(
-            compact_row_height
-        )
+        self._table.verticalHeader().setDefaultSectionSize(compact_row_height)
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.ResizeToContents
@@ -249,10 +247,7 @@ class HistoryDialog(QtWidgets.QDialog):
 
     def changeEvent(self, event: QtCore.QEvent) -> None:
         super().changeEvent(event)
-        if (
-            event.type() == QtCore.QEvent.ActivationChange
-            and self.isActiveWindow()
-        ):
+        if event.type() == QtCore.QEvent.ActivationChange and self.isActiveWindow():
             self.reload(force=True)
 
     def reload(self, force: bool = False) -> None:
@@ -361,7 +356,7 @@ class HistoryDialog(QtWidgets.QDialog):
                 elif change.kind == "insert":
                     self._insert_rows(
                         change.previous_start,
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                     )
                 elif change.kind == "update":
                     # `update` is only produced for equally sized ranges
@@ -369,7 +364,7 @@ class HistoryDialog(QtWidgets.QDialog):
                     # would be a bug rather than a case to tolerate.
                     for row, entry in zip(
                         range(change.previous_start, change.previous_stop),
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                         strict=True,
                     ):
                         self._populate_row(row, entry)
@@ -377,7 +372,7 @@ class HistoryDialog(QtWidgets.QDialog):
                     self._remove_rows(change.previous_start, change.previous_stop)
                     self._insert_rows(
                         change.previous_start,
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                     )
                 else:
                     return False
@@ -460,9 +455,7 @@ class HistoryDialog(QtWidgets.QDialog):
             )
         else:
             self._detail.setPlainText(f"{len(entries)} entries selected.")
-            self._copy_button.setEnabled(
-                any(bool(entry.text) for entry in entries)
-            )
+            self._copy_button.setEnabled(any(bool(entry.text) for entry in entries))
             self._edit_button.setEnabled(False)
             # Both actions act on exactly one recording.
             self._set_audio_actions_enabled(False)
@@ -603,8 +596,7 @@ class HistoryDialog(QtWidgets.QDialog):
             selection = QtCore.QItemSelection(top_left, bottom_right)
             selection_model.select(
                 selection,
-                QtCore.QItemSelectionModel.Select
-                | QtCore.QItemSelectionModel.Rows,
+                QtCore.QItemSelectionModel.Select | QtCore.QItemSelectionModel.Rows,
             )
         if rows:
             current_row = min(max(rows[0], 0), self._table.rowCount() - 1)
@@ -794,9 +786,7 @@ class HistoryDialog(QtWidgets.QDialog):
                 # value -- the setting really is stored -- and the count label
                 # keeps the number it showed, which is still the truth. Only
                 # the deletion did not happen, which is what the box says.
-                QtWidgets.QMessageBox.warning(
-                    self, "History not trimmed", str(exc)
-                )
+                QtWidgets.QMessageBox.warning(self, "History not trimmed", str(exc))
                 return
             current_count = min(current_count, next_limit)
             next_visible = _visible_history_count(current_count, next_limit)

@@ -64,6 +64,7 @@ _AZURE_SPEECH_HOST_SUFFIXES = (
     ".api.cognitive.microsoft.com",
 )
 
+
 def normalize_azure_endpoint(endpoint: str) -> str:
     """Return a clean ``https://host`` base URL for a Speech resource.
 
@@ -179,8 +180,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "Azure Speech key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "Azure Speech key is missing. Enter your key in Settings -> API Keys."
             )
         # Validate eagerly so a misconfigured endpoint fails fast and clearly.
         self._transcribe_url = build_transcribe_url(endpoint)
@@ -201,9 +201,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
     # -- Request building -------------------------------------------------------
 
     def _azure_locale(self) -> str:
-        return AZURE_LOCALE_OVERRIDES.get(
-            self._language_mode, self._language_mode
-        )
+        return AZURE_LOCALE_OVERRIDES.get(self._language_mode, self._language_mode)
 
     def _definition(self) -> dict:
         definition: dict = {
@@ -280,12 +278,8 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             raise self._http_error(exc) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
-                raise TranscriptionError(
-                    format_ssl_error_message("Azure")
-                ) from exc
-            raise TranscriptionError(
-                f"Azure transcription failed: {exc}"
-            ) from exc
+                raise TranscriptionError(format_ssl_error_message("Azure")) from exc
+            raise TranscriptionError(f"Azure transcription failed: {exc}") from exc
 
     @staticmethod
     def _extract_transcript(body: object) -> str:
@@ -294,9 +288,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         combined = body.get("combinedPhrases")
         if isinstance(combined, list) and combined:
             texts = [
-                str(item.get("text", ""))
-                for item in combined
-                if isinstance(item, dict)
+                str(item.get("text", "")) for item in combined if isinstance(item, dict)
             ]
             return normalize_transcript_text(" ".join(t for t in texts if t))
         # Some responses may carry a single top-level text field.
@@ -320,8 +312,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             )
         if exc.code == 429:
             return TranscriptionError(
-                "Azure: Rate limit exceeded (HTTP 429). "
-                "Wait a moment and try again."
+                "Azure: Rate limit exceeded (HTTP 429). Wait a moment and try again."
             )
         if exc.code == 400:
             hint = f" {detail}" if detail else ""

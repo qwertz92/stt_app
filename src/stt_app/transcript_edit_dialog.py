@@ -28,9 +28,7 @@ class TranscriptEditDialog(QtWidgets.QDialog):
         # Keep the row in the layout and only swap its text: toggling the
         # label's visibility pushed the Save/Cancel row down by a line whenever
         # the validation error appeared.
-        self._error_label.setFixedHeight(
-            self._error_label.sizeHint().height()
-        )
+        self._error_label.setFixedHeight(self._error_label.sizeHint().height())
 
         self._save_button = QtWidgets.QPushButton("Save Transcript")
         self._save_button.setObjectName("primaryButton")

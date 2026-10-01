@@ -670,6 +670,7 @@ def test_a_file_that_is_not_a_wav_and_over_the_cap_is_logged(caplog):
 # The bounds
 # --------------------------------------------------------------------------
 
+
 @pytest.mark.parametrize(
     ("engine", "model", "size_limit_bytes", "duration_limit_s"),
     [
@@ -738,9 +739,7 @@ def test_a_marker_never_names_a_stretch_of_no_length():
 
 
 def test_a_failed_part_after_a_gap_carries_the_marker_in_its_recovered_text():
-    requests = _Requests(
-        ["erster teil", "", TranscriptionError("Example: HTTP 500.")]
-    )
+    requests = _Requests(["erster teil", "", TranscriptionError("Example: HTTP 500.")])
 
     with pytest.raises(TranscriptionError) as excinfo:
         transcribe_in_parts(

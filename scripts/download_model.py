@@ -78,6 +78,7 @@ from stt_app.transcriber.local_webgpu_asr import pinned_revision
 # Re-export under the name used throughout this script.
 MODELS = MODEL_REPO_MAP
 
+
 def _print_ssl_help(model_name: str) -> None:
     """Print actionable guidance when SSL verification fails."""
     repo_id = MODELS.get(model_name, f"Systran/faster-whisper-{model_name}")
@@ -110,7 +111,7 @@ def _print_ssl_help(model_name: str) -> None:
             "workarounds below target Hugging Face directly; ModelScope\n"
             "needs no extra setup.\n"
         )
-        +         "\n"
+        + "\n"
         "Workarounds (pick one):\n"
         "\n"
         "  1. SET YOUR CORPORATE CA BUNDLE (best fix):\n"
@@ -285,9 +286,7 @@ def main() -> None:
             # multilingual, and the substring test below it recognised
             # exactly the models with "distil" in the name.
             languages = (
-                "English only"
-                if name in LOCAL_ENGLISH_ONLY_MODELS
-                else "multilingual"
+                "English only" if name in LOCAL_ENGLISH_ONLY_MODELS else "multilingual"
             )
             if name in LOCAL_ONNX_MODEL_SIZES:
                 precision = LOCAL_ONNX_MODEL_PRECISION.get(name, "q4")

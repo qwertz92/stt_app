@@ -22,7 +22,9 @@ def test_creates_log_dir_and_file_handler(tmp_path):
     al = AppLogger(root_dir=tmp_path)
     assert al.log_path.parent.is_dir()
     root = logging.getLogger(APP_LOGGER_NAME)
-    rh = [h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)]
+    rh = [
+        h for h in root.handlers if isinstance(h, logging.handlers.RotatingFileHandler)
+    ]
     assert len(rh) >= 1
 
 
@@ -109,7 +111,8 @@ def test_configure_is_idempotent(tmp_path):
 
     root = logging.getLogger(APP_LOGGER_NAME)
     rh = [
-        h for h in root.handlers
+        h
+        for h in root.handlers
         if isinstance(h, logging.handlers.RotatingFileHandler)
         and h.baseFilename == str(al.log_path)
     ]

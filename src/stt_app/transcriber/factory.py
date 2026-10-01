@@ -82,9 +82,7 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             language_mode=settings.language_mode,
             offline_mode=settings.offline_mode,
             model_dir=settings.model_dir,
-            device=getattr(
-                settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE
-            ),
+            device=getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE),
             # Which device `auto` starts with, from a benchmark that measured
             # this model on more than one. Empty for every pinned policy, so
             # the two settings cannot contradict each other.

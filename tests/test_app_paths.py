@@ -149,7 +149,9 @@ def test_the_read_only_resolvers_create_nothing_and_move_nothing(monkeypatch, tm
     assert (tmp_path / "stt_app").exists() is False
 
 
-def test_the_read_only_resolvers_report_absence_instead_of_creating(monkeypatch, tmp_path):
+def test_the_read_only_resolvers_report_absence_instead_of_creating(
+    monkeypatch, tmp_path
+):
     """`None` is the honest answer, and it is not the same as a path.
 
     Returning "here is where it would go" is what made the caller create it.
@@ -164,7 +166,9 @@ def test_the_read_only_resolvers_report_absence_instead_of_creating(monkeypatch,
     assert list(appdata.iterdir()) == [], "a lookup created something"
 
 
-def test_existing_settings_path_is_none_when_the_folder_holds_no_settings(monkeypatch, tmp_path):
+def test_existing_settings_path_is_none_when_the_folder_holds_no_settings(
+    monkeypatch, tmp_path
+):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     (tmp_path / "stt_app").mkdir(parents=True)
     from stt_app.app_paths import existing_appdata_root, existing_settings_path

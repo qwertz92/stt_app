@@ -66,6 +66,7 @@ def _acquire_bounded(lock, timeout: float = 20.0, poll_seconds: float = 0.01):
     assert acquired, f"timed out after {timeout}s waiting for the lock"
     return acquired
 
+
 def _wait_for_file(path: Path, timeout: float = 20.0) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
@@ -162,6 +163,7 @@ def test_lock_filename_is_always_usable(tmp_path, resource):
     path.write_text("", encoding="utf-8")
     assert path.exists()
 
+
 def test_after_release_another_process_gets_the_lock_immediately(tmp_path):
     """Release must free the lock for other processes, not just this one.
 
@@ -186,6 +188,7 @@ def test_after_release_another_process_gets_the_lock_immediately(tmp_path):
         )
     finally:
         holder.wait(timeout=30)
+
 
 def test_the_same_directory_spelled_differently_is_one_lock(tmp_path):
     """Case and separator folding is what makes the lock actually exclusive."""

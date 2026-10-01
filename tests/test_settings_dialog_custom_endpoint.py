@@ -87,9 +87,7 @@ def test_the_key_command_alone_makes_the_provider_configured():
         assert "custom" in dialog._providers_for_connection_target("all-configured")
         assert dialog._import_engine_credential_issue("custom") is None
         dialog.custom_key_command_edit.setText("")
-        assert "custom" not in dialog._providers_for_connection_target(
-            "all-configured"
-        )
+        assert "custom" not in dialog._providers_for_connection_target("all-configured")
     finally:
         dialog.deleteLater()
 

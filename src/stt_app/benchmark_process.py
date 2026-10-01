@@ -17,6 +17,7 @@ after the bound is lost. A ``BenchmarkCancelled`` is raised to match the
 pure function's contract, unless the child had already reported an error,
 which is raised instead.
 """
+
 from __future__ import annotations
 
 import collections
@@ -287,7 +288,7 @@ def _pump_events(stream, events: queue.Queue[Any]) -> None:
             text = line.rstrip("\n")
             if not text.startswith(BENCHMARK_EVENT_PREFIX):
                 continue
-            payload = text[len(BENCHMARK_EVENT_PREFIX):]
+            payload = text[len(BENCHMARK_EVENT_PREFIX) :]
             try:
                 event = json.loads(payload)
             except json.JSONDecodeError:

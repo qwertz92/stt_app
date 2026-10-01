@@ -61,8 +61,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "OpenAI API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "OpenAI API key is missing. Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL
@@ -98,8 +97,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             term
             for term in terms
             if not any(
-                character in term
-                for character in OPENAI_KEYWORD_FORBIDDEN_CHARACTERS
+                character in term for character in OPENAI_KEYWORD_FORBIDDEN_CHARACTERS
             )
         ]
         return kept, len(terms) - len(kept)
@@ -227,8 +225,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             # phrase ("Bad Request"), which drops the one part that
             # says what to change.
             raise TranscriptionError(
-                f"OpenAI transcription failed (HTTP {exc.code})"
-                f"{http_error_suffix(exc)}"
+                f"OpenAI transcription failed (HTTP {exc.code}){http_error_suffix(exc)}"
             ) from exc
         except TranscriptionError:
             raise
@@ -255,9 +252,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (
-                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
-            )
+            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from OpenAI API."

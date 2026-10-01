@@ -16,19 +16,13 @@ if str(SRC) not in sys.path:
 
 from stt_app.persistence import atomic_write_text  # noqa: E402
 
-PROJECT_VERSION_RE = re.compile(
-    r'(?ms)(^\[project\]\s*.*?^version\s*=\s*")[^"]+(")'
-)
+PROJECT_VERSION_RE = re.compile(r'(?ms)(^\[project\]\s*.*?^version\s*=\s*")[^"]+(")')
 INIT_VERSION_RE = re.compile(r'(?m)^(__version__\s*=\s*")[^"]+(")')
-INNO_VERSION_RE = re.compile(
-    r'(?m)^(\s*#define\s+MyAppVersion\s+")[^"]+(")'
-)
+INNO_VERSION_RE = re.compile(r'(?m)^(\s*#define\s+MyAppVersion\s+")[^"]+(")')
 UV_LOCK_VERSION_RE = re.compile(
     r'(?ms)(\[\[package\]\]\s*name\s*=\s*"stt-app"\s*version\s*=\s*")[^"]+(")'
 )
-RELEASE_TAG_RE = re.compile(
-    r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
-)
+RELEASE_TAG_RE = re.compile(r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
 
 class ReleaseVersionError(ValueError):

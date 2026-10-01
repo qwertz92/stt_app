@@ -64,9 +64,7 @@ def reveal_path_in_file_manager(path: str | Path) -> bool:
 def open_directory(path: str | Path) -> bool:
     """Open ``path`` in the system file manager."""
     return bool(
-        QtGui.QDesktopServices.openUrl(
-            QtCore.QUrl.fromLocalFile(str(_resolved(path)))
-        )
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(_resolved(path))))
     )
 
 

@@ -62,11 +62,15 @@ class _FakeService:
         if url.endswith("/transcript?format=txt"):
             if self.transcript_errors:
                 raise self.transcript_errors.pop(0)
-            return fake_response(self.transcript, headers={"Content-Type": "text/plain"})
+            return fake_response(
+                self.transcript, headers={"Content-Type": "text/plain"}
+            )
         if f"/jobs/{_JOB_ID}" in url:
             if self.status_errors:
                 raise self.status_errors.pop(0)
-            status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            status = (
+                self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
+            )
             job = {"id": _JOB_ID, "status": status}
             if self.job_errors:
                 job["errors"] = self.job_errors
@@ -127,9 +131,9 @@ class TestSpeechmaticsJob:
 
     @pytest.mark.parametrize("region", ["us1", "au1"])
     def test_the_region_picks_the_host(self, service, region):
-        _transcriber(region=region, model="enhanced", language_mode="en").transcribe_batch(
-            wav_seconds(1.0)
-        )
+        _transcriber(
+            region=region, model="enhanced", language_mode="en"
+        ).transcribe_batch(wav_seconds(1.0))
         assert {r.host for r in service.requests} == {SPEECHMATICS_API_HOSTS[region]}
 
     def test_an_unknown_region_is_the_default(self, service):
@@ -207,7 +211,9 @@ class TestSpeechmaticsConfig:
         assert modes == ("auto", *SPEECHMATICS_LANGUAGE_MODES)
         assert language_modes_for_selection("speechmatics") == modes
 
-    def test_a_stored_auto_reaching_a_language_model_falls_back_to_german(self, service):
+    def test_a_stored_auto_reaching_a_language_model_falls_back_to_german(
+        self, service
+    ):
         _transcriber(model="enhanced", language_mode="auto").transcribe_batch(
             wav_seconds(1.0)
         )

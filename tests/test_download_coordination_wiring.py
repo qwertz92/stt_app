@@ -816,9 +816,7 @@ def test_the_overlay_never_invents_progress_for_a_queued_preload(
         # Only the waiting branch returns without measuring the cache, so it
         # is the only one this bare controller can render.
         detail = (
-            DictationController._preload_progress_detail(controller)
-            if waits
-            else ""
+            DictationController._preload_progress_detail(controller) if waits else ""
         )
     finally:
         if slot_holder is not None:
@@ -965,8 +963,9 @@ def test_a_download_queued_during_a_cancel_drain_still_runs(monkeypatch):
     monkeypatch.setattr(
         _LocalModelsMixin,
         "_download_local_model_in_subprocess",
-        lambda self, name, model_dir: downloads.append(name)
-        or _through_the_slot(name, model_dir, "success"),
+        lambda self, name, model_dir: (
+            downloads.append(name) or _through_the_slot(name, model_dir, "success")
+        ),
     )
 
     _LocalModelsMixin._start_local_model_download(dialog, ["small"])
@@ -1329,8 +1328,15 @@ class _CleanupCoordinator:
         self._waiting = waiting
         self._cancel_on_acquire = cancel_on_acquire
 
-    def acquire(self, name, model_dir, *, explicit, cancel_check=None,
-                interest_already_registered=False):
+    def acquire(
+        self,
+        name,
+        model_dir,
+        *,
+        explicit,
+        cancel_check=None,
+        interest_already_registered=False,
+    ):
         if self._cancel_on_acquire:
             from stt_app.model_download_coordinator import ModelDownloadCanceled
 
@@ -1450,8 +1456,7 @@ def test_a_cleanup_that_ran_and_removed_files_still_reports_them(monkeypatch):
     assert cleanups == ["large-v3"]
     assert success is False
     assert summary == (
-        "Download canceled. Removed 4 incomplete files (3100.0 MB). "
-        "Canceled: large-v3."
+        "Download canceled. Removed 4 incomplete files (3100.0 MB). Canceled: large-v3."
     )
 
 
@@ -1556,7 +1561,7 @@ def test_several_models_left_alone_are_named_together():
 
 
 def test_a_file_the_cleanup_could_not_remove_is_reported_as_still_there():
-    """"No incomplete files remained." is a statement about the disk, and the
+    """ "No incomplete files remained." is a statement about the disk, and the
     file another program still holds is on it whatever the removal count
     says; reported as absent, the user went looking for gigabytes that were
     still there."""
@@ -1615,7 +1620,7 @@ def test_a_held_partial_reaches_the_drain_as_a_left_file():
 
 
 def test_no_downloads_ran_is_reported_in_the_warning_colour():
-    """"No downloads ran." is a Cancel-shaped outcome, not a failure; the
+    """ "No downloads ran." is a Cancel-shaped outcome, not a failure; the
     colour rule softened only the two texts it knew and painted it red."""
     from unittest.mock import MagicMock
 

@@ -91,7 +91,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
-        self._model = model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
+        self._model = (
+            model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
+        )
         self._region = normalize_speechmatics_region(region)
         if (
             self._model == SPEECHMATICS_MELIA_MODEL
@@ -132,7 +134,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         code, plus `additional_vocab` entries for the custom vocabulary (up to
         20,000 items; the app sends at most 100).
         """
-        language = SPEECHMATICS_LANGUAGE_CODES.get(self._language_mode, self._language_mode)
+        language = SPEECHMATICS_LANGUAGE_CODES.get(
+            self._language_mode, self._language_mode
+        )
         transcription: dict[str, Any] = {"model": self._model}
         if self._model == SPEECHMATICS_MELIA_MODEL:
             transcription["language"] = "multi"
@@ -147,7 +151,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         return {"type": "transcription", "transcription_config": transcription}
 
     def _request(self, url: str, *, data: bytes | None = None, content_type: str = ""):
-        request = urllib.request.Request(url, data=data, method="POST" if data else "GET")
+        request = urllib.request.Request(
+            url, data=data, method="POST" if data else "GET"
+        )
         request.add_header("Authorization", f"Bearer {self._api_key}")
         if content_type:
             request.add_header("Content-Type", content_type)
@@ -310,10 +316,16 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
     def push_audio_chunk(
         self, chunk: bytes, *, block_timeout_s: float | None = None
     ) -> None:
-        raise NotImplementedError("Speechmatics streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Speechmatics streaming is not implemented in this project."
+        )
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("Speechmatics streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Speechmatics streaming is not implemented in this project."
+        )
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("Speechmatics streaming is not implemented in this project.")
+        raise NotImplementedError(
+            "Speechmatics streaming is not implemented in this project."
+        )

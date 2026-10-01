@@ -106,23 +106,34 @@ def test_taking_an_edit_back_is_no_change(dialog: SettingsDialog) -> None:
 @pytest.mark.parametrize(
     "edit",
     [
-        pytest.param(lambda d: d.engine_combo.setCurrentIndex(
-            d.engine_combo.findData("groq")), id="engine"),
-        pytest.param(lambda d: d.custom_vocabulary_edit.setPlainText("Splunk"),
-                     id="vocabulary"),
-        pytest.param(lambda d: d.vad_threshold_spin.setValue(
-            d.vad_threshold_spin.value() + d.vad_threshold_spin.singleStep()),
-            id="spin"),
-        pytest.param(lambda d: d.model_dir_edit.setText("D:/models"),
-                     id="model-dir"),
-        pytest.param(lambda d: d.openai_key_edit.setText("sk-typed"),
-                     id="typed-key"),
-        pytest.param(lambda d: d.local_onnx_device_combo.setCurrentIndex(
-            d.local_onnx_device_combo.findData("cpu")), id="onnx-device"),
-        pytest.param(lambda d: d.history_timezone_combo.setCurrentIndex(
-            d.history_timezone_combo.findData("utc")), id="history-timezone"),
-        pytest.param(lambda d: d.tray_middle_click_checkbox.toggle(),
-                     id="hotkeys-tab"),
+        pytest.param(
+            lambda d: d.engine_combo.setCurrentIndex(d.engine_combo.findData("groq")),
+            id="engine",
+        ),
+        pytest.param(
+            lambda d: d.custom_vocabulary_edit.setPlainText("Splunk"), id="vocabulary"
+        ),
+        pytest.param(
+            lambda d: d.vad_threshold_spin.setValue(
+                d.vad_threshold_spin.value() + d.vad_threshold_spin.singleStep()
+            ),
+            id="spin",
+        ),
+        pytest.param(lambda d: d.model_dir_edit.setText("D:/models"), id="model-dir"),
+        pytest.param(lambda d: d.openai_key_edit.setText("sk-typed"), id="typed-key"),
+        pytest.param(
+            lambda d: d.local_onnx_device_combo.setCurrentIndex(
+                d.local_onnx_device_combo.findData("cpu")
+            ),
+            id="onnx-device",
+        ),
+        pytest.param(
+            lambda d: d.history_timezone_combo.setCurrentIndex(
+                d.history_timezone_combo.findData("utc")
+            ),
+            id="history-timezone",
+        ),
+        pytest.param(lambda d: d.tray_middle_click_checkbox.toggle(), id="hotkeys-tab"),
     ],
 )
 def test_every_settings_page_counts(dialog: SettingsDialog, edit) -> None:
@@ -142,7 +153,8 @@ def test_a_model_chosen_for_a_provider_not_selected_counts(
     dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
     combo = dialog.remote_model_combo
     chosen = next(
-        index for index in range(combo.count())
+        index
+        for index in range(combo.count())
         if combo.itemData(index) != combo.currentData()
     )
     combo.setCurrentIndex(chosen)
@@ -318,9 +330,7 @@ def test_close_on_a_clean_dialog_does_not_ask(dialog, monkeypatch) -> None:
     assert dialog.isVisible() is False
 
 
-def test_close_with_unsaved_changes_asks_and_cancel_stays(
-    dialog, monkeypatch
-) -> None:
+def test_close_with_unsaved_changes_asks_and_cancel_stays(dialog, monkeypatch) -> None:
     asked = _answer_prompt(monkeypatch, QtWidgets.QMessageBox.Cancel)
     dialog.show()
     dialog.keep_clipboard_checkbox.toggle()
@@ -406,7 +416,10 @@ def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> N
     dialog._request_close()
 
     assert dialog.isVisible() is False
-    assert dialog.keep_clipboard_checkbox.isChecked() is stored.keep_transcript_in_clipboard
+    assert (
+        dialog.keep_clipboard_checkbox.isChecked()
+        is stored.keep_transcript_in_clipboard
+    )
     assert dialog.engine_combo.currentData() == stored.engine
     assert dialog.openai_key_edit.text() == ""
     assert dialog._provider_pending_clear == set()

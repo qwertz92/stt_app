@@ -82,7 +82,6 @@ class ClipboardContentionError(TextInsertionError):
         super().__init__(message, allow_clipboard_fallback=False)
 
 
-
 class _ClipboardContentionAfterPaste(
     ClipboardContentionError, TextMayHaveBeenPastedError
 ):
@@ -302,9 +301,7 @@ _CLIPBOARD_PRIVATE_FORMAT_RANGES = ((0x0200, 0x02FF), (0x0300, 0x03FF))
 # Registered formats that describe the *live* IDataObject of the application
 # that copied, rather than data. Restoring them would advertise an object that
 # no longer exists. Both were on the user's clipboard when this was measured.
-_CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE = frozenset(
-    {"DataObject", "Ole Private Data"}
-)
+_CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE = frozenset({"DataObject", "Ole Private Data"})
 # The registered formats that keep one clipboard write out of Windows'
 # clipboard history (Win+V) and out of cloud clipboard sync. Microsoft,
 # "Clipboard Formats", section "Cloud Clipboard and Clipboard History Formats"
@@ -909,9 +906,7 @@ class Win32ClipboardBackend:
             text_restored, written = self._restore_clipboard_formats(state.formats)
             if wants_text and not text_restored:
                 try:
-                    win32clipboard.SetClipboardText(
-                        state.text, win32con.CF_UNICODETEXT
-                    )
+                    win32clipboard.SetClipboardText(state.text, win32con.CF_UNICODETEXT)
                 except Exception as exc:
                     _raise_if_clipboard_not_open(exc)
                     raise ClipboardEmptiedError(
@@ -988,7 +983,10 @@ class Win32ClipboardBackend:
                 if format_id in ours or format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
                     return False
                 continue
-            if format_id not in ours and format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
+            if (
+                format_id not in ours
+                and format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS
+            ):
                 return False
         return matched
 
@@ -1125,9 +1123,7 @@ class Win32ClipboardBackend:
         get_state.restype = ctypes.c_short
         deadline = time.monotonic() + max(0.0, timeout_s)
         while True:
-            if not any(
-                int(get_state(vk)) & 0x8000 for vk in _MODIFIER_VIRTUAL_KEYS
-            ):
+            if not any(int(get_state(vk)) & 0x8000 for vk in _MODIFIER_VIRTUAL_KEYS):
                 return True
             if time.monotonic() >= deadline:
                 return False
@@ -1254,9 +1250,7 @@ class Win32ClipboardBackend:
                         exc_info=True,
                     )
                     return False
-                if self._tolerate_lost_close and _is_clipboard_not_open(
-                    close_error
-                ):
+                if self._tolerate_lost_close and _is_clipboard_not_open(close_error):
                     self.lost_before_close = True
                     return False
                 raise
@@ -1265,9 +1259,7 @@ class Win32ClipboardBackend:
     def _clipboard_opened(
         self, *, tolerate_lost_close: bool = False
     ) -> Win32ClipboardBackend._ClipboardContext:
-        return self._ClipboardContext(
-            self, tolerate_lost_close=tolerate_lost_close
-        )
+        return self._ClipboardContext(self, tolerate_lost_close=tolerate_lost_close)
 
     def _send_wm_paste(self, target_hwnd: int | None = None) -> bool:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
@@ -1301,9 +1293,7 @@ class Win32ClipboardBackend:
         return False
 
     def _send_message_timeout(self, hwnd: int, message: int, timeout_ms: int) -> bool:
-        sent, _last_error = self._send_message_timeout_result(
-            hwnd, message, timeout_ms
-        )
+        sent, _last_error = self._send_message_timeout_result(hwnd, message, timeout_ms)
         return sent
 
     def _send_message_timeout_result(
@@ -1654,9 +1644,7 @@ class TextInserter:
                 # four events went out, so the target may read the clipboard
                 # late exactly as after a whole keystroke.
                 self._note_paste_keystroke("send_input")
-            if isinstance(
-                exc, (ClipboardContentionError, TextMayHaveBeenPastedError)
-            ):
+            if isinstance(exc, (ClipboardContentionError, TextMayHaveBeenPastedError)):
                 # Contention: leave the user's clipboard alone. A paste that
                 # may already be in flight: restoring now would make its late
                 # read take the previous content instead of the transcript,
@@ -1690,9 +1678,7 @@ class TextInserter:
                     # our write or by this restore -- leaves no content of ours
                     # to recognise, so the counter read now is the evidence.
                     record.restore = "retry"
-                    emptied = not write_landed or isinstance(
-                        exc, ClipboardEmptiedError
-                    )
+                    emptied = not write_landed or isinstance(exc, ClipboardEmptiedError)
                     self._arm_restore_retry(
                         transaction_id=transaction_id,
                         previous_state=previous_state,
@@ -1729,9 +1715,7 @@ class TextInserter:
         # re-raise `TextMayHaveBeenPastedError(allow_clipboard_fallback=
         # True)`. AGENTS.md recorded this as unreachable "because no caller
         # combines the two"; the two are combined inside this function.
-        fallback_allowed = getattr(
-            paste_error, "allow_clipboard_fallback", True
-        )
+        fallback_allowed = getattr(paste_error, "allow_clipboard_fallback", True)
         # The combined branch below cannot currently observe a False flag,
         # and mutation testing cannot tell it apart: every path that
         # produces one -- the pre-paste check, the post-paste check, and
@@ -1746,8 +1730,7 @@ class TextInserter:
             ) from paste_error
         if paste_error is not None:
             if isinstance(paste_error, TextInsertionError) and (
-                not paste_sent
-                or isinstance(paste_error, TextMayHaveBeenPastedError)
+                not paste_sent or isinstance(paste_error, TextMayHaveBeenPastedError)
             ):
                 raise paste_error
             if paste_sent:
@@ -1809,9 +1792,7 @@ class TextInserter:
         except (TypeError, ValueError):
             return None
 
-    def _raise_if_the_foreground_changed(
-        self, foreground_at_start: int | None
-    ) -> None:
+    def _raise_if_the_foreground_changed(self, foreground_at_start: int | None) -> None:
         """Abort before the keystroke when the user has switched windows.
 
         Between the controller's own foreground check and the keystroke sit
@@ -2240,8 +2221,7 @@ class TextInserter:
             return getter()
         except Exception as exc:
             raise ClipboardContentionError(
-                "Clipboard could not be verified; left the current clipboard "
-                "untouched."
+                "Clipboard could not be verified; left the current clipboard untouched."
             ) from exc
 
     def _clipboard_changed_after_set(
@@ -2289,6 +2269,7 @@ class TextInserter:
             paste_mode=paste_mode,
             restore_clipboard=restore_clipboard,
         )
+
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
@@ -2373,7 +2354,9 @@ class INPUT(ctypes.Structure):
 
 def _keyboard_input(vk: int, keyup: bool = False) -> INPUT:
     flags = KEYEVENTF_KEYUP if keyup else 0
-    return INPUT(type=INPUT_KEYBOARD, union=_INPUTUNION(ki=KEYBDINPUT(vk, 0, flags, 0, 0)))
+    return INPUT(
+        type=INPUT_KEYBOARD, union=_INPUTUNION(ki=KEYBDINPUT(vk, 0, flags, 0, 0))
+    )
 
 
 def _send_input_batch(

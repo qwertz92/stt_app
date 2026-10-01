@@ -339,8 +339,7 @@ def test_a_comparison_that_measured_one_device_says_why_nothing_changed(tmp_path
     other = _case(_GRANITE, "gpu", 0.0)
     other.error = "No GPU device could load the model"
     assert (
-        dialog._apply_measured_onnx_devices([other, _case(_GRANITE, "cpu", 0.10)])
-        == ""
+        dialog._apply_measured_onnx_devices([other, _case(_GRANITE, "cpu", 0.10)]) == ""
     )
     dialog.deleteLater()
     _ = app

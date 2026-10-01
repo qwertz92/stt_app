@@ -1,4 +1,5 @@
 """Settings dialog: local mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import logging
@@ -725,9 +726,7 @@ class _LocalModelsMixin:
                     )
                 else:
                     status = (
-                        "Downloaded"
-                        if model_name in cached_set
-                        else "Not downloaded"
+                        "Downloaded" if model_name in cached_set else "Not downloaded"
                     )
                 if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                     status = f"{status}, English only"
@@ -793,8 +792,15 @@ class _LocalModelsMixin:
     def _known_cached_models(self, cached: list[str] | None = None) -> list[str]:
         if cached is not None:
             return list(cached)
-        current_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
-        if self._cached_local_models_available and current_dir == self._cached_local_models_dir:
+        current_dir = (
+            self.model_dir_edit.text().strip()
+            if hasattr(self, "model_dir_edit")
+            else ""
+        )
+        if (
+            self._cached_local_models_available
+            and current_dir == self._cached_local_models_dir
+        ):
             return list(self._cached_local_models)
         return []
 
@@ -918,7 +924,11 @@ class _LocalModelsMixin:
             # `aboutToQuit`, with nothing left to join either.
             return
         request_started_at = time.perf_counter()
-        model_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
+        model_dir = (
+            self.model_dir_edit.text().strip()
+            if hasattr(self, "model_dir_edit")
+            else ""
+        )
         if (
             not force
             and self._active_local_model_scan_thread is None
@@ -1045,7 +1055,11 @@ class _LocalModelsMixin:
             except Exception:
                 pass
 
-        current_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
+        current_dir = (
+            self.model_dir_edit.text().strip()
+            if hasattr(self, "model_dir_edit")
+            else ""
+        )
         if current_dir == model_dir:
             self._apply_local_model_scan_result(cached)
 
@@ -1200,12 +1214,8 @@ class _LocalModelsMixin:
         self.delete_selected_model_button.setEnabled(
             (not busy) and bool(selected_downloaded)
         )
-        self.download_selected_models_button.setEnabled(
-            bool(missing)
-        )
-        self.download_all_missing_models_button.setEnabled(
-            any_missing
-        )
+        self.download_selected_models_button.setEnabled(bool(missing))
+        self.download_all_missing_models_button.setEnabled(any_missing)
         self.cancel_model_downloads_button.setEnabled(busy)
         self.model_dir_edit.setEnabled(not busy)
         self.model_dir_browse.setEnabled(not busy)
@@ -1253,10 +1263,13 @@ class _LocalModelsMixin:
         self,
         names: list[str] | None = None,
     ) -> list[str]:
-        wanted = set(names or [
-            str(self.local_models_list.item(index).data(QtCore.Qt.UserRole) or "")
-            for index in range(self.local_models_list.count())
-        ])
+        wanted = set(
+            names
+            or [
+                str(self.local_models_list.item(index).data(QtCore.Qt.UserRole) or "")
+                for index in range(self.local_models_list.count())
+            ]
+        )
         pending = self._local_model_download_pending_names()
         with self._local_model_download_lock:
             pending.update(self._local_model_download_completed_names)
@@ -1389,8 +1402,7 @@ class _LocalModelsMixin:
         terminate_model_download_process(process)
         self.local_models_action_label.setStyleSheet("color: #b26a00;")
         suffix = (
-            f" Removed {queued_count} queued model"
-            f"{'s' if queued_count != 1 else ''}."
+            f" Removed {queued_count} queued model{'s' if queued_count != 1 else ''}."
             if queued_count
             else ""
         )
@@ -1456,9 +1468,7 @@ class _LocalModelsMixin:
                 if self._local_model_download_claimed == (model_name, model_dir):
                     self._local_model_download_claimed = None
             if acquired:
-                coordinator.release(
-                    model_name, model_dir, succeeded=download_succeeded
-                )
+                coordinator.release(model_name, model_dir, succeeded=download_succeeded)
             else:
                 # Never held the slot, but the enqueue-time interest is ours.
                 coordinator.drop_explicit_interest(model_name, model_dir)
@@ -1518,18 +1528,26 @@ class _LocalModelsMixin:
                 if self._local_model_download_cancel_event.wait(timeout=0.1):
                     terminate_model_download_process(process)
                     model_download_process_error(process)
-                    return "canceled", "", self._cleanup_unless_awaited(
-                        model_name,
-                        model_dir,
+                    return (
+                        "canceled",
+                        "",
+                        self._cleanup_unless_awaited(
+                            model_name,
+                            model_dir,
+                        ),
                     )
 
             detail = model_download_process_error(process)
             if process.returncode == 0:
                 return "success", "", _CleanupOutcome()
             if self._local_model_download_cancel_event.is_set():
-                return "canceled", "", self._cleanup_unless_awaited(
-                    model_name,
-                    model_dir,
+                return (
+                    "canceled",
+                    "",
+                    self._cleanup_unless_awaited(
+                        model_name,
+                        model_dir,
+                    ),
                 )
             return "failed", detail or "Download worker failed.", _CleanupOutcome()
         finally:
@@ -1816,9 +1834,8 @@ class _LocalModelsMixin:
                 f"{count} incomplete file{'s' if count != 1 else ''} of {name} "
                 "could not be removed: still in use."
             )
-        if (
-            not (kept or skipped or left or cleaned_files)
-            and any(c.state == _CLEANUP_RAN for _name, c in cleanups)
+        if not (kept or skipped or left or cleaned_files) and any(
+            c.state == _CLEANUP_RAN for _name, c in cleanups
         ):
             parts.append("No incomplete files remained.")
         groups: list[tuple[str, list[str]]] = []
@@ -1899,9 +1916,7 @@ class _LocalModelsMixin:
         )
 
         self.local_models_action_label.setStyleSheet("color: #0d47a1;")
-        self.local_models_action_label.setText(
-            format_model_download_progress(progress)
-        )
+        self.local_models_action_label.setText(format_model_download_progress(progress))
         if progress.percent is None:
             self.local_model_download_progress_bar.setRange(0, 0)
         else:
@@ -2050,8 +2065,7 @@ class _LocalModelsMixin:
             self.delete_selected_model_button.setEnabled(False)
             return
         names = [
-            str(item.data(QtCore.Qt.UserRole) or "").strip()
-            for item in selected_items
+            str(item.data(QtCore.Qt.UserRole) or "").strip() for item in selected_items
         ]
         names = [n for n in names if n]
         if not names:
@@ -2072,9 +2086,7 @@ class _LocalModelsMixin:
                     str(path) for path in cached_model_paths(model_name, model_dir)
                 )
             except Exception:  # pragma: no cover - listing must never block
-                _logger.exception(
-                    "Failed to list the cache folders for %s", model_name
-                )
+                _logger.exception("Failed to list the cache folders for %s", model_name)
         folders = _describe_doomed_folders(doomed)
 
         answer = QtWidgets.QMessageBox.question(

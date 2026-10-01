@@ -7,8 +7,7 @@ from stt_app.settings_dialog import (
 
 def test_qt_hotkey_text_to_app_hotkey_maps_meta_to_win():
     assert (
-        _qt_hotkey_text_to_app_hotkey("Ctrl+Meta+Shift+Space")
-        == "Ctrl+Win+Shift+Space"
+        _qt_hotkey_text_to_app_hotkey("Ctrl+Meta+Shift+Space") == "Ctrl+Win+Shift+Space"
     )
 
 

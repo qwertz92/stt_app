@@ -71,10 +71,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.mode == DEFAULT_MODE
     assert settings.concurrent_transcription_mode == "insert"
     assert settings.paste_mode == DEFAULT_PASTE_MODE
-    assert (
-        settings.keep_transcript_in_clipboard
-        == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
-    )
+    assert settings.keep_transcript_in_clipboard == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     assert settings.keep_onnx_model_loaded == DEFAULT_KEEP_ONNX_MODEL_LOADED
     assert settings.has_openai_key is False
     assert settings.has_deepgram_key is False
@@ -107,9 +104,7 @@ def test_display_timezone_round_trips_and_invalid_falls_back(tmp_path):
     store.save(AppSettings(display_timezone="utc"))
     assert store.load().display_timezone == "utc"
 
-    settings_path.write_text(
-        json.dumps({"display_timezone": "mars"}), encoding="utf-8"
-    )
+    settings_path.write_text(json.dumps({"display_timezone": "mars"}), encoding="utf-8")
     assert store.load().display_timezone == DEFAULT_DISPLAY_TIMEZONE
 
 
@@ -129,16 +124,12 @@ def test_legacy_queue_boolean_migrates_to_mode(tmp_path):
     settings_path.write_text(
         json.dumps({"transcription_queue_enabled": False}), encoding="utf-8"
     )
-    assert (
-        SettingsStore(settings_path).load().concurrent_transcription_mode == "cancel"
-    )
+    assert SettingsStore(settings_path).load().concurrent_transcription_mode == "cancel"
 
     settings_path.write_text(
         json.dumps({"transcription_queue_enabled": True}), encoding="utf-8"
     )
-    assert (
-        SettingsStore(settings_path).load().concurrent_transcription_mode == "insert"
-    )
+    assert SettingsStore(settings_path).load().concurrent_transcription_mode == "insert"
 
 
 def test_load_fills_missing_values_with_defaults(tmp_path):
@@ -691,7 +682,7 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
         ),
         (
             "a large negative count lands there too",
-            -10**9,
+            -(10**9),
             DEFAULT_RECORDINGS_MAX_COUNT,
         ),
         # `int()` truncates toward zero *before* the sign check, so each of
@@ -718,8 +709,11 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
             True,
             DEFAULT_RECORDINGS_MAX_COUNT,
         ),
-        ("NaN falls back rather than defeating the clamp", float("nan"),
-         DEFAULT_RECORDINGS_MAX_COUNT),
+        (
+            "NaN falls back rather than defeating the clamp",
+            float("nan"),
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
         ("an infinity does too", float("inf"), DEFAULT_RECORDINGS_MAX_COUNT),
         # The shapes that must keep working: a whole number stored as a JSON
         # float, and the numeric strings an edited file can contain.
@@ -1084,9 +1078,7 @@ def test_a_configured_azure_engine_keeps_its_model(tmp_path, monkeypatch):
     assert settings.azure_speech_model == "mai-transcribe-1.5"
 
 
-def test_an_azure_model_chosen_at_the_current_schema_is_kept(
-    tmp_path, monkeypatch
-):
+def test_an_azure_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
     """The adoption happens once: a model picked before the endpoint is
     entered must not flip back on the next load."""
     settings = _load_settings_file(
@@ -1135,9 +1127,7 @@ def test_a_configured_openai_engine_keeps_its_model(tmp_path, monkeypatch):
     assert settings.openai_model == "gpt-4o-mini-transcribe"
 
 
-def test_an_openai_model_chosen_at_the_current_schema_is_kept(
-    tmp_path, monkeypatch
-):
+def test_an_openai_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
     """The adoption happens once: a model picked before the key is entered
     must not flip back on the next load."""
     settings = _load_settings_file(
@@ -1156,16 +1146,12 @@ def test_an_openai_model_in_a_file_without_a_schema_version_is_adopted(
     tmp_path, monkeypatch
 ):
     """A missing key reads as schema 0, which is older than 25."""
-    settings = _load_settings_file(
-        tmp_path, monkeypatch, {"openai_model": "whisper-1"}
-    )
+    settings = _load_settings_file(tmp_path, monkeypatch, {"openai_model": "whisper-1"})
 
     assert settings.openai_model == "gpt-transcribe"
 
 
-def test_a_schema_version_written_as_a_string_still_counts(
-    tmp_path, monkeypatch
-):
+def test_a_schema_version_written_as_a_string_still_counts(tmp_path, monkeypatch):
     """`_int_or_none` parses it, so a hand-edited "25" is the current schema
     and not an unreadable value that would re-run the migration."""
     settings = _load_settings_file(
@@ -1177,9 +1163,7 @@ def test_a_schema_version_written_as_a_string_still_counts(
     assert settings.openai_model == "whisper-1"
 
 
-def test_an_openai_model_id_this_build_does_not_know_falls_back(
-    tmp_path, monkeypatch
-):
+def test_an_openai_model_id_this_build_does_not_know_falls_back(tmp_path, monkeypatch):
     """An older build reading a file a newer one wrote must start, not crash:
     the unknown id is normalized to this build's default."""
     settings = _load_settings_file(
@@ -1269,9 +1253,11 @@ def test_faster_whisper_still_defaults_to_a_faster_whisper_model():
         LocalFasterWhisperTranscriber,
     )
 
-    default = inspect.signature(
-        LocalFasterWhisperTranscriber.__init__
-    ).parameters["model_size"].default
+    default = (
+        inspect.signature(LocalFasterWhisperTranscriber.__init__)
+        .parameters["model_size"]
+        .default
+    )
 
     assert default in FASTER_WHISPER_MODEL_SIZES
 
@@ -1423,9 +1409,7 @@ def test_load_stops_rewriting_the_file_once_it_matches(tmp_path):
         store.load()
         rewrites.append(path.read_bytes() != before)
 
-    assert rewrites == [True, False, False, False], (
-        f"load never converged: {rewrites}"
-    )
+    assert rewrites == [True, False, False, False], f"load never converged: {rewrites}"
     assert json.loads(path.read_text(encoding="utf-8"))["from_a_newer_build"] == 7
 
 
@@ -1489,7 +1473,9 @@ def test_a_load_that_cannot_rewrite_still_returns_the_settings(tmp_path, monkeyp
         ("a numeric string is a limit", "7", 7),
     ],
 )
-def test_history_max_items_refuses_what_int_would_have_truncated(label, stored, expected):
+def test_history_max_items_refuses_what_int_would_have_truncated(
+    label, stored, expected
+):
     """The sibling of `recordings_max_count`, and here the boolean was the
     destructive value: `True` parsed to a limit of 1, and one dictation at
     that limit deleted every transcript but the newest (measured: 5 lost
@@ -1506,10 +1492,22 @@ _NEMOTRON = "nemotron-3.5-asr-streaming-0.6b-int4"
 @pytest.mark.parametrize(
     ("label", "stored", "expected"),
     [
-        ("a measured device for a device-aware model", {_A_WEBGPU_MODEL: "cpu"}, {_A_WEBGPU_MODEL: "cpu"}),
+        (
+            "a measured device for a device-aware model",
+            {_A_WEBGPU_MODEL: "cpu"},
+            {_A_WEBGPU_MODEL: "cpu"},
+        ),
         ("Nemotron is device-aware too", {_NEMOTRON: "dml"}, {_NEMOTRON: "dml"}),
-        ("case and padding are normalized", {_A_WEBGPU_MODEL: " CPU "}, {_A_WEBGPU_MODEL: "cpu"}),
-        ("a CPU-only model has no device to prefer", {"parakeet-tdt-0.6b-v3": "cpu"}, {}),
+        (
+            "case and padding are normalized",
+            {_A_WEBGPU_MODEL: " CPU "},
+            {_A_WEBGPU_MODEL: "cpu"},
+        ),
+        (
+            "a CPU-only model has no device to prefer",
+            {"parakeet-tdt-0.6b-v3": "cpu"},
+            {},
+        ),
         ("faster-whisper is not in the picker", {"small": "cpu"}, {}),
         ("an unknown model name", {"made-up": "cpu"}, {}),
         ("a device no case can report", {_A_WEBGPU_MODEL: "cuda"}, {}),
@@ -1606,16 +1604,46 @@ def test_a_damaged_measured_device_map_does_not_fail_the_load(tmp_path):
 @pytest.mark.parametrize(
     ("label", "model", "policy", "stored", "expected"),
     [
-        ("the Node runtime takes the measured device", _A_WEBGPU_MODEL, "auto", {_A_WEBGPU_MODEL: "cpu"}, "cpu"),
+        (
+            "the Node runtime takes the measured device",
+            _A_WEBGPU_MODEL,
+            "auto",
+            {_A_WEBGPU_MODEL: "cpu"},
+            "cpu",
+        ),
         ("Nemotron takes it too", _NEMOTRON, "auto", {_NEMOTRON: "cpu"}, "cpu"),
         ("nothing measured", _A_WEBGPU_MODEL, "auto", {}, ""),
         ("measured for another model", _A_WEBGPU_MODEL, "auto", {_NEMOTRON: "cpu"}, ""),
-        ("already the first device of the chain", _A_WEBGPU_MODEL, "auto", {_A_WEBGPU_MODEL: "webgpu"}, ""),
-        ("Nemotron cannot reach WebGPU at all", _NEMOTRON, "auto", {_NEMOTRON: "webgpu"}, ""),
-        ("Nemotron's chain already starts with DirectML", _NEMOTRON, "auto", {_NEMOTRON: "dml"}, ""),
+        (
+            "already the first device of the chain",
+            _A_WEBGPU_MODEL,
+            "auto",
+            {_A_WEBGPU_MODEL: "webgpu"},
+            "",
+        ),
+        (
+            "Nemotron cannot reach WebGPU at all",
+            _NEMOTRON,
+            "auto",
+            {_NEMOTRON: "webgpu"},
+            "",
+        ),
+        (
+            "Nemotron's chain already starts with DirectML",
+            _NEMOTRON,
+            "auto",
+            {_NEMOTRON: "dml"},
+            "",
+        ),
         ("a pinned device wins", _A_WEBGPU_MODEL, "cpu", {_A_WEBGPU_MODEL: "dml"}, ""),
         ("a pinned GPU wins", _A_WEBGPU_MODEL, "gpu", {_A_WEBGPU_MODEL: "cpu"}, ""),
-        ("a CPU-only model has no device", "parakeet-tdt-0.6b-v3", "auto", {"parakeet-tdt-0.6b-v3": "cpu"}, ""),
+        (
+            "a CPU-only model has no device",
+            "parakeet-tdt-0.6b-v3",
+            "auto",
+            {"parakeet-tdt-0.6b-v3": "cpu"},
+            "",
+        ),
         ("faster-whisper has no device", "small", "auto", {"small": "cpu"}, ""),
     ],
 )
@@ -1643,9 +1671,12 @@ def test_the_preferred_device_survives_settings_without_the_field():
 
     from stt_app.settings_store import preferred_onnx_device
 
-    assert preferred_onnx_device(
-        SimpleNamespace(engine="local", model_size=_A_WEBGPU_MODEL)
-    ) == ""
+    assert (
+        preferred_onnx_device(
+            SimpleNamespace(engine="local", model_size=_A_WEBGPU_MODEL)
+        )
+        == ""
+    )
     assert preferred_onnx_device(SimpleNamespace()) == ""
 
 
@@ -1706,11 +1737,15 @@ def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     older = AppSettings.from_dict({"schema_version": 25})
     assert (older.assemblyai_region, older.deepgram_region) == ("auto", "global")
 
-    us_only = AppSettings.from_dict({"assemblyai_region": "us", "deepgram_region": "us"})
+    us_only = AppSettings.from_dict(
+        {"assemblyai_region": "us", "deepgram_region": "us"}
+    )
     # Deepgram documents no US-only endpoint, so "us" is not one of its values.
     assert (us_only.assemblyai_region, us_only.deepgram_region) == ("us", "global")
 
-    shouting = AppSettings.from_dict({"assemblyai_region": " EU ", "deepgram_region": "Eu"})
+    shouting = AppSettings.from_dict(
+        {"assemblyai_region": " EU ", "deepgram_region": "Eu"}
+    )
     assert (shouting.assemblyai_region, shouting.deepgram_region) == ("eu", "eu")
 
     damaged = AppSettings.from_dict(
@@ -1752,13 +1787,18 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         "eu1",
     )
     assert damaged.mistral_model == "voxtral-mini-2602"
-    assert AppSettings.from_dict({"speechmatics_region": " AU1 "}).speechmatics_region == "au1"
+    assert (
+        AppSettings.from_dict({"speechmatics_region": " AU1 "}).speechmatics_region
+        == "au1"
+    )
 
 
 @pytest.mark.parametrize(
     ("engine", "field", "model"),
-    [("speechmatics", "speechmatics_model", "standard"),
-     ("mistral", "mistral_model", "voxtral-mini-2602")],
+    [
+        ("speechmatics", "speechmatics_model", "standard"),
+        ("mistral", "mistral_model", "voxtral-mini-2602"),
+    ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):
     from stt_app.settings_store import apply_engine_model_selection
@@ -1769,7 +1809,9 @@ def test_the_new_engines_take_a_model_selection(engine, field, model):
 
 def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
-    store.save(AppSettings(), extra={"speechmatics_api_key": "s", "mistral_api_key": "m"})
+    store.save(
+        AppSettings(), extra={"speechmatics_api_key": "s", "mistral_api_key": "m"}
+    )
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw

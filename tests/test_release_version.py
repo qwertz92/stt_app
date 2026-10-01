@@ -65,9 +65,9 @@ def test_bump_validates_all_metadata_before_writing(tmp_path):
         module.bump_version("0.2.2", root=tmp_path)
 
     assert module._read_project_version(tmp_path / "pyproject.toml") == "0.2.1"
-    assert '__version__ = "0.2.1"' in (
-        tmp_path / "src/stt_app/__init__.py"
-    ).read_text(encoding="utf-8")
+    assert '__version__ = "0.2.1"' in (tmp_path / "src/stt_app/__init__.py").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_bump_rolls_back_metadata_after_a_later_write_failure(

@@ -114,7 +114,10 @@ def _transcriber(**kwargs) -> CustomEndpointTranscriber:
         ("http://localhost:8000/v1", "http://localhost:8000/v1"),
         # Nothing is appended: a gateway may serve the routes at its root.
         ("https://llm-gateway.example.com", "https://llm-gateway.example.com"),
-        ("https://llm-gateway.example.com/openai", "https://llm-gateway.example.com/openai"),
+        (
+            "https://llm-gateway.example.com/openai",
+            "https://llm-gateway.example.com/openai",
+        ),
     ],
 )
 def test_the_base_url_is_used_as_given(given, expected):
@@ -247,7 +250,10 @@ def test_the_chat_request_carries_the_audio_and_the_instruction(server):
         ("```\nHallo Welt.\n```", "Hallo Welt."),
         ("```text\nHallo Welt.\n```", "Hallo Welt."),
         ("  „Hallo Welt.“ ", "Hallo Welt."),
-        ([{"type": "text", "text": "Hallo"}, {"type": "text", "text": "Welt."}], "Hallo Welt."),
+        (
+            [{"type": "text", "text": "Hallo"}, {"type": "text", "text": "Welt."}],
+            "Hallo Welt.",
+        ),
         ("", ""),
     ],
 )
@@ -260,7 +266,11 @@ def test_the_chat_reply_is_unwrapped(server, reply, expected):
     ("message", "finish_reason", "expected"),
     [
         pytest.param(
-            {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+            {
+                "role": "assistant",
+                "content": None,
+                "refusal": "I can't help with that.",
+            },
             "stop",
             "refused: I can't help with that.",
             id="refusal",
@@ -271,7 +281,9 @@ def test_the_chat_reply_is_unwrapped(server, reply, expected):
             "finish reason 'length'",
             id="length",
         ),
-        pytest.param({"role": "assistant"}, "stop", "finish reason 'stop'", id="missing"),
+        pytest.param(
+            {"role": "assistant"}, "stop", "finish reason 'stop'", id="missing"
+        ),
         pytest.param(
             {"role": "assistant", "content": [{"type": "refusal", "refusal": "No."}]},
             "stop",
@@ -312,7 +324,9 @@ def test_a_chat_reply_without_content_is_an_error(server):
 
 def test_a_refused_reasoning_effort_is_dropped_once_and_remembered(server, caplog):
     fake = server(
-        _http_error(400, '{"error": {"message": "reasoning_effort minimal is not supported"}}'),
+        _http_error(
+            400, '{"error": {"message": "reasoning_effort minimal is not supported"}}'
+        ),
         _chat_reply("eins"),
         _chat_reply("zwei"),
     )
@@ -331,7 +345,9 @@ def test_a_refused_reasoning_effort_is_dropped_once_and_remembered(server, caplo
 
 
 def test_another_400_is_reported_with_its_detail_and_not_retried(server):
-    fake = server(_http_error(400, '{"error": {"message": "Content blocks are expected"}}'))
+    fake = server(
+        _http_error(400, '{"error": {"message": "Content blocks are expected"}}')
+    )
     with pytest.raises(TranscriptionError, match="Content blocks are expected"):
         _transcriber(api_mode="chat").transcribe_batch(WAV)
     assert len(fake.requests) == 1
@@ -642,10 +658,12 @@ def test_a_key_command_whose_grandchild_holds_the_pipe_is_still_bounded(
     child.write_text(_CHILD_SCRIPT, encoding="utf-8")
     heartbeat = tmp_path / "heartbeat.txt"
     monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 1.0)
-    command = subprocess.list2cmdline(
-        [sys.executable, str(child), str(grandchild), str(heartbeat)]
-    ) if provider_module.os.name == "nt" else " ".join(
-        [sys.executable, str(child), str(grandchild), str(heartbeat)]
+    command = (
+        subprocess.list2cmdline(
+            [sys.executable, str(child), str(grandchild), str(heartbeat)]
+        )
+        if provider_module.os.name == "nt"
+        else " ".join([sys.executable, str(child), str(grandchild), str(heartbeat)])
     )
     transcriber = _transcriber(api_key="", key_command=command)
 
@@ -748,7 +766,9 @@ class _RecordingHandler:
                 length = int(self.headers.get("Content-Length") or 0)
                 if length:
                     self.rfile.read(length)
-                seen.append((self.command, self.path, self.headers.get("Authorization")))
+                seen.append(
+                    (self.command, self.path, self.headers.get("Authorization"))
+                )
                 if self.path.endswith("/models") or self.path.endswith("/models/"):
                     body = json.dumps({"data": [{"id": "whisper-1"}]}).encode()
                 else:
@@ -926,9 +946,7 @@ def test_which_redirects_may_carry_the_key(old, new, allowed):
 # -- a key a header cannot carry --------------------------------------------
 
 
-def test_a_stored_key_with_a_line_break_is_refused_without_echoing_it(
-    loopback, caplog
-):
+def test_a_stored_key_with_a_line_break_is_refused_without_echoing_it(loopback, caplog):
     """`http.client` refuses the header with the whole value in its message.
 
     That message reached the overlay and the log: "Invalid header value
@@ -940,9 +958,9 @@ def test_a_stored_key_with_a_line_break_is_refused_without_echoing_it(
     key = "sk-first-half\nsecond-half-SECRET"
 
     with caplog.at_level(logging.DEBUG), pytest.raises(TranscriptionError) as raised:
-        _transcriber(api_key=key, endpoint=f"http://127.0.0.1:{port}/v1").transcribe_batch(
-            WAV
-        )
+        _transcriber(
+            api_key=key, endpoint=f"http://127.0.0.1:{port}/v1"
+        ).transcribe_batch(WAV)
 
     message = str(raised.value)
     assert "line break" in message

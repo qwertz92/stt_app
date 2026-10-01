@@ -635,7 +635,7 @@ def test_double_click_copies_entry_to_clipboard(monkeypatch, tmp_path):
 
 
 def test_import_only_free_slots_keeps_the_newest_entries(monkeypatch, tmp_path):
-    """"Import only N" took the front of the file, which is the oldest N.
+    """ "Import only N" took the front of the file, which is the oldest N.
 
     An export is written in store order and the store is ordered oldest-first,
     so the choice kept the oldest entries and dropped the newest -- the

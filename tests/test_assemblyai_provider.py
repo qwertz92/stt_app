@@ -52,9 +52,7 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
             return "https://assemblyai.test/uploaded.wav"
 
         def submit(self, audio_file, config=None):
-            FakeTranscriber.calls.append(
-                {"audio_file": audio_file, "config": config}
-            )
+            FakeTranscriber.calls.append({"audio_file": audio_file, "config": config})
             return FakeTranscript()
 
     class FakeSettings:
@@ -746,7 +744,6 @@ class TestAssemblyAIStreaming:
         assert "stopped while connecting" in str(start_errors[0])
         assert client.terminated is True
         assert t._stream_state == "idle"
-
 
     def test_a_stop_during_the_handshake_retires_the_session(self):
         """Refusing the stop is not enough; the session has to be retired.
@@ -1454,9 +1451,7 @@ class TestStreamStopBudget:
         # A value the SDK's own default is not: the shipped constant happens
         # to equal that default, so comparing against it cannot tell "pinned"
         # apart from "inherited" -- which is exactly what this test is for.
-        monkeypatch.setattr(
-            provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 3.25
-        )
+        monkeypatch.setattr(provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 3.25)
         assert sdk.StreamingClientOptions(api_key="k").terminate_timeout != 3.25
 
         t = AssemblyAITranscriber(api_key="key", aai_module=_make_fake_aai())
@@ -1468,9 +1463,7 @@ class TestStreamStopBudget:
         finally:
             t.abort_stream()
 
-    def test_a_final_turn_during_the_sdk_teardown_is_still_delivered(
-        self, monkeypatch
-    ):
+    def test_a_final_turn_during_the_sdk_teardown_is_still_delivered(self, monkeypatch):
         """The turn the old bound dropped, with no error to show for it.
 
         The server sends the last Turn after Terminate, i.e. inside the window
@@ -1479,13 +1472,9 @@ class TestStreamStopBudget:
         """
         from stt_app.transcriber import assemblyai_provider as provider
 
-        monkeypatch.setattr(
-            provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 0.05
-        )
+        monkeypatch.setattr(provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 0.05)
         monkeypatch.setattr(provider, "ASSEMBLYAI_SDK_THREAD_LOOP_S", 0.01)
-        monkeypatch.setattr(
-            provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.40
-        )
+        monkeypatch.setattr(provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.40)
 
         t, clients = _make_streaming_transcriber()
         t.start_stream()
@@ -1515,9 +1504,7 @@ class TestStreamStopBudget:
         """
         from stt_app.transcriber import assemblyai_provider as provider
 
-        monkeypatch.setattr(
-            provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.15
-        )
+        monkeypatch.setattr(provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.15)
 
         t, clients = _make_streaming_transcriber()
         t.start_stream()
@@ -1672,9 +1659,7 @@ def test_a_fetch_result_without_a_status_is_a_fetch_failure(monkeypatch):
     class _NoStatus:
         text = None
 
-    aai.Transcript.from_response = staticmethod(
-        lambda *, client, response: _NoStatus()
-    )
+    aai.Transcript.from_response = staticmethod(lambda *, client, response: _NoStatus())
     _fake_clock(monkeypatch, provider)
     t = AssemblyAITranscriber(api_key="key", aai_module=aai)
     try:
@@ -1738,11 +1723,13 @@ class TestAssemblyAIRegion:
         assert fake_aai.settings.base_url == "https://api.assemblyai.com"
 
     def test_us_only_batch_uses_the_documented_us_host(self):
-        """"The default endpoint (`api.assemblyai.com`) processes your
+        """ "The default endpoint (`api.assemblyai.com`) processes your
         pre-recorded audio transcription requests in the US region" -- there
         is no separate US batch host (select-the-region page, 2026-10-01)."""
         fake_aai = _make_fake_aai()
-        AssemblyAITranscriber(api_key="k", aai_module=fake_aai, region="us")._configure()
+        AssemblyAITranscriber(
+            api_key="k", aai_module=fake_aai, region="us"
+        )._configure()
         assert fake_aai.settings.base_url == "https://api.assemblyai.com"
 
     def test_a_us_transcriber_after_an_eu_one_puts_the_us_host_back(self):
@@ -1782,9 +1769,7 @@ class TestAssemblyAIRegion:
         )
 
     def test_the_connection_test_asks_the_eu_host(self):
-        t = AssemblyAITranscriber(
-            api_key="k", aai_module=_make_fake_aai(), region="eu"
-        )
+        t = AssemblyAITranscriber(api_key="k", aai_module=_make_fake_aai(), region="eu")
         with patch("urllib.request.urlopen") as mock_urlopen:
             mock_urlopen.return_value.__enter__.return_value.status = 200
             ok, _message = t.test_connection()

@@ -182,9 +182,7 @@ def test_every_window_stays_within_the_bound_and_the_windows_are_the_input():
     rng = np.random.default_rng(5)
     samples = rng.standard_normal(16_000 * 10).astype(np.float32)
 
-    windows = split_into_passes(
-        samples, 16_000, max_seconds=3.0, search_seconds=1.0
-    )
+    windows = split_into_passes(samples, 16_000, max_seconds=3.0, search_seconds=1.0)
 
     assert len(windows) > 1
     assert all(window.size <= 16_000 * 3 for window in windows)
@@ -251,9 +249,7 @@ def _model_root(tmp_path: Path, preprocessor: dict | None = None) -> str:
         json.dumps({"pad_token_id": 0}), encoding="utf-8"
     )
     (folder / "preprocessor_config.json").write_text(
-        json.dumps(
-            _REAL_PREPROCESSOR_CONFIG if preprocessor is None else preprocessor
-        ),
+        json.dumps(_REAL_PREPROCESSOR_CONFIG if preprocessor is None else preprocessor),
         encoding="utf-8",
     )
     _write_tiny_tokenizer(folder / "tokenizer.json")
@@ -383,9 +379,7 @@ def test_a_wav_declaring_an_implausible_sample_rate_is_a_transcription_error(
     payload = bytearray(_wav_bytes(_speech_pcm(0.01)))
     payload[24:28] = declared_rate.to_bytes(4, "little")
 
-    with pytest.raises(
-        TranscriptionError, match=f"sample rate of {declared_rate} Hz"
-    ):
+    with pytest.raises(TranscriptionError, match=f"sample rate of {declared_rate} Hz"):
         transcriber.transcribe_batch(bytes(payload))
 
     assert fake.features == []
@@ -412,9 +406,7 @@ def test_audio_that_cannot_be_held_in_memory_is_a_transcription_error(
     assert fake.features == []
 
 
-def test_a_cancel_raised_while_reading_the_audio_stays_a_cancel(
-    tmp_path, monkeypatch
-):
+def test_a_cancel_raised_while_reading_the_audio_stays_a_cancel(tmp_path, monkeypatch):
     """The decode step renames what it cannot name, and a cancel has a name:
     `TranscriptionCanceled` derives from `Exception`, not from
     `TranscriptionError`, and the controller discards a canceled recording
@@ -476,9 +468,7 @@ def test_a_recording_past_the_bound_runs_several_passes_and_joins_them(
     assert all(features.shape[1] <= 180 * 50 for features in fake.features)
 
 
-def test_an_empty_window_is_skipped_rather_than_joined_as_a_gap(
-    tmp_path, monkeypatch
-):
+def test_an_empty_window_is_skipped_rather_than_joined_as_a_gap(tmp_path, monkeypatch):
     transcriber, fake = _transcriber(
         tmp_path, monkeypatch, session=_FakeSession([[1], [0], [3]])
     )
@@ -540,9 +530,7 @@ def test_the_preprocessor_config_is_checked_and_names_the_key_that_differs(
     assert "320" in message and "160" in message
 
 
-def test_a_preprocessor_config_that_is_missing_a_key_is_refused(
-    tmp_path, monkeypatch
-):
+def test_a_preprocessor_config_that_is_missing_a_key_is_refused(tmp_path, monkeypatch):
     incomplete = {
         key: value
         for key, value in _REAL_PREPROCESSOR_CONFIG.items()
@@ -671,9 +659,7 @@ def test_a_failure_without_an_abort_stays_a_failure(tmp_path, monkeypatch):
         def run(self, _output_names, _input_feed, run_options=None):
             raise RuntimeError("graph is corrupt")
 
-    transcriber, _fake = _transcriber(
-        tmp_path, monkeypatch, session=_BrokenSession()
-    )
+    transcriber, _fake = _transcriber(tmp_path, monkeypatch, session=_BrokenSession())
     transcriber.set_cancel_check(lambda: False)
 
     with pytest.raises(TranscriptionError, match="graph is corrupt"):

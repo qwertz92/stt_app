@@ -31,6 +31,7 @@ appending to tracks it exactly, measured at 1 MiB every 50 ms, buffered and
 flushed alike, through `Path.stat`, `os.scandir` and the app's own
 `rglob`-based sizer.
 """
+
 from __future__ import annotations
 
 import threading

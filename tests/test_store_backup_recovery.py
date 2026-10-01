@@ -141,14 +141,14 @@ def _last_recording(tmp_path: Path):
 
 
 def _provider_connection_tests(tmp_path: Path):
-    store = ProviderConnectionTestStore(path=tmp_path / "provider_connection_tests.json")
+    store = ProviderConnectionTestStore(
+        path=tmp_path / "provider_connection_tests.json"
+    )
     store.save_result("openai", ok=True, message="reachable")
     store.save_result("groq", ok=False, message="401")
 
     def read():
-        return sorted(
-            (name, result.ok) for name, result in store.load_all().items()
-        )
+        return sorted((name, result.ok) for name, result in store.load_all().items())
 
     return store, store.path, read
 
@@ -311,7 +311,9 @@ def test_a_damaged_primary_does_not_take_a_healthy_backup_with_it(tmp_path):
     )
     assert backup_path(path).is_file()
 
-    path.write_text('{"schema_version": 1, "results": "not an object"}', encoding="utf-8")
+    path.write_text(
+        '{"schema_version": 1, "results": "not an object"}', encoding="utf-8"
+    )
 
     store.load_all()
     assert backup_path(path).is_file(), "the healthy backup was quarantined"
@@ -755,8 +757,7 @@ def test_a_locked_primary_is_neither_rewritten_nor_quarantined(
     )
     quarantined = sorted(p.name for p in tmp_path.glob("*.corrupt.*"))
     assert not quarantined, (
-        f"{name}: a primary that could not be opened was quarantined: "
-        f"{quarantined}"
+        f"{name}: a primary that could not be opened was quarantined: {quarantined}"
     )
     assert (path.read_bytes(), backup.read_bytes()) == before, (
         f"{name}: a file changed while the primary could not be read"

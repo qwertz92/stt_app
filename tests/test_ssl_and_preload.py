@@ -305,7 +305,9 @@ class TestFindCachedModels:
         the rest itself, past the download slot and its housekeeping, and
         offline it could not load at all (review round 3, 2026-09-21).
         """
-        snapshot = self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
+        snapshot = self._make_hf_cache(
+            tmp_path, "small", "Systran/faster-whisper-small"
+        )
         (snapshot / "tokenizer.json").unlink()
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
@@ -542,9 +544,7 @@ class TestEstimateCachedModelBytes:
 
         destination = tmp_path / repo_basename / "onnx"
         destination.mkdir(parents=True)
-        (destination / "audio_encoder_q4.onnx_data").write_bytes(
-            b"\x00" * 700
-        )
+        (destination / "audio_encoder_q4.onnx_data").write_bytes(b"\x00" * 700)
 
         with patch(
             "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
@@ -565,10 +565,7 @@ class TestEstimateCachedModelBytes:
         model_name = "cohere-transcribe-03-2026"
         repo_id = MODEL_REPO_MAP[model_name]
         legacy = (
-            tmp_path
-            / f"models--{repo_id.replace('/', '--')}"
-            / "snapshots"
-            / "abc123"
+            tmp_path / f"models--{repo_id.replace('/', '--')}" / "snapshots" / "abc123"
         )
         # A *complete* snapshot: an incomplete one must not count, because the
         # model would not load from it either.
@@ -591,9 +588,7 @@ class TestEstimateCachedModelBytes:
             measured = estimate_cached_model_bytes(model_name)
         assert measured == 512 * len(local_webgpu_asr._REQUIRED_FILES[model_name])
 
-    def test_foreign_copy_is_ignored_even_before_the_destination_exists(
-        self, tmp_path
-    ):
+    def test_foreign_copy_is_ignored_even_before_the_destination_exists(self, tmp_path):
         """The combination that matters: destination absent *and* a foreign copy
         of the same repo present. Falling back to the largest candidate here
         reported a repo's fp32 conversion weights as this download's progress,
@@ -702,8 +697,8 @@ class TestDeleteCachedModel:
             "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
             return_value=[cache_root],
         ):
-            removed_files, removed_bytes, left_files = cleanup_incomplete_model_download(
-                "small"
+            removed_files, removed_bytes, left_files = (
+                cleanup_incomplete_model_download("small")
             )
 
         assert removed_files == 1
@@ -712,7 +707,9 @@ class TestDeleteCachedModel:
         assert incomplete.exists() is False
         assert complete.read_bytes() == b"complete"
 
-    @pytest.mark.skipif(os.name != "nt", reason="an open handle blocks unlink on Windows")
+    @pytest.mark.skipif(
+        os.name != "nt", reason="an open handle blocks unlink on Windows"
+    )
     def test_cleanup_reports_a_file_it_could_not_remove_as_still_there(self, tmp_path):
         """The size was counted before `unlink` and the file after, so a
         partial another program still held -- the killed download child in
@@ -770,7 +767,9 @@ class TestDeleteCachedModel:
         assert tuple(outcome) == (0, 0, 0)
         assert not partial.exists()
 
-    def test_a_partial_refused_once_is_removed_by_the_retry(self, tmp_path, monkeypatch):
+    def test_a_partial_refused_once_is_removed_by_the_retry(
+        self, tmp_path, monkeypatch
+    ):
         """A lock that was only transient -- the download child's handle
         closing as it dies -- refuses the first unlink and not the second;
         the retry removes the file and counts it as removed, with its size."""
@@ -798,7 +797,9 @@ class TestDeleteCachedModel:
         assert refusals == [partial]
         assert not partial.exists()
 
-    @pytest.mark.skipif(os.name != "nt", reason="an open handle blocks unlink on Windows")
+    @pytest.mark.skipif(
+        os.name != "nt", reason="an open handle blocks unlink on Windows"
+    )
     def test_a_model_dir_spelled_through_the_cache_counts_a_held_partial_once(
         self, tmp_path, monkeypatch
     ):
@@ -843,7 +844,9 @@ class TestDeleteCachedModel:
         assert tuple(outcome) == (1, 1000, 0)
         assert not partial.exists()
 
-    @pytest.mark.skipif(os.name != "nt", reason="8.3 short names are a Windows spelling")
+    @pytest.mark.skipif(
+        os.name != "nt", reason="8.3 short names are a Windows spelling"
+    )
     def test_a_model_dir_spelled_as_a_short_name_counts_a_held_partial_once(
         self, tmp_path, monkeypatch
     ):
@@ -1038,9 +1041,7 @@ class TestDownloadProgressMeasuresTheDestination:
         default_cache.mkdir()
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        self._make_hf_cache(
-            default_cache, "Systran/faster-whisper-tiny", b"0" * 4096
-        )
+        self._make_hf_cache(default_cache, "Systran/faster-whisper-tiny", b"0" * 4096)
 
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
@@ -1054,9 +1055,7 @@ class TestDownloadProgressMeasuresTheDestination:
     def test_the_destination_is_measured_once_it_exists(self, tmp_path):
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        self._make_hf_cache(
-            model_dir, "Systran/faster-whisper-tiny", b"0" * 2048
-        )
+        self._make_hf_cache(model_dir, "Systran/faster-whisper-tiny", b"0" * 2048)
 
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",

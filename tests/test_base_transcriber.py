@@ -256,9 +256,7 @@ def test_every_transcriber_re_arms_the_log_through_the_base_setter():
         LocalFasterWhisperTranscriber(model_size="small"),
         LocalOnnxAsrTranscriber(model_size="parakeet-tdt-0.6b-v3"),
     ):
-        transcriber.set_cancel_check(
-            lambda: (_ for _ in ()).throw(ValueError("boom"))
-        )
+        transcriber.set_cancel_check(lambda: (_ for _ in ()).throw(ValueError("boom")))
         transcriber._is_cancel_requested()
         assert transcriber._cancel_check_failed is True, type(transcriber).__name__
 
@@ -281,6 +279,7 @@ def test_installing_a_new_cancel_check_re_arms_the_log():
     t.set_cancel_check(lambda: False)
 
     assert t._cancel_check_failed is False
+
 
 @pytest.mark.parametrize(
     ("text", "expected"),

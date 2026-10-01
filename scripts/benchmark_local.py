@@ -67,10 +67,7 @@ def _validate_models(models: list[str]) -> list[str]:
     if unknown:
         names = ", ".join(VALID_MODEL_SIZES)
         raise ValueError(
-            "Unknown model(s): "
-            + ", ".join(unknown)
-            + ". Available models: "
-            + names
+            "Unknown model(s): " + ", ".join(unknown) + ". Available models: " + names
         )
     return models
 
@@ -125,9 +122,7 @@ def _resolve_model_size_bytes(model_name: str) -> int | None:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=(
-            "Benchmark local transcription runs over one audio file."
-        )
+        description=("Benchmark local transcription runs over one audio file.")
     )
     parser.add_argument(
         "audio_path",
@@ -302,10 +297,14 @@ def _ensure_models_available(
     print("")
 
     try:
-        answer = input(
-            "  Download these models now? [y]es / [s]kip "
-            "(benchmark cached only) / [a]bort: "
-        ).strip().lower()
+        answer = (
+            input(
+                "  Download these models now? [y]es / [s]kip "
+                "(benchmark cached only) / [a]bort: "
+            )
+            .strip()
+            .lower()
+        )
     except (EOFError, KeyboardInterrupt):
         answer = "a"
 
@@ -609,7 +608,9 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
         if case.runs:
             language = case.runs[0].detected_language or "-"
         status = "ok" if case.error is None else "error"
-        dl_str = _format_seconds(case.download_seconds) if case.download_seconds > 0 else "-"
+        dl_str = (
+            _format_seconds(case.download_seconds) if case.download_seconds > 0 else "-"
+        )
         print(
             f"{case.model:<14} {case.device:<8} {case.compute_type:<10} "
             f"{dl_str:<10} "
@@ -697,9 +698,7 @@ def main() -> int:
         parser.error("--runs must be >= 1")
         return 2
 
-    model_names = _parse_csv(
-        args.models, fallback=[DEFAULT_FASTER_WHISPER_MODEL_SIZE]
-    )
+    model_names = _parse_csv(args.models, fallback=[DEFAULT_FASTER_WHISPER_MODEL_SIZE])
     compute_types = _parse_csv(args.compute_types, fallback=["int8"])
     try:
         webgpu_devices = normalize_webgpu_benchmark_devices(args.webgpu_devices)

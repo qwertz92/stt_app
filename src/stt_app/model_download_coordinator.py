@@ -79,6 +79,7 @@ def _cache_lock_resource(model_dir: str) -> str:
         normalized = default_hf_cache_dir()
     return os.path.normcase(os.path.abspath(os.path.normpath(normalized)))
 
+
 # Poll interval while waiting for the active download to finish. Short enough
 # that a cancel is honoured promptly, long enough not to spin.
 _WAIT_POLL_SECONDS = 0.1
@@ -221,9 +222,7 @@ class ModelDownloadCoordinator:
             try:
                 while self._active is not None:
                     if _SHUTDOWN.is_set():
-                        raise ModelDownloadCanceled(
-                            "The application is shutting down."
-                        )
+                        raise ModelDownloadCanceled("The application is shutting down.")
                     if cancel_check is not None and cancel_check():
                         raise ModelDownloadCanceled("Model download canceled.")
                     waiting_for_same_model = (

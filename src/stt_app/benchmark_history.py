@@ -347,9 +347,7 @@ class BenchmarkHistoryStore:
             try:
                 cls(path=path).save(entries)
             except OSError:
-                _LOGGER.exception(
-                    "Could not republish %s from its backup", path
-                )
+                _LOGGER.exception("Could not republish %s from its backup", path)
         return entries, primary_unreadable
 
 
@@ -389,9 +387,7 @@ def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\r\n")
     writer.writerow(_export_headers())
-    writer.writerows(
-        [_csv_cell(value) for value in row] for row in _export_rows(entry)
-    )
+    writer.writerows([_csv_cell(value) for value in row] for row in _export_rows(entry))
     atomic_write_bytes(path, buffer.getvalue().encode("utf-8"))
 
 

@@ -490,7 +490,9 @@ def test_nemotron_decode_strips_the_locale_marker_it_emits():
     session = _Session()
     decoded = LocalNemotronTranscriber._decode_available(session)
 
-    assert "<de-DE>" not in decoded, f"locale marker reached the transcript: {decoded!r}"
+    assert "<de-DE>" not in decoded, (
+        f"locale marker reached the transcript: {decoded!r}"
+    )
     assert "<de-DE>" not in session.text
     assert decoded.strip() == "Hallo Welt"
 

@@ -58,7 +58,9 @@ _LFS_POINTER_HEADER = "version https://git-lfs.github.com/spec/v1"
 _MODEL_BIN_MIN_BYTES = 10_000_000  # 10 MB
 
 # Build reverse map: common folder name patterns → short model name
-_NON_IMPORTABLE_MODEL_NAMES = frozenset(MODEL_REPO_MAP) - frozenset(IMPORTABLE_MODEL_REPO_MAP)
+_NON_IMPORTABLE_MODEL_NAMES = frozenset(MODEL_REPO_MAP) - frozenset(
+    IMPORTABLE_MODEL_REPO_MAP
+)
 
 _FOLDER_HINTS: dict[str, str] = {}
 for _short, _repo in IMPORTABLE_MODEL_REPO_MAP.items():
@@ -349,9 +351,7 @@ def import_model(
         snapshot_hash = compute_fake_hash(staging_dir)
         snapshot_dir = snapshots_dir / snapshot_hash
         if snapshot_dir.exists():
-            is_valid, _found, _missing = validate_model_files(
-                snapshot_dir, model_name
-            )
+            is_valid, _found, _missing = validate_model_files(snapshot_dir, model_name)
             existing_hash = compute_fake_hash(snapshot_dir)
             if is_valid and existing_hash == snapshot_hash:
                 shutil.rmtree(staging_dir)
@@ -495,9 +495,7 @@ def main() -> None:
     detected = model_name is None
     if model_name is None:
         model_name = detect_model_name(source_dir)
-    is_valid, found_files, missing_files = validate_model_files(
-        source_dir, model_name
-    )
+    is_valid, found_files, missing_files = validate_model_files(source_dir, model_name)
 
     print(f"Source: {source_dir}")
     print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")

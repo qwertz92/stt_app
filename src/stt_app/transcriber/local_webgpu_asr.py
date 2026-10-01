@@ -1136,9 +1136,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 return
             reported = False
             for line in process.stdout:
-                overflowed = _push_bounded(
-                    state.stdout_queue, line.rstrip("\r\n")
-                )
+                overflowed = _push_bounded(state.stdout_queue, line.rstrip("\r\n"))
                 if overflowed and not reported:
                     reported = True
                     logger.warning(

@@ -1,4 +1,5 @@
 """Settings dialog: benchmark mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import logging
@@ -310,8 +311,7 @@ def _benchmark_plan_sequence(
 ) -> tuple[tuple[str, str, str], ...]:
     """What identifies a plan: its cases in order, not their statuses."""
     return tuple(
-        (case.model, case.device_target, case.display_compute_type)
-        for case in planned
+        (case.model, case.device_target, case.display_compute_type) for case in planned
     )
 
 
@@ -520,8 +520,10 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         for case_index, case in enumerate(cases):
             reference = case.runs[0].transcript if case.runs else ""
             available = [run.transcript for run in case.runs if run.transcript]
-            all_identical = bool(available) and len(available) == len(case.runs) and all(
-                transcript == reference for transcript in available
+            all_identical = (
+                bool(available)
+                and len(available) == len(case.runs)
+                and all(transcript == reference for transcript in available)
             )
             for run in case.runs:
                 if not run.transcript:
@@ -600,9 +602,7 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
             # The unique key is tried first and the visible label second, which
             # is what lets the selection follow a row that moved *and* stay on
             # the right one of two rows that look alike.
-            restored = self._transcript_row_for(
-                QtCore.Qt.UserRole + 2, previous_key
-            )
+            restored = self._transcript_row_for(QtCore.Qt.UserRole + 2, previous_key)
             if restored < 0:
                 restored = self._transcript_row_for(
                     QtCore.Qt.UserRole + 1, previous_identity
@@ -681,14 +681,10 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         self._splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self._splitter.setChildrenCollapsible(False)
 
-        self._results_table = QtWidgets.QTableWidget(
-            0, len(_BENCHMARK_RESULT_COLUMNS)
-        )
+        self._results_table = QtWidgets.QTableWidget(0, len(_BENCHMARK_RESULT_COLUMNS))
         self._results_table.setMinimumHeight(110)
         self._results_table.setTabKeyNavigation(False)
-        self._results_table.setHorizontalHeaderLabels(
-            list(_BENCHMARK_RESULT_COLUMNS)
-        )
+        self._results_table.setHorizontalHeaderLabels(list(_BENCHMARK_RESULT_COLUMNS))
         for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
             header_item = self._results_table.horizontalHeaderItem(column)
             if header_item is None:
@@ -702,12 +698,8 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         row_height = compact_table_row_height(self._results_table)
         self._results_table.verticalHeader().setMinimumSectionSize(row_height)
         self._results_table.verticalHeader().setDefaultSectionSize(row_height)
-        self._results_table.setEditTriggers(
-            QtWidgets.QAbstractItemView.NoEditTriggers
-        )
-        self._results_table.setSelectionMode(
-            QtWidgets.QAbstractItemView.NoSelection
-        )
+        self._results_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._results_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self._results_table.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
@@ -779,9 +771,7 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         order = _benchmark_result_order(cases, self._benchmark_results_sort)
         for row, index in enumerate(order):
             case = cases[index]
-            for column, value in enumerate(
-                _benchmark_result_row_values(index, case)
-            ):
+            for column, value in enumerate(_benchmark_result_row_values(index, case)):
                 item = QtWidgets.QTableWidgetItem(value)
                 if column == _BENCHMARK_RESULT_STATUS_COLUMN:
                     detail = case.error or case.runtime_details
@@ -919,9 +909,7 @@ class _BenchmarkMixin:
         self.open_benchmark_window_button = QtWidgets.QPushButton(
             _BENCHMARK_RUN_BUTTON_IDLE_TEXT
         )
-        self.open_benchmark_window_button.clicked.connect(
-            self._open_benchmark_window
-        )
+        self.open_benchmark_window_button.clicked.connect(self._open_benchmark_window)
         header_row.addWidget(self.open_benchmark_window_button)
         header_button_height = self.open_benchmark_window_button.sizeHint().height()
         self.benchmark_status_label = ElidingLabel("")
@@ -996,9 +984,7 @@ class _BenchmarkMixin:
         )
         self.benchmark_history_list.setAlternatingRowColors(True)
         # Same surface as the Results table so the tab reads as one design.
-        self.benchmark_history_list.setStyleSheet(
-            _BENCHMARK_RESULT_SURFACE_STYLESHEET
-        )
+        self.benchmark_history_list.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
         self.benchmark_history_list.verticalHeader().setVisible(False)
         self.benchmark_history_list.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
@@ -1029,7 +1015,9 @@ class _BenchmarkMixin:
         self.load_benchmark_history_button.clicked.connect(
             self._load_selected_benchmark_history
         )
-        self.export_benchmark_history_button = QtWidgets.QPushButton("Export Selected...")
+        self.export_benchmark_history_button = QtWidgets.QPushButton(
+            "Export Selected..."
+        )
         self.export_benchmark_history_button.setEnabled(False)
         self.export_benchmark_history_button.clicked.connect(
             self._export_selected_benchmark_history
@@ -1056,9 +1044,7 @@ class _BenchmarkMixin:
         )
         benchmark_history_actions.addWidget(self.load_benchmark_history_button)
         benchmark_history_actions.addWidget(self.export_benchmark_history_button)
-        benchmark_history_actions.addWidget(
-            self.open_benchmark_history_window_button
-        )
+        benchmark_history_actions.addWidget(self.open_benchmark_history_window_button)
         benchmark_history_actions.addStretch(1)
         benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
         benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
@@ -1082,9 +1068,7 @@ class _BenchmarkMixin:
         self.benchmark_results_splitter = self.benchmark_results_panel.splitter
         self.benchmark_results_table = self.benchmark_results_panel.results_table
         self.benchmark_summary_text = self.benchmark_results_panel.details_view
-        self.benchmark_transcripts_table = (
-            self.benchmark_summary_text.transcripts_table
-        )
+        self.benchmark_transcripts_table = self.benchmark_summary_text.transcripts_table
         self.benchmark_transcript_text = self.benchmark_summary_text.transcript_text
         results_layout.addWidget(self.benchmark_results_panel)
 
@@ -1108,9 +1092,7 @@ class _BenchmarkMixin:
         self.open_benchmark_results_window_button.clicked.connect(
             self._open_current_benchmark_results_window
         )
-        self.export_benchmark_results_button = QtWidgets.QPushButton(
-            "Export Loaded..."
-        )
+        self.export_benchmark_results_button = QtWidgets.QPushButton("Export Loaded...")
         self.export_benchmark_results_button.setEnabled(False)
         self.export_benchmark_results_button.setToolTip(
             "Export the displayed result. Runs are already saved in Benchmark History."
@@ -1202,9 +1184,7 @@ class _BenchmarkMixin:
         self.benchmark_audio_browse_button.clicked.connect(
             self._choose_benchmark_audio_file
         )
-        self.benchmark_audio_last_button = QtWidgets.QPushButton(
-            "Use last recording"
-        )
+        self.benchmark_audio_last_button = QtWidgets.QPushButton("Use last recording")
         self.benchmark_audio_last_button.clicked.connect(
             self._use_last_recording_for_benchmark
         )
@@ -1218,7 +1198,9 @@ class _BenchmarkMixin:
         audio_row.addWidget(self.benchmark_audio_last_button)
         audio_layout.addLayout(audio_row)
 
-        self.benchmark_audio_status_label = QtWidgets.QLabel("No audio sample selected.")
+        self.benchmark_audio_status_label = QtWidgets.QLabel(
+            "No audio sample selected."
+        )
         make_label_selectable(self.benchmark_audio_status_label)
         self.benchmark_audio_status_label.setWordWrap(True)
         self._style_note_label(self.benchmark_audio_status_label)
@@ -1303,9 +1285,7 @@ class _BenchmarkMixin:
         self.benchmark_options_toggle.setChecked(False)
         # Use a small text triangle instead of the style-drawn QToolButton arrow,
         # which some styles render oversized and misaligned next to the label.
-        self.benchmark_options_toggle.setToolButtonStyle(
-            QtCore.Qt.ToolButtonTextOnly
-        )
+        self.benchmark_options_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextOnly)
         self.benchmark_options_toggle.setArrowType(QtCore.Qt.NoArrow)
         self.benchmark_options_toggle.toggled.connect(
             self._set_benchmark_options_visible
@@ -1654,9 +1634,7 @@ class _BenchmarkMixin:
                 _BENCHMARK_PLAN_STATUS_PENDING,
                 _BENCHMARK_PLAN_STATUS_RUNNING,
             ):
-                self._mark_benchmark_plan_case(
-                    row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED
-                )
+                self._mark_benchmark_plan_case(row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED)
 
     def _pin_benchmark_header_row_height(self) -> None:
         """Match the status label and the bar to the button as it renders.
@@ -1734,9 +1712,7 @@ class _BenchmarkMixin:
             self.benchmark_models_list.clear()
             for model_name in cached:
                 suffix = (
-                    " (English only)"
-                    if model_name in LOCAL_ENGLISH_ONLY_MODELS
-                    else ""
+                    " (English only)" if model_name in LOCAL_ENGLISH_ONLY_MODELS else ""
                 )
                 item = QtWidgets.QListWidgetItem(
                     f"{self._model_label(model_name)}{suffix}"
@@ -2295,9 +2271,7 @@ class _BenchmarkMixin:
         case_index = _benchmark_progress_case_index(text)
         if case_index is not None:
             self._benchmark_plan_running_index = case_index
-            self._mark_benchmark_plan_case(
-                case_index, _BENCHMARK_PLAN_STATUS_RUNNING
-            )
+            self._mark_benchmark_plan_case(case_index, _BENCHMARK_PLAN_STATUS_RUNNING)
 
     def _on_benchmark_case_finished(self, payload: object) -> None:
         if not isinstance(payload, BenchmarkCase):
@@ -2315,9 +2289,7 @@ class _BenchmarkMixin:
             if payload.error
             else f"Done (RTF {_format_number(payload.avg_rtf)})",
         )
-        self._set_benchmark_progress(
-            finished, self.benchmark_plan_table.rowCount()
-        )
+        self._set_benchmark_progress(finished, self.benchmark_plan_table.rowCount())
         summary = self._benchmark_summary(
             self._current_benchmark_cases,
             status="running",
@@ -2433,8 +2405,10 @@ class _BenchmarkMixin:
                 " ".join(
                     part
                     for part in (
-                        ("Benchmark completed with errors and was saved to "
-                         "history. See the summary for details."),
+                        (
+                            "Benchmark completed with errors and was saved to "
+                            "history. See the summary for details."
+                        ),
                         # A run that failed on one model can still have
                         # compared another on two devices, and that write has
                         # already happened -- so it has to be reported on this
@@ -2777,7 +2751,10 @@ class _BenchmarkMixin:
         if output_path.suffix.lower() not in {".csv", ".xlsx", ".md", ".markdown"}:
             if "xlsx" in selected_filter.lower():
                 suffix = ".xlsx"
-            elif "markdown" in selected_filter.lower() or "*.md" in selected_filter.lower():
+            elif (
+                "markdown" in selected_filter.lower()
+                or "*.md" in selected_filter.lower()
+            ):
                 suffix = ".md"
             else:
                 suffix = ".csv"
@@ -2829,7 +2806,9 @@ class _BenchmarkMixin:
             # what the store holds now, not the rows of before.
             self._refresh_benchmark_history_list()
             self._update_benchmark_actions()
-            self._set_benchmark_status("Selected benchmark entry was not found.", "#b71c1c")
+            self._set_benchmark_status(
+                "Selected benchmark entry was not found.", "#b71c1c"
+            )
             return
         # The entry is gone, so a window still showing it would outlive the run
         # it was opened for and could never be reopened from History.

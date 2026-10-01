@@ -12,6 +12,7 @@ the hotkeys (a half-typed one is invalid) and reads the settings file, and
 the answer is wanted on every keystroke. Undoing an edit makes the widget
 equal its fingerprint again, so the dialog is clean again.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable

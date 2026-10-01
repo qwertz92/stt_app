@@ -263,9 +263,7 @@ class TestGptTranscribeRequestFields:
     @staticmethod
     def _fields(mock_urlopen, **kwargs) -> list[tuple[str, str]]:
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
-        transcriber = OpenAITranscriber(
-            api_key="key", model="gpt-transcribe", **kwargs
-        )
+        transcriber = OpenAITranscriber(api_key="key", model="gpt-transcribe", **kwargs)
         assert transcriber.transcribe_batch(b"RIFF fake") == "ok"
         return _sent_fields(mock_urlopen.call_args[0][0])
 
@@ -323,7 +321,9 @@ class TestGptTranscribeRequestFields:
         """One forbidden character costs the whole request -- "The API rejects
         the entire request when it encounters one of these characters" -- so
         the term goes and the dictation stays."""
-        with caplog.at_level(logging.INFO, logger="stt_app.transcriber.openai_provider"):
+        with caplog.at_level(
+            logging.INFO, logger="stt_app.transcriber.openai_provider"
+        ):
             fields = self._fields(
                 mock_urlopen,
                 custom_vocabulary=f"Kubernetes; {term}; Zscaler",
@@ -341,10 +341,10 @@ class TestGptTranscribeRequestFields:
         assert not any(term in text for text in messages)
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_nothing_is_logged_when_no_term_was_dropped(
-        self, mock_urlopen, caplog
-    ):
-        with caplog.at_level(logging.INFO, logger="stt_app.transcriber.openai_provider"):
+    def test_nothing_is_logged_when_no_term_was_dropped(self, mock_urlopen, caplog):
+        with caplog.at_level(
+            logging.INFO, logger="stt_app.transcriber.openai_provider"
+        ):
             self._fields(mock_urlopen, custom_vocabulary="Kubernetes")
 
         assert not [
@@ -448,9 +448,7 @@ class TestOpenAILongRecordings:
         ],
     )
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_the_bound_is_the_models_own(
-        self, mock_urlopen, model, seconds, requests
-    ):
+    def test_the_bound_is_the_models_own(self, mock_urlopen, model, seconds, requests):
         bound = (
             OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS
             if "gpt-4o" in model

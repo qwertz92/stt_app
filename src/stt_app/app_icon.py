@@ -1,4 +1,5 @@
 """Shared application icon loading for top-level windows and dialogs."""
+
 from __future__ import annotations
 
 import sys

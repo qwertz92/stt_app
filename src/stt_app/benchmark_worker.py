@@ -10,6 +10,7 @@ so it stays fully responsive no matter what the benchmark does.
 
 The parent launcher and event protocol live in ``benchmark_process.py``.
 """
+
 from __future__ import annotations
 
 import argparse

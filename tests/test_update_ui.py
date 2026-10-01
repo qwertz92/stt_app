@@ -94,9 +94,7 @@ def test_the_update_status_dialog_has_a_reachable_button(monkeypatch):
     monkeypatch.setattr(QtWidgets.QMessageBox, "__init__", _spy)
     monkeypatch.setattr(QtWidgets.QMessageBox, "exec", lambda self: None)
 
-    update_ui.show_update_status_dialog(
-        title="Update", text="No update available."
-    )
+    update_ui.show_update_status_dialog(title="Update", text="No update available.")
 
     box = seen[-1]
     button = box.button(QtWidgets.QMessageBox.Ok)

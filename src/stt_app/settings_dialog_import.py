@@ -1,4 +1,5 @@
 """Settings dialog: importtab mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 import threading
@@ -93,17 +94,13 @@ class _ImportTabMixin:
         self._configure_button_row(import_buttons)
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
         self.import_file_button.clicked.connect(self._choose_import_file)
-        self.import_last_recording_button = QtWidgets.QPushButton(
-            "Use last recording"
-        )
+        self.import_last_recording_button = QtWidgets.QPushButton("Use last recording")
         self.import_last_recording_button.clicked.connect(
             self._select_last_recording_file
         )
         self.import_start_button = QtWidgets.QPushButton("Start transcription")
         self.import_start_button.setEnabled(False)
-        self.import_start_button.clicked.connect(
-            self._transcribe_selected_import_file
-        )
+        self.import_start_button.clicked.connect(self._transcribe_selected_import_file)
         # "Use last recording" can resolve to the archive folder, so offer a way
         # to look inside it without hunting through AppData by hand.
         self.import_open_recordings_button = QtWidgets.QPushButton(
@@ -113,9 +110,7 @@ class _ImportTabMixin:
             "Open the folder that stores archived recordings.\n"
             "It only fills up while 'Save all recordings' is enabled."
         )
-        self.import_open_recordings_button.clicked.connect(
-            self._open_recordings_dir
-        )
+        self.import_open_recordings_button.clicked.connect(self._open_recordings_dir)
         import_buttons.addWidget(self.import_file_button)
         import_buttons.addWidget(self.import_last_recording_button)
         import_buttons.addWidget(self.import_open_recordings_button)
@@ -358,9 +353,7 @@ class _ImportTabMixin:
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
         if not Path(path).is_file():
-            self.import_result_label.setText(
-                f"Selected file no longer exists: {path}"
-            )
+            self.import_result_label.setText(f"Selected file no longer exists: {path}")
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_start_button.setEnabled(False)
             return
@@ -387,9 +380,7 @@ class _ImportTabMixin:
 
         # Build settings on the GUI thread — widgets must not be accessed
         # from background threads.
-        import_engine = str(
-            self.import_engine_combo.currentData() or DEFAULT_ENGINE
-        )
+        import_engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
         import_model = str(self.import_model_combo.currentData() or "")
         import_language = str(
             self.import_language_combo.currentData() or DEFAULT_LANGUAGE_MODE
@@ -411,9 +402,7 @@ class _ImportTabMixin:
             self.import_copy_button.setEnabled(bool(detail))
             self.import_file_button.setEnabled(True)
             self.import_last_recording_button.setEnabled(True)
-            self.import_start_button.setEnabled(
-                bool(self._selected_import_file_path)
-            )
+            self.import_start_button.setEnabled(bool(self._selected_import_file_path))
             self.import_engine_combo.setEnabled(True)
             self.import_model_combo.setEnabled(True)
             self.import_language_combo.setEnabled(

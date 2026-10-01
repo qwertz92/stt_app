@@ -271,6 +271,7 @@ class FakeTextInserter:
             raise TextInsertionError("failed insert")
         return True
 
+
 class FakeWindowFocusHelper:
     def __init__(self):
         self.captured = 987
@@ -514,9 +515,10 @@ def _keep_download_locks_out_of_the_real_appdata(
     """
     from stt_app import model_download_coordinator
 
-    lock_dir = _download_lock_root / hashlib.sha1(
-        request.node.nodeid.encode("utf-8")
-    ).hexdigest()[:16]
+    lock_dir = (
+        _download_lock_root
+        / hashlib.sha1(request.node.nodeid.encode("utf-8")).hexdigest()[:16]
+    )
     monkeypatch.setattr(
         model_download_coordinator,
         "_download_lock_dir",

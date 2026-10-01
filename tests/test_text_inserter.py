@@ -51,8 +51,12 @@ class LegacyBackend:
 
 
 class PasteBackend(LegacyBackend):
-    def __init__(self, paste_mode="wm_paste", raise_on_paste=False, raise_on_restore=False):
-        super().__init__(raise_on_paste=raise_on_paste, raise_on_restore=raise_on_restore)
+    def __init__(
+        self, paste_mode="wm_paste", raise_on_paste=False, raise_on_restore=False
+    ):
+        super().__init__(
+            raise_on_paste=raise_on_paste, raise_on_restore=raise_on_restore
+        )
         self.paste_mode = paste_mode
         self.last_target_hwnd = None
         self.last_requested_mode = None
@@ -682,6 +686,7 @@ def test_input_struct_size_matches_windows_expectation():
     expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
     assert ctypes.sizeof(INPUT) == expected
 
+
 class _ClipboardBusyAfterPaste:
     """A clipboard another program holds open once the paste has gone out."""
 
@@ -885,9 +890,7 @@ def test_a_partially_delivered_ctrl_v_is_reported_as_maybe_pasted(monkeypatch):
     overlay offered Insert for a fourth.
     """
     send_input = _FakeSendInput(lambda count: 2 if count == 4 else count)
-    monkeypatch.setattr(
-        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
-    )
+    monkeypatch.setattr(text_inserter.ctypes, "WinDLL", _fake_user32(send_input))
 
     with pytest.raises(TextMayHaveBeenPastedError):
         text_inserter._send_ctrl_v_input()
@@ -901,9 +904,7 @@ def test_nothing_delivered_at_all_stays_retryable(monkeypatch):
     """The other side of the same cut: no event landed, so nothing was pasted."""
 
     send_input = _FakeSendInput(lambda _count: 0)
-    monkeypatch.setattr(
-        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
-    )
+    monkeypatch.setattr(text_inserter.ctypes, "WinDLL", _fake_user32(send_input))
 
     with pytest.raises(TextInsertionError) as raised:
         text_inserter._send_ctrl_v_input()
@@ -1125,9 +1126,7 @@ def test_one_delivered_event_is_a_held_ctrl_and_stays_retryable(monkeypatch):
     key-down applications paste on.
     """
     send_input = _FakeSendInput(lambda count: 1 if count == 4 else count)
-    monkeypatch.setattr(
-        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
-    )
+    monkeypatch.setattr(text_inserter.ctypes, "WinDLL", _fake_user32(send_input))
 
     with pytest.raises(TextInsertionError) as raised:
         text_inserter._send_ctrl_v_input()
@@ -1246,9 +1245,7 @@ def test_a_failed_set_restores_only_what_we_actually_destroyed(
     restored = "restore" in backend.calls
     assert restored is expect_restore, f"{label}: calls were {backend.calls}"
     if expect_restore:
-        assert backend.state["text"] == "old", (
-            f"{label}: the clipboard was left empty"
-        )
+        assert backend.state["text"] == "old", f"{label}: the clipboard was left empty"
     assert "paste_ctrl_v" not in backend.calls, (
         f"{label}: a failed set must not be followed by a paste"
     )
@@ -1306,9 +1303,7 @@ class _FakeUser32:
         self.GetClipboardSequenceNumber = _RecordingWin32Call(
             "sequence", calls, sequence
         )
-        self.GetForegroundWindow = _RecordingWin32Call(
-            "foreground", calls, foreground
-        )
+        self.GetForegroundWindow = _RecordingWin32Call("foreground", calls, foreground)
 
 
 @pytest.mark.parametrize(
@@ -2653,9 +2648,7 @@ class _NotOpenClipboard(_FakeClipboard):
             foreign = self.foreign_write_on_close
             self.foreign_write_on_close = None
             self.text = foreign
-            self.payloads = {
-                CF_UNICODETEXT: foreign.encode("utf-16-le") + b"\x00\x00"
-            }
+            self.payloads = {CF_UNICODETEXT: foreign.encode("utf-16-le") + b"\x00\x00"}
             self.order = [CF_UNICODETEXT]
             self.sequence += 1
         self._not_open("close_not_open", "CloseClipboard")
@@ -2727,9 +2720,12 @@ def test_a_landed_write_with_a_lost_close_is_pasted_and_restored(monkeypatch):
 
     clipboard.CloseClipboard = _close_with_the_write_refused
 
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
 
     assert pasted == [("send_input", 321)]
     assert len(scheduler.pending) == 1
@@ -2952,9 +2948,12 @@ def test_a_capture_whose_close_was_lost_is_taken_again(monkeypatch):
 
     clipboard.OpenClipboard = _open_closed_underneath_the_first_time
 
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     assert pasted == [("send_input", 321)]
     assert scheduler.fire_pending() == 1
 
@@ -3122,9 +3121,12 @@ def test_a_deferred_restore_that_loses_its_open_writes_again(monkeypatch):
     inserter = TextInserter(
         backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
     )
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     original_empty = clipboard.EmptyClipboard
     original_open = clipboard.OpenClipboard
     lost = {"done": False}
@@ -3159,9 +3161,12 @@ def test_a_restore_that_keeps_failing_is_retried_then_reported_once(monkeypatch)
         backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
     )
     inserter.set_restore_failure_handler(reports.append)
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     clipboard.set_failures = {CF_DIB}
 
     fired = 0
@@ -3466,9 +3471,12 @@ def test_a_deferred_restore_that_cannot_read_the_clipboard_tries_again(monkeypat
     inserter, _backend, scheduler, reports, held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     held["on"] = True
 
     assert scheduler.fire_pending() == 1  # the deferred restore: held
@@ -3578,9 +3586,12 @@ def test_a_restore_retry_leaves_a_copy_that_lands_after_its_failed_attempt(
     inserter, _backend, scheduler, reports, _held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     clipboard.set_failures.add(CF_DIB)
     scheduler.fire_pending()  # the deferred restore empties, writes nothing
     assert clipboard.payloads == {}, "precondition: our failed restore emptied it"
@@ -3752,9 +3763,12 @@ def test_a_deferred_restore_refused_by_a_foreign_write_ends_there(monkeypatch):
     inserter, _backend, scheduler, reports, _held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "the transcript", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "the transcript", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     opens_before_restore = _count_opens_from_now(clipboard)
 
     def _copy_on_the_restores_open():
@@ -3944,7 +3958,7 @@ def test_a_transcript_that_will_be_restored_stays_out_of_clipboard_history(
 
 
 def test_a_transcript_the_user_keeps_is_an_ordinary_clipboard_entry(monkeypatch):
-    """"Keep transcript in clipboard" means the user wants it there, Win+V too."""
+    """ "Keep transcript in clipboard" means the user wants it there, Win+V too."""
     clipboard = _history_aware_clipboard(
         contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag"
     )
@@ -3975,9 +3989,7 @@ def test_a_refused_history_format_costs_the_exclusion_not_the_paste(
     backend = _backend_on(clipboard, monkeypatch)
 
     with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
-        marker = backend.set_clipboard_text(
-            "the transcript", exclude_from_history=True
-        )
+        marker = backend.set_clipboard_text("the transcript", exclude_from_history=True)
 
     assert marker is not None
     assert clipboard.set_formats == [
@@ -4000,9 +4012,7 @@ def test_the_paste_transaction_excludes_a_transcript_it_will_restore():
         schedule_fn=RecordingScheduler(),
     )
 
-    inserter.insert_text_with_options(
-        "hello", target_hwnd=123, paste_mode="send_input"
-    )
+    inserter.insert_text_with_options("hello", target_hwnd=123, paste_mode="send_input")
     inserter.insert_text_with_options(
         "kept", target_hwnd=123, paste_mode="send_input", restore_clipboard=False
     )
@@ -4088,13 +4098,18 @@ def test_a_busy_take_over_after_a_user_copy_refuses_the_paste(monkeypatch):
     record over. Inheriting restored the older content over the new copy
     (review of a404479); the moved counter now refuses the paste before it
     writes, and the record's own check then leaves the copy alone."""
-    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag"
+    )
     inserter, _backend, scheduler, reports, held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "first", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "first", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     clipboard.text = "the user's new copy"
     clipboard.payloads = {
         CF_UNICODETEXT: "the user's new copy".encode("utf-16-le") + b"\x00\x00"
@@ -4117,18 +4132,26 @@ def test_a_busy_take_over_after_a_user_copy_refuses_the_paste(monkeypatch):
 def test_a_busy_take_over_with_an_unmoved_counter_still_inherits(monkeypatch):
     """Held during the take-over but nobody wrote: the clipboard is still
     ours, the paste goes ahead and the original content comes back."""
-    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag"
+    )
     inserter, _backend, scheduler, _reports, held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "first", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "first", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     _hold_clipboard_during_take_over(inserter, held, monkeypatch)
 
-    assert inserter.insert_text_with_options(
-        "second", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "second", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     while scheduler.pending:
         scheduler.fire_pending()
 
@@ -4136,13 +4159,18 @@ def test_a_busy_take_over_with_an_unmoved_counter_still_inherits(monkeypatch):
 
 
 def _first_paste_with_a_pending_restore_then_a_user_copy(monkeypatch):
-    clipboard = _NotOpenClipboard(contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag")
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG)], text="Guten Tag"
+    )
     inserter, _backend, scheduler, reports, held = _inserter_on_a_holdable_clipboard(
         clipboard, monkeypatch
     )
-    assert inserter.insert_text_with_options(
-        "first", target_hwnd=321, paste_mode="send_input"
-    ) is True
+    assert (
+        inserter.insert_text_with_options(
+            "first", target_hwnd=321, paste_mode="send_input"
+        )
+        is True
+    )
     clipboard.text = "user copy"
     clipboard.payloads = {CF_UNICODETEXT: "user copy".encode("utf-16-le") + b"\x00\x00"}
     clipboard.order = [CF_UNICODETEXT]

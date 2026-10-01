@@ -265,9 +265,7 @@ def _prompt_for_version(
     latest_label = latest.tag if latest is not None else "none"
     print(f"Latest release tag: {latest_label}")
     print(f"Current project version: {current.text}")
-    raw_value = input(
-        f"New release version [{default_version.text}]: "
-    )
+    raw_value = input(f"New release version [{default_version.text}]: ")
     return select_release_version(raw_value, latest=latest, current=current)
 
 
@@ -314,7 +312,9 @@ def main(argv: list[str] | None = None) -> int:
         latest = latest_release_version(tags)
         current = ReleaseVersion.parse(read_version_files().pyproject)
         if args.version:
-            version = select_release_version(args.version, latest=latest, current=current)
+            version = select_release_version(
+                args.version, latest=latest, current=current
+            )
             latest_label = latest.tag if latest is not None else "none"
             print(f"Latest release tag: {latest_label}")
             print(f"Selected release version: {version.text}")

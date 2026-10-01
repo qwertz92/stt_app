@@ -122,9 +122,7 @@ def test_parakeet_ultra_offers_auto_only_and_sends_no_language():
     """Ultra is the same TDT architecture post-trained further, so it ignores
     `language=` exactly like v3: offering a language list would fake control,
     and sending one would be the same illusion one level down."""
-    assert language_modes_for_selection("local", PARAKEET_ULTRA_MODEL_SIZE) == (
-        "auto",
-    )
+    assert language_modes_for_selection("local", PARAKEET_ULTRA_MODEL_SIZE) == ("auto",)
 
     transcriber, fake = _transcriber_with_fake_model(PARAKEET_ULTRA_MODEL_SIZE)
     transcriber.set_language_mode("de")
@@ -330,8 +328,9 @@ def test_bytes_and_path_wav_decoding_validate_identically(tmp_path):
     def wav_with_width(width: int) -> bytes:
         frames = b"\x00" * (width * 100)
         header = b"RIFF" + struct.pack("<I", 36 + len(frames)) + b"WAVE"
-        header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000,
-                                        16000 * width, width, width * 8)
+        header += b"fmt " + struct.pack(
+            "<IHHIIHH", 16, 1, 1, 16000, 16000 * width, width, width * 8
+        )
         header += b"data" + struct.pack("<I", len(frames))
         return header + frames
 
