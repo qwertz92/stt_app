@@ -59,6 +59,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     `_report_background_insertion_failure`). A job keeps its appended entry
     (`_TranscriptionJob.history_entry`); a coalesced multi-transcript paste
     has none, so Edit refuses ("No saved history entry").
+  - `_last_transcript` is a property over `_shown_transcript`; writing it
+    clears `_delivered_after_shown` (2026-10-01). A background success sets
+    only `_delivered_after_shown` (text, entry or None when coalesced), which
+    the re-paste reads; Copy and Edit stay on the shown pair.
   - `edit_last_transcript` reads the entry with the text before
     `TranscriptEditDialog.get_text`, whose modal `exec()` keeps delivering
     results; if the pair moved on, the edit goes to history only
@@ -153,6 +157,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     otherwise the `_active_request_token` guard holds. Deferred tokens are
     always older than the active one, so delivering them first keeps token
     order; the running transcription delivers itself later, no duplicate.
+    A `paste_paced` job (held by the restore-window pace, see
+    `docs/agents/text-insertion.md`) passes the active-transcription guard
+    (a capture still blocks unless immediate mode) and is flushed by the
+    single-shot `_paste_pace_timer`, stopped in `shutdown`; a held group is
+    put back with the wait it still owes.
 - **Every local engine cancels mid-run** via `set_cancel_check`, raising
   `TranscriptionCanceled`; else a canceled job holds the worker, its model
   and the shared lease: the next dictation queues behind it, and a later
@@ -268,4 +277,5 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   background, re-paste) via `_play_tone` on a short-lived thread (only the
   start beep is synchronous). Never for streaming appends, history-only or
   failed inserts. `Thread.start` is guarded: a `RuntimeError` there once
-  reported a landed paste as failed and armed a duplicate Insert.
+  reported a landed paste as failed and armed a duplicate Insert. One tone
+  per coalesced paste, and one for a re-paste during a session.

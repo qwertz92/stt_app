@@ -28,6 +28,7 @@ from conftest import (
 from conftest import (
     make_controller as _make_controller,
 )
+from PySide6 import QtGui
 
 # The real Deepgram provider's fake socket, so the preconnect flush can be
 # exercised against the provider's real 32-chunk send-queue bound rather
@@ -4075,6 +4076,101 @@ def test_repaste_last_transcript_blocked_while_recording():
     _ = app
 
 
+def test_repaste_waits_for_a_pending_streaming_finalize():
+    """A streaming finalize still inserts its own tail when it lands.
+
+    The session is no longer recording, but the tail past `committed_text`
+    is inserted by the finalize itself; a re-paste in between would put the
+    previous dictation into the document in front of it. The refusal names
+    the thing to wait for, not a recording that has already stopped.
+    """
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    controller._last_transcript = "hello again"
+    controller._streaming_recording = True
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    painted_before = list(overlay.states)
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls == []
+    assert overlay.states == painted_before
+    assert tray == [
+        (
+            "Wait for the streaming transcript to finish before inserting the "
+            "last transcript again."
+        )
+    ]
+    controller._streaming_recording = False
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "flag", ["_recording_start_in_progress", "_recording_stop_in_progress"]
+)
+def test_repaste_is_refused_while_a_recording_starts_or_stops(flag):
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    controller._last_transcript = "hello again"
+    setattr(controller, flag, True)
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls == []
+    assert len(tray) == 1 and "recording" in tray[0].lower(), tray
+    setattr(controller, flag, False)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_re_paste_that_fails_during_a_transcription_reports_through_the_tray(
+    monkeypatch,
+):
+    """Allowed while a result is pending, so its failure must not paint.
+
+    The inserter's own error arm paints "Error" with the text and an Insert
+    action; over "Processing" that would claim the pending job failed, and
+    the job's own result would overwrite it a moment later. The failure
+    reaches the tray instead, with the text the inserter reported.
+    """
+    clipboard_text: list[str] = []
+
+    class _Clipboard:
+        def setText(self, text):
+            clipboard_text.append(text)
+
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter(should_fail=True)
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    beeps: list[bool] = []
+    monkeypatch.setattr(
+        controller, "_play_completion_beep", lambda: beeps.append(True)
+    )
+    controller._last_transcript = "hello again"
+    controller._active_request_token = 7
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    painted_before = list(overlay.states)
+
+    controller.repaste_last_transcript()
+
+    assert [call[0] for call in inserter.calls] == ["hello again"]
+    assert overlay.states == painted_before
+    assert tray == ["failed insert Transcript copied to clipboard."]
+    assert clipboard_text == ["hello again"]
+    assert beeps == []
+    controller._active_request_token = None
+    controller.shutdown()
+    _ = app
+
+
 def _controller_with_a_retryable_failure_and_a_job_in_flight(overlay):
     store = _StoreWithIds("rec-W")
     controller, app = _make_controller(overlay=overlay, last_recording_store=store)
@@ -6122,7 +6218,7 @@ def test_a_post_paste_background_failure_offers_no_action_at_all(monkeypatch):
 def test_a_foreground_post_paste_failure_also_offers_no_action(monkeypatch):
     """The twin of the background case, missed when that one was fixed.
 
-    Reachable through "Insert last transcript again": a post-paste failure
+    Reachable through "Insert transcript again": a post-paste failure
     there left a Retry button, and Retry re-transcribes the last FAILED
     recording -- cleared only on the foreground ready path, so it can be an
     entirely different recording pasted on top of what was just inserted.
@@ -6578,7 +6674,7 @@ def test_a_providers_error_callback_carries_the_session_it_was_registered_for(
 def test_an_empty_streaming_result_keeps_the_previous_transcript():
     """A dictation that produced nothing must not erase the one before it.
 
-    `_last_transcript` is what the tray's "Insert last transcript again" and
+    `_last_transcript` is what the tray's "Insert transcript again" and
     the overlay's Copy act on. Assigning it before the empty check meant an
     empty streaming session reported "No transcript available" while the
     earlier dictation was still in history. The batch silence-gate path
@@ -9671,5 +9767,31 @@ def test_a_background_transcript_with_a_gap_keeps_its_recording():
 
     assert store.completed_ids == []
     assert store.failed_ids == ["rec-B"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_paced_foreground_transcript_with_a_gap_keeps_its_recording():
+    """The paste-queue road marks the recording with the delivered text too.
+
+    A foreground result that waits for the previous paste's restore window
+    still paints Done and marks its recording at once; a gap marker in it
+    must keep that recording (failed) exactly as on the direct road.
+    """
+    store = _StoreWithIds("rec-P")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._text_inserter.paste_pace_remaining_s = lambda: 1.0
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(7, settings, "batch")
+    controller._active_request_token = 7
+
+    controller._on_transcription_ready(
+        "erster teil [no text returned for 0:16-0:31] dritter teil",
+        request_token=7,
+    )
+
+    assert controller._deferred_background_results, "the paste was not paced"
+    assert store.completed_ids == []
+    assert store.failed_ids == ["rec-P"]
     controller.shutdown()
     _ = app

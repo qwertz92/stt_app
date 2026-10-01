@@ -2241,6 +2241,15 @@ OVERLAY_ERROR_ACTION_INSERT = "insert"
 # The tray menu's cancel entry, named by the preload's progress line when no
 # cancel hotkey reaches the download and the overlay's slot holds Insert.
 TRAY_CANCEL_ACTION_LABEL = "Cancel current action"
+# The tray menu's re-paste entry, named by the reports of transcripts that are
+# still waiting to be inserted, which is what that entry inserts first.
+TRAY_REPASTE_ACTION_LABEL = "Insert transcript again"
+# The two kinds of row the overlay's queue panel shows: a transcription still
+# running or queued (its button cancels it), and a finished transcript whose
+# paste failed or may have failed (its button dismisses the row; the text
+# stays in history).
+QUEUE_ROW_KIND_TRANSCRIPTION = "transcription"
+QUEUE_ROW_KIND_UNDELIVERED = "undelivered"
 # An Error state that must offer NO action at all. `None` cannot express
 # this: the action slot treats "not Insert" as Retry, so passing None gave
 # the user a Retry button on a transcript that had already been inserted --

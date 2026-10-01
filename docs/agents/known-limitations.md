@@ -109,9 +109,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **One insert offer at a time; a later failure replaces an earlier one.** In
   a flush, an earlier pre-keystroke failure (Insert useful) is replaced by a
   later post-keystroke one (Insert withheld); the earlier text is in history
-  and the tray. A tray re-paste of the whole dictation failing before its
-  keystroke replaces a streaming tail's offer, whose Insert then re-pastes the
-  already-streamed prefix.
+  and the tray, and since 2026-10-01 stays listed as a queue-panel row that
+  the re-paste inserts. A tray re-paste of the whole dictation failing before
+  its keystroke replaces a streaming tail's offer, whose Insert then re-pastes
+  the already-streamed prefix.
+- **The paste pace is target-agnostic**: a queued paste into another window
+  also waits up to `CLIPBOARD_RESTORE_DELAY_S` after the previous keystroke
+  (one clipboard). Only the last SendInput keystroke is tracked.
+- **Paced pastes and waiting-insert rows end with the app**: shutdown drops
+  them (the texts stay in history), and a streaming finalize tail whose
+  insert fails gets an Insert offer but no row. A foreground result without
+  a job is not paced.
+- **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
+  a NULL owner, so a clipboard manager can still close it under us; three
+  reopens cost up to about 0.33 s on the Qt thread before the paste reports
+  contention.
+- **A transcript left on the clipboard after an abandoned restore**
+  (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
+  restoring the user's own content may add their copy to Win+V again, as
+  before.
 - **`close_if_idle` is not bounded against its own closes**: a
   `request_restart` after its generation bump reopens and each own close
   re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers

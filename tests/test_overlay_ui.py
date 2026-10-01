@@ -13,6 +13,8 @@ from stt_app.config import (
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
+    QUEUE_ROW_KIND_TRANSCRIPTION,
+    QUEUE_ROW_KIND_UNDELIVERED,
 )
 from stt_app.overlay_ui import (
     _QUEUE_CANCEL_BUTTON_HEIGHT,
@@ -2240,3 +2242,171 @@ def test_the_users_own_position_survives_a_queue_relayout():
     assert scrollbar.value() == chosen, "the user's position was not restored"
     assert overlay.detail_is_being_read is True
     overlay.close()
+
+
+# -- Waiting inserts in the queue panel ----------------------------------------
+
+
+def _queue_rows(overlay):
+    rows = []
+    for index in range(overlay._queue_rows_layout.count()):
+        row = overlay._queue_rows_layout.itemAt(index).widget()
+        rows.append(
+            (row, row.findChild(QtWidgets.QLabel), row.findChild(QtWidgets.QPushButton))
+        )
+    return rows
+
+
+def test_a_waiting_insert_row_offers_dismiss_and_reads_as_not_inserted():
+    """A transcript whose paste failed is not a transcription to cancel.
+
+    Its row says Dismiss, carries its own kind for the stylesheet, and the
+    button still reports the row's id through `queue_cancel_requested`, which
+    the controller answers by dismissing the row.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    dismissed: list[int] = []
+    overlay.queue_cancel_requested.connect(dismissed.append)
+
+    overlay.set_transcription_queue(
+        [
+            (5, "#1 - local - small"),
+            (-1, 'Not inserted - 12:00:00 - "hello"', QUEUE_ROW_KIND_UNDELIVERED),
+        ]
+    )
+
+    (_row_a, label_a, button_a), (_row_b, label_b, button_b) = _queue_rows(overlay)
+    assert button_a.text() == "Cancel"
+    assert label_a.property("queueRowKind") == QUEUE_ROW_KIND_TRANSCRIPTION
+    assert button_b.text() == "Dismiss"
+    assert "history" in button_b.toolTip().lower()
+    assert label_b.property("queueRowKind") == QUEUE_ROW_KIND_UNDELIVERED
+    button_b.click()
+    assert dismissed == [-1]
+
+
+@pytest.mark.parametrize(
+    ("items", "title"),
+    [
+        ([(1, "a"), (2, "b")], "Transcribing 2 files"),
+        ([(-1, "x", QUEUE_ROW_KIND_UNDELIVERED)], "1 transcript not inserted"),
+        (
+            [(-1, "x", QUEUE_ROW_KIND_UNDELIVERED), (-2, "y", QUEUE_ROW_KIND_UNDELIVERED)],
+            "2 transcripts not inserted",
+        ),
+        (
+            [(1, "a"), (-1, "x", QUEUE_ROW_KIND_UNDELIVERED)],
+            "Transcribing 1 file · 1 not inserted",
+        ),
+    ],
+)
+def test_the_queue_title_counts_transcriptions_and_waiting_inserts_apart(items, title):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_transcription_queue(items)
+
+    assert overlay._queue_title_label.text() == title
+
+
+def test_a_waiting_insert_row_moves_nothing_against_a_transcription_row():
+    """No layout shift: every row button is one width whatever its caption,
+    a row is as tall as a transcription row, and the overlay keeps its width
+    and its header when waiting inserts join the queue."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    header = [
+        widget.geometry()
+        for widget in (
+            overlay._record_button,
+            overlay._always_on_top_button,
+            overlay._state_label,
+            overlay._clear_button,
+            overlay._copy_button,
+        )
+    ]
+    overlay.set_transcription_queue([(1, "job one"), (2, "job two")])
+    QtWidgets.QApplication.processEvents()
+    plain_width = overlay.width()
+    plain_rows = _queue_rows(overlay)
+    plain_heights = [row.height() for row, _label, _button in plain_rows]
+    plain_button = plain_rows[0][2].size()
+
+    overlay.set_transcription_queue(
+        [(1, "job one"), (-1, "job two", QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    QtWidgets.QApplication.processEvents()
+
+    rows = _queue_rows(overlay)
+    assert [button.size() for _row, _label, button in rows] == [plain_button] * 2
+    for caption in ("Cancel", "Dismiss"):
+        probe = QtWidgets.QPushButton(caption, rows[0][0])
+        probe.setStyleSheet(rows[0][2].styleSheet())
+        assert plain_button.width() >= probe.sizeHint().width(), caption
+        probe.deleteLater()
+    assert [row.height() for row, _label, _button in rows] == plain_heights
+    assert overlay.width() == plain_width
+    assert [
+        widget.geometry()
+        for widget in (
+            overlay._record_button,
+            overlay._always_on_top_button,
+            overlay._state_label,
+            overlay._clear_button,
+            overlay._copy_button,
+        )
+    ] == header
+    overlay.close()
+
+
+def test_a_waiting_insert_row_is_coloured_apart_from_a_transcription_row():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    overlay.set_transcription_queue(
+        [(1, "job one"), (-1, "job two", QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    QtWidgets.QApplication.processEvents()
+
+    (_ra, label_a, _ba), (_rb, label_b, _bb) = _queue_rows(overlay)
+    role = QtGui.QPalette.ColorRole.WindowText
+    assert label_b.palette().color(role) != label_a.palette().color(role)
+    assert label_b.font() == label_a.font()
+    overlay.close()
+
+
+@pytest.mark.parametrize("point_scale", [1.25, 1.5, 2.0])
+def test_both_row_captions_fit_one_button_width_at_a_larger_system_font(point_scale):
+    """At 9 pt the pinned 58 px already holds both captions; at Windows'
+    larger text sizes each row button is grown, and it must grow for both
+    captions, or a Dismiss row and a Cancel row wrap their labels at
+    different widths and one of the captions clips."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            overlay.set_transcription_queue(
+                [(1, "job one"), (-1, "job two", QUEUE_ROW_KIND_UNDELIVERED)]
+            )
+            (_ra, _la, cancel), (_rb, _lb, dismiss) = _queue_rows(overlay)
+            assert cancel.size() == dismiss.size()
+            for button, other in ((cancel, "Dismiss"), (dismiss, "Cancel")):
+                original = button.text()
+                button.setText(other)
+                needed = button.sizeHint().width()
+                button.setText(original)
+                assert needed <= button.width(), (
+                    f"{other} needs {needed} px, the button is {button.width()}"
+                )
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
