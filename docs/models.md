@@ -749,6 +749,19 @@ repository's `vocab.txt` and `config.json` (about 94 KB) into its `int8`
 folder beside the graphs, because onnx-asr looks for all four files in one
 folder, so the folder has to be writable once.
 
+**v3 or v3 Ultra?** v3 stays the default (decided 2026-10-01).
+
+Ultra's advantages:
+- About 30% faster on the CPU.
+- It produced the better German text on the one dictation measured.
+
+Ultra's disadvantages:
+- **One individual's upload.** It is a single person's community export. The pinned commit protects against files being replaced, but not against the repository being deleted or made private. A new install could then no longer download it, and there is no ModelScope fallback for a pinned download.
+- **Less measured.** It slightly trails v3 on English, though most of the gap is spelling. Languages other than German and English have not been measured at all, while NVIDIA documents v3 for 25 European languages.
+- **Needs a writable folder once.** The model folder must be writable on the first load, because of the file copy described above.
+
+Ultra fits dictation in German or English on a machine where the speed matters. v3 is the safer choice for other languages and for a setup that has to keep installing anywhere.
+
 The ONNX Device setting does not apply to them and is disabled while one is
 selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
 but installing it overwrites the ONNX Runtime that Nemotron depends on and breaks
