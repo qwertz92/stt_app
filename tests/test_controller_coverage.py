@@ -2666,7 +2666,7 @@ def test_a_job_registered_from_a_slot_it_cannot_name_marks_nothing(slot):
 
     assert job.source_recording_id == ""
     assert job.marks_last_recording is False
-    controller._mark_last_recording_completed(job)
+    controller._mark_last_recording_completed(job, "text")
     controller._mark_last_recording_failed(job, "boom")
     assert store.completed_ids == []
     assert store.failed_ids == []
@@ -9584,5 +9584,45 @@ def test_the_queued_and_load_phase_lines_name_the_way_out(monkeypatch, phase, ac
     assert hotkey
     detail = controller._preload_progress_detail()
     assert detail.endswith(f" Press {hotkey} to {action}.")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcript_with_a_gap_keeps_its_recording():
+    """A split remote recording whose empty part left a gap marker is
+    delivered, but its recording is marked failed rather than completed: the
+    marker tells the user to listen to that stretch, and with `save_last_wav`
+    off (the default) a completed recording is deleted."""
+    store = _StoreWithIds("rec-G")
+    controller, app = _make_controller(last_recording_store=store)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(5, settings, "batch")
+    controller._active_request_token = 5
+
+    controller._on_transcription_ready(
+        "erster teil [no text returned for 0:16-0:31] dritter teil",
+        request_token=5,
+    )
+
+    assert store.completed_ids == []
+    assert store.failed_ids == ["rec-G"]
+    assert controller._last_transcript.startswith("erster teil")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_transcript_with_a_gap_keeps_its_recording():
+    store = _StoreWithIds("rec-Q")
+    controller, app = _make_controller(last_recording_store=store)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    job = controller._register_transcription_job(6, settings, "batch")
+
+    controller._mark_last_recording_completed(
+        job, "[no text returned for 3:00-6:00] rest"
+    )
+    controller._mark_last_recording_completed(job, "complete text")
+
+    assert store.failed_ids == ["rec-Q"]
+    assert store.completed_ids == ["rec-Q"]
     controller.shutdown()
     _ = app

@@ -150,7 +150,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     threshold *as the user set it* (passed by the factory to OpenAI, Groq,
     Azure and the custom endpoint, and part of their runtime identity), or
     unmeasurable -- leaves `[no text returned for m:ss-m:ss]` in its place
-    and logs `remote_audio_part_empty` at WARNING; a silent one is skipped.
+    (adjacent gaps share one marker; start rounded down, end up, so a
+    short tail never reads `3:00-3:00`) and logs `remote_audio_part_empty`
+    at WARNING; a silent one is skipped. `transcript_has_gap`
+    (`transcriber/base.py`, beside `gap_marker`) makes the controller mark
+    such a recording failed rather than completed, so with `save_last_wav`
+    off the stretch the marker names is not deleted with the rest (found by
+    the review of a1e0b01).
     Failing used to throw away every other part's minutes of speech; skipping
     unmarked would hand back a transcript with a hole that reads complete,
     and the marker is the one channel that reaches the overlay, the document

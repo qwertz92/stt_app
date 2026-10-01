@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -258,3 +259,37 @@ class ProgressReporter:
             self._progress_callback(text)
         except Exception:
             self._logger.debug("Progress callback raised", exc_info=True)
+
+
+def _clock(total: int) -> str:
+    """`m:ss`, or `h:mm:ss` past an hour."""
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+_GAP_MARKER_PATTERN = re.compile(
+    r"\[no text returned for \d+:\d{2}(?::\d{2})?-\d+:\d{2}(?::\d{2})?\]"
+)
+
+
+def gap_marker(start_s: float, end_s: float) -> str:
+    """The marker an empty part that held sound leaves in the transcript.
+
+    The start rounds down and the end up, so even a tail a fraction of a
+    second long reads as a stretch rather than `3:00-3:00`.
+    """
+    return (
+        f"[no text returned for {_clock(math.floor(start_s))}-"
+        f"{_clock(math.ceil(end_s))}]"
+    )
+
+
+def transcript_has_gap(text: str) -> bool:
+    """Whether a transcript carries a gap marker. The controller asks, because
+    a transcript with a gap must keep its recording: the marker tells the user
+    to listen to that stretch, and with `save_last_wav` off a completed
+    recording is deleted."""
+    return bool(_GAP_MARKER_PATTERN.search(text or ""))

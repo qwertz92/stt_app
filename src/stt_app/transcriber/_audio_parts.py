@@ -25,7 +25,7 @@ from ..config import RemotePartLimit
 from ..vad import measure_peak_windowed_rms
 from ._http_utils import recovered_text_suffix
 from ._pcm_audio import pcm16_wav_bytes, split_into_passes
-from .base import AudioInput, TranscriptionError
+from .base import AudioInput, TranscriptionError, gap_marker
 from .local_onnx_asr import _read_wav_float32
 
 logger = logging.getLogger(__name__)
@@ -144,16 +144,6 @@ def _part_seconds(part: AudioInput) -> float:
     return declared.frames / declared.sample_rate
 
 
-def _clock(seconds: float) -> str:
-    """`m:ss`, or `h:mm:ss` past an hour, rounded to the second."""
-    total = round(seconds)
-    hours, rest = divmod(total, 3600)
-    minutes, secs = divmod(rest, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
-
-
 def split_for_request(
     audio_source: AudioInput,
     limit: RemotePartLimit | None,
@@ -266,7 +256,17 @@ def transcribe_in_parts(
     pieces: list[str] = []
     texts: list[str] = []
     empty_with_sound = 0
+    # The stretch of consecutive empty parts with sound not yet written out:
+    # adjacent gaps are one stretch to listen to, so they share one marker.
+    gap_start: float | None = None
     start = 0.0
+
+    def close_gap(end_s: float) -> None:
+        nonlocal gap_start
+        if gap_start is not None:
+            pieces.append(gap_marker(gap_start, end_s))
+            gap_start = None
+
     for index, part in enumerate(parts, start=1):
         # Before the first part as well: splitting a large import takes a
         # second, and a cancel pressed meanwhile must not upload a part.
@@ -277,11 +277,13 @@ def transcribe_in_parts(
                 part, f"Transcribing part {index} of {count}. {progress_text}"
             )
         except TranscriptionError as exc:
+            close_gap(start)
             raise TranscriptionError(
                 f"Transcribing part {index} of {count} failed: {exc}"
-                f"{recovered_text_suffix(texts, '')}"
+                f"{recovered_text_suffix(pieces, '')}"
             ) from exc
         if text:
+            close_gap(start)
             texts.append(text)
             pieces.append(text)
         elif _holds_sound(part, silence_threshold):
@@ -294,10 +296,13 @@ def transcribe_in_parts(
                 start,
                 end,
             )
-            pieces.append(f"[no text returned for {_clock(start)}-{_clock(end)}]")
+            if gap_start is None:
+                gap_start = start
         else:
+            close_gap(start)
             logger.info("remote_audio_part_silent index=%d count=%d", index, count)
         start = end
+    close_gap(start)
     if not texts and empty_with_sound:
         raise TranscriptionError(
             f"No part of the {count} returned text, although the recording "

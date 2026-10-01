@@ -3087,10 +3087,10 @@ def test_the_completion_mark_carries_the_job_recording_id_or_none():
         assert unknown.marks_last_recording is False
         assert retained.marks_last_recording is False
 
-        controller._mark_last_recording_completed(known)
-        controller._mark_last_recording_completed(unknown)
-        controller._mark_last_recording_completed(None)
-        controller._mark_last_recording_completed(retained)
+        controller._mark_last_recording_completed(known, "text")
+        controller._mark_last_recording_completed(unknown, "text")
+        controller._mark_last_recording_completed(None, "text")
+        controller._mark_last_recording_completed(retained, "text")
 
         assert store.completed_ids == ["rec-a", None]
     finally:

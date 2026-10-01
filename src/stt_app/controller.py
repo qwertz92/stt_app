@@ -109,6 +109,7 @@ from .transcriber.base import (
     TranscriptionCanceled,
     TranscriptionError,
     request_transcription_shutdown,
+    transcript_has_gap,
 )
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .vad import EnergyVad, measure_peak_windowed_rms
@@ -125,6 +126,13 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
 # look like the recording never happened.
 _EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
     "The model returned no text for this recording."
+)
+
+# The last-recording error for a transcript with a gap marker. The recording
+# is kept rather than completed, so the stretch the marker names can still be
+# listened to or transcribed again.
+_GAP_KEPT_RECORDING_MESSAGE = (
+    "Part of the recording returned no text; the recording was kept."
 )
 
 # The stages of a local model preload. They fail, progress and finish for
@@ -3013,8 +3021,16 @@ class DictationController(QtCore.QObject):
         self._last_transcript = text
         self._last_history_entry = entry
 
-    def _mark_last_recording_completed(self, job: _TranscriptionJob | None) -> None:
+    def _mark_last_recording_completed(
+        self, job: _TranscriptionJob | None, text: str
+    ) -> None:
         """Complete the last recording only while it is still the job's own.
+
+        A transcript carrying a gap marker -- a part of a split remote
+        recording that held sound came back empty (`transcribe_in_parts`) --
+        is marked failed instead: the marker tells the user to listen to that
+        stretch, and with `keep_after_success` off a completed recording is
+        deleted. Failed keeps it reachable from History and Import.
 
         A job records the managed recording's id when it is registered. An
         older job that finishes after a newer recording was stored -- the
@@ -3028,6 +3044,9 @@ class DictationController(QtCore.QObject):
         at all is the unconditional write.
         """
         if job is not None and not job.marks_last_recording:
+            return
+        if transcript_has_gap(text):
+            self._mark_last_recording_failed(job, _GAP_KEPT_RECORDING_MESSAGE)
             return
         expected = job.source_recording_id if job is not None else None
         try:
@@ -5278,7 +5297,7 @@ class DictationController(QtCore.QObject):
             self._last_transcript = text
 
         if not text.strip():
-            self._mark_last_recording_completed(job)
+            self._mark_last_recording_completed(job, text)
             self._overlay.set_state("Done", "No speech detected.")
             self._reveal_overlay_result(is_error=False)
             self._last_transcribe_settings = None
@@ -5307,7 +5326,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job)
+                self._mark_last_recording_completed(job, text)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -5320,7 +5339,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job)
+                self._mark_last_recording_completed(job, text)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -5333,7 +5352,7 @@ class DictationController(QtCore.QObject):
         self._reveal_overlay_result(is_error=False)
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
-        self._mark_last_recording_completed(job)
+        self._mark_last_recording_completed(job, text)
         self._last_transcribe_settings = None
         self._reset_streaming_state()
 
@@ -5374,7 +5393,7 @@ class DictationController(QtCore.QObject):
         # transcript the history write refused is kept as audio, since with
         # `save_last_wav` off the completion mark deletes the only copy left.
         if job.history_entry is not None and not job.aborting:
-            self._mark_last_recording_completed(job)
+            self._mark_last_recording_completed(job, text)
         if (
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and job.mode != "streaming"

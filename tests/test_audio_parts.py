@@ -30,7 +30,12 @@ from stt_app.transcriber._audio_parts import (
     transcribe_in_parts,
 )
 from stt_app.transcriber._pcm_audio import pcm16_wav_bytes, split_into_passes
-from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
+from stt_app.transcriber.base import (
+    TranscriptionCanceled,
+    TranscriptionError,
+    gap_marker,
+    transcript_has_gap,
+)
 
 
 def _wav_bytes(
@@ -705,3 +710,59 @@ def test_engines_whose_limit_no_dictation_reaches_are_sent_whole(engine):
     """Deepgram 2 GB, ElevenLabs 3 GB / 10 h, AssemblyAI 2.2 GB / 10 h; Fun-ASR
     streams over a WebSocket, and the local runtimes split on their own."""
     assert remote_batch_part_limit(engine) is None
+
+
+def test_adjacent_empty_parts_with_sound_share_one_marker():
+    """Two gaps in a row are one stretch to listen to, not two."""
+    requests = _Requests(["", "", "dritter teil"])
+
+    text = transcribe_in_parts(
+        _three_parts(),
+        requests,
+        limit=_LIMIT,
+        progress_text=_UPLOAD,
+        raise_if_canceled=_never_canceled,
+        silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
+    )
+
+    assert text == "[no text returned for 0:00-0:31] dritter teil"
+    assert transcript_has_gap(text)
+
+
+def test_a_marker_never_names_a_stretch_of_no_length():
+    """A tail a fraction of a second long -- a hotkey click after the last
+    cut -- rounds to one second in both directions; the range must still read
+    as a stretch, so the start rounds down and the end up."""
+    assert gap_marker(180.2, 180.4) == "[no text returned for 3:00-3:01]"
+    assert gap_marker(3599.6, 3661.0) == "[no text returned for 59:59-1:01:01]"
+
+
+def test_a_failed_part_after_a_gap_carries_the_marker_in_its_recovered_text():
+    requests = _Requests(
+        ["erster teil", "", TranscriptionError("Example: HTTP 500.")]
+    )
+
+    with pytest.raises(TranscriptionError) as excinfo:
+        transcribe_in_parts(
+            _three_parts(),
+            requests,
+            limit=_LIMIT,
+            progress_text=_UPLOAD,
+            raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
+        )
+
+    assert "erster teil [no text returned for 0:16-0:31]" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("erster teil [no text returned for 0:16-0:31] dritter teil", True),
+        ("[no text returned for 59:59-1:01:01]", True),
+        ("he said [no text returned] once", False),
+        ("plain dictation", False),
+    ],
+)
+def test_a_gap_is_recognised_by_the_exact_marker_only(text, expected):
+    assert transcript_has_gap(text) is expected
