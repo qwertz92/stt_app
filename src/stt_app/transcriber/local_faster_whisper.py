@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
+from .. import silero_vad
 from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -27,6 +28,7 @@ from ..config import (
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
+    SILERO_STREAM_MIN_PROBABILITY,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
     STREAMING_PARTIAL_INTERVAL_S,
@@ -1246,7 +1248,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 if self._stream_tail_window_is_silent(session) or (
                     tail_after_long_pause
                     and self.silence_gate_enabled
-                    and not self._stream_window_has_speech(session)
+                    and not self._stream_window_has_speech(
+                        session, confirm_with_speech_model=True
+                    )
                 ):
                     final_text = session.result.merged_text
                 else:
@@ -1341,7 +1345,13 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         )
         new_segment = False
         if pause_exceeded_window:
-            new_segment = self._stream_window_has_speech(session)
+            # With the gate on, a refusal skips the decode, so the speech
+            # model may refuse too; with it off, the answer only chooses
+            # append over replace, and a refusal there would discard text
+            # (`_stream_window_has_speech` says why).
+            new_segment = self._stream_window_has_speech(
+                session, confirm_with_speech_model=self.silence_gate_enabled
+            )
             if not new_segment and self.silence_gate_enabled:
                 # Too little speech to append on trust -- and too little to
                 # trust a replace either. A transient ending a long pause would
@@ -1571,16 +1581,51 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return False
         return speech_seconds >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
 
-    def _stream_window_has_speech(self, session: _StreamingSession) -> bool:
+    def _speech_model_refuses(self, pcm: bytes) -> bool:
+        """Does the Silero speech model confidently find no speech in ``pcm``?
+
+        Loudness cannot tell a desk thump, fast typing or a loud room from a
+        short word -- they measure the same energy run -- and the speech
+        model can: config.py holds the measurements behind
+        SILERO_STREAM_MIN_PROBABILITY. False whenever the model cannot
+        answer (no graph, a stream rate other than 16 kHz, a failed run):
+        this check may only take an admission away, never make one, and a
+        check that did not run must not refuse. About 13 ms for an 8 s
+        window.
+        """
+        measured = silero_vad.measure_speech_pcm16(pcm, self.stream_sample_rate)
+        return (
+            measured is not None
+            and measured.max_probability < SILERO_STREAM_MIN_PROBABILITY
+        )
+
+    def _stream_window_has_speech(
+        self, session: _StreamingSession, *, confirm_with_speech_model: bool = False
+    ) -> bool:
         """Does the window about to be decoded hold enough speech to append?
 
         Asked *before* the decode, so the trailing window is the one that will
         be decoded a moment later.
+
+        ``confirm_with_speech_model`` adds the Silero check on top of the
+        energy run. Pass it only where a refusal means "do not decode this
+        window" -- the post-pause skip and the finalizer's dropped tail, both
+        with the silence gate on -- and never where the answer chooses
+        between appending and replacing: there a refusal turns the append
+        into a replace, and a replace discards real text already
+        transcribed. Measured on the finalizer's disjoint route: a thump the
+        model rightly refused replaced "erster teil der nachricht" with the
+        hallucination decoded from it, where energy alone had kept the
+        dictation and appended the junk.
         """
         snapshot, _start, _end = self._trailing_window(
             session, self.stream_partial_window_s
         )
-        return self._pcm_has_enough_speech_to_append(snapshot)
+        if not self._pcm_has_enough_speech_to_append(snapshot):
+            return False
+        return not (
+            confirm_with_speech_model and self._speech_model_refuses(snapshot)
+        )
 
     def _decoded_window_has_speech(self, session: _StreamingSession) -> bool:
         """The same question about the window that was ALREADY decoded.

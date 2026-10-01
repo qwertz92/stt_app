@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all
+from PyInstaller.utils.hooks import collect_all, collect_data_files
 
 
 datas = [
@@ -39,6 +39,16 @@ onnx_asr_datas, onnx_asr_binaries, onnx_asr_hiddenimports = collect_all('onnx_as
 datas.extend(onnx_asr_datas)
 binaries.extend(onnx_asr_binaries)
 hiddenimports.extend(onnx_asr_hiddenimports)
+# The Silero VAD v6 graph faster-whisper ships as package data (1.2 MB). The
+# app's speech check (stt_app/silero_vad.py) finds it through
+# importlib.util.find_spec('faster_whisper'), which in a frozen app answers
+# _MEIPASS/faster_whisper, and faster-whisper's own vad_filter reads the same
+# file. No PyInstaller hook collects faster_whisper's data, so without this
+# line the file is missing from the bundle and the speech check reports itself
+# unavailable -- which never skips a recording, but also never checks one.
+datas.extend(
+    collect_data_files('faster_whisper', includes=['assets/silero_vad_v6.onnx'])
+)
 # The Cohere and Granite Speech runtimes are Node.js, so these three are not
 # optional for a release build. Skipping a missing one silently produced a
 # bundle in which selecting either model fails at runtime with a

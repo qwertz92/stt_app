@@ -16,7 +16,7 @@ from typing import NamedTuple
 
 from PySide6 import QtCore, QtGui
 
-from . import audio_devices
+from . import audio_devices, silero_vad
 from .app_paths import resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import AudioDeviceChangeListener
@@ -52,6 +52,10 @@ from .config import (
     OVERLAY_RESULT_REVEAL_MS,
     RECORDINGS_MAX_COUNT_UNLIMITED,
     REMOTE_BATCH_MAX_PART_SECONDS,
+    SILERO_BATCH_MAX_SCAN_S,
+    SILERO_BATCH_MIN_PROBABILITY,
+    SILERO_BATCH_QUIET_SPEECH_GAIN,
+    SILERO_BATCH_STOP_AFTER_SPEECH_S,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
@@ -2348,6 +2352,21 @@ class DictationController(QtCore.QObject):
         previous recording, which the unkeyed mark relabelled canceled with
         this gate's text, and the text called audio the store never received
         kept (the wave-17 reach lens, on the real store).
+
+        A recording loud enough for the level gate is also scored by the
+        Silero speech model (`silero_vad`, thresholds and their measurements
+        in `config.py`), because typing, a knock or room tone just above the
+        gate are loud and are still not speech. It is skipped only when the
+        gate is on and `SpeechCheck.no_speech` holds: a COMPLETE scan as
+        recorded and a complete scan of the copy amplified by
+        `SILERO_BATCH_QUIET_SPEECH_GAIN` both stayed below
+        `SILERO_BATCH_MIN_PROBABILITY`. The second scan is what keeps quiet
+        speech that a keystroke lifted over the level gate: Silero scores by
+        level, and such speech scored as low as 0.025 as recorded. A scan the
+        budget cut short, a measurement that failed and a graph that could not
+        be loaded all leave the level gate's answer standing. The measurement
+        is logged on every stop, the gate off included, so the cut can be
+        checked against real recordings.
         """
         enabled = bool(getattr(self._settings, "silence_gate_enabled", False))
         try:
@@ -2369,39 +2388,119 @@ class DictationController(QtCore.QObject):
                 DEFAULT_SILENCE_GATE_THRESHOLD,
             )
         )
+        speech = self._measure_speech_for_silence_gate(wav_bytes)
         self._logger.info(
-            "recording_peak_level level=%.4f silence_gate_enabled=%s threshold=%.4f",
+            "recording_peak_level level=%.4f silence_gate_enabled=%s "
+            "threshold=%.4f %s",
             peak_level,
             enabled,
             threshold,
+            self._speech_measurement_log_fields(speech),
         )
-        if not enabled or peak_level >= threshold:
+        if not enabled:
             return False
-        if persisted:
-            try:
-                self._last_recording_store.mark_canceled(
-                    "Recording skipped by the silence gate.",
-                    expected_recording_id=self._last_persisted_recording_id
-                    or None,
-                )
-            except Exception:
-                self._logger.exception("Failed to mark silence-gated recording")
         kept = (
             "the recording is kept"
             if persisted
             else "the recording could not be kept as the last recording (see "
             "the log)"
         )
-        self._overlay.set_state(
-            "Done",
-            (
+        if peak_level < threshold:
+            reason = "level"
+            store_text = "Recording skipped by the silence gate."
+            detail = (
                 f"No speech detected (loudest 100 ms {peak_level:.4f}, gate "
                 f"{threshold:.4f}). Nothing was transcribed; {kept}. If this "
-                "was speech, lower the silence gate in "
-                "Settings -> Audio."
-            ),
+                "was speech, lower the silence gate in Settings -> Audio."
+            )
+        elif speech is not None and speech.no_speech:
+            scored = max(
+                speech.natural.max_probability,
+                speech.amplified.max_probability if speech.amplified else 0.0,
+            )
+            reason = "speech_check"
+            store_text = "Recording skipped by the speech check: no speech found."
+            detail = (
+                "No speech detected (the speech check scored it at most "
+                f"{scored:.2f}, speech needs "
+                f"{speech.min_probability:.2f}; loudest 100 ms "
+                f"{peak_level:.4f}). Nothing was transcribed; {kept}. If this "
+                "was speech, switch the silence gate off in Settings -> Audio."
+            )
+        else:
+            return False
+        self._logger.info(
+            "silence_gate_skipped reason=%s level=%.4f threshold=%.4f "
+            "silero_max_probability=%s",
+            reason,
+            peak_level,
+            threshold,
+            "unavailable"
+            if speech is None
+            else f"{speech.natural.max_probability:.3f}",
         )
+        if persisted:
+            try:
+                self._last_recording_store.mark_canceled(
+                    store_text,
+                    expected_recording_id=self._last_persisted_recording_id
+                    or None,
+                )
+            except Exception:
+                self._logger.exception("Failed to mark silence-gated recording")
+        self._overlay.set_state("Done", detail)
         return True
+
+    def _measure_speech_for_silence_gate(
+        self, wav_bytes: bytes
+    ) -> silero_vad.SpeechCheck | None:
+        """Silero's view of a stopped recording; None whenever it has none.
+
+        Bounded (`SILERO_BATCH_STOP_AFTER_SPEECH_S`, `SILERO_BATCH_MAX_SCAN_S`,
+        both scans) because it runs on the Qt thread at every stop. Anything
+        it raises is logged and read as "unmeasured", which never skips a
+        recording.
+        """
+        try:
+            return silero_vad.check_speech_wav(
+                wav_bytes,
+                min_probability=SILERO_BATCH_MIN_PROBABILITY,
+                gain=SILERO_BATCH_QUIET_SPEECH_GAIN,
+                stop_after_speech_s=SILERO_BATCH_STOP_AFTER_SPEECH_S,
+                max_scan_s=SILERO_BATCH_MAX_SCAN_S,
+            )
+        except Exception:
+            self._logger.exception("Failed to measure speech in the recording")
+            return None
+
+    @staticmethod
+    def _speech_measurement_log_fields(
+        speech: silero_vad.SpeechCheck | None,
+    ) -> str:
+        """The speech-check half of the `recording_peak_level` line.
+
+        The fields describe the scan as recorded; `complete=False` marks one
+        that stopped early -- on enough speech or on the budget -- so its
+        speech seconds are a lower bound. `silero_amplified_max_probability`
+        is `not_run` whenever the first scan settled the answer, and
+        `unavailable` when the amplified scan was needed and failed.
+        """
+        if speech is None:
+            return "silero_speech_seconds=unavailable"
+        natural = speech.natural
+        if speech.amplified is not None:
+            amplified = f"{speech.amplified.max_probability:.3f}"
+        elif natural.complete and natural.max_probability < speech.min_probability:
+            amplified = "unavailable"
+        else:
+            amplified = "not_run"
+        return (
+            f"silero_speech_seconds={natural.speech_seconds:.2f} "
+            f"silero_max_probability={natural.max_probability:.3f} "
+            f"silero_amplified_max_probability={amplified} "
+            f"silero_scanned_s={natural.scanned_seconds:.1f}/"
+            f"{natural.total_seconds:.1f} silero_complete={natural.complete}"
+        )
 
     def _auto_stop_from_vad(self) -> None:
         """Voice-activity detection ended the recording on its own.

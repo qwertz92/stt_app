@@ -1824,6 +1824,142 @@ SILENCE_GATE_THRESHOLD_MIN = 0.0005
 SILENCE_GATE_THRESHOLD_MAX = 0.1
 SILENCE_GATE_WINDOW_MS = 100
 
+# A speech check beside the two energy gates: the Silero VAD v6 graph that
+# faster-whisper ships (`silero_vad.py` says where and why). It scores every
+# 32 ms window for speech, which loudness cannot do -- a knuckle knock and a
+# short word measure the same energy run (STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+# above). It can only take a decision away from an energy gate, never make
+# one: audio it cannot measure is left to the energy gate alone.
+#
+# Every figure below is the highest window probability in the audio, measured
+# on 2026-09-27..10-01 with that graph (faster-whisper 1.2.1, ONNX Runtime
+# 1.30.0, CPU, one thread). Three properties of the graph decide the design:
+#   - The score of non-speech is not a fixed number. It moves with where the
+#     audio starts on the 32 ms grid, with the noise seed and with where the
+#     event falls: a knuckle knock scored 0.064-0.227 over 50 seeds, white
+#     room tone at -42 dBFS 0.043-0.159. Speech at a normal level holds still
+#     (the owner's recordings move by at most 0.018 across eight grid
+#     offsets). So every non-speech figure here is a range or a count of
+#     seeds/offsets, never one value.
+#   - The score depends on level. Speech whose loudest 100 ms is 0.0005 --
+#     the quietest level the Audio tab lets the silence gate admit,
+#     SILENCE_GATE_THRESHOLD_MIN -- scores as low as 0.027 as recorded, and
+#     the lowest scores come from a high crest: a transient far louder than
+#     the speech sets the recording's level while the speech stays quiet
+#     (crest up to 51.6 in the dictation clips, at most 3.8 in LibriSpeech).
+#   - A copy of the audio amplified by 8 and clipped to full scale restores
+#     that speech (0.25 or more) and lifts non-speech far less.
+#
+# Real speech, batch (the whole recording from its start, worst of 8 grid
+# offsets unless stated):
+#   - 493 of the owner's recordings that pass the level gate: lowest 0.938,
+#     1st percentile 0.981, median 0.995. (Aggregates only; the recordings
+#     were read, never copied.)
+#   - 20 LibriSpeech dev-clean clips and 5 German/English dictation clips,
+#     attenuated by up to 42 dB and kept while the level gate admits them:
+#     at -30 dB 18 pass, lowest 0.992; at -34 dB 8, lowest 0.984; at -38 dB
+#     only a 192 s clip passes, at 0.688 (0.140 at its worst offset), 0.996
+#     amplified.
+#   - A quiet microphone: 37 excerpts (the 20 LibriSpeech clips and 17 of the
+#     dictation clips, 15 s each) scaled so their loudest 100 ms is L, plus
+#     no transient: as recorded the lowest is 0.027 / 0.045 / 0.096 / 0.160
+#     at L = 0.0005 / 0.00075 / 0.001 / 0.0015 (3 / 2 / 1 / 0 below the batch
+#     cut), amplified by 8 0.246 / 0.253 / 0.271 / 0.381 (none below).
+#   - The six LibriSpeech words of tests/data scaled to L = 0.0005 and ended
+#     by a key clack that lifts them over the default level gate (grid offset
+#     0): five of six score 0.060-0.143 as recorded, every one 0.808 or more
+#     amplified.
+#   - Speech whose loudest 100 ms is 0.0003, below every settable threshold,
+#     lifted over the level gate by a key clack (50 cases, worst of 8
+#     offsets): as recorded 18-19 of 50 below the batch cut, lowest 0.025;
+#     amplified none, lowest 0.980. faster-whisper medium transcribed 13 of
+#     those 18 within 80 % word agreement of its own transcript of the clip
+#     at full level, Parakeet TDT 1 of 18. This is the case that rules out a
+#     check on the recording as recorded alone.
+# Real speech, streaming (the trailing window after a pause, as recorded):
+#   - The six LibriSpeech words and phrases after 7.5 s of room tone, 20
+#     seeds: lowest 0.930; attenuated by up to 22 dB, lowest 0.864; at a
+#     loudest 100 ms of 0.0005, lowest 0.510.
+#   - 2868 utterances of the owner's recordings that follow a pause of at
+#     least 0.7 s and that the energy run admits, each scored as the
+#     streaming window sees it (7 s of room tone, the utterance up to the
+#     next such pause, 0.3 s after) at 8 grid offsets. Every utterance whose
+#     worst offset scored below 0.35 was played to Parakeet TDT and
+#     faster-whisper medium; "heard" means one of them transcribed words.
+#       cut   below at offset 0   below at some offset   heard   both heard
+#       0.05          1                    3                1         0
+#       0.08          4                   11                3         0
+#       0.10          7                   17                6         0
+#       0.15         18                   25               12         0
+#     Averaged over the offsets, 0.08 refuses 4.5 utterances, 1.1 of them
+#     heard by a hearer.
+# Non-speech, SYNTHETIC (seeded signals built for the calibration, not
+# recordings). Batch, offsets of 8 below the cut, as recorded / with the
+# amplified copy as well: white room tone -48 dBFS 8/4, -42 dBFS 8/3, pink
+# -36 dBFS 8/6, fan-like low-pass noise 3/0 and 3/1, mains hum 6/6, 5 ms
+# click 8/7, key clack 8/5, knuckle knock 6/4, door latch 8/4, heavy thump
+# 8/2, mouse double click 8/8, typing 80 / 120 / 160 wpm 8/7, 8/3, 8/0, chair
+# creak 5/1, cough-like burst 8/4, 318 Hz tone 2/0, 1 kHz beep 7/5. At grid
+# offset 0 over 50 seeds (the tests' fixtures): thump after a pause skipped
+# 50 as recorded / 32 with both, knock 45 / 1, room tone -42 dBFS 49 / 40,
+# -48 dBFS 50 / 38. Streaming, 50 seeds, refused at 0.08: thump 45
+# (0.038-0.098), typing 160 wpm 49 (0.035-0.086), knock 3 (0.064-0.227),
+# room tone -42 dBFS 26 (0.052-0.159).
+#
+# A window counts as speech at Silero's own default. Used for the logged
+# speech seconds and the batch scan's early stop, not for either decision.
+SILERO_SPEECH_PROBABILITY = 0.5
+# Batch: a recording that passed the level gate is skipped only when a
+# COMPLETE scan stays below this as recorded AND a complete scan of the copy
+# amplified by SILERO_BATCH_QUIET_SPEECH_GAIN stays below it too. 0.15 sits
+# under every real-speech case above once the amplified scan is included
+# (lowest 0.246) and over most of the transients. The cut and the second scan
+# are placed for the speech side, not to catch every noise: a dictation
+# wrongly skipped is lost until the user retries it by hand, a missed noise
+# costs what it cost before this check existed. The price is visible above:
+# with both scans a knock is skipped 1 time in 50 instead of 45, typing at
+# 160 wpm never, a thump 32 times in 50.
+SILERO_BATCH_MIN_PROBABILITY = 0.15
+# The amplification of the second batch scan. It is the ratio of the default
+# silence-gate threshold to the lowest one the Audio tab allows
+# (DEFAULT_SILENCE_GATE_THRESHOLD / SILENCE_GATE_THRESHOLD_MIN = 8): speech
+# at the quietest admissible level is scored as if it had reached the default
+# gate's level. Measured gains 2 and 4 restore less of the quiet speech
+# (gain 4: lowest 0.230 at L = 0.0005), 8 is the smallest that restored every
+# case above.
+SILERO_BATCH_QUIET_SPEECH_GAIN = 8.0
+# The batch scan runs on the Qt thread at every stop, so it is bounded.
+# Measured on a Ryzen 5 7600X, warm, from the WAV bytes: audio with no speech
+# costs about 1.5-1.7 ms per second scanned per scan, while speech settles
+# the natural scan after about 3 s whatever the length (4-11 ms for 10 s,
+# 60 s and ten minutes, over two sessions) and no second scan runs. The scan
+# stops once this much speech is found and never scans past the budget. A
+# speechless recording within the budget pays both scans: 31 ms for 10 s,
+# 92 ms for 30 s (2026-10-01). A scan that stopped for either reason is
+# incomplete, and an incomplete scan never skips: the unscanned rest may hold
+# the speech, so a speechless recording longer than the budget is transcribed
+# as before (46 ms for 60 s, one scan). The first call in a process also
+# builds the session: 29 ms when ONNX Runtime is already loaded (onnx-asr,
+# Nemotron and Granite CTC load it), 123-275 ms when it still has to be
+# imported (four fresh interpreters), once.
+SILERO_BATCH_STOP_AFTER_SPEECH_S = 1.0
+SILERO_BATCH_MAX_SCAN_S = 30.0
+# Streaming: the trailing window after a pause longer than the window must
+# also reach this, as recorded, before it is decoded and appended on trust.
+# The check runs only where a refusal means "skip the window" or "drop the
+# finalizer's tail", never where it would turn an append into a replace. A
+# refusal is not a delay but can be a loss: the window is re-checked on every
+# partial, so a word followed by more speech is admitted with it, but a word
+# that ends the dictation after a long pause is dropped by the finalizer. So
+# the cut sits for the speech side: the table above, 4.5 expected refusals of
+# 2868 owner utterances, 1.1 of them heard as words by one hearer and none by
+# both, and every LibriSpeech word at least 0.51. On the noise side it
+# refuses most thumps and fast typing and about half of the near-gate room
+# tone, and still admits most knocks, whose damage stays bounded by the
+# segment floor as before. No amplified copy here: the quietest words scored
+# 0.510 as recorded, and amplification would admit more of the noise.
+SILERO_STREAM_MIN_PROBABILITY = 0.08
+
 OVERLAY_WIDTH = 396
 OVERLAY_HEIGHT = 98
 OVERLAY_MAX_HEIGHT = OVERLAY_HEIGHT * 4

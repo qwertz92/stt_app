@@ -120,3 +120,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   mark is keyed by the id the stop's persist returned and skipped (text says
   not kept) when it failed. Unmeasurable audio (`None`) is never gated. Schema
   22 turns the gate on once for older files; "off" saved at >= 22 is kept.
+- **Behind the level gate, a speech check (2026-10-01, `silero_vad.py`)**: the
+  Silero VAD v6 graph faster-whisper ships (MIT; found by `find_spec`, never
+  imported; `stt_app.spec` collects it -- no PyInstaller hook does) runs on
+  the CPU, one thread, loaded lazily once. A recording the level gate admits
+  is skipped (reason `speech_check`, same canceled mark and overlay shape)
+  only when the gate is on and `SpeechCheck.no_speech` holds: a COMPLETE scan
+  as recorded AND a complete scan of a copy amplified by
+  `SILERO_BATCH_QUIET_SPEECH_GAIN` (8, clipped) both stay below
+  `SILERO_BATCH_MIN_PROBABILITY` (0.15). The amplified scan is not optional:
+  Silero scores by level, and speech at the lowest settable threshold that a
+  keystroke lifted over the level gate scored 0.025-0.14 as recorded and
+  0.25+ amplified, while faster-whisper still transcribed it. A scan cut by
+  `SILERO_BATCH_MAX_SCAN_S` or stopped by `SILERO_BATCH_STOP_AFTER_SPEECH_S`
+  is incomplete and never skips; a graph that will not load, a scan that
+  raises and audio that is not 16 kHz 16-bit mono answer `None` and never
+  skip. Every stop logs both scores on `recording_peak_level`
+  (`silero_amplified_max_probability=not_run` when the first scan settled
+  it). No setting of its own: it follows `silence_gate_enabled`. Its
+  figures, ranges over seeds and grid offsets because non-speech scores move
+  with both, are in the `config.py` comment; do not quote one value for a
+  noise. `silero_vad.check_speech_pcm16` / `check_speech_wav` are the one
+  answer to "does this audio hold no speech" for any other caller.

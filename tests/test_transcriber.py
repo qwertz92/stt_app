@@ -13,10 +13,24 @@ import wave
 from pathlib import Path
 
 import pytest
+from speech_fixtures import (
+    after_a_pause,
+    concat,
+    low_thump,
+    pcm_bytes,
+    room_tone,
+    speech_excerpts,
+    typing,
+)
 
+from stt_app.config import (
+    STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
+    STREAMING_SPEECH_RUN_WINDOW_MS,
+)
 from stt_app.transcriber import local_faster_whisper
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+from stt_app.vad import measure_longest_speech_run_s
 
 
 class Segment:
@@ -1585,6 +1599,348 @@ def test_audio_that_cannot_be_measured_is_never_appended_on_trust():
     assert transcriber._pcm_has_enough_speech_to_append(b"") is False
     # One byte is not a whole int16 sample, so there is nothing to measure.
     assert transcriber._pcm_has_enough_speech_to_append(b"\x00") is False
+
+
+def _energy_run_s(transcriber, pcm):
+    return measure_longest_speech_run_s(
+        pcm,
+        transcriber.stream_sample_rate,
+        transcriber.silence_gate_threshold,
+        window_ms=STREAMING_SPEECH_RUN_WINDOW_MS,
+    )
+
+
+def _window(pcm):
+    """A stand-in session: `_stream_window_has_speech` reads the buffer only."""
+    return types.SimpleNamespace(pcm_buffer=bytearray(pcm))
+
+
+# Room-tone seed 3 puts the SYNTHETIC thump's trailing window at 0.059, the
+# median over seeds 0-49 (0.038-0.098). The score of a non-speech sound moves
+# with the noise around it and with where it falls on Silero's 32 ms grid;
+# speech does not (every excerpt after a pause, seeds 0-19: 0.930 or more).
+# Seed 0 scores the thump 0.083, above the cut, which is why the tests that
+# need "a thump the model refuses" name their seed.
+_TYPICAL_THUMP_SEED = 3
+_ROOM_TONE_SEEDS = range(20)
+# Measured 2026-09-27: the thump is refused at 18 of these 20 seeds, typing
+# at 160 wpm at 20 of 20 (over seeds 0-49: 45 and 49 of 50). The bound leaves
+# room for a CPU whose ONNX Runtime kernels round a near-cut score the other
+# way, and still fails if the check stops refusing most of them.
+_MIN_REFUSALS = 15
+
+
+@pytest.mark.parametrize(
+    ("label", "event"),
+    [
+        ("a low thump", low_thump),
+        ("typing at 160 wpm", lambda: typing(160, 1.0)),
+    ],
+    ids=["thump", "typing-160"],
+)
+def test_the_speech_check_refuses_most_sounds_the_energy_run_admits(
+    real_silero, label, event
+):
+    """Loudness cannot tell a thump from a word; the speech model mostly can.
+
+    Each SYNTHETIC sound clears STREAMING_NEW_SEGMENT_MIN_SPEECH_S on the
+    20 ms energy run -- the precondition proves it for every seed -- so on
+    energy alone each one authorised decoding a window after a pause, i.e.
+    an invented sentence pasted into the document. The check is a
+    probability, not a guarantee: it refuses the thump at most room-tone
+    seeds and not at all of them (config.py, SILERO_STREAM_MIN_PROBABILITY).
+    Steady room tone above the gate is deliberately not here: it never lets
+    a pause accumulate, so it never reaches this check.
+    """
+    transcriber = _slow_decode_stream(["x"])
+    refused = []
+    for seed in _ROOM_TONE_SEEDS:
+        pcm = pcm_bytes(after_a_pause(event(), seed=seed))
+        assert (
+            _energy_run_s(transcriber, pcm) >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+        ), f"precondition: the energy run alone admits {label} (seed {seed})"
+        refused.append(
+            not transcriber._stream_window_has_speech(
+                _window(pcm), confirm_with_speech_model=True
+            )
+        )
+
+    assert sum(refused) >= _MIN_REFUSALS, (
+        f"{label} after a pause was refused at only {sum(refused)} of "
+        f"{len(refused)} room-tone seeds"
+    )
+
+
+def test_the_speech_check_admits_every_recorded_word_after_a_pause(real_silero):
+    """The other direction, which costs a real dictation: a short answer after
+    a pause ("Ja.", "Stopp.") must still be decoded. Every LibriSpeech
+    excerpt, the 140 ms word included, after 7.5 s of room tone, at every
+    seed the refusal test uses -- none may be refused, not most."""
+    transcriber = _slow_decode_stream(["x"])
+    for name, samples in speech_excerpts().items():
+        for seed in _ROOM_TONE_SEEDS:
+            pcm = pcm_bytes(after_a_pause(samples, seed=seed))
+            assert (
+                transcriber._stream_window_has_speech(
+                    _window(pcm), confirm_with_speech_model=True
+                )
+                is True
+            ), f"the recorded {name} after a pause was refused (seed {seed})"
+
+
+def test_an_unavailable_speech_check_leaves_the_energy_answer_standing():
+    """"Could not measure" must never gate: without the graph (the suite-wide
+    stub answers None, exactly as a missing faster_whisper asset does) the
+    thump the speech check refuses is admitted again on energy alone."""
+    transcriber = _slow_decode_stream(["x"])
+    pcm = pcm_bytes(after_a_pause(low_thump(), seed=_TYPICAL_THUMP_SEED))
+
+    assert transcriber._speech_model_refuses(pcm) is False
+    assert (
+        transcriber._stream_window_has_speech(
+            _window(pcm), confirm_with_speech_model=True
+        )
+        is True
+    )
+
+
+def test_a_stream_rate_the_graph_cannot_score_keeps_the_energy_answer(real_silero):
+    """The graph takes 16 kHz only and answers None for any other rate, which
+    must read as "cannot tell", not as "no speech"."""
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_sample_rate=8000,
+        stream_partial_interval_s=3600.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: None,
+    )
+    pcm = pcm_bytes(after_a_pause(low_thump(), seed=_TYPICAL_THUMP_SEED))
+
+    assert transcriber._speech_model_refuses(pcm) is False
+    assert (
+        transcriber._stream_window_has_speech(
+            _window(pcm), confirm_with_speech_model=True
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "tail", "must_append"),
+    [
+        ("a recorded word", lambda: speech_excerpts()["word_220ms"], True),
+        ("a low thump", low_thump, False),
+    ],
+    ids=["word", "thump"],
+)
+def test_the_real_stream_worker_appends_speech_after_a_pause_and_not_a_thump(
+    real_silero, label, tail, must_append
+):
+    """End to end through the stream worker, with the real graph.
+
+    The pause is room tone below the silence gate, long enough to exceed the
+    window, so the next window reaches the post-pause route. The thump clears
+    the energy run (the unit test above proves it) and used to append the
+    model's invention after "hello world"; a recorded word must still append.
+    With room-tone seeds 7 and 8 the thump's last trailing window scores
+    0.056 (measured 2026-09-27), a typical one; the refusal test above says
+    how often a thump is refused at all.
+    """
+    outputs = iter(["hello world"] + [f"after{index}" for index in range(300)])
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text=next(outputs, "x"))
+            info = types.SimpleNamespace(language="en", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _Model(),
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        _push_and_decode(transcriber, pcm_bytes(speech_excerpts()["phrase_1700ms"]))
+        assert transcriber._stream_session.result.merged_text == "hello world"
+
+        pause = room_tone(transcriber.stream_partial_window_s + 2.5, seed=7)
+        for start in range(0, pause.size, 1600):
+            _push_and_decode(transcriber, pcm_bytes(pause[start:start + 1600]))
+        _push_and_decode(
+            transcriber, pcm_bytes(concat(tail(), room_tone(0.3, seed=8)))
+        )
+        merged = transcriber._stream_session.result.merged_text
+    finally:
+        transcriber.stop_stream()
+
+    if must_append:
+        assert merged.startswith("hello world") and merged != "hello world", (
+            f"{label} after a pause was dropped from the transcript: {merged!r}"
+        )
+    else:
+        assert merged == "hello world", (
+            f"{label} after a pause changed the transcript: {merged!r}"
+        )
+
+
+def _stream_after_one_partial(model_texts, *, gate):
+    """A stream that decoded one phrase and is ready for what follows."""
+    transcriber = _slow_decode_stream(model_texts)
+    transcriber.silence_gate_enabled = gate
+    transcriber.start_stream(on_partial=lambda text: None)
+    _push_and_wait(transcriber, pcm_bytes(speech_excerpts()["phrase_1700ms"]))
+    _emit_partial_now(transcriber)
+    assert transcriber._stream_session.result.merged_text == model_texts[0]
+    return transcriber
+
+
+@pytest.mark.parametrize(
+    ("label", "tail", "must_append"),
+    [
+        ("a recorded word", lambda: speech_excerpts()["word_220ms"], True),
+        ("a low thump", low_thump, False),
+    ],
+    ids=["word", "thump"],
+)
+def test_the_finalizer_drops_a_thump_after_a_pause_and_keeps_a_word(
+    real_silero, label, tail, must_append
+):
+    """The finalizer's post-pause tail takes the same speech check.
+
+    With the silence gate on, a tail after a pause longer than the window is
+    dropped unless it holds speech. The thump clears the energy run, so on
+    energy alone it was decoded and its invention appended at the moment the
+    transcript is handed over; a recorded word must still be decoded. The
+    thump is the typical one (`_TYPICAL_THUMP_SEED`); at 2 of the 20 seeds
+    the refusal test counts it would still be decoded.
+    """
+    transcriber = _stream_after_one_partial(
+        ["erster teil der nachricht", "Untertitel von Stephanie Geiges"], gate=True
+    )
+    try:
+        _push_and_wait(
+            transcriber, pcm_bytes(after_a_pause(tail(), seed=_TYPICAL_THUMP_SEED))
+        )
+        # What the partials would have counted over the pause.
+        transcriber._stream_session.result.silent_seconds = (
+            transcriber.stream_partial_window_s + 1.0
+        )
+        final_text = transcriber.stop_stream()
+    finally:
+        transcriber.abort_stream()
+
+    if must_append:
+        assert final_text == (
+            "erster teil der nachricht Untertitel von Stephanie Geiges"
+        ), f"{label} at the end of the dictation was dropped: {final_text!r}"
+    else:
+        assert final_text == "erster teil der nachricht", (
+            f"{label} at the end of the dictation was decoded: {final_text!r}"
+        )
+
+
+def test_a_refusal_never_turns_an_append_into_a_replace(real_silero):
+    """Where the speech check's answer would choose replace over append, it
+    must not be asked: a replace discards text already transcribed.
+
+    The finalizer's disjoint route is the sharpest case: one partial, then
+    exactly one window of new audio holding a thump. The model rightly
+    refuses the thump -- and wired into that decision, the refusal made the
+    merge replace "erster teil der nachricht" with the hallucination decoded
+    from the thump, the whole dictation gone at the last step. Energy alone
+    keeps the dictation (and appends the junk, as it always did). This
+    window scores 0.074 (measured 2026-09-27), which the model refuses; the
+    test can only catch the check being asked while that holds.
+    """
+    transcriber = _stream_after_one_partial(
+        ["erster teil der nachricht", "Untertitel von Stephanie Geiges"], gate=True
+    )
+    try:
+        body = concat(room_tone(3.0), low_thump())
+        body = concat(body, room_tone(8.0 - body.size / 16_000, seed=3))
+        _push_and_wait(transcriber, pcm_bytes(body))
+        final_text = transcriber.stop_stream()
+    finally:
+        transcriber.abort_stream()
+
+    assert final_text.startswith("erster teil der nachricht"), (
+        f"a refused final window replaced the dictation: {final_text!r}"
+    )
+
+
+def test_with_the_gate_off_the_speech_model_does_not_decide_the_merge(real_silero):
+    """With the silence gate off, the post-pause answer only chooses append
+    over replace -- nothing is skipped -- so the speech model stays out of
+    it and a thump after a pause leaves the text before it intact."""
+    transcriber = _stream_after_one_partial(
+        ["erster teil der nachricht", "Untertitel von Stephanie Geiges"], gate=False
+    )
+    try:
+        # The typical thump: one the model refuses, so consulting it here
+        # would change the answer.
+        _push_and_wait(
+            transcriber,
+            pcm_bytes(after_a_pause(low_thump(), seed=_TYPICAL_THUMP_SEED)),
+        )
+        transcriber._stream_session.result.silent_seconds = (
+            transcriber.stream_partial_window_s + 1.0
+        )
+        _emit_partial_now(transcriber)
+        merged = transcriber._stream_session.result.merged_text
+    finally:
+        transcriber.stop_stream()
+
+    assert merged.startswith("erster teil der nachricht"), merged
+
+
+def test_with_the_gate_off_a_thump_after_decoded_silence_still_appends(real_silero):
+    """The same rule where the disjoint-window check cannot cover for it.
+
+    With the silence gate off the partials keep decoding through a pause, so
+    the window holding the thump overlaps the last decoded one and only the
+    post-pause answer pins the segment floor. Asked, the speech model refuses
+    this thump (its trailing window is the 0.059 one `_TYPICAL_THUMP_SEED`
+    names), the floor stays unset, and the unalignable window replaced the
+    whole dictation. Energy alone appends it, junk included, as before.
+    """
+    transcriber = _stream_after_one_partial(
+        ["erster teil der nachricht", "", "Untertitel von Stephanie Geiges"],
+        gate=False,
+    )
+    try:
+        # 8.5 s of quiet: one second, then the 7.5 s `after_a_pause` puts
+        # before the thump, so the final trailing window is exactly the one
+        # measured for that seed.
+        _push_and_wait(transcriber, pcm_bytes(room_tone(1.0, seed=50)))
+        _push_and_wait(
+            transcriber, pcm_bytes(room_tone(7.5, seed=_TYPICAL_THUMP_SEED))
+        )
+        transcriber._stream_session.result.silent_seconds = (
+            transcriber.stream_partial_window_s + 0.5
+        )
+        _emit_partial_now(transcriber)  # decodes the silence to nothing
+        assert (
+            transcriber._stream_session.result.merged_text
+            == "erster teil der nachricht"
+        )
+        _push_and_wait(
+            transcriber,
+            pcm_bytes(
+                concat(low_thump(), room_tone(0.3, seed=_TYPICAL_THUMP_SEED + 100))
+            ),
+        )
+        _emit_partial_now(transcriber)
+        merged = transcriber._stream_session.result.merged_text
+    finally:
+        transcriber.stop_stream()
+
+    assert merged == "erster teil der nachricht Untertitel von Stephanie Geiges", (
+        merged
+    )
 
 
 def test_a_disjoint_final_window_of_silence_is_not_appended_on_trust():

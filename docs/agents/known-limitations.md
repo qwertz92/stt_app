@@ -36,19 +36,31 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   re-enumeration and reboot; PortAudio indices do not.
 - Streaming inserts are append-only; focus-change detection is polled, so a
   very brief switch can be missed.
-- **The post-pause append gate is energy, not a VAD; it blocks silence and
-  nothing else.** A ~400 ms cough or knock after a pause can append one
-  hallucinated window; a word under 80 ms voiced is dropped. "Bitte."
-  (0.085 s) vs a key clack (0.080 s): no threshold separates them; the damage
-  is bounded by `protected_prefix`.
+- **The post-pause append gate is energy plus a speech check that admits
+  most knocks.** With the silence gate on, Silero refuses most thumps and
+  fast typing after a pause, but a knuckle knock still passes 47 times in 50
+  (0.064-0.227 against the 0.08 cut) and can append one hallucinated window;
+  the damage stays bounded by `protected_prefix`. With the silence gate off
+  the speech check does not run and the gate is energy alone, as before. A
+  word under 80 ms voiced is still dropped by the energy run.
+- **The batch speech check lets much noise through, by design.** With its
+  amplified second scan, the SYNTHETIC calibration skips a knock 1 time in
+  50, typing at 160 wpm never, a fan rarely, a thump 32 times and room tone
+  just over the gate about 40 times in 50; the second scan is the price of
+  never skipping quiet speech. A speechless recording longer than
+  `SILERO_BATCH_MAX_SCAN_S` (30 s) is never skipped (incomplete scan).
 - **The pause mechanism is inert in a room above the silence gate**: noise
   over `silence_gate_threshold` means `silent_seconds` never accumulates,
   `new_segment` never fires, `segment_floor` is never set. Logged once per
   session as `streaming_noise_floor_above_gate` after 20 s of above-gate audio
   (rolling; cannot tell a loud room from 20 s of pause-free speech).
-- **Every number behind that gate is synthetic**: `samples/benchmark_sample.wav`
-  (from `scripts/generate_sample_audio.py`) is sine tones. Do not move the
-  threshold on synthetic evidence; a knock vs a short word needs a real VAD.
+- **The energy gate's numbers are synthetic; the speech check's noise side
+  is too**: `samples/benchmark_sample.wav` (from
+  `scripts/generate_sample_audio.py`) is sine tones, so do not move the
+  energy threshold on synthetic evidence. The Silero cuts were calibrated on
+  real speech (six LibriSpeech excerpts in `tests/data`, 25 clips and the
+  owner's recordings, aggregates only) but on SYNTHETIC non-speech only: no
+  recorded cough, fan, room or keyboard was measured.
 - **Remote batch parts are independent**: a sentence across a cut is split,
   language detection runs per part, no previous-part prompt (vocabulary goes
   with every part). A cancel between parts discards finished parts (audio

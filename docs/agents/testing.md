@@ -66,6 +66,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
     replaced a later test's model list).
   - `_a_fresh_download_coordinator_per_test`: replaces `_COORDINATOR` (a
     leaked explicit interest `('large-v3', '')`).
+  - `_silero_speech_check_unavailable`: makes the Silero speech check answer
+    "unmeasurable" (`silero_vad._get_session` -> None), which every gate reads
+    as "leave the energy decision standing". The suite drives the energy gates
+    with tones and seeded noise that the real graph rightly calls non-speech.
+    A test about the speech check takes the `real_silero` fixture, which
+    restores the real loader and resets the cached session on both sides.
+    Speech for those tests comes from `tests/speech_fixtures.py` (six
+    LibriSpeech excerpts, CC BY 4.0, attribution in the `.npz`); never read
+    the `.npz` as text.
   The alphabetical full suite hid the last three leaks; only another file
   order showed them.
 - **`tests/conftest.py` blocks the real `create_transcriber`**: the isolated

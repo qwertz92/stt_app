@@ -694,6 +694,48 @@ def real_model_prefetch(monkeypatch):
     )
 
 
+_REAL_SILERO = {}
+
+
+@pytest.fixture(autouse=True)
+def _silero_speech_check_unavailable(monkeypatch):
+    """Every test runs with the Silero speech check answering "unmeasurable".
+
+    The rest of the suite drives the energy gates with sine tones and seeded
+    noise, which a speech model rightly scores as non-speech: with the real
+    graph loaded, the post-pause and silence-gate tests would all be refused
+    by a check they are not about. "Unmeasurable" is the answer both gates
+    must read as "leave the energy decision standing", so this stub is also
+    what the app does when the graph cannot be loaded. `real_silero` gives a
+    test the real graph back.
+
+    The original is saved on every run rather than once at import:
+    monkeypatch restores it after each test, so what is here before the patch
+    is always the real function, and importing the module lazily keeps this
+    file importable on its own.
+    """
+    from stt_app import silero_vad
+
+    _REAL_SILERO["get_session"] = silero_vad._get_session
+    monkeypatch.setattr(silero_vad, "_get_session", lambda: None)
+
+
+@pytest.fixture
+def real_silero(monkeypatch):
+    """The real Silero graph, loaded fresh for this test and forgotten after.
+
+    The detector caches its session and remembers a failed load for the life
+    of the process; a test that simulates a failure would otherwise leave the
+    detector dead for every later test, so the cache is reset on both sides.
+    """
+    from stt_app import silero_vad
+
+    monkeypatch.setattr(silero_vad, "_get_session", _REAL_SILERO["get_session"])
+    silero_vad.reset_silero_for_tests()
+    yield
+    silero_vad.reset_silero_for_tests()
+
+
 class RealTranscriberRefused(BaseException):
     """Deliberately not an `Exception`, and that is the whole point.
 

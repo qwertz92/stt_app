@@ -152,6 +152,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   `protected_prefix` and do not move the number on energy or sliced-excerpt
   evidence. A failing window is not decoded; the finalizer applies the same
   rule; never fall back to `silent_seconds` alone or unconditional append.
+  **With the silence gate on, the window must also reach
+  `SILERO_STREAM_MIN_PROBABILITY` (0.08) in the Silero speech check, as
+  recorded** (`_stream_window_has_speech(confirm_with_speech_model=...)`,
+  2026-10-01). It runs only where a refusal means "skip this window" (the
+  pause route) or "drop the finalizer's tail" -- never where a refusal would
+  turn an append into a replace -- and a detector that is unavailable never
+  refuses. 0.08 is placed for the speech side: of 2868 owner utterances it
+  refuses 4.5 on average over grid offsets, 1.1 of them heard as words by one
+  of two hearer models and none by both; it refuses most thumps and fast
+  typing and only 3 knocks in 50 (`config.py` has the table). No amplified
+  copy here, unlike the batch check: the quietest words scored 0.51.
 - **The partial callback carries the merged transcript**
   (`session.result.merged_text`); the controller must not re-merge.
 - **A failed live insert gives its words back, unless it may have landed**:

@@ -6,11 +6,14 @@ signals directly.
 """
 
 import logging
+import re
 from dataclasses import replace
 
+import numpy as np
 import pytest
 from conftest import (
     FakeCapture,
+    FakeLastRecordingStore,
     FakeOverlay,
     FakeSettingsStore,
     FakeStreamingTranscriber,
@@ -19,12 +22,28 @@ from conftest import (
     make_controller,
 )
 from PySide6 import QtCore, QtGui
+from speech_fixtures import (
+    after_a_pause,
+    at_peak_level,
+    concat,
+    key_clack,
+    low_thump,
+    room_tone,
+    speech_excerpts,
+    typing,
+    wav_bytes,
+)
 
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import (
+    DEFAULT_SILENCE_GATE_THRESHOLD,
+    FALLBACK_HOTKEY,
+    SILENCE_GATE_THRESHOLD_MIN,
+)
 from stt_app.controller import _join_transcripts, _TranscriptionJob
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
+from stt_app.vad import measure_peak_windowed_rms
 
 
 class DeferredExecutor:
@@ -914,6 +933,234 @@ def test_silence_gate_passes_recording_with_speech(monkeypatch, tmp_path):
 
     assert controller._active_request_token is not None
     assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+# --- The Silero speech check behind the level gate -------------------------
+#
+# The level gate skips a recording whose loudest 100 ms stays below the
+# threshold; everything louder used to be transcribed, typing and a fan
+# included, and a speech model hallucinates words from those. The speech
+# check skips a recording the level gate admits only when a COMPLETE scan
+# finds no window reaching SILERO_BATCH_MIN_PROBABILITY. The non-speech
+# signals are SYNTHETIC (tests/speech_fixtures.py); the speech is the six
+# LibriSpeech excerpts.
+
+
+def _gated_controller(monkeypatch, tmp_path, *, enabled=True):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, silence_gate_enabled=enabled)
+    return controller, app, overlay
+
+
+def _stop_with(controller, wav):
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = wav
+    controller.stop_recording()
+
+
+def _peak_level_lines(caplog):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("recording_peak_level")
+    ]
+
+
+_NON_SPEECH_THE_LEVEL_GATE_ADMITS = {
+    "typing-120wpm": lambda: typing(120, 3.0),
+    "room-tone-42dBFS": lambda: room_tone(3.0, rms=0.008),
+    "thump-after-a-pause": lambda: after_a_pause(low_thump()),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_NON_SPEECH_THE_LEVEL_GATE_ADMITS))
+def test_the_speech_check_skips_a_recording_the_level_gate_admits(
+    monkeypatch, tmp_path, caplog, real_silero, name
+):
+    samples = _NON_SPEECH_THE_LEVEL_GATE_ADMITS[name]()
+    wav = wav_bytes(samples)
+    assert measure_peak_windowed_rms(wav) >= DEFAULT_SILENCE_GATE_THRESHOLD
+    controller, app, overlay = _gated_controller(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav)
+
+    assert controller._executor.calls == []
+    assert controller._active_request_token is None
+    state, detail = overlay.states[-1]
+    assert state == "Done"
+    assert detail.startswith("No speech detected")
+    assert "speech check" in detail
+    assert "Settings -> Audio" in detail
+    skip_lines = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("silence_gate_skipped")
+    ]
+    assert len(skip_lines) == 1
+    assert "reason=speech_check" in skip_lines[0]
+    assert "level=" in skip_lines[0]
+    assert "silero_max_probability=" in skip_lines[0]
+    controller.shutdown()
+    _ = app
+
+
+def _speech_recordings():
+    cases = []
+    for name, samples in sorted(speech_excerpts().items()):
+        cases.append((f"{name}-alone", samples))
+        cases.append((f"{name}-after-a-pause", after_a_pause(samples)))
+        quiet = (samples.astype(np.float32) * 10 ** (-20 / 20)).astype(np.int16)
+        cases.append((f"{name}-at-20dB-after-a-pause", after_a_pause(quiet)))
+    return cases
+
+
+@pytest.mark.parametrize(
+    "samples", [case[1] for case in _speech_recordings()],
+    ids=[case[0] for case in _speech_recordings()],
+)
+def test_the_speech_check_never_skips_a_recorded_word(
+    monkeypatch, tmp_path, real_silero, samples
+):
+    wav = wav_bytes(samples)
+    if measure_peak_windowed_rms(wav) < DEFAULT_SILENCE_GATE_THRESHOLD:
+        pytest.skip("the level gate refuses this recording before the speech check")
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+
+    _stop_with(controller, wav)
+
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("name", sorted(speech_excerpts()))
+def test_quiet_speech_lifted_over_the_level_gate_by_a_keystroke_is_not_skipped(
+    monkeypatch, tmp_path, real_silero, name
+):
+    # A word whose loudest 100 ms is the quietest level the Audio tab lets the
+    # silence gate admit, followed by the stop key's clack: the clack lifts
+    # the recording over the default level gate, and Silero, which scores by
+    # level, gave five of the six words 0.06-0.14 at their own level -- below
+    # the cut. faster-whisper medium still transcribes speech that quiet, so
+    # skipping it would drop a real dictation. The scan of the copy amplified
+    # by SILERO_BATCH_QUIET_SPEECH_GAIN scores every one of them 0.80 or more.
+    word = at_peak_level(speech_excerpts()[name], SILENCE_GATE_THRESHOLD_MIN)
+    silence = np.zeros(1600, dtype=np.int16)
+    wav = wav_bytes(concat(word, silence, key_clack(), silence[:800]))
+    assert measure_peak_windowed_rms(wav) >= DEFAULT_SILENCE_GATE_THRESHOLD
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+
+    _stop_with(controller, wav)
+
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_every_batch_stop_logs_the_speech_measurement(
+    monkeypatch, tmp_path, caplog, real_silero
+):
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav_bytes(after_a_pause(speech_excerpts()["word_220ms"])))
+
+    lines = _peak_level_lines(caplog)
+    assert len(lines) == 1
+    assert "silero_speech_seconds=" in lines[0]
+    assert "silero_max_probability=" in lines[0]
+    assert "silero_speech_seconds=unavailable" not in lines[0]
+    # Speech settles the answer on the first scan; the second never runs.
+    assert "silero_amplified_max_probability=not_run" in lines[0]
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_with_the_silence_gate_off_the_speech_check_only_logs(
+    monkeypatch, tmp_path, caplog, real_silero
+):
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path, enabled=False)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+    assert len(controller._executor.calls) == 1
+    lines = _peak_level_lines(caplog)
+    assert len(lines) == 1
+    assert "silero_max_probability=" in lines[0]
+    assert "silero_speech_seconds=unavailable" not in lines[0]
+    # Typing stays below the cut as recorded, so the amplified scan ran and
+    # its score is logged too.
+    assert re.search(r"silero_amplified_max_probability=0\.\d{3}", lines[0])
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unavailable_speech_check_never_skips(monkeypatch, tmp_path, caplog):
+    # No `real_silero`: the suite's stub answers "unmeasurable", which is what
+    # the app sees when the graph cannot be loaded.
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+    assert len(controller._executor.calls) == 1
+    lines = _peak_level_lines(caplog)
+    assert len(lines) == 1
+    assert "silero_speech_seconds=unavailable" in lines[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_speech_check_that_raises_never_skips(monkeypatch, tmp_path, real_silero):
+    from stt_app import silero_vad
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("scan exploded")
+
+    monkeypatch.setattr(silero_vad, "check_speech_wav", broken)
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+
+    _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_scan_cut_short_by_its_budget_never_skips(monkeypatch, tmp_path, real_silero):
+    # Past the budget the rest of the recording was never looked at, so a
+    # low score so far proves nothing about it.
+    monkeypatch.setattr("stt_app.controller.SILERO_BATCH_MAX_SCAN_S", 1.0)
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+
+    _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_speech_check_skip_marks_the_recording_its_persist_wrote(
+    monkeypatch, tmp_path, real_silero
+):
+    controller, app, overlay = _gated_controller(monkeypatch, tmp_path)
+    store = FakeLastRecordingStore()
+    controller._last_recording_store = store
+
+    _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+    assert controller._executor.calls == []
+    assert store.canceled_ids == [controller._last_persisted_recording_id]
+    assert controller._last_persisted_recording_id
+    assert "speech check" in store.canceled[-1]
+    assert "the recording is kept" in overlay.states[-1][1]
     controller.shutdown()
     _ = app
 
