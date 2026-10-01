@@ -45,24 +45,8 @@ class FakeClipboard:
         return self.value
 
 
-def test_overlay_copy_button_copies_detail_text(monkeypatch):
-    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
-
-    overlay = OverlayUI()
-    overlay.set_state("Done", "transcribed text")
-    overlay._copy_button.click()
-
-    assert fake_clipboard.text() == "transcribed text"
-    assert overlay._copy_button.text() == "Copied"
-
-    QtTest.QTest.qWait(1100)
-    assert overlay._copy_button.text() == "Copy"
-
-
 def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch):
-    """Ensure the copy button remains clickable after multiple uses."""
+    """The copy button copies, shows feedback, resets, and works again."""
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     fake_clipboard = FakeClipboard()
     monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
@@ -72,6 +56,7 @@ def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch)
 
     overlay._copy_button.click()
     assert fake_clipboard.text() == "first text"
+    assert overlay._copy_button.text() == "Copied"
     assert overlay._copy_button.isEnabled()
 
     # Wait for feedback reset

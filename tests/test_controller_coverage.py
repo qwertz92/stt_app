@@ -6337,13 +6337,17 @@ def test_a_stale_abort_does_not_tear_down_a_newer_session():
         assert joining.wait(timeout=5.0)
 
         controller._teardown_pending_stream_connect(superseded)
+        aborters = [
+            t for t in threading.enumerate() if t.name == "stt-stream-connect-abort"
+        ]
+        assert aborters, "the teardown did not detach an aborter"
         # A newer handshake starts before the aborter wakes.
         controller._stream_connect_token = object()
         release.set()
         thread.join(timeout=5.0)
-        deadline = time.monotonic() + 3.0
-        while time.monotonic() < deadline and not superseded.aborted:
-            time.sleep(0.01)
+        for aborter in aborters:
+            aborter.join(timeout=5.0)
+            assert not aborter.is_alive()
 
         assert superseded.aborted is False, (
             "the abort tore down a session that a newer handshake owns"
