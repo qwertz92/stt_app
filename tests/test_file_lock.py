@@ -23,6 +23,14 @@ from stt_app.file_lock import (
 
 _REPO_SRC = Path(__file__).resolve().parents[1] / "src"
 
+# A holder process keeps the lock for _HOLD_S after it signals "ready"; the
+# waiting side must then have waited longer than _MIN_WAIT_S. A lock that does
+# not hold answers within milliseconds, so the threshold only has to clear
+# that; it is kept at under a third of the hold so a slow runner that delays
+# the waiter's start by most of a second still passes.
+_HOLD_S = 1.0
+_MIN_WAIT_S = 0.3
+
 
 def _spawn_holder(lock_dir: Path, resource: str, hold_seconds: float, ready: Path):
     script = textwrap.dedent(
@@ -69,7 +77,7 @@ def _wait_for_file(path: Path, timeout: float = 20.0) -> None:
 def test_lock_is_held_against_another_process(tmp_path):
     lock_dir = tmp_path / "locks"
     ready = tmp_path / "ready"
-    holder = _spawn_holder(lock_dir, "cache-a", 2.0, ready)
+    holder = _spawn_holder(lock_dir, "cache-a", _HOLD_S, ready)
     try:
         _wait_for_file(ready)
         lock = CrossProcessLock("cache-a", lock_dir=lock_dir)
@@ -79,7 +87,7 @@ def test_lock_is_held_against_another_process(tmp_path):
         lock.release()
     finally:
         holder.wait(timeout=30)
-    assert waited > 0.5, "the second process did not wait for the first"
+    assert waited > _MIN_WAIT_S, "the second process did not wait for the first"
 
 
 def test_a_killed_holder_frees_the_lock(tmp_path):
@@ -226,7 +234,7 @@ def test_the_coordinator_really_holds_the_os_lock_against_another_process(
     cache_dir = str(tmp_path / "cache")
     resource = coordinator_module._cache_lock_resource(cache_dir)
     ready = tmp_path / "ready"
-    holder = _spawn_holder(lock_dir, resource, 3.0, ready)
+    holder = _spawn_holder(lock_dir, resource, _HOLD_S, ready)
     try:
         _wait_for_file(ready)
         started = time.monotonic()
@@ -239,7 +247,7 @@ def test_the_coordinator_really_holds_the_os_lock_against_another_process(
         holder.wait(timeout=30)
 
     assert ran == [True]
-    assert waited > 0.5, (
+    assert waited > _MIN_WAIT_S, (
         "the coordinator downloaded while another process held the cache lock"
     )
 

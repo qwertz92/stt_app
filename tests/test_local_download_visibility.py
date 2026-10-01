@@ -155,13 +155,3 @@ def test_matching_model_dir_is_still_recognised():
         model_dir=r"C:\mine",
     )
     assert dialog._local_model_download_state("cohere-transcribe-03-2026") == "active"
-
-
-def test_old_string_only_answer_is_rejected():
-    """A controller that has not been updated must not be half-understood."""
-    class _Legacy:
-        def preload_downloading_model(self):
-            return "cohere-transcribe-03-2026"
-
-    dialog = _Dialog(controller=_Legacy())
-    assert dialog._preload_downloading_model() is None

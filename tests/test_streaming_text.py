@@ -558,29 +558,6 @@ def test_a_seam_of_pure_punctuation_is_not_agreement():
     assert resolved.aligned is False
 
 
-def test_one_real_word_in_the_seam_is_still_a_seam():
-    """The punctuation gate must not be able to cause a replace.
-
-    Counting substantive words *against* the two-word threshold is stricter
-    than the threshold has ever been: an overlap of "praktisch ..." scores
-    one, fails, and the merge falls through to the replace -- and before the
-    first measured pause there is no floor to bound that, so the whole
-    dictation so far is gone, not one window. Measured at 13 words. The rule
-    is the token threshold as before, plus at least one real word.
-    """
-    previous = (
-        "die spracherkennung wandelt sprache in text um und das ist sehr "
-        "praktisch ..."
-    )
-
-    merged = merge_rolling_window_transcript(
-        previous, "praktisch ... und jetzt kommt der naechste satz"
-    )
-
-    assert merged.startswith("die spracherkennung wandelt sprache"), merged
-    assert merged.endswith("und jetzt kommt der naechste satz"), merged
-
-
 def test_a_seam_containing_punctuation_still_counts_its_real_words():
     """The other direction, and why the empty key is counted, not refused.
 
@@ -642,9 +619,11 @@ def test_a_revised_punctuation_mark_does_not_freeze_remote_live_insertion():
 def test_a_trailing_window_still_merges_on_one_real_word():
     """The other half of the split: the rolling window keeps the relaxed gate.
 
-    Requiring two real words here refuses a seam of "praktisch ...", and a
-    refused merge before the first measured pause replaces the whole
-    accumulated text -- 11 of 13 words gone, measured.
+    The punctuation gate must not be able to cause a replace. Requiring two
+    real words refuses a seam of "praktisch ...", and a refused merge before
+    the first measured pause replaces the whole accumulated text -- 11 of 13
+    words gone, measured. The rule is the token threshold as before, plus at
+    least one real word.
     """
     previous = (
         "die spracherkennung wandelt sprache in text um und das ist sehr "

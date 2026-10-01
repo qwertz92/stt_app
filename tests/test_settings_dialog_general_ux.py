@@ -831,37 +831,46 @@ def test_inline_field_buttons_match_their_field_height(
     dialog.benchmark_window.show()
     app.processEvents()
 
-    rows = (
-        (dialog.microphone_combo, dialog.microphone_refresh_button),
+    def _check(rows) -> None:
+        for field, *buttons in rows:
+            for button in buttons:
+                assert button.property("inlineFieldButton") is True
+                assert button.height() == field.height(), (
+                    button.text(),
+                    button.height(),
+                    field.height(),
+                )
+                # The stylesheet minimum must fit inside the matched height,
+                # or the style would draw the button clipped at the bottom.
+                assert button.minimumSizeHint().height() <= field.height(), (
+                    button.text()
+                )
+
+    _check(
         (
-            dialog.recordings_dir_edit,
-            dialog.recordings_dir_browse,
-            dialog.recordings_open_button,
-        ),
-        (
-            dialog.benchmark_audio_edit,
-            dialog.benchmark_audio_browse_button,
-            dialog.benchmark_audio_last_button,
-        ),
-        (
-            dialog.benchmark_select_all_button,
-            dialog.benchmark_deselect_all_button,
-            dialog.refresh_benchmark_models_button,
-        ),
+            (dialog.microphone_combo, dialog.microphone_refresh_button),
+            (
+                dialog.recordings_dir_edit,
+                dialog.recordings_dir_browse,
+                dialog.recordings_open_button,
+            ),
+            (
+                dialog.benchmark_audio_edit,
+                dialog.benchmark_audio_browse_button,
+                dialog.benchmark_audio_last_button,
+            ),
+            (
+                dialog.benchmark_select_all_button,
+                dialog.benchmark_deselect_all_button,
+                dialog.refresh_benchmark_models_button,
+            ),
+        )
     )
-    for field, *buttons in rows:
-        for button in buttons:
-            assert button.property("inlineFieldButton") is True
-            assert button.height() == field.height(), (
-                button.text(),
-                button.height(),
-                field.height(),
-            )
-            # The stylesheet minimum must fit inside the matched height, or
-            # the style would draw the button clipped at the bottom.
-            assert button.minimumSizeHint().height() <= field.height(), (
-                button.text()
-            )
+    # Real heights exist only for a shown page, so the Model Dir row is
+    # measured on its own tab.
+    _switch_to_tab(dialog, "Models")
+    app.processEvents()
+    _check(((dialog.model_dir_edit, dialog.model_dir_browse),))
 
     dialog.benchmark_window.hide()
 

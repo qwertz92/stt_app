@@ -186,6 +186,40 @@ def _wait_for_local_models(
     raise AssertionError(f"Local models {sorted(expected)} were not rendered in time.")
 
 
+def _wait_for_the_deferred_local_refresh(
+    dialog: SettingsDialog, *, scan_finishes: bool = True, timeout_ms: int = 15000
+) -> None:
+    """Wait until the dialog's deferred inventory refresh has fired and run.
+
+    Selecting the Models or Benchmark tab arms a single-shot timer
+    (`_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS`) that requests the scan. With
+    ``scan_finishes`` the wait also covers the scan thread; a test that
+    installs `_IdleThread` (a scan that never completes) passes False.
+    """
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        fired = (
+            not dialog._deferred_local_model_refresh_pending
+            and not dialog._deferred_local_model_refresh_timer.isActive()
+        )
+        if fired and (
+            not scan_finishes or dialog._active_local_model_scan_thread is None
+        ):
+            return
+        QtTest.QTest.qWait(10)
+    raise AssertionError("The deferred local model refresh did not run in time.")
+
+
+@pytest.fixture(autouse=True)
+def _a_short_deferred_local_refresh_delay(monkeypatch):
+    """The 150 ms the app waits before the tab-selection scan is a latency
+    choice, not behaviour any test here asserts; every test that needs the
+    scan waits for the refresh itself, not for the clock."""
+    monkeypatch.setattr(
+        settings_dialog_module, "_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS", 10
+    )
+
+
 @pytest.fixture(autouse=True)
 def _close_top_level_windows_after_test():
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -1680,32 +1714,6 @@ def test_remote_provider_status_badges_use_calculated_fixed_width():
     _ = app
 
 
-def test_inline_field_buttons_match_their_field_height():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    dialog = SettingsDialog(
-        settings_store=_FakeSettingsStore(AppSettings()),
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    assert dialog.model_dir_browse.maximumHeight() == (
-        dialog.model_dir_edit.maximumHeight()
-    )
-    assert dialog.recordings_dir_browse.maximumHeight() == (
-        dialog.recordings_dir_edit.maximumHeight()
-    )
-    assert dialog.recordings_open_button.maximumHeight() == (
-        dialog.recordings_dir_edit.maximumHeight()
-    )
-    assert dialog.benchmark_audio_browse_button.maximumHeight() == (
-        dialog.benchmark_audio_edit.maximumHeight()
-    )
-    assert dialog.benchmark_audio_last_button.maximumHeight() == (
-        dialog.benchmark_audio_edit.maximumHeight()
-    )
-    _ = app
-
-
 def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls = {"delete": 0}
@@ -1814,7 +1822,7 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
 
     dialog._start_local_model_download(["tiny"])
     worker = dialog._active_local_model_download_thread
@@ -2017,7 +2025,7 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     )
     dialog._refresh_benchmark_history_list()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     dialog._set_benchmark_audio_path(str(audio_path))
 
     assert dialog.benchmark_models_list.count() == 1
@@ -2106,7 +2114,7 @@ def test_a_crashed_benchmark_child_keeps_the_cases_it_already_streamed(
     )
     dialog._refresh_benchmark_history_list()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     dialog._set_benchmark_audio_path(str(audio_path))
 
     dialog._run_local_benchmark()
@@ -2146,7 +2154,7 @@ def _benchmark_dialog(monkeypatch, tmp_path):
     )
     dialog._refresh_benchmark_history_list()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     dialog._set_benchmark_audio_path(str(audio_path))
     return dialog
 
@@ -3155,7 +3163,7 @@ def test_settings_dialog_defers_local_model_scan_until_tab_event_loop(monkeypatc
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     assert calls == []
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     assert calls == ["/tmp/models"]
     _ = app
 
@@ -3186,6 +3194,9 @@ def test_settings_dialog_uses_session_cached_models_without_rescan(monkeypatch):
     assert "small" in dialog.local_models_label.text()
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    # An absence test: the cached inventory is trusted, so nothing may scan. A
+    # condition to wait for would end at once, so the fixed 250 ms stays; it
+    # is longer than the deferred-refresh timer a stray scan would use.
     QtTest.QTest.qWait(250)
     assert calls == []
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -3220,7 +3231,7 @@ def test_settings_dialog_uses_persistent_cache_before_auto_rescan(monkeypatch):
     assert "last known local models" in dialog.local_models_scan_status_label.text()
 
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
 
     assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
@@ -3252,7 +3263,7 @@ def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
 
     assert "tiny" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     assert calls == ["/tmp/models"]
     calls.clear()
 
@@ -3284,7 +3295,7 @@ def test_settings_dialog_treats_empty_persistent_cache_as_valid(monkeypatch):
 
     assert "No local models found" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog, scan_finishes=False)
 
     assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     _ = app
@@ -3307,7 +3318,7 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
     )
 
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog, scan_finishes=False)
 
     assert dialog.local_models_list.isEnabled() is True
     assert dialog.refresh_local_models_button.isEnabled() is True
@@ -3441,11 +3452,11 @@ def test_model_dir_change_triggers_single_rescan(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_the_deferred_local_refresh(dialog)
     calls.clear()
 
     dialog.model_dir_edit.setText("/tmp/other-models")
-    QtTest.QTest.qWait(300)
+    _wait_for_the_deferred_local_refresh(dialog)
 
     assert calls == ["/tmp/other-models"]
     _ = app

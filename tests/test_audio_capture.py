@@ -846,7 +846,11 @@ def test_an_open_waits_for_a_refresh_that_holds_the_portaudio_guard(monkeypatch)
     assert reenumerated_with == [live_before]
     assert len(opened) == 2
     assert warm.is_running is True
+    # The reopened stream's `close` blocks like the first one's; release it
+    # so the closing `close()` returns at once instead of at its 5 s timeout.
+    opened[-1].release_close.set()
     warm.close()
+    assert opened[-1].closed is True
 
 
 def test_detach_restarts_under_the_lock_it_released_the_consumer_under(monkeypatch):
@@ -872,7 +876,10 @@ def test_detach_restarts_under_the_lock_it_released_the_consumer_under(monkeypat
     opened[0].release_close.set()
     assert _wait_until(lambda: len(opened) == 2)
     assert _wait_until(lambda: warm.is_running)
+    # Release the reopened stream's blocking `close` (see above).
+    opened[-1].release_close.set()
     warm.close()
+    assert opened[-1].closed is True
 
 
 def test_the_warm_stream_publishes_the_selected_device_before_resolving_it(

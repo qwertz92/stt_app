@@ -61,11 +61,17 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
     )
     assert dialog._copy_button.minimumWidth() >= dialog._copy_button.sizeHint().width()
     dialog._table.selectRow(0)
+    # The reset is the dialog's own single-shot timer (1000 ms in the app);
+    # a short interval proves it fires without the test sitting out a second.
+    dialog._copy_feedback_timer.setInterval(50)
     dialog._copy_button.click()
 
     assert clipboard.text() == "beta"
     assert dialog._copy_button.text() == "Copied"
-    QtTest.QTest.qWait(1100)
+    for _ in range(300):
+        if dialog._copy_button.text() == "Copy selected":
+            break
+        QtTest.QTest.qWait(10)
     assert dialog._copy_button.text() == "Copy selected"
     _ = app
 
