@@ -7,6 +7,7 @@ signals directly.
 
 import logging
 import re
+import threading
 from dataclasses import replace
 
 import numpy as np
@@ -60,7 +61,7 @@ class DeferredExecutor:
         pass
 
 
-def _make_queue_controller(monkeypatch, tmp_path, *, mode):
+def _make_queue_controller(monkeypatch, tmp_path, *, mode, silence_gate_enabled=False):
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
         "stt_app.controller.create_transcriber",
@@ -77,7 +78,7 @@ def _make_queue_controller(monkeypatch, tmp_path, *, mode):
         model_size="small",
         # These tests drive the queue with synthetic silent audio, which the
         # silence gate would (correctly) refuse to transcribe.
-        silence_gate_enabled=False,
+        silence_gate_enabled=silence_gate_enabled,
     )
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
@@ -948,11 +949,16 @@ def test_silence_gate_passes_recording_with_speech(monkeypatch, tmp_path):
 # LibriSpeech excerpts.
 
 
-def _gated_controller(monkeypatch, tmp_path, *, enabled=True):
+def _gated_controller(monkeypatch, tmp_path, *, enabled=True, wait_for_speech_model=True):
+    # The gate is in the settings the controller starts with, so its start
+    # loads the speech model in the background as the app's does.
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
-        monkeypatch, tmp_path, mode="insert"
+        monkeypatch, tmp_path, mode="insert", silence_gate_enabled=enabled
     )
-    controller._settings = replace(controller._settings, silence_gate_enabled=enabled)
+    # A stop before the load finished would leave the recording unmeasured,
+    # which is not what these tests are about.
+    if wait_for_speech_model:
+        _join_speech_model_loader()
     return controller, app, overlay
 
 
@@ -1005,6 +1011,10 @@ def test_the_speech_check_skips_a_recording_the_level_gate_admits(
     assert "reason=speech_check" in skip_lines[0]
     assert "level=" in skip_lines[0]
     assert "silero_max_probability=" in skip_lines[0]
+    # A skip needs both scans, so the amplified one ran and is logged.
+    peak_lines = _peak_level_lines(caplog)
+    assert len(peak_lines) == 1
+    assert re.search(r"silero_amplified_max_probability=0\.\d{3}", peak_lines[0])
     controller.shutdown()
     _ = app
 
@@ -1082,30 +1092,16 @@ def test_every_batch_stop_logs_the_speech_measurement(
     _ = app
 
 
-def test_with_the_silence_gate_off_the_speech_check_only_logs(
+def test_an_unavailable_speech_check_never_skips(
     monkeypatch, tmp_path, caplog, real_silero
 ):
-    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path, enabled=False)
-    caplog.set_level(logging.INFO)
+    # The graph cannot be loaded -- the faster_whisper asset is missing.
+    from stt_app import silero_vad
 
-    _stop_with(controller, wav_bytes(typing(120, 3.0)))
-
-    assert len(controller._executor.calls) == 1
-    lines = _peak_level_lines(caplog)
-    assert len(lines) == 1
-    assert "silero_max_probability=" in lines[0]
-    assert "silero_speech_seconds=unavailable" not in lines[0]
-    # Typing stays below the cut as recorded, so the amplified scan ran and
-    # its score is logged too.
-    assert re.search(r"silero_amplified_max_probability=0\.\d{3}", lines[0])
-    controller.shutdown()
-    _ = app
-
-
-def test_an_unavailable_speech_check_never_skips(monkeypatch, tmp_path, caplog):
-    # No `real_silero`: the suite's stub answers "unmeasurable", which is what
-    # the app sees when the graph cannot be loaded.
+    silero_vad.reset_silero_for_tests()
+    monkeypatch.setattr(silero_vad, "silero_asset_path", lambda: None)
     controller, app, _overlay = _gated_controller(monkeypatch, tmp_path)
+    assert silero_vad.load_failed_recently()
     caplog.set_level(logging.INFO)
 
     _stop_with(controller, wav_bytes(typing(120, 3.0)))
@@ -1131,6 +1127,122 @@ def test_a_speech_check_that_raises_never_skips(monkeypatch, tmp_path, real_sile
 
     assert len(controller._executor.calls) == 1
     controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("enabled", "make"),
+    [
+        (False, lambda: typing(120, 3.0)),
+        (True, lambda: room_tone(3.0)),
+    ],
+    ids=["gate-off", "below-the-level-gate"],
+)
+def test_the_speech_check_runs_only_when_its_answer_can_skip(
+    monkeypatch, tmp_path, caplog, real_silero, enabled, make
+):
+    # The check costs a scan on the Qt thread at every stop. With the gate off
+    # nothing can be skipped, and below the level threshold the level gate has
+    # already skipped the recording: in both its answer would decide nothing.
+    from stt_app import silero_vad
+
+    calls = []
+    real_check = silero_vad.check_speech_wav
+
+    def counting_check(*args, **kwargs):
+        calls.append(1)
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(silero_vad, "check_speech_wav", counting_check)
+    controller, app, _overlay = _gated_controller(monkeypatch, tmp_path, enabled=enabled)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav_bytes(make()))
+
+    assert calls == []
+    # Gate off: transcribed as before. Below the level gate: skipped by it.
+    assert len(controller._executor.calls) == (0 if enabled else 1)
+    lines = _peak_level_lines(caplog)
+    assert len(lines) == 1
+    assert "silero_speech_seconds=not_run" in lines[0]
+    controller.shutdown()
+    _ = app
+
+
+def _join_speech_model_loader():
+    from stt_app import silero_vad
+
+    loader = getattr(silero_vad, "_loader_thread", None)
+    if loader is not None:
+        loader.join(timeout=10)
+
+
+def test_the_first_stop_does_not_build_the_speech_model_on_its_thread(
+    monkeypatch, tmp_path, real_silero
+):
+    # Building the session imports ONNX Runtime and loads the graph: 123-275 ms
+    # cold. A stop arriving before the background load has finished must not
+    # do that work on the Qt thread; it leaves the recording unmeasured, which
+    # never skips it.
+    from stt_app import silero_vad
+
+    silero_vad.reset_silero_for_tests()
+    caller = threading.get_ident()
+    release = threading.Event()
+    builders = []
+    real_build = silero_vad._build_session
+
+    def recording_build():
+        builders.append(threading.get_ident())
+        if threading.get_ident() != caller:
+            release.wait(timeout=10)
+        return real_build()
+
+    monkeypatch.setattr(silero_vad, "_build_session", recording_build)
+    controller, app, overlay = _gated_controller(
+        monkeypatch, tmp_path, wait_for_speech_model=False
+    )
+    try:
+        _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+        assert caller not in builders
+        assert len(controller._executor.calls) == 1
+    finally:
+        release.set()
+        _join_speech_model_loader()
+        controller.shutdown()
+    _ = app, overlay
+
+
+def test_the_speech_model_loads_in_the_background_when_the_controller_starts(
+    monkeypatch, tmp_path, real_silero
+):
+    from stt_app import silero_vad
+
+    silero_vad.reset_silero_for_tests()
+    caller = threading.get_ident()
+    builders = []
+    real_build = silero_vad._build_session
+
+    def recording_build():
+        builders.append(threading.get_ident())
+        return real_build()
+
+    monkeypatch.setattr(silero_vad, "_build_session", recording_build)
+    controller, app, _overlay = _gated_controller(
+        monkeypatch, tmp_path, wait_for_speech_model=False
+    )
+    try:
+        _join_speech_model_loader()
+        assert builders, "the controller never started loading the speech model"
+        assert caller not in builders
+
+        _stop_with(controller, wav_bytes(typing(120, 3.0)))
+
+        # Loaded before the stop, so the stop measured and skipped the typing.
+        assert controller._executor.calls == []
+    finally:
+        controller.shutdown()
     _ = app
 
 

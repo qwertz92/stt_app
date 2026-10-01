@@ -36,6 +36,7 @@ import io
 import logging
 import struct
 import threading
+import time
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,7 @@ import numpy as np
 from .config import (
     SILERO_BATCH_MIN_PROBABILITY,
     SILERO_BATCH_QUIET_SPEECH_GAIN,
+    SILERO_LOAD_RETRY_S,
     SILERO_SPEECH_PROBABILITY,
 )
 
@@ -59,10 +61,11 @@ __all__ = [
     "SpeechMeasurement",
     "check_speech_pcm16",
     "check_speech_wav",
+    "load_failed_recently",
+    "loaded_session",
     "measure_speech_pcm16",
-    "measure_speech_wav",
     "silero_asset_path",
-    "speech_probabilities",
+    "start_loading",
 ]
 
 SAMPLE_RATE_HZ = 16_000
@@ -80,7 +83,12 @@ _OUTPUTS = ("speech_probs", "hn", "cn")
 
 _session_lock = threading.Lock()
 _session: object | None = None
-_load_failed = False
+# When the last load failed (`_now()` seconds), or None. A failure is not
+# forever: a scanner or a backup tool holding the file for a moment would
+# otherwise switch the check off until the app restarts.
+_load_failed_at: float | None = None
+_loader_thread: threading.Thread | None = None
+_now = time.monotonic
 
 
 @dataclass(frozen=True)
@@ -90,8 +98,6 @@ class SpeechMeasurement:
     max_probability: float
     # Windows at or above SILERO_SPEECH_PROBABILITY, in seconds.
     speech_seconds: float
-    # The longest unbroken run of such windows, in seconds.
-    longest_speech_run_s: float
     scanned_seconds: float
     total_seconds: float
     # False when the scan stopped early or ran out of budget: the rest of the
@@ -107,9 +113,9 @@ class SpeechCheck:
     multiplied by the check's gain and clipped to full scale, and exists only
     when the natural scan was complete and stayed below the cut -- the one
     case in which it can change the answer. Silero scores by level as well as
-    by shape: speech whose loudest 100 ms is at the quietest level the Audio
-    tab lets the silence gate admit scores 0.03-0.14 as recorded and 0.25 or
-    more amplified (`config.py`, SILERO_BATCH_QUIET_SPEECH_GAIN).
+    by shape: speech near the quietest level the Audio tab lets the silence
+    gate admit scored as low as 0.025 as recorded and 0.246 or more amplified
+    (`config.py`, SILERO_BATCH_QUIET_SPEECH_GAIN).
     """
 
     natural: SpeechMeasurement
@@ -189,38 +195,84 @@ def _build_session():
     return session
 
 
-def _get_session():
-    """The shared session, built once; None when it cannot be built.
+def _in_backoff() -> bool:
+    failed_at = _load_failed_at
+    return failed_at is not None and _now() - failed_at < SILERO_LOAD_RETRY_S
 
-    A failed load is remembered: every post-pause streaming partial asks, and
-    retrying the load there would pay the failure -- and log it -- every
+
+def _get_session():
+    """The shared session, built on first use; None when it cannot be built.
+
+    This builds on the calling thread (123-275 ms cold, most of it importing
+    ONNX Runtime), so the Qt thread never calls it: it asks
+    `loaded_session` and `start_loading` instead. A failed load is
+    remembered for SILERO_LOAD_RETRY_S: every post-pause streaming partial
+    asks, and retrying there would pay the failure -- and log it -- every
     350 ms. ONNX Runtime allows concurrent `run` calls on one session, so the
     stream worker and the Qt thread share it; only the build is serialized.
     """
-    global _session, _load_failed
+    global _session, _load_failed_at
     session = _session
-    if session is not None or _load_failed:
+    if session is not None or _in_backoff():
         return session
     with _session_lock:
-        if _session is None and not _load_failed:
+        if _session is None and not _in_backoff():
             try:
                 _session = _build_session()
+                _load_failed_at = None
             except Exception as exc:
-                _load_failed = True
+                _load_failed_at = _now()
                 logger.warning(
-                    "silero_vad_unavailable: the speech check is off and the "
-                    "energy gates decide alone. error=%s",
+                    "silero_vad_unavailable: the speech check is off for %.0f s "
+                    "and the energy gates decide alone. error=%s",
+                    SILERO_LOAD_RETRY_S,
                     exc,
                 )
         return _session
 
 
+def load_failed_recently() -> bool:
+    """Whether the last load failed less than SILERO_LOAD_RETRY_S ago."""
+    return _in_backoff()
+
+
+def loaded_session():
+    """The session if it is already built, else None; never builds or waits."""
+    return _session
+
+
+def start_loading() -> None:
+    """Build the session on a daemon thread, unless it is built, being built
+    or inside the retry backoff. Cheap and idempotent: the controller calls it
+    at start, on every settings reload with the silence gate on, and from a
+    stop that found no session yet."""
+    global _loader_thread
+    if _session is not None or _in_backoff():
+        return
+    with _session_lock:
+        loader = _loader_thread
+        if loader is not None and loader.is_alive():
+            return
+        # `_get_session` is looked up when the thread runs, so a test that
+        # replaces it is honoured.
+        loader = threading.Thread(
+            target=lambda: _get_session(), name="stt_app_silero_load", daemon=True
+        )
+        _loader_thread = loader
+    try:
+        loader.start()
+    except RuntimeError as exc:
+        # No thread available: the check stays off for this stop and the next
+        # stop asks again.
+        logger.warning("silero_vad_load_thread_not_started error=%s", exc)
+
+
 def reset_silero_for_tests() -> None:
     """Forget the cached session and any remembered load failure."""
-    global _session, _load_failed
+    global _session, _load_failed_at
     with _session_lock:
         _session = None
-        _load_failed = False
+        _load_failed_at = None
 
 
 def _windows(samples: np.ndarray) -> np.ndarray:
@@ -256,27 +308,6 @@ def _initial_state():
         np.zeros(_STATE_SHAPE, dtype=np.float32),
         np.zeros(_CONTEXT_SAMPLES, dtype=np.float32),
     )
-
-
-def speech_probabilities(samples: np.ndarray) -> np.ndarray | None:
-    """Per-window speech probability of 16 kHz mono float32 ``samples``.
-
-    One value per 32 ms window, the last window zero-padded; None when the
-    detector is unavailable, the input is empty, or the run fails.
-    """
-    samples = np.asarray(samples, dtype=np.float32).reshape(-1)
-    if samples.size == 0:
-        return None
-    session = _get_session()
-    if session is None:
-        return None
-    h, c, tail = _initial_state()
-    try:
-        probabilities, _state, _tail = _run(session, _windows(samples), (h, c), tail)
-    except Exception as exc:
-        logger.warning("silero_vad_run_failed error=%s", exc)
-        return None
-    return probabilities
 
 
 def measure_speech_pcm16(
@@ -321,8 +352,6 @@ def measure_speech_pcm16(
     state = (h, c)
     max_probability = 0.0
     speech_windows = 0
-    run = 0
-    longest = 0
     scanned_windows = 0
     stop_windows = (
         None
@@ -335,13 +364,9 @@ def measure_speech_pcm16(
             probabilities, state, tail = _run(session, block, state, tail)
             scanned_windows += block.shape[0]
             max_probability = max(max_probability, float(probabilities.max()))
-            for is_speech in probabilities >= SILERO_SPEECH_PROBABILITY:
-                if is_speech:
-                    speech_windows += 1
-                    run += 1
-                    longest = max(longest, run)
-                else:
-                    run = 0
+            speech_windows += int(
+                np.count_nonzero(probabilities >= SILERO_SPEECH_PROBABILITY)
+            )
             if stop_windows is not None and speech_windows >= stop_windows:
                 break
     except Exception as exc:
@@ -351,7 +376,6 @@ def measure_speech_pcm16(
     return SpeechMeasurement(
         max_probability=max_probability,
         speech_seconds=speech_windows * WINDOW_SECONDS,
-        longest_speech_run_s=longest * WINDOW_SECONDS,
         scanned_seconds=scanned / SAMPLE_RATE_HZ,
         total_seconds=total / SAMPLE_RATE_HZ,
         complete=scanned >= total,
@@ -369,27 +393,6 @@ def _read_pcm16_mono(wav_bytes: bytes) -> tuple[bytes, int] | None:
     except (wave.Error, EOFError, OSError, ValueError, struct.error):
         return None
     return pcm, rate
-
-
-def measure_speech_wav(
-    wav_bytes: bytes,
-    *,
-    stop_after_speech_s: float | None = None,
-    max_scan_s: float | None = None,
-    gain: float = 1.0,
-) -> SpeechMeasurement | None:
-    """`measure_speech_pcm16` for a WAV file's bytes; None unless 16-bit mono."""
-    read = _read_pcm16_mono(wav_bytes)
-    if read is None:
-        return None
-    pcm, rate = read
-    return measure_speech_pcm16(
-        pcm,
-        rate,
-        stop_after_speech_s=stop_after_speech_s,
-        max_scan_s=max_scan_s,
-        gain=gain,
-    )
 
 
 def check_speech_pcm16(

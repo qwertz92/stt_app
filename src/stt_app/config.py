@@ -1944,6 +1944,11 @@ SILERO_BATCH_QUIET_SPEECH_GAIN = 8.0
 # imported (four fresh interpreters), once.
 SILERO_BATCH_STOP_AFTER_SPEECH_S = 1.0
 SILERO_BATCH_MAX_SCAN_S = 30.0
+# A session load that failed is retried after this long, not never: the file
+# held for a moment by a scanner or a backup tool would otherwise switch the
+# check off until the app restarts, and every post-pause streaming partial
+# (about every 350 ms) retrying it would pay and log the failure each time.
+SILERO_LOAD_RETRY_S = 60.0
 # Streaming: the trailing window after a pause longer than the window must
 # also reach this, as recorded, before it is decoded and appended on trust.
 # The check runs only where a refusal means "skip the window" or "drop the

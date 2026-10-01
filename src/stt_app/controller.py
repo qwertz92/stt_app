@@ -463,6 +463,7 @@ class DictationController(QtCore.QObject):
         self._last_recording_store = last_recording_store or LastRecordingStore()
 
         self._settings: AppSettings = self._settings_store.load()
+        self._warm_up_speech_check()
         self._audio_capture: AudioCapture | None = None
         self._warm_mic_stream: WarmMicrophoneStream | None = None
         self._audio_device_listener: AudioDeviceChangeListener | None = None
@@ -891,6 +892,7 @@ class DictationController(QtCore.QObject):
         )
         self._sync_overlay_language_options()
         self._sync_warm_microphone_stream()
+        self._warm_up_speech_check()
         # Only tear the loaded runtime down when the saved settings would build
         # a different one. Before this, *every* save closed it — overlay
         # opacity, a hotkey, the completion tone — and the preload that follows
@@ -2364,9 +2366,12 @@ class DictationController(QtCore.QObject):
         speech that a keystroke lifted over the level gate: Silero scores by
         level, and such speech scored as low as 0.025 as recorded. A scan the
         budget cut short, a measurement that failed and a graph that could not
-        be loaded all leave the level gate's answer standing. The measurement
-        is logged on every stop, the gate off included, so the cut can be
-        checked against real recordings.
+        be loaded all leave the level gate's answer standing. The check runs
+        only when its answer can skip -- the gate on and the level gate passed
+        -- because it costs a scan on the Qt thread; every stop's
+        `recording_peak_level` line says `silero_speech_seconds=not_run`
+        otherwise, `loading` while the background load has not finished, and
+        the measurement when it ran.
         """
         enabled = bool(getattr(self._settings, "silence_gate_enabled", False))
         try:
@@ -2388,14 +2393,17 @@ class DictationController(QtCore.QObject):
                 DEFAULT_SILENCE_GATE_THRESHOLD,
             )
         )
-        speech = self._measure_speech_for_silence_gate(wav_bytes)
+        speech: silero_vad.SpeechCheck | None = None
+        speech_note = "not_run"
+        if enabled and peak_level >= threshold:
+            speech, speech_note = self._measure_speech_for_silence_gate(wav_bytes)
         self._logger.info(
             "recording_peak_level level=%.4f silence_gate_enabled=%s "
             "threshold=%.4f %s",
             peak_level,
             enabled,
             threshold,
-            self._speech_measurement_log_fields(speech),
+            self._speech_measurement_log_fields(speech, speech_note),
         )
         if not enabled:
             return False
@@ -2451,18 +2459,34 @@ class DictationController(QtCore.QObject):
         self._overlay.set_state("Done", detail)
         return True
 
+    def _warm_up_speech_check(self) -> None:
+        """Load the Silero session on a daemon thread while the gate is on.
+
+        Building it imports ONNX Runtime and loads the graph -- 123-275 ms
+        cold -- which must not happen inside a stop on the Qt thread. Called
+        at start and on every settings reload; idempotent.
+        """
+        if bool(getattr(self._settings, "silence_gate_enabled", False)):
+            silero_vad.start_loading()
+
     def _measure_speech_for_silence_gate(
         self, wav_bytes: bytes
-    ) -> silero_vad.SpeechCheck | None:
-        """Silero's view of a stopped recording; None whenever it has none.
+    ) -> tuple[silero_vad.SpeechCheck | None, str]:
+        """Silero's view of a stopped recording, and a log note when it has none.
 
         Bounded (`SILERO_BATCH_STOP_AFTER_SPEECH_S`, `SILERO_BATCH_MAX_SCAN_S`,
-        both scans) because it runs on the Qt thread at every stop. Anything
-        it raises is logged and read as "unmeasured", which never skips a
-        recording.
+        both scans) because it runs on the Qt thread. A session not yet
+        loaded is never built here: the stop answers "loading" -- unmeasured,
+        which never skips -- and asks for the background load. Anything the
+        scan raises is logged and read as unmeasured too.
         """
+        if silero_vad.loaded_session() is None:
+            silero_vad.start_loading()
+            if silero_vad.load_failed_recently():
+                return None, "unavailable"
+            return None, "loading"
         try:
-            return silero_vad.check_speech_wav(
+            checked = silero_vad.check_speech_wav(
                 wav_bytes,
                 min_probability=SILERO_BATCH_MIN_PROBABILITY,
                 gain=SILERO_BATCH_QUIET_SPEECH_GAIN,
@@ -2471,11 +2495,12 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to measure speech in the recording")
-            return None
+            return None, "unavailable"
+        return checked, "" if checked is not None else "unavailable"
 
     @staticmethod
     def _speech_measurement_log_fields(
-        speech: silero_vad.SpeechCheck | None,
+        speech: silero_vad.SpeechCheck | None, note: str = "unavailable"
     ) -> str:
         """The speech-check half of the `recording_peak_level` line.
 
@@ -2483,10 +2508,12 @@ class DictationController(QtCore.QObject):
         that stopped early -- on enough speech or on the budget -- so its
         speech seconds are a lower bound. `silero_amplified_max_probability`
         is `not_run` whenever the first scan settled the answer, and
-        `unavailable` when the amplified scan was needed and failed.
+        `unavailable` when the amplified scan was needed and failed. Without
+        a measurement the line carries `note` instead: `not_run`, `loading`
+        or `unavailable`.
         """
         if speech is None:
-            return "silero_speech_seconds=unavailable"
+            return f"silero_speech_seconds={note}"
         natural = speech.natural
         if speech.amplified is not None:
             amplified = f"{speech.amplified.max_probability:.3f}"

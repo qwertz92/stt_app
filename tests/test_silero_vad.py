@@ -122,7 +122,7 @@ def test_audio_the_graph_cannot_take_answers_none(real_silero, wav):
     """None is "could not measure", which every caller must read as "do not
     gate". A 44.1 kHz or stereo file would be measured as something it is
     not, so it is refused rather than guessed at."""
-    assert silero_vad.measure_speech_wav(wav) is None
+    assert silero_vad.check_speech_wav(wav) is None
 
 
 @pytest.mark.parametrize(
@@ -141,7 +141,6 @@ def _fail(*_args, **_kwargs):
 def test_a_missing_asset_answers_none(real_silero, monkeypatch):
     monkeypatch.setattr(silero_vad, "silero_asset_path", lambda: None)
     assert silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000) is None
-    assert silero_vad.speech_probabilities(np.zeros(1600, np.float32)) is None
 
 
 def test_a_session_that_cannot_be_built_answers_none(real_silero, monkeypatch):
@@ -181,7 +180,6 @@ def test_a_run_that_fails_answers_none(real_silero, monkeypatch):
 
     monkeypatch.setattr(silero_vad, "_get_session", lambda: _Broken())
     assert silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000) is None
-    assert silero_vad.speech_probabilities(np.zeros(1600, np.float32)) is None
 
 
 def test_a_failed_load_is_remembered_instead_of_retried(real_silero, monkeypatch):
@@ -194,6 +192,31 @@ def test_a_failed_load_is_remembered_instead_of_retried(real_silero, monkeypatch
     for _ in range(3):
         assert silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000) is None
     assert len(attempts) == 1
+
+
+def test_a_failed_load_is_retried_after_the_backoff(real_silero, monkeypatch):
+    """A file a scanner holds for a moment must not switch the check off until
+    the app restarts: past SILERO_LOAD_RETRY_S the next call tries again."""
+    from stt_app.config import SILERO_LOAD_RETRY_S
+
+    clock = [1000.0]
+    monkeypatch.setattr(silero_vad, "_now", lambda: clock[0])
+    real_path = silero_vad.silero_asset_path
+    attempts = []
+
+    def flaky_path():
+        attempts.append(1)
+        return None if len(attempts) == 1 else real_path()
+
+    monkeypatch.setattr(silero_vad, "silero_asset_path", flaky_path)
+    assert silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000) is None
+    clock[0] += SILERO_LOAD_RETRY_S - 1
+    assert silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000) is None
+    assert len(attempts) == 1
+    clock[0] += 2
+    measured = silero_vad.measure_speech_pcm16(pcm_bytes(_SPEECH), 16_000)
+    assert len(attempts) == 2
+    assert measured is not None
 
 
 def test_two_threads_share_one_session(real_silero, monkeypatch):
@@ -234,6 +257,18 @@ def test_two_threads_share_one_session(real_silero, monkeypatch):
     assert alone is not None and alone.max_probability > 0.5
 
 
+def _one_pass_probabilities(samples: np.ndarray) -> np.ndarray:
+    """Every window's probability from one run over the whole input -- the
+    reference the block-by-block scan is compared with."""
+    session = silero_vad._get_session()
+    assert session is not None
+    h, c, tail = silero_vad._initial_state()
+    probabilities, _state, _tail = silero_vad._run(
+        session, silero_vad._windows(samples), (h, c), tail
+    )
+    return probabilities
+
+
 def test_the_probabilities_match_faster_whispers_own_runner(real_silero):
     """The window, context and state contract, checked against the runner
     that ships with the graph. faster-whisper's runner zeroes the last 64
@@ -247,8 +282,7 @@ def test_the_probabilities_match_faster_whispers_own_runner(real_silero):
     reference = np.asarray(
         SileroVADModel(str(silero_vad.silero_asset_path()))(padded.copy())
     ).reshape(-1)
-    ours = silero_vad.speech_probabilities(samples)
-    assert ours is not None
+    ours = _one_pass_probabilities(samples)
     assert ours.shape == reference.shape
     np.testing.assert_array_equal(ours[:-1], reference[:-1])
 
@@ -266,9 +300,9 @@ def test_scanning_in_blocks_measures_what_one_pass_measures(real_silero):
         excerpts["phrase_1030ms"],
         room_tone(1.1, seed=4),
     )
-    probabilities = silero_vad.speech_probabilities(samples.astype(np.float32) / 32768.0)
+    probabilities = _one_pass_probabilities(samples.astype(np.float32) / 32768.0)
     measured = silero_vad.measure_speech_pcm16(pcm_bytes(samples), 16_000)
-    assert probabilities is not None and measured is not None
+    assert measured is not None
     assert samples.size > 3 * silero_vad.BLOCK_WINDOWS * 512
     assert measured.complete
     assert measured.max_probability == pytest.approx(float(probabilities.max()), abs=0)
