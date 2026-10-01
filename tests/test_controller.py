@@ -2250,6 +2250,8 @@ def _assert_reload_outcome(controller, reloads, *, preloads, closed, cached):
         {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
         {"custom_endpoint": "https://llm-gateway.example.com/v1"},
         {"custom_key_command": "token-helper --print"},
+        {"assemblyai_region": "eu"},
+        {"deepgram_region": "eu"},
         # The base settings select faster-whisper, which reads neither of
         # these -- they belong to the ONNX runtimes.
         {"local_onnx_device": "cpu"},
@@ -2625,6 +2627,15 @@ def test_every_remote_engine_is_in_both_identity_maps():
         assert hasattr(defaults, controller_module._ENGINE_KEY_FLAGS[engine])
 
 
+def test_every_region_field_names_a_setting_of_a_remote_engine():
+    """A typo in the region map would read the default host forever."""
+    remote = set(VALID_ENGINES) - {DEFAULT_ENGINE}
+    defaults = AppSettings()
+    for engine, field in controller_module._ENGINE_REGION_FIELDS.items():
+        assert engine in remote
+        assert hasattr(defaults, field), field
+
+
 @pytest.mark.parametrize("engine", sorted(set(VALID_ENGINES) - {DEFAULT_ENGINE}))
 def test_each_remote_engine_reads_its_own_model_field_and_key_flag(engine):
     """Every provider, not just the three that happened to be parametrized."""
@@ -2735,6 +2746,21 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("custom", {"silence_gate_threshold": 0.02}, True),
         ("deepgram", {"silence_gate_threshold": 0.02}, False),
         ("elevenlabs", {"silence_gate_threshold": 0.02}, False),
+        # The data-residency host is baked into the provider at construction.
+        ("assemblyai", {"assemblyai_region": "eu"}, True),
+        ("deepgram", {"deepgram_region": "eu"}, True),
+        ("assemblyai", {"deepgram_region": "eu"}, False),
+        ("deepgram", {"assemblyai_region": "eu"}, False),
+        ("groq", {"assemblyai_region": "eu"}, False),
+        ("speechmatics", {"speechmatics_region": "us1"}, True),
+        ("speechmatics", {"speechmatics_model": "enhanced"}, True),
+        ("speechmatics", {"silence_gate_threshold": 0.02}, True),
+        ("assemblyai", {"speechmatics_region": "us1"}, False),
+        ("mistral", {"mistral_model": "voxtral-mini-2602-x"}, True),
+        ("mistral", {"custom_vocabulary": "Kubernetes"}, True),
+        ("mistral", {"silence_gate_threshold": 0.02}, True),
+        # Melia 1 has no custom dictionary; Enhanced has one.
+        ("speechmatics", {"custom_vocabulary": "Kubernetes"}, False),
     ],
     ids=lambda value: value if isinstance(value, str) else str(value),
 )

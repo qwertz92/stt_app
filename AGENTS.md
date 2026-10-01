@@ -66,6 +66,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German),
+  Speechmatics (REST batch jobs, polled; EU/US/AU regions),
+  Mistral Voxtral (REST, batch-only),
   Custom endpoint (any OpenAI-compatible REST API, batch-only)
 - keyring for secret storage
 - comtypes for MMDevice audio endpoint change notifications (Windows)
@@ -96,7 +98,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
+| `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced, Standard; region `eu1`/`us1`/`au1` |
+| `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Mini Transcribe 2); custom vocabulary as `context_bias` |
+| `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
+| `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
@@ -107,7 +113,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_audio.py` | Audio tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the Transcription tab) |
 | `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete; model selection lives on the Transcription tab) plus the "Local runtime" group (ONNX Device, Keep ONNX model loaded) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
-| `settings_dialog_remote.py` | API Keys tab: provider API keys and connection-test mixin |
+| `settings_dialog_remote.py` | API Keys tab: provider API keys, data-residency region selectors (AssemblyAI, Deepgram, Speechmatics) and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
@@ -214,7 +220,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 ## Engines
 
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
-  azure, funasr, custom
+  azure, funasr, speechmatics, mistral, custom
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - **OpenAI** model select picks `gpt-transcribe` (default) or one of the three
   models OpenAI removes on 2027-02-26.
@@ -227,6 +233,14 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
   driven over the realtime WebSocket in batch mode. It covers 31 languages but
   **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
+- **Speechmatics** (`speechmatics`): `speechmatics_model` `melia-1`
+  (default; the only one with Auto), `enhanced`, `standard`;
+  `speechmatics_region` `eu1` (default), `us1`, `au1` (Melia 1 not in
+  `au1`).
+- **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
+- **Regions**: `assemblyai_region` and `deepgram_region` (`us` default,
+  `eu`) and `speechmatics_region` are picked on the API Keys tab; the field
+  map is `settings_store._REMOTE_REGION_FIELDS`.
 - **Custom endpoint** (`custom`): base URL, free-text model, API style
   (`transcriptions` or `chat`) and an optional key command that prints a
   short-lived Bearer token; the `custom` key is the static fallback.

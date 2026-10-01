@@ -125,6 +125,11 @@ def test_the_vocabulary_note_says_whether_the_selected_model_uses_the_terms(
             )
             assert note.startswith(name), (engine, model, note)
             assert note == dialog.vocabulary_support_label.toolTip()
+            # A remote engine is asked about the model it would run: for
+            # Speechmatics the answer differs by model (Melia 1 ignores the
+            # terms), so asking with no model asked a different question.
+            if engine != "local":
+                model = dialog._remote_model_value_for_provider(engine)
             if supports_custom_vocabulary(engine, model):
                 assert "uses the custom vocabulary" in note, (engine, model)
                 assert "ignores" not in note, (engine, model)

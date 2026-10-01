@@ -9131,3 +9131,17 @@ Update 2026-10-01: the vendor pages were read later that day
 streaming id `universal-3-6-pro` and the 32-language code-switching figure
 (3.5: 19); the $0.45/h price and the "up to 100 keyterms" figure remain
 unverified.
+
+## 2026-10-01: Speechmatics, Mistral and region selectors in Settings
+
+The Speechmatics and Mistral backends and the AssemblyAI/Deepgram EU regions
+landed with no Settings widgets. `_construct_settings_from_widgets` builds a
+whole `AppSettings`, so the seven new fields took their dataclass defaults,
+read as edits against the baseline and were written over the stored values
+on an untouched Save (a hand-set `"deepgram_region": "eu"` came back `us`).
+The field guard test that exists for exactly this had not been run, because
+the settings-dialog suites were excluded from the backend work. The fields
+now come from widgets: model pickers for both engines on Transcription, key
+rows and connection tests on API Keys, and one region selector per provider
+(AssemblyAI, Deepgram, Speechmatics) on API Keys. Lesson: a new
+`AppSettings` field is not done until the settings-dialog suites ran.

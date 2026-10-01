@@ -193,6 +193,23 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
         # the user read Python dict syntax with the request id in it, capped
         # mid-dict; the nested object's own text fields are tried first and
         # the JSON text is the last resort.
+        error = parsed.get("error")
+        detail = parsed.get("detail")
+        if (
+            isinstance(error, str)
+            and error.strip()
+            and isinstance(detail, str)
+            and detail.strip()
+        ):
+            # Speechmatics' shape, `{"code": 403, "error": "Forbidden",
+            # "detail": "Entitlement check failed"}`: `error` is only the
+            # status phrase and `detail` is the part that says what to change,
+            # so the two are kept together (unless the detail already starts
+            # with the phrase).
+            error, detail = error.strip(), detail.strip()
+            if detail.lower().startswith(error.lower()):
+                return detail[:300]
+            return f"{error}: {detail}"[:300]
         for key in ("error", "message", "detail", "err_msg"):
             value = parsed.get(key)
             if isinstance(value, dict):

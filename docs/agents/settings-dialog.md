@@ -163,6 +163,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   Exception: the Run Benchmark model list has checkboxes and no selection;
   Space toggles; a rebuild keeps check states (first fill all checked, later
   models unchecked).
+- **A setting without a widget is a defect waiting for a Save** (2026-10-01).
+  `_construct_settings_from_widgets` builds a whole `AppSettings`, so a field
+  it does not name takes the dataclass default, differs from the baseline,
+  counts as an edit and is written over the stored value: the region and
+  Speechmatics/Mistral fields added without UI reset a hand-set
+  `"deepgram_region": "eu"` on an untouched Save. Every field is built from
+  a widget or carried from `_populated_settings` (`schema_version`,
+  `onnx_auto_preferred_devices`); the field guard in
+  `tests/test_settings_dialog_connection.py` fails for a new one, and
+  `tests/test_settings_dialog_regions.py` pins the round trip.
+- **Region selectors sit on the API Keys tab** (2026-10-01): one row per
+  provider in `_REMOTE_REGION_CHOICES` ("AssemblyAI Region", "Deepgram
+  Region", "Speechmatics Region") below the key rows, always visible and
+  enabled whatever the engine, so a pick moves nothing; the combo spans the
+  key/button/badge columns left-aligned at its own width, so it never raises
+  the page minimum. Next to the key because the connection test there uses
+  the region, and Save API Keys writes it too. Measured: dialog minimum
+  unchanged (797 / 907 / 1020 px at 9 / 11.25 / 13.5 pt); the API Keys page
+  minimum 578 px at 9 pt before and after, 717 -> 720 px at 13.5 pt (the
+  longer "Speechmatics Region" label).
 - **Connection test results persist in `provider_connection_tests.json`**,
   not `settings.json`; restored on open, overwritten only for tested
   providers, cleared when that provider's key is saved or deleted.

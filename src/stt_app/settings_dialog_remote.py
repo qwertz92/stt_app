@@ -20,10 +20,12 @@ from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_GRID_SPACING_PX,
     _REMOTE_PROVIDERS,
+    _REMOTE_REGION_CHOICES,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
     _WheelPassthroughComboBox,
+    region_row_label,
 )
 
 
@@ -43,6 +45,9 @@ class _ConnectionTestSnapshot:
     custom_endpoint: str = ""
     custom_api_mode: str = DEFAULT_CUSTOM_API_MODE
     custom_key_command: str = ""
+    # The provider's data-residency region, for the providers that have one
+    # (`_REMOTE_REGION_CHOICES`); empty for the rest.
+    region: str = ""
 
 
 def _assemblyai_transcriber_factory(**kwargs: object) -> object:
@@ -93,19 +98,40 @@ def _funasr_transcriber_factory(**kwargs: object) -> object:
     return FunAsrTranscriber(**kwargs)
 
 
+def _speechmatics_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.speechmatics_provider import SpeechmaticsTranscriber
+
+    return SpeechmaticsTranscriber(**kwargs)
+
+
+def _mistral_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.mistral_provider import MistralTranscriber
+
+    return MistralTranscriber(**kwargs)
+
+
 # Maps provider name to (lazy transcriber factory, extra snapshot fields the
 # factory needs besides api_key and model).
 _CONNECTION_TESTER_FACTORIES: dict[
     str,
     tuple[Callable[..., object], tuple[str, ...]],
 ] = {
-    "assemblyai": (_assemblyai_transcriber_factory, ()),
+    # A region is passed so the test asks the host the dictation uses: a test
+    # against the US host would pass for a key the EU host then refuses.
+    "assemblyai": (_assemblyai_transcriber_factory, ("region",)),
     "groq": (_groq_transcriber_factory, ()),
     "openai": (_openai_transcriber_factory, ()),
-    "deepgram": (_deepgram_transcriber_factory, ()),
+    "deepgram": (_deepgram_transcriber_factory, ("region",)),
     "elevenlabs": (_elevenlabs_transcriber_factory, ("language_mode",)),
     "azure": (_azure_transcriber_factory, ("language_mode", "endpoint")),
     "funasr": (_funasr_transcriber_factory, ("language_mode",)),
+    # Built as the dictation builds it: the language decides how Melia 1 is
+    # asked, and Melia 1 in the Australian region is refused at construction.
+    "speechmatics": (
+        _speechmatics_transcriber_factory,
+        ("language_mode", "region"),
+    ),
+    "mistral": (_mistral_transcriber_factory, ("language_mode",)),
     "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
@@ -135,6 +161,8 @@ def _build_connection_tester(
     }
     if "language_mode" in extra_fields:
         kwargs["language_mode"] = snapshot.language_mode
+    if "region" in extra_fields:
+        kwargs["region"] = snapshot.region
     if "endpoint" in extra_fields:
         if not snapshot.azure_endpoint:
             return (
@@ -262,7 +290,52 @@ class _RemoteProvidersMixin:
         self.elevenlabs_key_edit = self._provider_key_edits["elevenlabs"]
         self.azure_key_edit = self._provider_key_edits["azure"]
         self.funasr_key_edit = self._provider_key_edits["funasr"]
+        self.speechmatics_key_edit = self._provider_key_edits["speechmatics"]
+        self.mistral_key_edit = self._provider_key_edits["mistral"]
         self.custom_key_edit = self._provider_key_edits["custom"]
+
+        # Where each provider that offers a choice processes the audio. One
+        # row each, always present and enabled whatever the engine, so a pick
+        # cannot move anything; the combo spans the key, button and badge
+        # columns but is left-aligned at its own width, so it never raises
+        # the page's minimum width.
+        for provider, choices in _REMOTE_REGION_CHOICES.items():
+            combo = _WheelPassthroughComboBox()
+            for value, label in choices:
+                combo.addItem(label, value)
+            combo.setToolTip(
+                f"Where {_remote_provider_label(provider)} processes the "
+                "audio. Dictation, audio imports and the connection test all "
+                "use this region."
+            )
+            region_label = QtWidgets.QLabel(region_row_label(provider))
+            region_label.setFixedWidth(provider_label_width)
+            region_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            provider_grid.addWidget(
+                region_label,
+                grid_row,
+                0,
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+            )
+            provider_grid.addWidget(
+                combo,
+                grid_row,
+                1,
+                1,
+                3,
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+            )
+            grid_row += 1
+            self._provider_region_combos[provider] = combo
+        region_hint = QtWidgets.QLabel(
+            "The vendor's default endpoint unless you pick another region. "
+            "Speechmatics' Melia 1 model runs in the EU and US only; pick "
+            "Enhanced or Standard on the Transcription tab for Australia."
+        )
+        region_hint.setWordWrap(True)
+        self._style_note_label(region_hint)
+        provider_grid.addWidget(region_hint, grid_row, 1, 1, 3)
+        grid_row += 1
 
         # Azure additionally needs a per-resource endpoint (no other provider
         # does), so it gets a dedicated, non-secret text field here.
@@ -765,6 +838,11 @@ class _RemoteProvidersMixin:
             azure_endpoint=(
                 self._resolve_azure_endpoint() if provider == "azure" else ""
             ),
+            region=(
+                self._region_shown(provider)
+                if provider in self._provider_region_combos
+                else ""
+            ),
             **(
                 {
                     "custom_endpoint": self.custom_endpoint_edit.text().strip(),
@@ -780,6 +858,12 @@ class _RemoteProvidersMixin:
                 else {}
             ),
         )
+
+    def _region_shown(self, provider: str) -> str:
+        """The region the provider's selector shows (its first, default
+        choice if it shows none)."""
+        combo = self._provider_region_combos[provider]
+        return str(combo.currentData() or _REMOTE_REGION_CHOICES[provider][0][0])
 
     def _resolve_api_key(self, provider: str, key_field: QtWidgets.QLineEdit) -> str:
         api_key = key_field.text().strip()

@@ -1217,6 +1217,100 @@ FUNASR_LANGUAGE_MODES = (
 # App language code -> Fun-ASR language_hints code, where they differ.
 # Most are identical bare codes; this maps only the exceptions.
 FUNASR_LANGUAGE_HINTS: dict[str, str] = {}
+# Speechmatics batch transcription. The languages page (read 2026-09-27,
+# https://docs.speechmatics.com/speech-to-text/languages) lists 62 codes; this
+# is every one of them the app has a code for, after `cmn` (Mandarin) is
+# mapped to the app's `zh` (`SPEECHMATICS_LANGUAGE_CODES`). Left out: `auto`
+# (below), the bilingual and multi-language packs (`ar_en`, `en_ms`, `cmn_en`,
+# `cmn_en_ms_ta`, `en_ta`, and `tl`, which is "Tagalog (Filipino) & English
+# bilingual"), and `eo`, `ia` and `ug`, which the app has no code for. In
+# the order of `VALID_LANGUAGE_MODES`.
+SPEECHMATICS_LANGUAGE_MODES = (
+    "de",
+    "en",
+    "ar",
+    "ba",
+    "be",
+    "bn",
+    "bg",
+    "ca",
+    "yue",
+    "zh",
+    "hr",
+    "cs",
+    "da",
+    "nl",
+    "et",
+    "eu",
+    "fi",
+    "fr",
+    "gl",
+    "el",
+    "he",
+    "hi",
+    "hu",
+    "id",
+    "ga",
+    "it",
+    "ja",
+    "ko",
+    "lv",
+    "lt",
+    "ms",
+    "mn",
+    "mr",
+    "mt",
+    "no",
+    "fa",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "es",
+    "sw",
+    "sv",
+    "ta",
+    "th",
+    "tr",
+    "uk",
+    "ur",
+    "vi",
+    "cy",
+)
+# Melia 1 "transcribes the individual languages listed here and switches
+# between them automatically, without language selection", and "does not
+# support the `auto` option" (the same page): the app's Auto is sent as
+# `"language": "multi"`, and a chosen language as a `language_hints` entry.
+# Enhanced and Standard do take `auto`, but automatic identification needs "at
+# least 60 seconds of speech" and rejects the job by default otherwise
+# (https://docs.speechmatics.com/speech-to-text/batch/language-identification,
+# read 2026-09-27) -- longer than most dictations -- so those two take a chosen
+# language only.
+SPEECHMATICS_MELIA_LANGUAGE_MODES = ("auto", *SPEECHMATICS_LANGUAGE_MODES)
+# App language code -> Speechmatics language code, where they differ.
+SPEECHMATICS_LANGUAGE_CODES: dict[str, str] = {"zh": "cmn"}
+# Mistral Voxtral Mini Transcribe 2: "English, Chinese, Hindi, Spanish,
+# Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian, and
+# Dutch" (https://mistral.ai/news/voxtral-transcribe-2/, 2026-02-04, read
+# 2026-09-27). Without `language` the model detects it.
+MISTRAL_LANGUAGE_MODES = (
+    "auto",
+    "en",
+    "zh",
+    "hi",
+    "es",
+    "ar",
+    "fr",
+    "pt",
+    "ru",
+    "de",
+    "ja",
+    "ko",
+    "it",
+    "nl",
+)
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
     "local",
@@ -1228,6 +1322,8 @@ VALID_ENGINES = (
     "azure",
     "funasr",
     "custom",
+    "speechmatics",
+    "mistral",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1241,6 +1337,9 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # A bring-your-own endpoint: which languages work is the served model's
     # business, so every code the app knows is offered and sent as a hint.
     "custom": VALID_LANGUAGE_MODES,
+    # The default model's list; Enhanced and Standard have their own.
+    "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
+    "mistral": MISTRAL_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
 LOCAL_BATCH_ONLY_MODELS = (
@@ -1270,6 +1369,9 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("azure", "mai-transcribe-1.5"): AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
     ("azure", "mai-transcribe-1"): AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
+    ("speechmatics", "melia-1"): SPEECHMATICS_MELIA_LANGUAGE_MODES,
+    ("speechmatics", "enhanced"): SPEECHMATICS_LANGUAGE_MODES,
+    ("speechmatics", "standard"): SPEECHMATICS_LANGUAGE_MODES,
 }
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
@@ -1321,14 +1423,24 @@ def language_modes_for_selection(
 # (`gpt-transcribe`) or as `prompt` (the three older models), Groq as
 # `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
 # query parameters, a custom endpoint as `prompt` (transcription API) or as a
-# sentence of its chat instruction. ElevenLabs, Azure LLM Speech and Fun-ASR
-# expose no biasing input at all.
+# sentence of its chat instruction, Speechmatics as `additional_vocab`
+# entries (Enhanced and Standard), Mistral as repeated `context_bias`
+# fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
+# at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
     "groq",
     "openai",
     "deepgram",
     "custom",
+    "speechmatics",
+    "mistral",
+)
+# A model of one of those engines that has no biasing input. Melia 1:
+# "Custom Dictionary: ... Not yet."
+# (https://docs.speechmatics.com/speech-to-text/models, read 2026-09-27).
+CUSTOM_VOCABULARY_EXCLUDED_MODELS: tuple[tuple[str, str], ...] = (
+    ("speechmatics", "melia-1"),
 )
 # Local runtimes with a biasing input: faster-whisper takes the terms as its
 # `initial_prompt`. The onnx-asr (Parakeet, Canary), ONNX Runtime GenAI
@@ -1340,7 +1452,8 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # faster-whisper entries, and a generated list would have to name all seven.
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
-    "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, and a custom endpoint"
+    "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
+    "Enhanced/Standard, Mistral, and a custom endpoint"
 )
 
 
@@ -1348,7 +1461,10 @@ def supports_custom_vocabulary(engine: str, model: str = "") -> bool:
     """Whether this engine/model combination is sent the custom vocabulary."""
     normalized_engine = str(engine or "").strip().lower()
     if normalized_engine in CUSTOM_VOCABULARY_ENGINES:
-        return True
+        return (
+            normalized_engine,
+            str(model or "").strip(),
+        ) not in CUSTOM_VOCABULARY_EXCLUDED_MODELS
     if (
         normalized_engine in VALID_ENGINES
         and normalized_engine != DEFAULT_ENGINE
@@ -1444,6 +1560,49 @@ DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
 ASSEMBLYAI_STREAMING_MODEL = "universal-3-6-pro"
 ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
 
+# Data-residency region for AssemblyAI and Deepgram (`assemblyai_region`,
+# `deepgram_region`). "us" is each vendor's default endpoint, i.e. what every
+# build before this setting sent; "eu" is the vendor's EU host. Hosts read on
+# the vendors' own pages on 2026-10-01:
+# - AssemblyAI batch: https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region
+#   (US default `api.assemblyai.com`, EU `api.eu.assemblyai.com`).
+# - AssemblyAI streaming:
+#   https://www.assemblyai.com/docs/streaming/endpoints-and-data-zones
+#   (EU data zone `streaming.eu.assemblyai.com`). "us" keeps the default
+#   `streaming.assemblyai.com`, which that page calls edge routing, and not
+#   the US data-zone host `streaming.us.assemblyai.com`: the default must stay
+#   what was sent before.
+# - Deepgram: https://developers.deepgram.com/reference/custom-endpoints
+#   (`api.eu.deepgram.com`, "the same API keys and SDKs as the default global
+#   endpoint"). That page names the REST host; the WebSocket host is the same
+#   name with `wss://`, which it does not spell out.
+REMOTE_REGION_US = "us"
+REMOTE_REGION_EU = "eu"
+VALID_REMOTE_REGIONS = (REMOTE_REGION_US, REMOTE_REGION_EU)
+DEFAULT_REMOTE_REGION = REMOTE_REGION_US
+ASSEMBLYAI_API_BASE_URLS = {
+    REMOTE_REGION_US: "https://api.assemblyai.com",
+    REMOTE_REGION_EU: "https://api.eu.assemblyai.com",
+}
+ASSEMBLYAI_STREAMING_HOSTS = {
+    REMOTE_REGION_US: "streaming.assemblyai.com",
+    REMOTE_REGION_EU: "streaming.eu.assemblyai.com",
+}
+DEEPGRAM_API_HOSTS = {
+    REMOTE_REGION_US: "api.deepgram.com",
+    REMOTE_REGION_EU: "api.eu.deepgram.com",
+}
+
+
+def normalize_remote_region(value: object) -> str:
+    """Return a known region; anything else is the default (US) region.
+
+    A value this build does not know -- a typo in a hand-edited file, a
+    region a newer build added -- must not reach a provider as a host name.
+    """
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in VALID_REMOTE_REGIONS else DEFAULT_REMOTE_REGION
+
 # Total time one batch job may stay queued/processing before the app gives
 # up on it. The SDK's own `wait_for_completion` is `while True:` with no
 # bound, so a job AssemblyAI never finishes holds the single transcription
@@ -1503,6 +1662,49 @@ FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
 # socket timeout, so a service that pings but never sends `task-finished`
 # parked the app's single transcription worker forever.
 FUNASR_BATCH_MAX_WAIT_S = 1800.0
+
+# Speechmatics batch (SaaS) models, selected by `transcription_config.model`
+# (https://docs.speechmatics.com/speech-to-text/models, read 2026-09-27):
+# Enhanced "the highest accuracy"; Standard and Melia 1 "High", Melia 1
+# multilingual and the cheapest ($0.129/h, read 2026-09-27 on a pricing
+# summary; the vendor's pricing page states $0.129 without naming the
+# model). Melia 1 is the default because it is the one that transcribes
+# without a chosen language, which the app's default Auto needs.
+SPEECHMATICS_MELIA_MODEL = "melia-1"
+SPEECHMATICS_MODELS = (SPEECHMATICS_MELIA_MODEL, "enhanced", "standard")
+DEFAULT_SPEECHMATICS_MODEL = SPEECHMATICS_MELIA_MODEL
+# Batch hosts open to every customer
+# (https://docs.speechmatics.com/get-started/authentication, read
+# 2026-09-27); "EU2 and US2 ... are provided for enterprise customer high
+# availability and failover purposes only" and are not offered. "Melia 1
+# is available for Batch transcription in the EU and US regions only."
+SPEECHMATICS_API_HOSTS = {
+    "eu1": "eu1.asr.api.speechmatics.com",
+    "us1": "us1.asr.api.speechmatics.com",
+    "au1": "au1.asr.api.speechmatics.com",
+}
+SPEECHMATICS_REGIONS = tuple(SPEECHMATICS_API_HOSTS)
+DEFAULT_SPEECHMATICS_REGION = "eu1"
+SPEECHMATICS_MELIA_REGIONS = ("eu1", "us1")
+# A job's total wait, as for AssemblyAI (`ASSEMBLYAI_BATCH_MAX_WAIT_S`),
+# and the pause between status requests: the GET limit is 50 per second,
+# so one per second is far inside it.
+SPEECHMATICS_BATCH_MAX_WAIT_S = 1800.0
+SPEECHMATICS_POLL_INTERVAL_S = 1.0
+
+
+def normalize_speechmatics_region(value: object) -> str:
+    """A Speechmatics region this build knows; anything else is the default."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in SPEECHMATICS_REGIONS else DEFAULT_SPEECHMATICS_REGION
+
+
+# Mistral Voxtral Mini Transcribe 2, released 2026-02-04, $0.003 per minute
+# (https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02, read
+# 2026-09-27). The dated id rather than `voxtral-mini-latest`, so the model
+# does not change under the user.
+MISTRAL_MODELS = ("voxtral-mini-2602",)
+DEFAULT_MISTRAL_MODEL = "voxtral-mini-2602"
 
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The
@@ -1586,17 +1788,33 @@ CUSTOM_MAX_REQUEST_BYTES = OPENAI_MAX_REQUEST_BYTES
 # gateways and model output limits commonly allow.
 CUSTOM_CHAT_MAX_PART_SECONDS = 300.0
 CUSTOM_CHAT_MAX_REQUEST_BYTES = 15_000_000
+# Speechmatics: a file "less than 1 GB in size or the job will be rejected"
+# (https://docs.speechmatics.com/speech-to-text/batch/limits, read
+# 2026-09-27), and no duration limit is stated. Half an hour per job keeps
+# one job's turnaround well inside `SPEECHMATICS_BATCH_MAX_WAIT_S`.
+SPEECHMATICS_MAX_PART_SECONDS = 1800.0
+SPEECHMATICS_MAX_REQUEST_BYTES = 999_000_000
+# Mistral: "Maximum audio duration: 60 minutes", "Maximum file size: 500
+# MB" (https://docs.mistral.ai/resources/known-limitations, read
+# 2026-09-27). The request is synchronous, so half an hour per part keeps
+# one request well inside its socket timeout.
+MISTRAL_MAX_PART_SECONDS = 1800.0
+MISTRAL_MAX_REQUEST_BYTES = 500_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
     "azure": AZURE_MAX_PART_SECONDS,
     "custom": CUSTOM_MAX_PART_SECONDS,
+    "speechmatics": SPEECHMATICS_MAX_PART_SECONDS,
+    "mistral": MISTRAL_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
     "groq": GROQ_MAX_REQUEST_BYTES,
     "azure": AZURE_MAX_REQUEST_BYTES,
     "custom": CUSTOM_MAX_REQUEST_BYTES,
+    "speechmatics": SPEECHMATICS_MAX_REQUEST_BYTES,
+    "mistral": MISTRAL_MAX_REQUEST_BYTES,
 }
 # An API style whose limit differs from its engine's: (engine, api_mode) ->
 # (seconds, bytes). Only the custom endpoint has more than one style.

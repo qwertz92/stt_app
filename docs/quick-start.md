@@ -72,7 +72,7 @@ Common settings to adjust:
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | **Model size** | Which local model transcribes. `parakeet-tdt-0.6b-v3` is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
-| **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR` | `Local` |
+| **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR`, `Speechmatics`, `Mistral (Voxtral)`, `Custom endpoint` | `Local` |
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live, experimental) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |
 | **Paste mode** | How text is inserted into the target app | Auto |
@@ -93,6 +93,6 @@ Right-click the **system tray icon** → **Quit**.
   than the Whisper models. See [Models & Offline Setup](models.md).
 - **Better Whisper quality (CPU)?** Try `large-v3-turbo` (multilingual, ~1.62 GB) or `distil-large-v3.5` (English-only, ~1.52 GB).
 - **Find the best model for your hardware?** Run the [benchmark](advanced-setup.md#benchmarking) to compare speed (real-time factor) across models and devices.
-- **Cloud transcription?** Switch Engine to `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, or `Fun-ASR` in Settings and enter your API key. Azure also needs the per-resource **endpoint** (entered next to the keys); Fun-ASR (Alibaba) needs a Singapore-region DashScope key and does not support German.
+- **Cloud transcription?** Switch Engine to `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR`, `Speechmatics`, `Mistral (Voxtral)` or `Custom endpoint` in Settings and enter your API key on the **API Keys** tab. Azure also needs the per-resource **endpoint** (entered next to the keys); Fun-ASR (Alibaba) needs a Singapore-region DashScope key and does not support German. AssemblyAI, Deepgram and Speechmatics let you pick the region that processes your audio on the same tab; see [Advanced Setup](advanced-setup.md#speechmatics-and-mistral-voxtral).
 - **Corporate/offline setup?** See [Models & Offline Setup](models.md) or [Advanced Setup](advanced-setup.md).
 - **Full documentation:** See [README.md](../README.md).

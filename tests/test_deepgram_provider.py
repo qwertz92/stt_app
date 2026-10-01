@@ -1239,3 +1239,63 @@ def test_a_deepgram_close_thread_that_cannot_start_is_reported(monkeypatch, capl
     assert any(
         "close thread" in r.getMessage() for r in _deepgram_log_records(caplog)
     ), [r.getMessage() for r in _deepgram_log_records(caplog)]
+
+
+# ---------------------------------------------------------------------------
+# Tests: data-residency region (EU endpoint)
+# ---------------------------------------------------------------------------
+
+
+class TestDeepgramRegion:
+    """The EU region moves batch, streaming and the connection test.
+
+    Host from Deepgram's own page, read 2026-10-01:
+    https://developers.deepgram.com/reference/custom-endpoints
+    ("api.eu.deepgram.com"; regional endpoints "use the same API keys").
+    """
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_batch_goes_to_the_eu_host(self, mock_urlopen):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
+        t = DeepgramTranscriber(api_key="key", region="eu")
+        assert t.transcribe_batch(b"RIFF....WAVE") == "ok"
+        url = mock_urlopen.call_args[0][0].full_url
+        assert url.startswith("https://api.eu.deepgram.com/v1/listen?"), url
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_batch_keeps_the_default_host(self, mock_urlopen):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
+        DeepgramTranscriber(api_key="key").transcribe_batch(b"RIFF....WAVE")
+        url = mock_urlopen.call_args[0][0].full_url
+        assert url.startswith("https://api.deepgram.com/v1/listen?"), url
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_the_connection_test_asks_the_eu_host(self, mock_urlopen):
+        mock_urlopen.return_value = _make_fake_response({"projects": []})
+        DeepgramTranscriber(api_key="key", region="eu").test_connection()
+        url = mock_urlopen.call_args[0][0].full_url
+        assert url == "https://api.eu.deepgram.com/v1/projects"
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_an_unknown_region_falls_back_to_the_default_host(self, mock_urlopen):
+        mock_urlopen.return_value = _make_fake_response({"projects": []})
+        DeepgramTranscriber(api_key="key", region="EU-west-9").test_connection()
+        url = mock_urlopen.call_args[0][0].full_url
+        assert url == "https://api.deepgram.com/v1/projects"
+
+    @pytest.mark.parametrize(
+        ("region", "prefix"),
+        [
+            ("eu", "wss://api.eu.deepgram.com/v1/listen?"),
+            ("us", "wss://api.deepgram.com/v1/listen?"),
+        ],
+    )
+    def test_streaming_connects_to_the_region_host(self, monkeypatch, region, prefix):
+        _FakeWebSocketApp.instances = []
+        t = DeepgramTranscriber(api_key="key", region=region)
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        t.start_stream()
+        try:
+            assert _FakeWebSocketApp.instances[-1].url.startswith(prefix)
+        finally:
+            t.abort_stream()

@@ -21,12 +21,16 @@ from pathlib import Path
 
 from ..app_paths import temp_audio_dir
 from ..config import (
+    ASSEMBLYAI_API_BASE_URLS,
     ASSEMBLYAI_BATCH_MAX_WAIT_S,
+    ASSEMBLYAI_STREAMING_HOSTS,
     ASSEMBLYAI_STREAMING_MODEL,
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
+    DEFAULT_REMOTE_REGION,
     language_modes_for_selection,
+    normalize_remote_region,
     parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context
@@ -120,6 +124,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         or a language code like ``"de"`` / ``"en"``.
     aai_module :
         Injected ``assemblyai`` module (for testing).
+    region : str
+        ``"us"`` (the default endpoints) or ``"eu"`` (AssemblyAI's EU
+        hosts); batch, streaming and the connection test all use it.
     """
 
     def __init__(
@@ -131,6 +138,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         aai_module=None,
         streaming_client_factory=None,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
+        region: str = DEFAULT_REMOTE_REGION,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -139,6 +147,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> API Keys."
             )
         self._api_key = api_key
+        self._region = normalize_remote_region(region)
         # No class-specific validation: the base ``_normalize_language_mode``
         # (strip/lower with an "auto" fallback) already matches what this
         # provider needs. Actual language-code validity is decided per
@@ -165,9 +174,18 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         return self._aai
 
     def _configure(self):
-        """Set API key on the assemblyai global settings."""
+        """Set the API key and the region's host on the SDK's settings.
+
+        Both are process-global in the SDK, and `Client.get_default()`
+        rebuilds its client whenever they differ from the ones it was
+        built with, so setting them before every call is what keeps a US
+        transcriber created after an EU one (or the reverse) on its own
+        host. The base URL is set in the default region too, for exactly
+        that reason.
+        """
         aai = self._get_aai()
         aai.settings.api_key = self._api_key
+        aai.settings.base_url = ASSEMBLYAI_API_BASE_URLS[self._region]
 
     def _build_config(self):
         """Build a TranscriptionConfig for the current language mode."""
@@ -410,7 +428,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         import urllib.error
         import urllib.request
 
-        url = "https://api.assemblyai.com/v2/transcript?limit=1"
+        url = f"{ASSEMBLYAI_API_BASE_URLS[self._region]}/v2/transcript?limit=1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._api_key)
 
@@ -586,6 +604,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 client = StreamingClient(
                     StreamingClientOptions(
                         api_key=self._api_key,
+                        api_host=ASSEMBLYAI_STREAMING_HOSTS[self._region],
                         terminate_timeout=(
                             ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S
                         ),
