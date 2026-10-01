@@ -44,6 +44,7 @@ from ..config import (
     parse_custom_vocabulary,
     remote_batch_part_limit,
 )
+from ..process_tree import run_bounded
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
@@ -80,6 +81,21 @@ _MAX_TRANSCRIPT_RESPONSE_BYTES = 8 * 1024 * 1024
 # LiteLLM's `/models` carries a `mode` per entry. These can never transcribe.
 _UNUSABLE_MODEL_MODES = frozenset({"embedding", "image_generation", "rerank"})
 _MODEL_MODE_RANK = {"audio_transcription": 0, "chat": 1}
+# Most servers send no `mode` (OpenAI's own list does not), so a model
+# whose id names a speech recognizer is listed before the rest of its
+# group. It orders, never filters: an id says nothing reliable.
+_SPEECH_MODEL_NAME = re.compile(
+    r"whisper|transcri|speech|voxtral|parakeet|canary|sensevoice|paraformer"
+    r"|funasr|wav2vec|moonshine|scribe|(?:^|[-_/.:])(?:asr|stt)(?:$|[-_/.:])",
+    re.IGNORECASE,
+)
+_SPEECH_SYNTHESIS_NAME = re.compile(
+    r"text-to-speech|(?:^|[-_/.:])tts(?:$|[-_/.:\d])", re.IGNORECASE
+)
+# A base URL pasted together with one of the routes the app appends.
+_PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
+# How the start of an HTML page looks, after leading whitespace.
+_HTML_STARTS = (b"<!doctype html", b"<html")
 _ERROR_TAIL_MAX_CHARS = 200
 _CODE_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n?(.*?)\n?```$", re.DOTALL)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("„", "“"))
@@ -97,7 +113,11 @@ def normalize_custom_endpoint(endpoint: str) -> str:
     """The base URL requests are built on: stripped, no trailing slash.
 
     Nothing is appended: a gateway may serve the OpenAI routes under `/v1`,
-    under another prefix or at its root, so the URL is used as given.
+    under another prefix or at its root, so the URL is used as given --
+    except that a route the app appends itself (`/audio/transcriptions`,
+    `/chat/completions`, `/models`) is taken off the end, because users
+    paste the request URL their gateway documents, and the app then posted
+    to `.../audio/transcriptions/audio/transcriptions` and got a 404.
     """
     value = str(endpoint or "").strip().rstrip("/")
     if not value:
@@ -126,7 +146,112 @@ def normalize_custom_endpoint(endpoint: str) -> str:
             "Custom endpoint URL must be a base URL without a query or "
             f"fragment, {_ENDPOINT_EXAMPLE}."
         )
+    lowered = value.lower()
+    for route in _PASTED_ROUTES:
+        if lowered.endswith(route):
+            return value[: -len(route)].rstrip("/")
     return value
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_DISPLAY_URL_MAX_CHARS = 200
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    return scheme, (parts.hostname or "").lower(), parts.port or _DEFAULT_PORTS.get(scheme)
+
+
+def _redirect_keeps_origin(old_url: str, new_url: str) -> bool:
+    """Whether a redirect stays where the key may go.
+
+    The same scheme, host and port, or the upgrade from http to https on the
+    default ports of one host. Anything else -- another host, another port, or
+    https to http, which would send the key in clear -- is another origin.
+    """
+    try:
+        old_scheme, old_host, old_port = _origin(old_url)
+        new_scheme, new_host, new_port = _origin(new_url)
+    except ValueError:
+        return False
+    if not old_host or old_host != new_host:
+        return False
+    if (old_scheme, old_port) == (new_scheme, new_port):
+        return True
+    return (old_scheme, old_port, new_scheme, new_port) == ("http", 80, "https", 443)
+
+
+def _display_url(url: str) -> str:
+    """Scheme, host, port and path of a URL the server named; no query."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return "an invalid URL"
+    return f"{parts.scheme}://{host}{port}{parts.path}"[:_DISPLAY_URL_MAX_CHARS]
+
+
+class _RedirectGuard(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only where it cannot leak the key or drop the audio.
+
+    urllib's own handler copies every header, `Authorization` included, to
+    whatever host `Location` names (reproduced: 127.0.0.1:A -> localhost:B
+    received the Bearer key), and turns a redirected POST into a GET without
+    its body, which the endpoint answers with an HTTP 405 that names nothing
+    the user can act on. An upload is therefore never redirected, and a model
+    list only within its origin.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = _display_url(newurl)
+        if req.data is not None:
+            refusal = (
+                f"{_PROVIDER_NAME}: the endpoint redirected the upload (HTTP "
+                f"{code}) to {target}. Enter the base URL the server redirects "
+                "to in Settings -> API Keys."
+            )
+        elif not _redirect_keeps_origin(req.full_url, newurl):
+            refusal = (
+                f"{_PROVIDER_NAME}: the endpoint redirected (HTTP {code}) to "
+                f"another origin, {target}; the key is not sent there. Enter "
+                "that base URL in Settings -> API Keys if it is the right "
+                "server."
+            )
+        else:
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+        try:
+            fp.close()
+        except Exception:
+            pass
+        raise TranscriptionError(refusal)
+
+
+def _open(request: urllib.request.Request, *, timeout: float):
+    """`urlopen` with the system trust store and `_RedirectGuard`."""
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=create_ssl_context()),
+        _RedirectGuard(),
+    )
+    return opener.open(request, timeout=timeout)
+
+
+def _names_a_speech_recognizer(model_id: str) -> bool:
+    return bool(_SPEECH_MODEL_NAME.search(model_id)) and not bool(
+        _SPEECH_SYNTHESIS_NAME.search(model_id)
+    )
+
+
+def _header_unsafe(value: str) -> bool:
+    """Whether a Bearer value holds a character an HTTP header cannot carry.
+
+    Visible ASCII only: `http.client` refuses a line break with the whole
+    header value in its message, and encodes the rest as Latin-1, so a
+    pasted key with a stray newline, a non-breaking space or a typographic
+    quote fails in a way that would name the key.
+    """
+    return any(not ("\x21" <= character <= "\x7e") for character in value)
 
 
 def _command_arguments(command: str) -> list[str]:
@@ -196,6 +321,14 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 "authentication accepts any placeholder such as 'none', or "
                 "set a key command. Enter your key in Settings -> API Keys."
             )
+        if self._api_key and _header_unsafe(self._api_key):
+            # Never echoed: the key is the one thing this message must
+            # not contain.
+            raise TranscriptionError(
+                "Custom endpoint API key contains a line break, a space or "
+                "another character an HTTP header cannot carry. Enter it "
+                "again in Settings -> API Keys."
+            )
         self._base_url = normalize_custom_endpoint(endpoint)
         self._model = str(model or "").strip()
         mode = str(api_mode or "").strip().lower()
@@ -225,6 +358,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         No shell, no console window, no stdin. The token is the last non-empty
         line of its output, so a helper that prints a notice first still works.
         Nothing here puts the token into a log line or an exception.
+
+        `run_bounded`, not `subprocess.run`: a helper that starts a
+        program of its own (`wsl.exe -e ...`, a `.cmd` wrapper) hands it
+        the pipes, and `subprocess.run` then reads them until that program
+        exits -- 15.1 s on a 2 s timeout, reproduced.
         """
         arguments = _command_arguments(self._key_command)
         if not arguments:
@@ -234,15 +372,13 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             extra["creationflags"] = subprocess.CREATE_NO_WINDOW
         started = time.monotonic()
         try:
-            completed = subprocess.run(
+            completed = run_bounded(
                 arguments,
                 stdin=subprocess.DEVNULL,
-                capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
                 timeout=CUSTOM_KEY_COMMAND_TIMEOUT_S,
-                check=False,
                 **extra,
             )
         except FileNotFoundError as exc:
@@ -259,6 +395,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 f"The key command could not be started: {exc}"
             ) from exc
         token = _last_line(completed.stdout or "")
+        if token and _header_unsafe(token):
+            raise TranscriptionError(
+                "The key command printed a token with a space or a "
+                "character an HTTP header cannot carry."
+            )
         if completed.returncode != 0 or not token:
             reason = _error_tail(completed.stderr or "")
             detail = f": {reason}" if reason else ""
@@ -291,14 +432,23 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def _read(
         self, request: urllib.request.Request, timeout: float, max_bytes: int
     ) -> bytes:
-        with urllib.request.urlopen(
-            request, timeout=timeout, context=create_ssl_context()
-        ) as resp:
+        with _open(request, timeout=timeout) as resp:
             payload = resp.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the response is larger than "
                 f"{max_bytes // (1024 * 1024)} MB."
+            )
+        if payload.lstrip()[:16].lower().startswith(_HTML_STARTS):
+            # A proxy's sign-in or block page answers HTTP 200. Read as a
+            # plain-text transcript it was pasted into the document; its
+            # text is left out of the message, it is not the server's.
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the endpoint answered with an HTML page "
+                "instead of JSON -- typically a proxy's sign-in or block "
+                "page, or a base URL that points at a website. Check the "
+                f"base URL ({_ENDPOINT_EXAMPLE}) and whether the proxy "
+                "needs a sign-in."
             )
         return payload
 
@@ -368,6 +518,15 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def _other_error(self, exc: Exception, what: str) -> TranscriptionError:
         if _is_ssl_error(exc):
             return TranscriptionError(format_ssl_error_message(_PROVIDER_NAME))
+        if "invalid header" in str(exc).lower():
+            # `http.client` puts the refused header value -- the Bearer
+            # token -- into its message. The checks above keep such a
+            # value from being sent; this keeps any other road to that
+            # message from showing it.
+            return TranscriptionError(
+                f"{_PROVIDER_NAME} {what} failed: a request header was "
+                f"refused ({type(exc).__name__})."
+            )
         return TranscriptionError(f"{_PROVIDER_NAME} {what} failed: {exc}")
 
     # -- Model list --------------------------------------------------------
@@ -417,7 +576,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             models.setdefault(model_id.strip(), CustomEndpointModel(model_id.strip(), mode))
         return sorted(
             models.values(),
-            key=lambda model: (_MODEL_MODE_RANK.get(model.mode, 2), model.id.lower()),
+            key=lambda model: (
+                _MODEL_MODE_RANK.get(model.mode, 2),
+                0 if _names_a_speech_recognizer(model.id) else 1,
+                model.id.lower(),
+            ),
         )
 
     def test_connection(self) -> tuple[bool, str]:
@@ -495,10 +658,24 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             parsed = json.loads(text)
         except ValueError:
             return normalize_transcript_text(text)
-        if isinstance(parsed, dict):
-            value = parsed.get("text", "")
-            return normalize_transcript_text(value if isinstance(value, str) else "")
-        return normalize_transcript_text(parsed if isinstance(parsed, str) else "")
+        if isinstance(parsed, str):
+            return normalize_transcript_text(parsed)
+        value = parsed.get("text") if isinstance(parsed, dict) else None
+        if not isinstance(value, str):
+            # Not "no speech": that is `"text": ""`. An HTTP 200 carrying
+            # an error object, or a shape this app does not know, would
+            # otherwise read as silence, and a part of a split recording
+            # would then be dropped from the transcript.
+            keys = (
+                ", ".join(sorted(str(key) for key in parsed)[:8])
+                if isinstance(parsed, dict)
+                else type(parsed).__name__
+            )
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the answer has no 'text' field "
+                f"(it holds: {keys or 'nothing'})."
+            )
+        return normalize_transcript_text(value)
 
     def _chat_instruction(self) -> str:
         parts = [

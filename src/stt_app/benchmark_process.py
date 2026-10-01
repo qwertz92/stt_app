@@ -24,7 +24,6 @@ import json
 import logging
 import os
 import queue
-import signal
 import subprocess
 import sys
 import tempfile
@@ -37,6 +36,7 @@ from typing import Any
 from .benchmark_environment import text_or_empty
 from .benchmark_worker import BENCHMARK_EVENT_PREFIX
 from .local_benchmark import BenchmarkCancelled, BenchmarkCase, _case_from_dict
+from .process_tree import kill_process_tree
 
 BENCHMARK_WORKER_ARG = "--local-benchmark-worker"
 
@@ -359,52 +359,13 @@ def benchmark_command(options_path: Path, env: dict[str, str]) -> list[str]:
 def _terminate_process_tree(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
-    _kill_process_tree(process)
+    kill_process_tree(process)
     if process.poll() is None:
         # Every arm of the kill swallows its failure, so a child that
         # outlives all of them -- a kill a policy refused, a process an EDR
         # holds -- was invisible: the cancel reported a clean stop over a
         # worker still running.
         _LOGGER.warning("benchmark_worker_survived_termination pid=%s", process.pid)
-
-
-def _kill_process_tree(process: subprocess.Popen[str]) -> None:
-    """Every road to ending the child, each failure swallowed on the way."""
-    if os.name == "nt":
-        try:
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                creationflags=_subprocess_no_window_flags(),
-                timeout=5,
-                check=False,
-            )
-            process.wait(timeout=3.0)
-            return
-        except Exception:
-            pass
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=3.0)
-            return
-        except Exception:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait(timeout=3.0)
-                return
-            except Exception:
-                pass
-    try:
-        process.terminate()
-        process.wait(timeout=3.0)
-    except Exception:
-        try:
-            process.kill()
-            process.wait(timeout=3.0)
-        except Exception:
-            pass
 
 
 def _package_source_dir() -> Path:
