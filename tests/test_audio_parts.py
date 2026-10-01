@@ -17,6 +17,7 @@ import pytest
 
 from stt_app.config import (
     AUDIO_SAMPLE_RATE,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     REMOTE_BATCH_MAX_PART_SECONDS,
     REMOTE_BATCH_MAX_REQUEST_BYTES,
     REMOTE_BATCH_MODEL_MAX_PART_SECONDS,
@@ -367,6 +368,7 @@ def test_the_parts_are_sent_in_order_and_their_texts_joined():
         limit=_LIMIT,
         progress_text=_UPLOAD,
         raise_if_canceled=_never_canceled,
+        silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
     )
 
     assert text == "erster teil zweiter teil dritter teil"
@@ -402,6 +404,7 @@ def test_a_silent_part_that_comes_back_empty_is_skipped():
         limit=_LIMIT,
         progress_text=_UPLOAD,
         raise_if_canceled=_never_canceled,
+        silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
     )
 
     expected = [f"teil {index}" for index in range(1, len(parts) + 1)]
@@ -409,12 +412,36 @@ def test_a_silent_part_that_comes_back_empty_is_skipped():
     assert text == " ".join(expected)
 
 
-def test_a_part_with_sound_that_comes_back_empty_fails_and_names_itself():
-    """A single request that returns nothing is a failure
-    (docs/agents/controller-and-jobs.md, "Empty model text is a failure"), and
-    a part is minutes of speech: dropping it would hand back a transcript with
-    a hole that reads like a complete one."""
-    requests = _Requests(["erster teil", "", "never requested"])
+def test_a_part_with_sound_that_comes_back_empty_leaves_a_marker_and_the_rest_goes_on(
+    caplog,
+):
+    """One part a provider answered with nothing must not cost the whole
+    recording: the other parts are minutes of speech each. The gap is marked
+    where it sits, with its place in the recording, so the transcript does not
+    read like a complete one and the user knows which stretch to listen to."""
+    requests = _Requests(["erster teil", "", "dritter teil"])
+
+    with caplog.at_level("WARNING", logger="stt_app.transcriber._audio_parts"):
+        text = transcribe_in_parts(
+            _three_parts(),
+            requests,
+            limit=_LIMIT,
+            progress_text=_UPLOAD,
+            raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
+        )
+
+    assert text == "erster teil [no text returned for 0:16-0:31] dritter teil"
+    assert len(requests.sources) == 3
+    assert "remote_audio_part_empty index=2 count=3" in caplog.text
+
+
+def test_a_recording_whose_parts_all_come_back_empty_with_sound_fails():
+    """Nothing at all from a recording that holds sound is what a single
+    request returning nothing is (docs/agents/controller-and-jobs.md, "Empty
+    model text is a failure"): an Error with Retry, not a transcript made of
+    markers."""
+    requests = _Requests(["", "", ""])
 
     with pytest.raises(TranscriptionError) as excinfo:
         transcribe_in_parts(
@@ -423,13 +450,65 @@ def test_a_part_with_sound_that_comes_back_empty_fails_and_names_itself():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
-    message = str(excinfo.value)
-    assert "Part 2 of 3" in message
-    assert "empty" in message
-    assert message.endswith(' Received before the failure: "erster teil"')
-    assert len(requests.sources) == 2
+    assert "No part of the 3 returned text" in str(excinfo.value)
+    assert len(requests.sources) == 3
+
+
+def test_a_recording_whose_parts_are_all_silent_comes_back_empty():
+    samples = np.zeros(int(50.0 * AUDIO_SAMPLE_RATE), dtype=np.int16)
+    requests = _Requests(["", "", "", "", ""])
+
+    text = transcribe_in_parts(
+        _wav_bytes(samples),
+        requests,
+        limit=_LIMIT,
+        progress_text=_UPLOAD,
+        raise_if_canceled=_never_canceled,
+        silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
+    )
+
+    assert text == ""
+    assert len(requests.sources) > 1
+
+
+def _quiet_middle_recording() -> bytes:
+    """Three parts; the middle one is room tone at about 0.002 RMS -- above a
+    threshold of 0.001, below the default 0.004."""
+    samples, first_gap, second_gap = _three_part_recording()
+    rng = np.random.default_rng(11)
+    middle = slice(first_gap.stop, second_gap.start)
+    count = middle.stop - middle.start
+    samples[middle] = rng.integers(-110, 111, count, dtype=np.int16)
+    return _wav_bytes(samples)
+
+
+@pytest.mark.parametrize(
+    ("threshold", "expected"),
+    [
+        (0.004, "erster teil dritter teil"),
+        (0.001, "erster teil [no text returned for 0:16-0:31] dritter teil"),
+    ],
+)
+def test_the_configured_threshold_decides_whether_an_empty_part_held_sound(
+    threshold, expected
+):
+    """The silence gate's threshold as the user set it, not its default: a
+    user who raised it for a noisy room calls that room tone silence."""
+    requests = _Requests(["erster teil", "", "dritter teil"])
+
+    text = transcribe_in_parts(
+        _quiet_middle_recording(),
+        requests,
+        limit=_LIMIT,
+        progress_text=_UPLOAD,
+        raise_if_canceled=_never_canceled,
+        silence_threshold=threshold,
+    )
+
+    assert text == expected
 
 
 def test_one_part_is_todays_request_its_message_and_its_error():
@@ -444,6 +523,7 @@ def test_one_part_is_todays_request_its_message_and_its_error():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     assert excinfo.value is failure
@@ -465,6 +545,7 @@ def test_a_failed_part_names_itself_and_carries_the_text_before_it():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     message = str(excinfo.value)
@@ -485,6 +566,7 @@ def test_a_first_part_that_fails_claims_no_earlier_text():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_never_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     assert "part 1 of 3" in str(excinfo.value)
@@ -505,6 +587,7 @@ def test_a_cancel_between_parts_sends_no_further_request():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_cancel_once_a_part_is_back,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     assert len(requests.sources) == 1
@@ -525,6 +608,7 @@ def test_a_cancel_during_the_split_sends_nothing():
             limit=_LIMIT,
             progress_text=_UPLOAD,
             raise_if_canceled=_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     assert requests.sources == []
@@ -548,6 +632,7 @@ def test_a_cancel_during_the_split_into_one_part_sends_nothing():
             limit=RemotePartLimit(seconds=30.0, max_bytes=1_000_000),
             progress_text=_UPLOAD,
             raise_if_canceled=_canceled,
+            silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
         )
 
     assert requests.sources == []

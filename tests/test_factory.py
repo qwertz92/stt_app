@@ -352,3 +352,45 @@ def test_a_missing_key_points_at_the_api_keys_tab(engine):
     message = str(raised.value)
     assert "key is missing" in message
     assert message.endswith("Enter your key in Settings -> API Keys.")
+
+
+@pytest.mark.parametrize("engine", ["openai", "groq", "azure", "custom"])
+def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
+    monkeypatch, engine
+):
+    """A part of a long recording that came back empty is silent or a gap
+    depending on the silence gate's threshold as the user set it -- the
+    default would call a noisy room's tone a gap the user must listen to."""
+    import importlib
+
+    module = importlib.import_module(
+        {
+            "openai": "stt_app.transcriber.openai_provider",
+            "groq": "stt_app.transcriber.groq_provider",
+            "azure": "stt_app.transcriber.azure_provider",
+            "custom": "stt_app.transcriber.custom_endpoint_provider",
+        }[engine]
+    )
+    seen: list[float] = []
+
+    def fake_parts(audio, request, *, silence_threshold, **_kwargs):
+        seen.append(silence_threshold)
+        return "ok"
+
+    monkeypatch.setattr(module, "transcribe_in_parts", fake_parts)
+
+    class FakeSecretStore:
+        def get_api_key(self, provider):
+            return "test-key"
+
+    settings = AppSettings(
+        engine=engine,
+        silence_gate_threshold=0.02,
+        azure_endpoint="https://my-res.cognitiveservices.azure.com",
+        custom_endpoint="http://localhost:8000/v1",
+        custom_model="whisper-1",
+    )
+    transcriber = create_transcriber(settings, secret_store=FakeSecretStore())
+
+    assert transcriber.transcribe_batch(b"RIFF") == "ok"
+    assert seen == [0.02]

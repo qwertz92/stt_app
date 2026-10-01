@@ -21,7 +21,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-from ..config import DEFAULT_SILENCE_GATE_THRESHOLD, RemotePartLimit
+from ..config import RemotePartLimit
 from ..vad import measure_peak_windowed_rms
 from ._http_utils import recovered_text_suffix
 from ._pcm_audio import pcm16_wav_bytes, split_into_passes
@@ -122,16 +122,36 @@ def _size_bytes(audio_source: AudioInput) -> int | None:
         return None
 
 
-def _holds_sound(part: AudioInput) -> bool:
-    """Whether a part is louder than the silence gate's default threshold.
+def _holds_sound(part: AudioInput, threshold: float) -> bool:
+    """Whether a part's loudest 100 ms window reaches `threshold`, the silence
+    gate's threshold as the user set it.
 
     Unmeasurable counts as sound: calling a part silent without having
-    measured it is how a stretch of speech would be dropped.
+    measured it is how a stretch of speech would be dropped unmarked.
     """
     if not isinstance(part, (bytes, bytearray)):
         return True
     level = measure_peak_windowed_rms(bytes(part))
-    return level is None or level >= DEFAULT_SILENCE_GATE_THRESHOLD
+    return level is None or level >= threshold
+
+
+def _part_seconds(part: AudioInput) -> float:
+    """A part's duration from its header; 0 for one this cannot read (only a
+    part `_wav_parts` wrote reaches this, and those always parse)."""
+    declared = _declared_wav(part)
+    if declared is None:
+        return 0.0
+    return declared.frames / declared.sample_rate
+
+
+def _clock(seconds: float) -> str:
+    """`m:ss`, or `h:mm:ss` past an hour, rounded to the second."""
+    total = round(seconds)
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
 
 
 def split_for_request(
@@ -207,6 +227,7 @@ def transcribe_in_parts(
     limit: RemotePartLimit | None,
     progress_text: str,
     raise_if_canceled: Callable[[], None],
+    silence_threshold: float,
 ) -> str:
     """Transcribe a recording through one request, or one request per part.
 
@@ -222,10 +243,17 @@ def transcribe_in_parts(
     cancel discards the parts already transcribed); the texts are joined with
     one space. A part that fails raises a `TranscriptionError` naming it and
     carrying the text of the parts before it, never a partial transcript that
-    reads like a complete one -- and so does a part that holds sound and comes
-    back empty, because a single request returning nothing is a failure too
-    (the controller's empty-transcript rule) and a part is minutes of speech.
-    A silent part's empty text is skipped.
+    reads like a complete one.
+
+    A part that comes back empty is not a failure of the recording. A silent
+    one -- its loudest window below `silence_threshold`, the silence gate's
+    threshold as the user set it -- is skipped; one that holds sound leaves a
+    marker naming its stretch of the recording (`[no text returned for
+    3:00-6:00]`) and the parts after it are still sent, because failing would
+    throw away every other part's minutes of speech, and skipping it silently
+    would hand back a transcript with a hole that reads like a complete one.
+    Only a recording of which no part returned text, while one held sound,
+    fails -- the single request's rule ("Empty model text is a failure").
     """
     parts = split_for_request(audio_source, limit)
     if len(parts) == 1:
@@ -235,11 +263,15 @@ def transcribe_in_parts(
             raise_if_canceled()
         return transcribe_request(parts[0], progress_text)
     count = len(parts)
+    pieces: list[str] = []
     texts: list[str] = []
+    empty_with_sound = 0
+    start = 0.0
     for index, part in enumerate(parts, start=1):
         # Before the first part as well: splitting a large import takes a
         # second, and a cancel pressed meanwhile must not upload a part.
         raise_if_canceled()
+        end = start + _part_seconds(part)
         try:
             text = transcribe_request(
                 part, f"Transcribing part {index} of {count}. {progress_text}"
@@ -251,11 +283,24 @@ def transcribe_in_parts(
             ) from exc
         if text:
             texts.append(text)
-        elif _holds_sound(part):
-            raise TranscriptionError(
-                f"Part {index} of {count} came back empty although it holds "
-                f"sound.{recovered_text_suffix(texts, '')}"
+            pieces.append(text)
+        elif _holds_sound(part, silence_threshold):
+            empty_with_sound += 1
+            # The log carries the place, never text: there is none.
+            logger.warning(
+                "remote_audio_part_empty index=%d count=%d start_s=%.1f end_s=%.1f",
+                index,
+                count,
+                start,
+                end,
             )
+            pieces.append(f"[no text returned for {_clock(start)}-{_clock(end)}]")
         else:
             logger.info("remote_audio_part_silent index=%d count=%d", index, count)
-    return " ".join(texts)
+        start = end
+    if not texts and empty_with_sound:
+        raise TranscriptionError(
+            f"No part of the {count} returned text, although the recording "
+            "holds sound."
+        )
+    return " ".join(pieces)

@@ -102,6 +102,15 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
     )
 
 
+def _part_silence_threshold(settings: AppSettings) -> float:
+    """The level below which a part of a split remote recording that came
+    back empty counts as silent: the silence gate's threshold as the user set
+    it, whether or not the gate itself is on."""
+    return float(
+        getattr(settings, "silence_gate_threshold", DEFAULT_SILENCE_GATE_THRESHOLD)
+    )
+
+
 def _api_key(secret_store, provider: str) -> str:
     if secret_store is None:
         return ""
@@ -127,6 +136,7 @@ def create_transcriber(
             language_mode=settings.language_mode,
             model=settings.groq_model,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
         )
     if settings.engine == "openai":
         return OpenAITranscriber(
@@ -134,6 +144,7 @@ def create_transcriber(
             language_mode=settings.language_mode,
             model=settings.openai_model,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
         )
     if settings.engine == "deepgram":
         return DeepgramTranscriber(
@@ -154,6 +165,7 @@ def create_transcriber(
             endpoint=getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT),
             language_mode=settings.language_mode,
             model=getattr(settings, "azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL),
+            silence_gate_threshold=_part_silence_threshold(settings),
         )
     if settings.engine == "funasr":
         return FunAsrTranscriber(
@@ -170,6 +182,7 @@ def create_transcriber(
             key_command=settings.custom_key_command,
             language_mode=settings.language_mode,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
         )
 
     # Unknown engine — fall back to local provider.

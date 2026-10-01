@@ -141,10 +141,23 @@ history are in `docs/learning-log.md` and git history.
     `max_samples` beside `max_seconds`): quietest 20 ms frame in the last
     15 s of each window; parts share no audio.
   - **A failed part names itself and carries the earlier text** ("Transcribing
-    part i of n failed: ..." + `recovered_text_suffix`), as does an empty part
-    that holds sound (loudest window >= the silence gate's default threshold,
-    or unmeasurable); an empty silent part is skipped. Join with one space;
+    part i of n failed: ..." + `recovered_text_suffix`). Join with one space;
     progress names the part; the cancel hook is checked before every part.
+  - **An empty part never fails the recording (2026-10-01, owner's call).** A
+    part that holds sound -- loudest 100 ms window >= the silence gate's
+    threshold *as the user set it* (passed by the factory to OpenAI, Groq,
+    Azure and the custom endpoint, and part of their runtime identity), or
+    unmeasurable -- leaves `[no text returned for m:ss-m:ss]` in its place
+    and logs `remote_audio_part_empty` at WARNING; a silent one is skipped.
+    Failing used to throw away every other part's minutes of speech; skipping
+    unmarked would hand back a transcript with a hole that reads complete,
+    and the marker is the one channel that reaches the overlay, the document
+    and history without a new controller path. Only a recording of which no
+    part returned text while one held sound fails, the single request's
+    "Empty model text is a failure" rule. A speech-run check
+    (`vad.measure_longest_speech_run_s`) instead of the level was considered
+    and left out: with a marker instead of a failure, a false "sound" costs a
+    marker to delete, a false "silent" costs speech without a trace.
   - Split, not compressed (new dependency; OpenAI rejects FLAC).
   - Sent whole: Deepgram (2 GB), ElevenLabs (3 GB / 10 h), AssemblyAI
     (2.2 GB / 10 h), Fun-ASR (streams).

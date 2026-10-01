@@ -38,6 +38,7 @@ from ..config import (
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     LANGUAGE_MODE_LABELS,
     language_modes_for_selection,
     parse_custom_vocabulary,
@@ -181,8 +182,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
         request_timeout_s: int = 120,
+        silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD,
     ) -> None:
         ProgressReporter.__init__(self)
+        # Decides whether a part of a split recording that came back empty
+        # held sound (`transcribe_in_parts`).
+        self._silence_gate_threshold = float(silence_gate_threshold)
         self._api_key = str(api_key or "").strip()
         self._key_command = str(key_command or "").strip()
         if not self._api_key and not self._key_command:
@@ -441,6 +446,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             limit=remote_batch_part_limit("custom", self._model, self._api_mode),
             progress_text=_UPLOAD_PROGRESS,
             raise_if_canceled=self._raise_if_canceled,
+            silence_threshold=self._silence_gate_threshold,
         )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:

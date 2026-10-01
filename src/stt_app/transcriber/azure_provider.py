@@ -32,6 +32,7 @@ from ..config import (
     AZURE_SPEECH_MODELS,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_LANGUAGE_MODE,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     language_modes_for_selection,
     remote_batch_part_limit,
 )
@@ -170,8 +171,12 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         model: str = DEFAULT_AZURE_SPEECH_MODEL,
         request_timeout_s: int = 120,
+        silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD,
     ) -> None:
         ProgressReporter.__init__(self)
+        # Decides whether a part of a split recording that came back empty
+        # held sound (`transcribe_in_parts`).
+        self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
                 "Azure Speech key is missing. "
@@ -239,6 +244,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             limit=remote_batch_part_limit("azure", self._model),
             progress_text=_UPLOAD_PROGRESS,
             raise_if_canceled=self._raise_if_canceled,
+            silence_threshold=self._silence_gate_threshold,
         )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:

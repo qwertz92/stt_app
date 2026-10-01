@@ -283,7 +283,7 @@ def test_the_part_limits_follow_the_api_style():
 def test_the_transcriber_asks_for_the_limit_of_its_own_style(monkeypatch):
     seen: list[object] = []
 
-    def fake_parts(audio, request, *, limit, progress_text, raise_if_canceled):
+    def fake_parts(audio, request, *, limit, **_kwargs):
         seen.append(limit)
         return "ok"
 

@@ -13,6 +13,7 @@ from ..config import (
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     OPENAI_ARRAY_FIELD_MODELS,
     OPENAI_KEYWORD_FORBIDDEN_CHARACTERS,
     OPENAI_MODELS,
@@ -52,8 +53,12 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         model: str = DEFAULT_OPENAI_MODEL,
         request_timeout_s: int = 120,
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
+        silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD,
     ) -> None:
         ProgressReporter.__init__(self)
+        # Decides whether a part of a split recording that came back empty
+        # held sound (`transcribe_in_parts`).
+        self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
                 "OpenAI API key is missing. "
@@ -156,6 +161,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             limit=remote_batch_part_limit("openai", self._model),
             progress_text=_UPLOAD_PROGRESS,
             raise_if_canceled=self._raise_if_canceled,
+            silence_threshold=self._silence_gate_threshold,
         )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:

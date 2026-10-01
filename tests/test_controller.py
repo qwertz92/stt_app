@@ -2728,6 +2728,13 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("custom", {"custom_vocabulary": "Kubernetes"}, True),
         ("custom", {"azure_endpoint": "https://other.cognitiveservices.azure.com"}, False),
         ("groq", {"custom_key_command": "token-helper --print"}, False),
+        # The engines that split a long recording judge an empty part by it.
+        ("openai", {"silence_gate_threshold": 0.02}, True),
+        ("groq", {"silence_gate_threshold": 0.02}, True),
+        ("azure", {"silence_gate_threshold": 0.02}, True),
+        ("custom", {"silence_gate_threshold": 0.02}, True),
+        ("deepgram", {"silence_gate_threshold": 0.02}, False),
+        ("elevenlabs", {"silence_gate_threshold": 0.02}, False),
     ],
     ids=lambda value: value if isinstance(value, str) else str(value),
 )

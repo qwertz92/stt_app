@@ -51,13 +51,14 @@ in `docs/learning-log.md` and git history. Record a new one here, not in
   language detection runs per part, no previous-part prompt (vocabulary goes
   with every part). A cancel between parts discards finished parts (audio
   stays reachable via Import/recovery, not Retry); a request in flight runs on.
-- **An empty part holding "sound" fails the recording, and sound is a level.**
-  `_audio_parts._holds_sound` uses the silence gate's *default* 0.004, not the
-  user's threshold; a last part can be 20 ms (e.g. a hotkey click after
-  180.4 s of `gpt-4o-transcribe`). Fix: judge by
-  `vad.measure_longest_speech_run_s` (20 ms buckets) with the configured
-  threshold passed through the factory and runtime identity of OpenAI/Groq/
-  Azure, or forbid a short last part. P3, 1-2 h; waits for the owner.
+- **A gap marker can stand for a stretch without words.** An empty part is
+  judged by its loudest 100 ms window against the user's silence-gate
+  threshold, so a part holding only noise or a click -- a last part can be
+  20 ms, e.g. a hotkey click after 180.4 s of `gpt-4o-transcribe` -- leaves
+  `[no text returned for ...]` in the transcript if the provider answers it
+  with nothing. Deliberate: the error direction is a marker to delete, not
+  lost speech (docs/agents/remote-providers.md). A real speech detector
+  (the Silero work) would be the better judge.
 - **Splitting a long import holds ~5x its file size**:
   `local_onnx_asr._read_wav_float32` keeps raw bytes plus two float32 copies
   (1,325 MB for 265 MB; ~7 GB for two hours of 48 kHz stereo). A `MemoryError`

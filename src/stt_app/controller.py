@@ -51,6 +51,7 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    REMOTE_BATCH_MAX_PART_SECONDS,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
@@ -5087,6 +5088,20 @@ class DictationController(QtCore.QObject):
             ),
             azure_endpoint=(
                 getattr(settings, "azure_endpoint", "") if engine == "azure" else ""
+            ),
+            # An engine that splits a long recording judges a part that came
+            # back empty against the silence gate's threshold
+            # (`transcribe_in_parts`); the others never read it.
+            silence_gate_threshold=(
+                float(
+                    getattr(
+                        settings,
+                        "silence_gate_threshold",
+                        DEFAULT_SILENCE_GATE_THRESHOLD,
+                    )
+                )
+                if engine in REMOTE_BATCH_MAX_PART_SECONDS
+                else 0.0
             ),
             **custom_fields,
             # A key command is a credential source of its own: with one set,
