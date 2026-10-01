@@ -26,9 +26,10 @@ _REPO_SRC = Path(__file__).resolve().parents[1] / "src"
 # A holder process keeps the lock for _HOLD_S after it signals "ready"; the
 # waiting side must then have waited longer than _MIN_WAIT_S. A lock that does
 # not hold answers within milliseconds, so the threshold only has to clear
-# that; it is kept at under a third of the hold so a slow runner that delays
-# the waiter's start by most of a second still passes.
-_HOLD_S = 1.0
+# that; it is kept at a fifth of the hold so a slow runner that delays the
+# waiter's start by over a second still passes (a stall past the hold would
+# flake, never pass falsely).
+_HOLD_S = 1.5
 _MIN_WAIT_S = 0.3
 
 
