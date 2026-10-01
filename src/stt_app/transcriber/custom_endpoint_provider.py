@@ -770,13 +770,26 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 )
             )
         if isinstance(content, list):
-            content = " ".join(
-                part.get("text", "")
-                for part in content
-                if isinstance(part, dict) and isinstance(part.get("text"), str)
-            )
+            parts = [part for part in content if isinstance(part, dict)]
+            texts = [part["text"] for part in parts if isinstance(part.get("text"), str)]
+            refusals = [
+                part["refusal"]
+                for part in parts
+                if isinstance(part.get("refusal"), str) and part["refusal"].strip()
+            ]
+            if not texts and refusals:
+                raise TranscriptionError(
+                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{body_excerpt(refusals[0])}"
+                )
+            content = " ".join(texts)
         if not isinstance(content, str):
-            return ""
+            # A number or an object is no reply text; read as silence it
+            # would drop a part of a split recording without a word.
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the chat reply's content is not text "
+                f"({type(content).__name__})."
+            )
         return normalize_transcript_text(_strip_reply_wrapping(content))
 
     # -- Streaming ---------------------------------------------------------

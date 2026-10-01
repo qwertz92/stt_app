@@ -272,6 +272,18 @@ def test_the_chat_reply_is_unwrapped(server, reply, expected):
             id="length",
         ),
         pytest.param({"role": "assistant"}, "stop", "finish reason 'stop'", id="missing"),
+        pytest.param(
+            {"role": "assistant", "content": [{"type": "refusal", "refusal": "No."}]},
+            "stop",
+            "refused: No.",
+            id="refusal-part",
+        ),
+        pytest.param(
+            {"role": "assistant", "content": 5},
+            "stop",
+            "content is not text (int)",
+            id="number",
+        ),
     ],
 )
 def test_a_chat_reply_with_null_content_is_an_error_not_silence(

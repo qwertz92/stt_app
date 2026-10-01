@@ -160,3 +160,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **A benchmark model row toggles only on its checkbox** (checkable items, no
   selection). Whole-row toggling must test the click against the indicator
   rectangle or it toggles twice. P4, ~20 min (2026-09-27).
+- **A key command whose wrapper does not wait for its tool can lose the
+  token** (P3, 2026-10-01, review of dedcde4). `run_bounded` ends the job
+  0.5 s after the direct child exits while a descendant still holds the
+  pipes, so a `.cmd` that runs `start /b` (or PowerShell `Start-Process`
+  without `-Wait`) and exits before its tool prints gets "printed no token".
+  Telling a late token from a forgotten grandchild needs reader threads that
+  see partial output instead of `communicate`. Workaround: make the wrapper
+  wait (`start /wait`, `-Wait`). When the job cannot be assigned (a nested
+  job that forbids it), the taskkill fallback cannot reach an orphan whose
+  parent exited, so such a run times out even though the token arrived.
