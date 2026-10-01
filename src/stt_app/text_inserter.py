@@ -95,6 +95,48 @@ class _ClipboardContentionAfterPaste(
         ClipboardContentionError.__init__(self, message)
 
 
+# `GetLastError` 1418, "Thread does not have a clipboard open". pywin32's
+# `OpenClipboard()` opens with a NULL owner window, and a clipboard opened that
+# way can be closed by another program's `CloseClipboard` -- clipboard
+# managers do exactly that -- so the next call we make inside our own open
+# fails with this code. It is transient the way contention is: the next open
+# works. Opening with a real owner window would close the race itself, and is
+# deliberately not done here (see `Win32ClipboardBackend._with_reopen`).
+ERROR_CLIPBOARD_NOT_OPEN = 1418
+
+
+class _ClipboardNotOpenError(TextInsertionError):
+    """One call inside our open clipboard failed with 1418: reopen and retry.
+
+    Private: `Win32ClipboardBackend._with_reopen` consumes it, and what leaves
+    the backend once the attempts are spent is `ClipboardContentionError`.
+    """
+
+
+def _is_clipboard_not_open(exc: BaseException) -> bool:
+    """Is this a pywin32 error carrying 1418?
+
+    `pywintypes.error` has `winerror` and `args == (code, function, message)`.
+    Only an integer code counts -- a message that merely mentions 1418 is not
+    evidence of anything.
+    """
+    code = getattr(exc, "winerror", None)
+    if code is None:
+        args = getattr(exc, "args", ())
+        code = args[0] if args else None
+    return (
+        isinstance(code, int)
+        and not isinstance(code, bool)
+        and code == ERROR_CLIPBOARD_NOT_OPEN
+    )
+
+
+def _raise_if_clipboard_not_open(exc: BaseException) -> None:
+    """Turn a 1418 into the reopen signal; return for anything else."""
+    if _is_clipboard_not_open(exc):
+        raise _ClipboardNotOpenError(str(exc)) from exc
+
+
 @dataclass(slots=True)
 class ClipboardState:
     """Everything the clipboard held, so a dictation can put all of it back.
@@ -218,6 +260,26 @@ _CLIPBOARD_PRIVATE_FORMAT_RANGES = ((0x0200, 0x02FF), (0x0300, 0x03FF))
 _CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE = frozenset(
     {"DataObject", "Ole Private Data"}
 )
+# The registered formats that keep one clipboard write out of Windows'
+# clipboard history (Win+V) and out of cloud clipboard sync. Microsoft,
+# "Clipboard Formats", section "Cloud Clipboard and Clipboard History Formats"
+# (https://learn.microsoft.com/en-us/windows/win32/dataxchg/clipboard-formats,
+# read 2026-10-01): ExcludeClipboardContentFromMonitorProcessing takes "any
+# data" and keeps every format of the write out of both;
+# CanIncludeInClipboardHistory and CanUploadToCloudClipboard take "a serialized
+# DWORD value of zero" to keep it out of the history and out of sync
+# respectively, and each "does not affect" the other. All three are obtained
+# through `RegisterClipboardFormat`. A DWORD 0 goes into each, which is also
+# "any data" for the first. Set on a transcript the transaction will replace
+# with the user's own content -- never on a restore, never on a transcript the
+# user keeps -- and kept, like any other format, when the capture finds them
+# on someone else's copy (a password manager marks a secret this way).
+_CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES = (
+    "ExcludeClipboardContentFromMonitorProcessing",
+    "CanIncludeInClipboardHistory",
+    "CanUploadToCloudClipboard",
+)
+_CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD = (0).to_bytes(4, "little")
 # The range `RegisterClipboardFormat` hands out; below it a format has no name.
 _FIRST_REGISTERED_CLIPBOARD_FORMAT = 0xC000
 # What `SetClipboardData` requires of the block it is given.
@@ -231,9 +293,20 @@ _NO_INHERITED_STATE = object()
 
 
 class Win32ClipboardBackend:
-    def __init__(self, retry_count: int = 10, retry_sleep_s: float = 0.01) -> None:
+    def __init__(
+        self,
+        retry_count: int = 10,
+        retry_sleep_s: float = 0.01,
+        reopen_attempts: int = 3,
+    ) -> None:
         self._retry_count = retry_count
         self._retry_sleep_s = retry_sleep_s
+        # How often one clipboard operation is opened afresh after a 1418
+        # before it gives up as contention. Each attempt may spend the open
+        # retries above as well, so the worst case on the Qt thread is about
+        # reopen_attempts x (retry_count x retry_sleep_s + retry_sleep_s),
+        # 0.33 s at the defaults.
+        self._reopen_attempts = max(1, int(reopen_attempts))
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
         # The clipboard's data blocks are HGLOBALs, so reading and writing
         # their bytes goes through kernel32. `use_last_error=True` on both
@@ -241,23 +314,79 @@ class Win32ClipboardBackend:
         # `GetLastError`, which `hotkey.Win32HotkeyApi.get_last_error` reads.
         self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-    def capture_clipboard_state(self) -> ClipboardState:
-        with self._clipboard_opened():
-            # The whole id list is read in one pass before anything else
-            # touches the clipboard. `EnumClipboardFormats` is resumed from the
-            # id it is given, so interleaving it with the reads below would
-            # depend on what those reads do to the list -- and what
-            # `GetClipboardData` does to it for a format Windows synthesizes
-            # on demand is not something this code should have to know.
-            formats = self._copy_clipboard_formats(
-                self._enumerate_clipboard_formats()
-            )
-            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-                return ClipboardState(
-                    has_text=True, text=str(text), formats=formats
+    def _with_reopen(self, operation: str, body, exhausted_error=None):
+        """Run `body` inside an open clipboard, opening afresh after a 1418.
+
+        Returns `(result, lost_close)`. `body` raises `_ClipboardNotOpenError`
+        for a call that found the clipboard closed under it. A close refused
+        with 1418 after a body that finished is not retried: the body's work
+        is done, and what that means is the caller's to decide -- a read has
+        its answer, a write has to be read back (`set_clipboard_text`), which
+        is what `lost_close` is for. The spent attempts raise
+        `exhausted_error()`, by default `ClipboardContentionError`, which
+        every caller already treats as "try again, and never write over the
+        clipboard".
+
+        This survives the race rather than closing it: the race comes from
+        pywin32 opening with a NULL owner window, and opening with a window of
+        our own is a separate, larger change -- and an owner window without a
+        message pump blocks every other program's `EmptyClipboard` (see the
+        paste-transaction entry in `docs/agents/text-insertion.md`).
+        """
+        for attempt in range(1, self._reopen_attempts + 1):
+            if attempt > 1:
+                time.sleep(self._retry_sleep_s)
+            context = self._clipboard_opened(tolerate_lost_close=True)
+            try:
+                with context:
+                    result = body()
+            except _ClipboardNotOpenError:
+                _LOGGER.info(
+                    "clipboard_not_open op=%s attempt=%s of %s",
+                    operation,
+                    attempt,
+                    self._reopen_attempts,
                 )
-            return ClipboardState(has_text=False, text=None, formats=formats)
+                continue
+            if context.lost_before_close:
+                _LOGGER.info("clipboard_close_not_open op=%s", operation)
+            return result, context.lost_before_close
+        if exhausted_error is not None:
+            raise exhausted_error()
+        raise ClipboardContentionError(
+            "Another program kept closing the clipboard while it was in use "
+            "(Windows error 1418); left the current clipboard untouched."
+        )
+
+    def _unicode_text_or_none(self) -> str | None:
+        """`CF_UNICODETEXT` of the open clipboard, or None when there is none."""
+        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            return None
+        try:
+            text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
+        except Exception as exc:
+            _raise_if_clipboard_not_open(exc)
+            raise
+        return str(text)
+
+    def capture_clipboard_state(self) -> ClipboardState:
+        state, _lost_close = self._with_reopen(
+            "capture", self._capture_open_clipboard
+        )
+        return state
+
+    def _capture_open_clipboard(self) -> ClipboardState:
+        # The whole id list is read in one pass before anything else touches
+        # the clipboard. `EnumClipboardFormats` is resumed from the id it is
+        # given, so interleaving it with the reads below would depend on what
+        # those reads do to the list -- and what `GetClipboardData` does to it
+        # for a format Windows synthesizes on demand is not something this
+        # code should have to know.
+        formats = self._copy_clipboard_formats(self._enumerate_clipboard_formats())
+        text = self._unicode_text_or_none()
+        if text is not None:
+            return ClipboardState(has_text=True, text=text, formats=formats)
+        return ClipboardState(has_text=False, text=None, formats=formats)
 
     def _enumerate_clipboard_formats(self) -> list[int]:
         """Every format id on the clipboard, in the clipboard's own order.
@@ -434,15 +563,80 @@ class Win32ClipboardBackend:
         global_unlock.restype = ctypes.wintypes.BOOL
         global_unlock(handle)
 
-    def set_clipboard_text(self, text: str) -> ClipboardMarker:
-        with self._clipboard_opened():
-            win32clipboard.EmptyClipboard()
+    def set_clipboard_text(
+        self, text: str, exclude_from_history: bool = False
+    ) -> ClipboardMarker:
+        """Write `text` as the clipboard's only content and return its marker.
+
+        `exclude_from_history` adds the three registered formats that keep this
+        write out of Windows' clipboard history and cloud clipboard (see
+        `_CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES`), inside the same open, so
+        no monitor ever sees the transcript without them. Best-effort: a format
+        that cannot be registered or set is logged and costs the exclusion,
+        never the write.
+        """
+        # Set once our `EmptyClipboard` has succeeded in any attempt: from then
+        # on the clipboard is ours to put back if no write of ours lands, and a
+        # retry must not empty a clipboard someone else has written to since.
+        emptied = False
+        # Registering needs no open clipboard, so it stays out of the open.
+        exclusion_format_ids = (
+            self._history_exclusion_format_ids() if exclude_from_history else []
+        )
+        exclusion_failures = 0
+
+        def _write_into_open_clipboard() -> None:
+            nonlocal emptied, exclusion_failures
+            if emptied:
+                self._refuse_if_written_since_our_empty()
+            try:
+                win32clipboard.EmptyClipboard()
+            except Exception as exc:
+                _raise_if_clipboard_not_open(exc)
+                if emptied:
+                    raise ClipboardEmptiedError(
+                        f"The clipboard was emptied but could not be written: {exc}"
+                    ) from exc
+                raise
+            emptied = True
             try:
                 win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
             except Exception as exc:
+                _raise_if_clipboard_not_open(exc)
                 raise ClipboardEmptiedError(
                     f"The clipboard was emptied but could not be written: {exc}"
                 ) from exc
+            if exclude_from_history:
+                exclusion_failures = self._set_history_exclusion_formats(
+                    exclusion_format_ids
+                )
+
+        def _spent() -> TextInsertionError:
+            message = (
+                "Another program kept closing the clipboard while it was in "
+                "use (Windows error 1418)"
+            )
+            if emptied:
+                return ClipboardEmptiedError(
+                    f"The clipboard was emptied but could not be written: {message}."
+                )
+            return ClipboardContentionError(
+                f"{message}; left the current clipboard untouched."
+            )
+
+        _result, lost_close = self._with_reopen(
+            "write", _write_into_open_clipboard, exhausted_error=_spent
+        )
+        if exclusion_failures:
+            # The transcript is on the clipboard either way; without these
+            # formats Windows may list it in Win+V as it did before they
+            # existed. A warning, because the user sees an entry they did not
+            # expect, never an error, because the paste is unaffected.
+            _LOGGER.warning(
+                "clipboard_history_exclusion_partial failed=%d", exclusion_failures
+            )
+        if lost_close:
+            return self._confirm_write_landed(text)
         # The counter is read here -- after `CloseClipboard` and before
         # returning -- so the number the caller gets is the one our write
         # produced. A caller that reads it in a second call instead adopts the
@@ -452,6 +646,95 @@ class Win32ClipboardBackend:
         # documented and nothing here may depend on the answer: "the value
         # right after our close" is true either way.
         return ClipboardMarker(sequence=self.get_clipboard_sequence_number())
+
+    def _history_exclusion_format_ids(self) -> list[int]:
+        """The registered ids of the exclusion formats, 0 for any refused."""
+        format_ids = []
+        for name in _CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES:
+            try:
+                format_id = int(win32clipboard.RegisterClipboardFormat(name) or 0)
+            except Exception:
+                _LOGGER.debug(
+                    "Clipboard format %r could not be registered",
+                    name,
+                    exc_info=True,
+                )
+                format_id = 0
+            format_ids.append(format_id)
+        return format_ids
+
+    def _set_history_exclusion_formats(self, format_ids: list[int]) -> int:
+        """Set each exclusion format on the open clipboard; return the misses."""
+        failures = 0
+        for format_id in format_ids:
+            if format_id == 0:
+                failures += 1
+                continue
+            try:
+                written = self._set_clipboard_bytes(
+                    format_id, _CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD
+                )
+            except Exception:
+                _LOGGER.debug(
+                    "Clipboard format %s could not be set",
+                    format_id,
+                    exc_info=True,
+                )
+                written = False
+            if not written:
+                failures += 1
+        return failures
+
+    def _refuse_if_written_since_our_empty(self) -> None:
+        """A write retry must find the clipboard as our `EmptyClipboard` left it.
+
+        Between our refused write and this retry, the program that closed the
+        clipboard under us may have written to it. Emptying it again would
+        erase that program's content, which contention never does.
+        """
+        try:
+            first_format = int(win32clipboard.EnumClipboardFormats(0) or 0)
+        except Exception as exc:
+            _raise_if_clipboard_not_open(exc)
+            raise ClipboardContentionError(
+                "The clipboard could not be checked before writing to it again; "
+                "left it untouched."
+            ) from exc
+        if first_format:
+            raise ClipboardContentionError(
+                "Another program wrote to the clipboard while this app was "
+                "writing to it; left the current clipboard untouched."
+            )
+
+    def _confirm_write_landed(self, text: str) -> ClipboardMarker:
+        """Our write finished, but another program closed the clipboard first.
+
+        `SetClipboardData` handed the data over and only `CloseClipboard` was
+        refused with 1418, so the transcript is on the clipboard unless that
+        program wrote after us. The content read back is the evidence, never
+        the handle: exactly our text means the write landed and the paste may
+        go on; anything else is contention.
+
+        The counter is read BEFORE the text. Read after it, a foreign write
+        between the two reads would become "our" marker -- the gap
+        `ClipboardMarker` exists to close. Read before, the marker can only
+        describe a state at or before the one whose text was confirmed.
+        """
+        sequence = self.get_clipboard_sequence_number()
+        try:
+            current = self.get_clipboard_text()
+        except Exception as exc:
+            raise ClipboardContentionError(
+                "The clipboard was closed by another program during the write "
+                "and could not be read back; left it untouched."
+            ) from exc
+        if current != text:
+            raise ClipboardContentionError(
+                "The clipboard was closed by another program during the write "
+                "and no longer holds the transcript; left it untouched."
+            )
+        _LOGGER.info("clipboard_set_landed_despite_close_error")
+        return ClipboardMarker(sequence=sequence)
 
     def get_foreground_window(self) -> int | None:
         """The window Windows reports as foreground right now, or None.
@@ -594,10 +877,8 @@ class Win32ClipboardBackend:
         return int(getter() or 0)
 
     def get_clipboard_text(self) -> str | None:
-        with self._clipboard_opened():
-            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
-                return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
-            return None
+        text, _lost_close = self._with_reopen("read", self._unicode_text_or_none)
+        return text
 
     def send_ctrl_v(self) -> None:
         _send_ctrl_v_input()
@@ -710,8 +991,14 @@ class Win32ClipboardBackend:
         )
 
     class _ClipboardContext:
-        def __init__(self, backend: Win32ClipboardBackend) -> None:
+        def __init__(
+            self, backend: Win32ClipboardBackend, *, tolerate_lost_close: bool
+        ) -> None:
             self._backend = backend
+            self._tolerate_lost_close = tolerate_lost_close
+            # True when the body finished and `CloseClipboard` was refused
+            # with 1418 -- only reachable with `tolerate_lost_close`.
+            self.lost_before_close = False
 
         def __enter__(self):
             if win32clipboard is None or win32con is None:
@@ -729,11 +1016,36 @@ class Win32ClipboardBackend:
             raise TextInsertionError("Failed to open clipboard.")
 
         def __exit__(self, exc_type, exc, tb):
-            win32clipboard.CloseClipboard()
+            try:
+                win32clipboard.CloseClipboard()
+            except Exception as close_error:
+                if exc is not None:
+                    # The body's exception says what happened, and a close that
+                    # failed as well must not replace it. It did: a write
+                    # refused after `EmptyClipboard` is `ClipboardEmptiedError`,
+                    # the one error that makes the transaction put the user's
+                    # clipboard back, and a 1418 from this close arrived in its
+                    # place -- nothing restored, the clipboard left empty.
+                    _LOGGER.debug(
+                        "CloseClipboard failed after an error inside the open "
+                        "clipboard",
+                        exc_info=True,
+                    )
+                    return False
+                if self._tolerate_lost_close and _is_clipboard_not_open(
+                    close_error
+                ):
+                    self.lost_before_close = True
+                    return False
+                raise
             return False
 
-    def _clipboard_opened(self) -> Win32ClipboardBackend._ClipboardContext:
-        return self._ClipboardContext(self)
+    def _clipboard_opened(
+        self, *, tolerate_lost_close: bool = False
+    ) -> Win32ClipboardBackend._ClipboardContext:
+        return self._ClipboardContext(
+            self, tolerate_lost_close=tolerate_lost_close
+        )
 
     def _send_wm_paste(self, target_hwnd: int | None = None) -> bool:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
@@ -845,6 +1157,13 @@ class TextInserter:
         # transcript is on the clipboard and only one "previous clipboard" is
         # the user's.
         self._pending_restore: _PendingRestore | None = None
+        # Clock reading of the last SendInput paste keystroke, or None after a
+        # WM_PASTE (synchronous: the target has read the clipboard when the
+        # call returns) and before any paste. Written under `_insert_lock` as
+        # one assignment, so `paste_pace_remaining_s` reads it without the
+        # lock -- a deferred restore holding the lock on its timer thread must
+        # not stall the Qt thread asking this.
+        self._last_paste_keystroke_at: float | None = None
 
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
         return self.insert_text_with_options(
@@ -852,6 +1171,28 @@ class TextInserter:
             target_hwnd=target_hwnd,
             paste_mode="auto",
         )
+
+    def paste_pace_remaining_s(self) -> float:
+        """Seconds until a new paste stops racing the last keystroke's read.
+
+        After a SendInput keystroke the target reads the clipboard whenever it
+        gets to it -- an Electron renderer asynchronously, a busy application
+        seconds later -- and any clipboard write inside that window hands the
+        late reader the NEW text: the first transcript is lost and the second
+        is pasted twice. That holds whichever window the next paste is aimed
+        at, because the clipboard is one per session, so the answer is not per
+        target. The window is the one the deferred restore already trusts,
+        `restore_delay_s` from the keystroke, so the caller can hold a paste
+        until then instead of guessing a second budget.
+
+        Answers 0.0 before any paste, after a WM_PASTE and once the window
+        has passed.
+        """
+        pasted_at = self._last_paste_keystroke_at
+        if pasted_at is None:
+            return 0.0
+        remaining = self._restore_delay_s - (self._clock() - pasted_at)
+        return max(0.0, remaining)
 
     def _paste_text_with_options(
         self,
@@ -969,7 +1310,12 @@ class TextInserter:
         clipboard_was_set = False
         try:
             try:
-                written = self._backend.set_clipboard_text(text)
+                # A transcript the transaction will replace with the user's
+                # own content is kept out of Win+V; one the user keeps
+                # ("Keep transcript in clipboard") is an ordinary entry.
+                written = self._backend.set_clipboard_text(
+                    text, exclude_from_history=restore_clipboard
+                )
             except ClipboardEmptiedError:
                 # Destructive half done, write half not: the clipboard is
                 # empty and putting it back is the only way the user gets
@@ -1015,6 +1361,7 @@ class TextInserter:
                 actual_mode = "send_input"
             paste_sent = True
             record.actual_mode = actual_mode
+            self._note_paste_keystroke(actual_mode)
 
             if actual_mode == "send_input":
                 # Nothing here waits for the target and nothing sleeps:
@@ -1047,6 +1394,11 @@ class TextInserter:
                 )
         except Exception as exc:
             paste_error = exc
+            if not paste_sent and isinstance(exc, TextMayHaveBeenPastedError):
+                # A partial SendInput from inside the send itself: two of the
+                # four events went out, so the target may read the clipboard
+                # late exactly as after a whole keystroke.
+                self._note_paste_keystroke("send_input")
             if isinstance(
                 exc, (ClipboardContentionError, TextMayHaveBeenPastedError)
             ):
@@ -1130,6 +1482,19 @@ class TextInserter:
             raise TextMayHaveBeenPastedError(
                 f"Text pasted but clipboard restore failed: {restore_error}"
             ) from restore_error
+
+    def _note_paste_keystroke(self, actual_mode: str) -> None:
+        """Remember when a target may still read the clipboard late.
+
+        The caller holds `_insert_lock`. A WM_PASTE clears the record rather
+        than keeping the previous one: `SendMessageTimeout` returned after its
+        target read the clipboard, and that write already replaced whatever a
+        late reader of the paste before it would have found.
+        """
+        if actual_mode == "send_input":
+            self._last_paste_keystroke_at = self._clock()
+        else:
+            self._last_paste_keystroke_at = None
 
     def _foreground_window(self) -> int | None:
         """Which window is in front, or None when that cannot be answered.
