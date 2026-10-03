@@ -212,9 +212,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   deleting `onnx_auto_preferred_devices` from `%APPDATA%\stt_app\settings.json`
   with the app closed. A stale entry costs speed, never correctness
   (2026-09-19).
-- **A benchmark model row toggles only on its checkbox** (checkable items, no
-  selection). Whole-row toggling must test the click against the indicator
-  rectangle or it toggles twice. P4, ~20 min (2026-09-27).
 - **A key command whose wrapper does not wait for its tool can lose the
   token** (P3, 2026-10-01, review of dedcde4). `run_bounded` ends the job
   0.5 s after the direct child exits while a descendant still holds the
