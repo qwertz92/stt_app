@@ -15,6 +15,7 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
 from PySide6 import QtTest, QtWidgets
 from test_settings_dialog_connection import (
     _FakeLogger,
@@ -36,11 +37,13 @@ class _RefusingThread:
     guards exist for.
     """
 
+    error: type[Exception] = RuntimeError
+
     def __init__(self, *args, name: str = "", **kwargs) -> None:
         self.name = name
 
     def start(self) -> None:
-        raise RuntimeError("can't start new thread")
+        raise self.error("can't start new thread")
 
     def is_alive(self) -> bool:  # pragma: no cover - it never ran
         return False
@@ -59,7 +62,15 @@ def _make_dialog(settings: AppSettings | None = None, **kwargs) -> SettingsDialo
     )
 
 
-def _refuse_new_threads(monkeypatch) -> None:
+@pytest.fixture(params=[RuntimeError, MemoryError], ids=lambda error: error.__name__)
+def refusal(request) -> type[Exception]:
+    """How the starved interpreter refuses: `RuntimeError` when the OS will not
+    create the thread, `MemoryError` when the interpreter cannot allocate its
+    bookkeeping for one. Either way the busy marker has to go back."""
+    return request.param
+
+
+def _refuse_new_threads(monkeypatch, error: type[Exception] = RuntimeError) -> None:
     """Make every `threading.Thread.start()` raise, from here on.
 
     The dialog mixins each import `threading` themselves, and this replaces the
@@ -69,12 +80,16 @@ def _refuse_new_threads(monkeypatch) -> None:
     leave every later assertion reading the scan's failure message instead of
     the one the site under test wrote.
     """
-    monkeypatch.setattr(threading, "Thread", _RefusingThread)
+    monkeypatch.setattr(
+        threading, "Thread", type("_Refusing", (_RefusingThread,), {"error": error})
+    )
 
 
-def test_a_connection_test_that_cannot_start_gives_the_button_back(monkeypatch):
+def test_a_connection_test_that_cannot_start_gives_the_button_back(
+    monkeypatch, refusal
+):
     dialog = _make_dialog(AppSettings(engine="local"))
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
     dialog.deepgram_key_edit.setText("dg-test-key")
 
     dialog._provider_test_buttons["deepgram"].click()
@@ -86,9 +101,9 @@ def test_a_connection_test_that_cannot_start_gives_the_button_back(monkeypatch):
     assert "Could not start the connection test" in dialog.test_conn_result.text()
 
 
-def test_an_update_check_that_cannot_start_gives_the_button_back(monkeypatch):
+def test_an_update_check_that_cannot_start_gives_the_button_back(monkeypatch, refusal):
     dialog = _make_dialog()
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._check_for_updates()
 
@@ -98,9 +113,11 @@ def test_an_update_check_that_cannot_start_gives_the_button_back(monkeypatch):
     assert "Could not start the update check" in dialog._save_status_label.text()
 
 
-def test_a_model_scan_that_cannot_start_does_not_leave_the_tab_scanning(monkeypatch):
+def test_a_model_scan_that_cannot_start_does_not_leave_the_tab_scanning(
+    monkeypatch, refusal
+):
     dialog = _make_dialog()
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._request_local_model_scan(force=True)
 
@@ -113,7 +130,7 @@ def test_a_model_scan_that_cannot_start_does_not_leave_the_tab_scanning(monkeypa
     )
 
 
-def test_a_model_scan_that_cannot_start_leaves_no_state_behind(monkeypatch):
+def test_a_model_scan_that_cannot_start_leaves_no_state_behind(monkeypatch, refusal):
     """The arm repeated half the completion slot and forgot the other half.
 
     Left behind: the `_local_model_scan_started_at_by_token` entry, which is
@@ -123,7 +140,7 @@ def test_a_model_scan_that_cannot_start_leaves_no_state_behind(monkeypatch):
     """
     dialog = _make_dialog()
     dialog._cached_local_models_available = False
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._request_local_model_scan(force=True)
 
@@ -131,7 +148,7 @@ def test_a_model_scan_that_cannot_start_leaves_no_state_behind(monkeypatch):
     assert "in the background" not in dialog.local_models_label.text()
 
 
-def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch):
+def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch, refusal):
     """The download's completion refreshes the inventory, which starts a scan.
 
     With no thread available both fail, and the scan's message used to land on
@@ -139,7 +156,7 @@ def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch):
     that a model scan could not be started.
     """
     dialog = _make_dialog()
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._start_local_model_download(["tiny"])
 
@@ -148,7 +165,9 @@ def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch):
     assert "model scan" not in shown, shown
 
 
-def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkeypatch):
+def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(
+    monkeypatch, refusal
+):
     """The queue's claim on the model has to go back with the queue.
 
     Interest is registered at enqueue so the controller's preload leaves a
@@ -158,7 +177,7 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkey
     """
     dialog = _make_dialog()
     coordinator = model_download_coordinator()
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._start_local_model_download(["tiny"])
 
@@ -223,10 +242,12 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
     )
 
 
-def test_an_import_that_cannot_start_gives_the_import_controls_back(monkeypatch):
+def test_an_import_that_cannot_start_gives_the_import_controls_back(
+    monkeypatch, refusal
+):
     dialog = _make_dialog(AppSettings(engine="local"))
     dialog._set_selected_import_file("dummy.wav")
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, refusal)
 
     dialog._start_import_transcription("dummy.wav")
 

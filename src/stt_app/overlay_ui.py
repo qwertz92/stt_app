@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import sys
+from collections.abc import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -173,6 +174,39 @@ def _queue_title(entries) -> str:
         noun = "transcript" if waiting == 1 else "transcripts"
         return f"{waiting} {noun} not inserted"
     return f"{transcribing} · {waiting} not inserted"
+
+
+class _RebuildableMenu(QtWidgets.QMenu):
+    """A menu whose items are rebuilt from state, never while it is open.
+
+    `QMenu.clear()` deletes the actions under an open popup, among them one
+    the user has chosen whose `triggered` has not run yet. A request made
+    while the popup is visible is kept and run on the event-loop turn after
+    it hides: Qt hides the popup first and triggers the chosen action after
+    that, and a rebuild in between would delete it.
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget, rebuild: Callable[[], None]) -> None:
+        super().__init__(parent)
+        self._rebuild = rebuild
+        self._rebuild_pending = False
+        self.aboutToHide.connect(self._rebuild_after_hide)
+
+    def request_rebuild(self) -> None:
+        if self.isVisible():
+            self._rebuild_pending = True
+            return
+        self._rebuild_pending = False
+        self._rebuild()
+
+    def _rebuild_after_hide(self) -> None:
+        if self._rebuild_pending:
+            QtCore.QTimer.singleShot(0, self._run_pending_rebuild)
+
+    def _run_pending_rebuild(self) -> None:
+        if self._rebuild_pending and not self.isVisible():
+            self._rebuild_pending = False
+            self._rebuild()
 
 
 class _OverlayLanguageButton(QtWidgets.QPushButton):
@@ -550,7 +584,9 @@ class OverlayUI(QtWidgets.QWidget):
         # longest language names (Luxembourgish, Northern Sotho, ...), which
         # faster-whisper's ~100 languages expose by default.
         self._language_button.setFixedSize(self._widest_language_caption_width(), 22)
-        self._language_menu = QtWidgets.QMenu(self._language_button)
+        self._language_menu = _RebuildableMenu(
+            self._language_button, self._fill_language_menu
+        )
         self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
 
@@ -597,7 +633,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._microphone_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._microphone_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._microphone_button.setFixedHeight(22)
-        self._microphone_menu = QtWidgets.QMenu(self._microphone_button)
+        self._microphone_menu = _RebuildableMenu(
+            self._microphone_button, self._fill_microphone_menu
+        )
         self._microphone_button.clicked.connect(self._show_microphone_menu)
         self._opacity_value_label = QtWidgets.QLabel("")
         self._opacity_value_label.setFixedWidth(_OPACITY_VALUE_LABEL_WIDTH)
@@ -1271,6 +1309,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._rebuild_language_menu()
 
     def _rebuild_language_menu(self) -> None:
+        self._language_menu.request_rebuild()
+        self._sync_language_button()
+
+    def _fill_language_menu(self) -> None:
         self._language_menu.clear()
         for mode in self._language_modes:
             action = self._language_menu.addAction(LANGUAGE_MODE_LABELS.get(mode, mode))
@@ -1279,7 +1321,6 @@ class OverlayUI(QtWidgets.QWidget):
             action.triggered.connect(
                 lambda _checked=False, value=mode: self._select_language(value)
             )
-        self._sync_language_button()
 
     def _select_language(self, mode: str) -> None:
         if self._language_change_blocked or mode not in self._language_modes:
@@ -1344,6 +1385,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._rebuild_microphone_menu()
 
     def _rebuild_microphone_menu(self) -> None:
+        self._microphone_menu.request_rebuild()
+        self._sync_microphone_button()
+
+    def _fill_microphone_menu(self) -> None:
         self._microphone_menu.clear()
         for index, (label, value) in enumerate(self._microphone_entries):
             if index == 1:
@@ -1354,7 +1399,6 @@ class OverlayUI(QtWidgets.QWidget):
             action.triggered.connect(
                 lambda _checked=False, name=value: self._select_microphone(name)
             )
-        self._sync_microphone_button()
 
     def _select_microphone(self, name: str) -> None:
         if self._microphone_change_blocked:

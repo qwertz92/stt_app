@@ -64,6 +64,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   popup and a centred chevron; never `QPushButton.setMenu()` (misaligned
   indicator; a pixel test checks the chevron). The Transcription-tab model
   runtime note reserves three lines (gray note for faster-whisper).
+- **The Language and microphone menus are `_RebuildableMenu`s, rebuilt only
+  while hidden** (2026-10-03). `QMenu.clear()` deletes the actions under an
+  open popup -- and one the user has chosen whose `triggered` has not run
+  yet -- and `audio_devices_refreshed` or a settings load can land at any
+  moment. A request while the popup is visible is kept and runs on the
+  event-loop turn after `aboutToHide` (Qt hides first, triggers after, so an
+  immediate rebuild would still delete the chosen action). The button caption
+  and enabled state update at once; only the item list waits.
 - **The footer is [microphone menu][opacity slider][value]** (2026-10-03,
   UX review item 3, variant B). The microphone button
   (`_OverlayMicrophoneButton`, the Lang button's chevron and chrome, text

@@ -496,6 +496,55 @@ def test_a_stored_key_marked_for_removal_brings_the_warning_back(
     app.processEvents()
 
 
+class _PlainTextSecretStore:
+    """Holds one plain-text fallback key per provider; `source` is what the
+    real store reports for it: "insecure" while its fallback is enabled."""
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+
+    def get_api_key(self, provider: str) -> str | None:
+        return f"stored-{provider}" if self._source == "insecure" else None
+
+    def get_api_key_source(self, _provider: str) -> str:
+        return self._source
+
+
+@pytest.mark.parametrize(
+    ("saved_allows", "source"), [(True, "insecure"), (False, "insecure-disabled")]
+)
+def test_the_key_warning_follows_the_unsaved_insecure_storage_checkbox(
+    monkeypatch, tmp_path, saved_allows: bool, source: str
+) -> None:
+    """A plain-text key is handed out only while the fallback is enabled, and
+    the checkbox applies on Save. The warning says it judges what Save leaves,
+    but read the store's current state: unchecking the box (unsaved) kept the
+    key "usable" in the warning and badge, and checking it for a disabled
+    store kept the warning although Save would make the key usable."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch,
+        tmp_path,
+        "openai",
+        secret_store=_PlainTextSecretStore(source),
+        allow_insecure_key_storage=saved_allows,
+    )
+    try:
+        checkbox = dialog.insecure_key_storage_checkbox
+        badge = dialog._provider_status_labels["openai"]
+        assert checkbox.isChecked() is saved_allows
+        for checked in (True, False, True):
+            checkbox.setChecked(checked)
+            app.processEvents()
+            assert _note_is_a_warning(dialog) is (not checked), checked
+            assert badge.text() == (
+                "Stored insecurely" if checked else "Insecure disabled"
+            ), checked
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
 def test_azure_without_its_endpoint_warns_even_with_a_key(
     monkeypatch, tmp_path
 ) -> None:
@@ -1465,6 +1514,101 @@ def test_nothing_scrolls_sideways_or_hides_a_tab_at_the_minimum_width(
                         button.width(),
                         button.sizeHint().width(),
                     )
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            app.processEvents()
+
+
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge(
+    point_size: float, monkeypatch, tmp_path
+) -> None:
+    """The Azure endpoint ran from the key column to the badge's right edge,
+    622 px against the key field's 342 at the minimum width (9 pt), which made
+    it look out of place; the custom endpoint's Base URL, API Style and Key
+    Command did the same. One rule now: a field in a Providers grid starts and
+    ends where the key fields do (a region combo keeps its own, narrower
+    width, left-aligned)."""
+    with _AppFont(point_size) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            dialog.show()
+            for index in range(dialog.tabs.count()):
+                if dialog.tabs.tabText(index) == "Providers":
+                    dialog.tabs.setCurrentIndex(index)
+            _settle_layout(app)
+
+            def span(widget: QtWidgets.QWidget) -> tuple[int, int]:
+                left = widget.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+                return left, left + widget.width()
+
+            key = span(dialog._provider_key_edits["openai"])
+            assert span(dialog._provider_key_edits["custom"]) == key
+            for widget in (
+                dialog.azure_endpoint_edit,
+                dialog.custom_endpoint_edit,
+                dialog.custom_api_mode_combo,
+                dialog.custom_key_command_edit,
+            ):
+                assert span(widget) == key, widget
+            for provider, combo in dialog._provider_region_combos.items():
+                left, right = span(combo)
+                assert left == key[0], provider
+                assert right <= key[1], provider
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            app.processEvents()
+
+
+@pytest.mark.parametrize("failing", [10, 9])
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_summary_of_failed_tests_fits_its_reserved_two_lines(
+    point_size: float, failing: int, monkeypatch, tmp_path
+) -> None:
+    """Test All Configured with every provider failing listed each as
+    `Name: Fail |` under the long display labels: 3 lines wanted against the
+    2 reserved at every text size (60 of 50 px at 9 pt, 72 of 58 at 11.25),
+    so the last names were cut off. Passed rows show a mark, so the line
+    names only the failures, by their short row titles."""
+    from stt_app.settings_dialog_helpers import _REMOTE_PROVIDERS
+
+    with _AppFont(point_size) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            dialog.show()
+            for index in range(dialog.tabs.count()):
+                if dialog.tabs.tabText(index) == "Providers":
+                    dialog.tabs.setCurrentIndex(index)
+            dialog.resize(dialog.minimumWidth(), dialog.height())
+            _settle_layout(app)
+            names = [provider.name for provider in _REMOTE_PROVIDERS]
+            details = {
+                name: (index >= failing, "HTTP 401") for index, name in enumerate(names)
+            }
+            dialog._connection_test_id = 7
+            dialog._connection_test_details[7] = details
+            passed = sum(1 for ok, _msg in details.values() if ok)
+            dialog._on_connection_test_finished(
+                7, False, f"{passed}/{len(names)} provider tests passed."
+            )
+            _settle_layout(app)
+
+            label = dialog.test_conn_result
+            text = label.text()
+            for provider in _REMOTE_PROVIDERS[:failing]:
+                assert provider.title in text, provider.name
+            for provider in _REMOTE_PROVIDERS[failing:]:
+                assert provider.title not in text, provider.name
+            wanted = label.fontMetrics().boundingRect(
+                0, 0, label.width(), 10_000, QtCore.Qt.TextWordWrap, text
+            )
+            assert wanted.height() <= label.height(), (
+                wanted.height(),
+                label.height(),
+                text,
+            )
         finally:
             dialog.close()
             dialog.deleteLater()

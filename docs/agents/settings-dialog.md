@@ -94,7 +94,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     behind scroll arrows, and the tab a note sends the user to may be the
     hidden one. 2026-09-27: dialog minimum 797 px at 9 pt, 907 at 11.25, 1020
     at 13.5; 2026-10-03, with the longer "Providers" title: 801 / 912 / 1026
-    (still the tab bar; the Providers page needs 573 / 636 / 693).
+    (still the tab bar; the Providers page needs 583 / 674 / 757 since the
+  fields below the key column were narrowed to it).
   - It reads `self.tabs.minimumSizeHint()` plus root margins, never the
     dialog hint: a long failed-save message on the root status line once
     pinned 3077 px for the app's life (test: 400-character text on the status
@@ -188,9 +189,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   140 px), Test, Remove, a fixed-width last-test mark, the key-source badge.
   "Cloud providers" holds the nine key providers; a provider's region
   (`_REMOTE_REGION_CHOICES`, each choice's vendor guarantee as an item
-  tooltip) or Azure's endpoint is an indented sub-row right under it. The
-  region combo is left-aligned at its own width (never raises the page
-  minimum), always visible and enabled, so a pick moves nothing. "Custom
+  tooltip) or Azure's endpoint is an indented sub-row right under it.
+  **One width rule (2026-10-03): a field in a grid starts and ends where the
+  key fields do** -- Azure's endpoint and the custom endpoint's Base URL,
+  API Style and Key Command take the key field's column only (they used to
+  span to the badge: 622 px against the key field's 342 at the minimum
+  width, 9 pt; now 342 / 390 / 447 px at 9 / 11.25 / 13.5 pt, the
+  longest placeholder needs 252 / 310 / 372). The API Style combo's minimum
+  contents length is 8, not 24, or it would raise the column. The region
+  combo is left-aligned at its own width, always visible and enabled, so a
+  pick moves nothing; it raises the page minimum by at most its own width
+  (Providers page 583 / 674 / 757 px, was 573 / 636 / 693; the dialog
+  minimum 801 / 912 / 1026 is the tab bar and did not move). "Custom
   endpoint (OpenAI-compatible)" holds Base URL, API Style, Key Command and
   the endpoint's own key row; both groups use `_new_provider_grid` and the
   same captions, so their columns line up (a test pins it). Test is enabled
@@ -209,12 +219,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   under the groups (`test_conn_result`, two lines reserved) reports the test
   just run, or -- on opening and after a clear -- the most recent stored
   result, naming the provider. The per-row "Last test" lines it replaced
-  reserved two lines each.
+  reserved two lines each. The summary of a multi-provider test names only
+  the failures, by short row titles (`0/10 provider tests passed. Failed:
+  AssemblyAI, ...`); the old `Name: Fail | ...` over the long labels needed
+  three lines against the two reserved. Ten failures need 32 / 40 / 48 of
+  42 / 50 / 58 px at 9 / 11.25 / 13.5 pt at the minimum width.
 - **A remote engine that cannot dictate says so on the Transcription tab**
   (2026-10-03, UX review item 6d). `_remote_engine_setup_issue` (remote
   mixin) names the first gap: the custom endpoint's base URL, then the key
-  (typed, or stored with a usable source and not marked for removal -- the
-  Test button's judgement; for the custom endpoint a key command counts, as
+  (typed, or stored with a usable source and not marked for removal; a
+  plain-text key is usable while the insecure-fallback checkbox is
+  **checked, saved or not** -- `_key_source_after_save`, which the
+  key-source badge shares, since the store hands the key out only once Save
+  has applied the box. The Test button differs on purpose: a test runs now,
+  against the store's present state. For the custom endpoint a key command counts, as
   `CustomEndpointTranscriber` requires one of the two), then Azure's
   endpoint, then Speechmatics Melia 1 outside eu1/us1
   (`config.speechmatics_model_available_in`, the transcriber's own check). `_update_remote_model_note` shows it in red in place of the
@@ -245,7 +263,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   before measuring, or it only ever grows. Any test measuring a reservation
   must remove the previous one first, or it reads it back.
 - **A dialog worker thread that will not start rolls back its busy marker**
-  (six `Thread.start()` sites; otherwise `_background_work_active()` stayed
+  (seven `Thread.start()` sites, each catching `_THREAD_START_ERRORS` --
+  `RuntimeError` and `MemoryError` -- except the benchmark's, which still
+  catches only the first: Known limitations; otherwise
+  `_background_work_active()` stayed
   true and `reload_from_store()` was deferred forever). Each arm undoes its
   own site and reports the user's own action: connection test and update
   check re-enable controls; the scan routes through

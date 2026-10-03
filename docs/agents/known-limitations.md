@@ -183,8 +183,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `request_restart` after its generation bump reopens and each own close
   re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
   serialize on `_audio_device_refresh_lock`, off Qt.
-- **`Thread.start` guards catch `RuntimeError` only**
-  (`fd1b50a`/`c98f57e`, settings dialog's six); a `MemoryError` escapes.
+- **The Run Benchmark `Thread.start` guard catches `RuntimeError` only**
+  (`settings_dialog_benchmark.py`, `_run_local_benchmark`): a `MemoryError`
+  escapes and leaves the run button disabled. The other six worker starts
+  catch `_THREAD_START_ERRORS` since 2026-10-03; this one was outside that
+  round's files. Fix: the same one-word change plus parametrizing its test
+  in `tests/test_settings_dialog_thread_start.py` (about 15 minutes).
 - **`WarmMicrophoneStream.close()` does not wait for a helper's close in
   flight** (drains `_retiring` and returns). Only `shutdown()` calls it;
   `close_if_idle` is the call that waits.
@@ -226,7 +230,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Two history entries equal in every field are one entry to Edit and
   Delete**: `update_entry` / `delete_entries` use `list.index` on the
   `TranscriptHistoryEntry` dataclass. The app never writes such a pair (every
-  recording has an id); fixing needs an id in the schema.
+  recording has an id); fixing needs an id in the schema. Left on cost
+  versus effect (2026-10-03, about 4 hours: schema field, migration of the
+  stored file, every dialog and store call): two entries equal in every field
+  are indistinguishable on screen, so acting on the first instead of the
+  second changes at most which of the two rows shows the edit (not
+  measured: the history list's order for equal timestamps was not checked).
 - **The readiness probe cannot see a browser renderer's delay**: for
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;

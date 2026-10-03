@@ -25,6 +25,7 @@ from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_LABEL_EXTRA_PX,
     _REMOTE_PROVIDERS,
     _REMOTE_REGION_CHOICES,
+    _THREAD_START_ERRORS,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
@@ -464,9 +465,9 @@ class _RemoteProvidersMixin:
     ) -> None:
         """A setting that belongs to the row above it, label indented.
 
-        ``own_width`` keeps the field at its own width, left-aligned (a
-        region combo), so it never raises the page's minimum width;
-        otherwise it spans to the badge's right edge.
+        The field takes the key field's column and so ends where the key
+        fields do. ``own_width`` keeps it at its own, narrower width,
+        left-aligned (a region combo).
         """
         label = QtWidgets.QLabel(text)
         label.setIndent(_PROVIDER_SUB_ROW_INDENT_PX)
@@ -475,11 +476,9 @@ class _RemoteProvidersMixin:
         label.setStyleSheet("color: #555;")
         grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         if own_width:
-            grid.addWidget(
-                field, row, 1, 1, 5, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
-            )
+            grid.addWidget(field, row, 1, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         else:
-            grid.addWidget(field, row, 1, 1, 5)
+            grid.addWidget(field, row, 1)
 
     def _build_region_combo(self, provider: str) -> QtWidgets.QComboBox:
         """Where the provider processes the audio; always enabled whatever
@@ -566,7 +565,7 @@ class _RemoteProvidersMixin:
         self.custom_api_mode_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
         )
-        self.custom_api_mode_combo.setMinimumContentsLength(24)
+        self.custom_api_mode_combo.setMinimumContentsLength(8)
         self.custom_api_mode_combo.setToolTip(
             "Speech servers and speech models answer the transcription API. "
             "A gateway that routes audio only to a multimodal LLM needs the "
@@ -589,7 +588,7 @@ class _RemoteProvidersMixin:
             label.setFixedWidth(label_width)
             label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
             grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            grid.addWidget(field, row, 1, 1, 5)
+            grid.addWidget(field, row, 1)
         self._add_provider_key_row(
             grid,
             len(_CUSTOM_ENDPOINT_ROW_LABELS),
@@ -629,6 +628,25 @@ class _RemoteProvidersMixin:
         except Exception:
             return "none"
 
+    def _key_source_after_save(self, provider: str) -> str:
+        """The stored key's source as Save would leave it.
+
+        The store hands a plain-text key out only while its insecure fallback
+        is enabled, and the checkbox applies on Save, so an unsaved tick
+        changes what the store will report: a stored fallback key reads as
+        "insecure" with the box checked and "insecure-disabled" without it.
+        The key's Test button is not judged this way: a test runs now, against
+        the store's present state.
+        """
+        source = self._stored_key_source(provider)
+        if source in {"insecure", "insecure-disabled"}:
+            return (
+                "insecure"
+                if self.insecure_key_storage_checkbox.isChecked()
+                else "insecure-disabled"
+            )
+        return source
+
     def _set_provider_status_badge(
         self,
         provider: str,
@@ -659,6 +677,7 @@ class _RemoteProvidersMixin:
         typed_value = key_field.text().strip()
         source = self._stored_key_source(provider)
         self._refresh_provider_row_controls(provider, key_field, typed_value, source)
+        source = self._key_source_after_save(provider)
         # The Transcription tab warns while the selected engine has no key.
         if provider == self.engine_combo.currentData():
             self._update_remote_model_note()
@@ -793,11 +812,13 @@ class _RemoteProvidersMixin:
                 "No base URL for the custom endpoint yet: enter it on the "
                 "Providers tab, or dictation with this engine fails."
             )
-        # The same judgement as the row's Test button: an "insecure-disabled"
-        # key sits in the file but the store no longer hands it out.
+        # An "insecure-disabled" key sits in the file but the store does not
+        # hand it out; whether the fallback is enabled is the checkbox's value
+        # as Save would apply it (the row's Test button reads the store's
+        # present state instead, as a test runs now).
         has_key = bool(key_field.text().strip()) or (
             engine not in self._provider_pending_clear
-            and self._stored_key_source(engine) in _USABLE_KEY_SOURCES
+            and self._key_source_after_save(engine) in _USABLE_KEY_SOURCES
         )
         if engine == "custom":
             has_key = has_key or bool(self.custom_key_command_edit.text().strip())
@@ -962,7 +983,7 @@ class _RemoteProvidersMixin:
         # deferred forever, silently.
         try:
             worker.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._end_connection_test()
             self._set_test_connection_feedback(
                 f"Could not start the connection test: {exc}", "#b71c1c"
@@ -1110,16 +1131,19 @@ class _RemoteProvidersMixin:
             )
 
         if len(details) > 1:
-            parts = []
-            for provider in (provider.name for provider in _REMOTE_PROVIDERS):
-                if provider not in details:
-                    continue
-                provider_ok, _provider_msg = details[provider]
-                marker = "OK" if provider_ok else "Fail"
-                parts.append(f"{self._provider_label(provider)}: {marker}")
+            # Only the failures are named, by their short row titles: every
+            # row carries its own mark, and "Name: Fail | ..." under the long
+            # labels for all ten providers needed three lines of the two the
+            # line reserves.
+            failed = [
+                provider.title
+                for provider in _REMOTE_PROVIDERS
+                if provider.name in details and not details[provider.name][0]
+            ]
             color = _TEST_OK_COLOR if ok else "#b26a00"
-            joined = " | ".join(parts)
-            self._set_test_connection_feedback(f"{msg} {joined}", color)
+            if failed:
+                msg = f"{msg} Failed: {', '.join(failed)}."
+            self._set_test_connection_feedback(msg, color)
             return
         if details:
             # One provider: its name leads, since every row reports here.

@@ -47,6 +47,7 @@ from .settings_dialog_helpers import (
     _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
+    _THREAD_START_ERRORS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     LOCAL_MODEL_LABELS,
     _emit_background_signal,
@@ -1326,7 +1327,7 @@ class _GeneralTabMixin:
         # the life of the dialog (see the connection test's guard).
         try:
             worker.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._on_custom_models_fetched(
                 fetch_id, False, f"Could not start the model fetch: {exc}"
             )

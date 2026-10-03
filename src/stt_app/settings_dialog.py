@@ -60,6 +60,7 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX,
     _PROVIDER_STATUS_BADGE_TEXTS,
+    _THREAD_START_ERRORS,
     ElidingLabel,
     _app_hotkey_to_qt_hotkey_text,
     _emit_background_signal,
@@ -1237,7 +1238,7 @@ class SettingsDialog(
         # deferred forever, silently.
         try:
             thread.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._active_update_check_thread = None
             self.check_updates_button.setEnabled(True)
             self._set_bottom_status(
