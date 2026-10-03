@@ -1471,6 +1471,48 @@ def test_nothing_scrolls_sideways_or_hides_a_tab_at_the_minimum_width(
             app.processEvents()
 
 
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge(
+    point_size: float, monkeypatch, tmp_path
+) -> None:
+    """The Azure endpoint ran from the key column to the badge's right edge,
+    622 px against the key field's 342 at the minimum width (9 pt), which made
+    it look out of place; the custom endpoint's Base URL, API Style and Key
+    Command did the same. One rule now: a field in a Providers grid starts and
+    ends where the key fields do (a region combo keeps its own, narrower
+    width, left-aligned)."""
+    with _AppFont(point_size) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            dialog.show()
+            for index in range(dialog.tabs.count()):
+                if dialog.tabs.tabText(index) == "Providers":
+                    dialog.tabs.setCurrentIndex(index)
+            _settle_layout(app)
+
+            def span(widget: QtWidgets.QWidget) -> tuple[int, int]:
+                left = widget.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+                return left, left + widget.width()
+
+            key = span(dialog._provider_key_edits["openai"])
+            assert span(dialog._provider_key_edits["custom"]) == key
+            for widget in (
+                dialog.azure_endpoint_edit,
+                dialog.custom_endpoint_edit,
+                dialog.custom_api_mode_combo,
+                dialog.custom_key_command_edit,
+            ):
+                assert span(widget) == key, widget
+            for provider, combo in dialog._provider_region_combos.items():
+                left, right = span(combo)
+                assert left == key[0], provider
+                assert right <= key[1], provider
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            app.processEvents()
+
+
 def test_the_full_final_checkbox_is_enabled_only_where_it_acts(
     monkeypatch, tmp_path
 ) -> None:

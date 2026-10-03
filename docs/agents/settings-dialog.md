@@ -94,7 +94,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     behind scroll arrows, and the tab a note sends the user to may be the
     hidden one. 2026-09-27: dialog minimum 797 px at 9 pt, 907 at 11.25, 1020
     at 13.5; 2026-10-03, with the longer "Providers" title: 801 / 912 / 1026
-    (still the tab bar; the Providers page needs 573 / 636 / 693).
+    (still the tab bar; the Providers page needs 583 / 674 / 757 since the
+  fields below the key column were narrowed to it).
   - It reads `self.tabs.minimumSizeHint()` plus root margins, never the
     dialog hint: a long failed-save message on the root status line once
     pinned 3077 px for the app's life (test: 400-character text on the status
@@ -188,9 +189,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   140 px), Test, Remove, a fixed-width last-test mark, the key-source badge.
   "Cloud providers" holds the nine key providers; a provider's region
   (`_REMOTE_REGION_CHOICES`, each choice's vendor guarantee as an item
-  tooltip) or Azure's endpoint is an indented sub-row right under it. The
-  region combo is left-aligned at its own width (never raises the page
-  minimum), always visible and enabled, so a pick moves nothing. "Custom
+  tooltip) or Azure's endpoint is an indented sub-row right under it.
+  **One width rule (2026-10-03): a field in a grid starts and ends where the
+  key fields do** -- Azure's endpoint and the custom endpoint's Base URL,
+  API Style and Key Command take the key field's column only (they used to
+  span to the badge: 622 px against the key field's 342 at the minimum
+  width, 9 pt; now 342 / 390 / 447 px at 9 / 11.25 / 13.5 pt, the
+  longest placeholder needs 252 / 310 / 372). The API Style combo's minimum
+  contents length is 8, not 24, or it would raise the column. The region
+  combo is left-aligned at its own width, always visible and enabled, so a
+  pick moves nothing; it raises the page minimum by at most its own width
+  (Providers page 583 / 674 / 757 px, was 573 / 636 / 693; the dialog
+  minimum 801 / 912 / 1026 is the tab bar and did not move). "Custom
   endpoint (OpenAI-compatible)" holds Base URL, API Style, Key Command and
   the endpoint's own key row; both groups use `_new_provider_grid` and the
   same captions, so their columns line up (a test pins it). Test is enabled

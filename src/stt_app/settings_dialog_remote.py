@@ -464,9 +464,9 @@ class _RemoteProvidersMixin:
     ) -> None:
         """A setting that belongs to the row above it, label indented.
 
-        ``own_width`` keeps the field at its own width, left-aligned (a
-        region combo), so it never raises the page's minimum width;
-        otherwise it spans to the badge's right edge.
+        The field takes the key field's column and so ends where the key
+        fields do. ``own_width`` keeps it at its own, narrower width,
+        left-aligned (a region combo).
         """
         label = QtWidgets.QLabel(text)
         label.setIndent(_PROVIDER_SUB_ROW_INDENT_PX)
@@ -475,11 +475,9 @@ class _RemoteProvidersMixin:
         label.setStyleSheet("color: #555;")
         grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         if own_width:
-            grid.addWidget(
-                field, row, 1, 1, 5, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
-            )
+            grid.addWidget(field, row, 1, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         else:
-            grid.addWidget(field, row, 1, 1, 5)
+            grid.addWidget(field, row, 1)
 
     def _build_region_combo(self, provider: str) -> QtWidgets.QComboBox:
         """Where the provider processes the audio; always enabled whatever
@@ -566,7 +564,7 @@ class _RemoteProvidersMixin:
         self.custom_api_mode_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon
         )
-        self.custom_api_mode_combo.setMinimumContentsLength(24)
+        self.custom_api_mode_combo.setMinimumContentsLength(8)
         self.custom_api_mode_combo.setToolTip(
             "Speech servers and speech models answer the transcription API. "
             "A gateway that routes audio only to a multimodal LLM needs the "
@@ -589,7 +587,7 @@ class _RemoteProvidersMixin:
             label.setFixedWidth(label_width)
             label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
             grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            grid.addWidget(field, row, 1, 1, 5)
+            grid.addWidget(field, row, 1)
         self._add_provider_key_row(
             grid,
             len(_CUSTOM_ENDPOINT_ROW_LABELS),
