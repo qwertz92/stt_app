@@ -8,9 +8,14 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .model_download_coordinator import (
+    ModelDownloadCanceled,
+    download_shutdown_requested,
+)
 from .model_download_progress import (
     DOWNLOAD_EVENT_PREFIX,
     DOWNLOAD_PROGRESS_UNKNOWN,
@@ -32,6 +37,8 @@ _DRAIN_TIMEOUT_S = 5.0
 # it, and then the reader outlives this wait. `_close_progress_reader` says
 # what happens to the stream in that case.
 _READER_JOIN_TIMEOUT_S = 2.0
+# How often `download_model_via_worker_process` looks at its cancel check.
+_CANCEL_POLL_S = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +128,54 @@ def start_model_download_process(
     process._stt_error_log_lock = threading.Lock()  # type: ignore[attr-defined]
     _attach_progress_reader(process, model_name)
     return process
+
+
+def download_model_via_worker_process(
+    model_name: str,
+    model_dir: str = "",
+    *,
+    cancel_check: Callable[[], bool],
+) -> None:
+    """Download one model in the worker process, cancelable at any moment.
+
+    This is the download a transcriber runs from its own load path. In the
+    calling thread `snapshot_download` has no cancel hook, so a Cancel only
+    reached it while it waited for the slot and then held the single worker
+    thread for the whole transfer. In the worker process a cancel is a
+    terminate. The caller holds the download slot, as it does for any
+    download (`run_coordinated_download`).
+
+    Raises `ModelDownloadCanceled` when `cancel_check` or the app shutdown
+    fires (the partials stay: the next download's orphan sweep clears
+    `*.incomplete` and the mirror resumes `*.ms-part`), and `RuntimeError`
+    carrying the worker's last stderr line when it fails.
+    """
+
+    def _stop() -> bool:
+        return download_shutdown_requested() or cancel_check()
+
+    if _stop():
+        raise ModelDownloadCanceled("Model download canceled.")
+    try:
+        process = start_model_download_process(model_name, model_dir)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to start model download: {exc}") from exc
+    try:
+        while True:
+            if _stop():
+                raise ModelDownloadCanceled("Model download canceled.")
+            try:
+                process.wait(timeout=_CANCEL_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except BaseException:
+        terminate_model_download_process(process)
+        release_model_download_process(process)
+        raise
+    detail = model_download_process_error(process)
+    if process.returncode != 0:
+        raise RuntimeError(detail or f"Model download failed for '{model_name}'.")
 
 
 def _error_log_lock(process) -> threading.Lock:

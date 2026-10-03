@@ -113,8 +113,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `download_destination_dir` only, not following junctions or symlinks
     (`_partials_below`), never raising; it runs in
     `start_model_download_process` before the child starts and in both
-    snapshot functions (load-path downloads and `scripts/download_model.py`
-    bypass the launcher). A cancelled large file restarts from zero; stay on
+    snapshot functions (`scripts/download_model.py` bypasses the launcher).
+    A cancelled large file restarts from zero; stay on
     the newest hub anyway (Xet repos never resumed).
   - Settle hub's symlink probe before threads start (`_settle_symlink_probe`,
     keyed by the `commonpath` of blob and pointer): `are_symlinks_supported`
@@ -132,6 +132,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Every download goes through it, including load-path downloads
     (`_ensure_snapshot` / `_resolve_model_path` via `run_coordinated_download`;
     the only download Cohere/Granite have with `keep_onnx_model_loaded` off).
+    A load-path download runs in the same worker process as the Local tab's
+    (`local_model_download.download_model_via_worker_process`, polling
+    `cancel_check` and the shutdown flag every 0.1 s, terminating the child):
+    `snapshot_download` has no cancel hook, so in the calling thread a Cancel
+    reached it only while it waited for the slot (2026-10-03). Progress is not
+    reported there; the failure text is the child's last stderr line.
     `WhisperModel(...)` downloads in its constructor, so `_ensure_model`
     fetches via the slot first, gated on `download_destination_dir` +
     `_has_valid_model_snapshot`; `find_cached_models` is too broad.

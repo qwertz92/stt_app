@@ -2,8 +2,12 @@ import io
 import json
 import logging
 import subprocess
+import sys
 import threading
+import time
 from types import SimpleNamespace
+
+import pytest
 
 import stt_app.local_model_download as local_model_download
 from stt_app.model_download_progress import (
@@ -539,3 +543,79 @@ def test_reading_the_error_does_not_read_the_pipe_a_second_time():
 
     assert process.communicated is False
     assert process.stdout.closed is True
+
+
+def _stub_worker(monkeypatch, code: str) -> None:
+    """Make the download worker a one-line Python program."""
+    monkeypatch.setattr(
+        local_model_download,
+        "model_download_command",
+        lambda model_name, model_dir, env: [sys.executable, "-c", code],
+    )
+
+
+def test_a_load_path_download_stops_its_worker_when_canceled(monkeypatch):
+    """The load-path download ran `snapshot_download` in the calling thread,
+    which has no cancel hook, so a Cancel only reached it while it waited for
+    the slot. In the worker process it is a terminate."""
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    started = time.monotonic()
+    calls = []
+
+    def _cancel_after_a_moment():
+        calls.append(1)
+        return time.monotonic() - started > 0.3
+
+    processes = []
+    real_start = local_model_download.start_model_download_process
+    monkeypatch.setattr(
+        local_model_download,
+        "start_model_download_process",
+        lambda *a, **k: processes.append(real_start(*a, **k)) or processes[-1],
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=_cancel_after_a_moment
+        )
+
+    assert time.monotonic() - started < 10
+    assert processes[0].poll() is not None, "the worker was left running"
+
+
+def test_a_load_path_download_reports_the_workers_last_error_line(monkeypatch):
+    _stub_worker(
+        monkeypatch,
+        r"import sys; sys.stderr.write('first\nthe mirror is unreachable\n'); "
+        "sys.exit(1)",
+    )
+
+    with pytest.raises(RuntimeError, match="the mirror is unreachable"):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=lambda: False
+        )
+
+
+def test_a_load_path_download_returns_when_its_worker_succeeds(monkeypatch):
+    _stub_worker(monkeypatch, "pass")
+
+    local_model_download.download_model_via_worker_process(
+        "no-such-model", "", cancel_check=lambda: False
+    )
+
+
+def test_a_load_path_download_stops_for_a_shutdown(monkeypatch):
+    from stt_app import model_download_coordinator as coordinator
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    coordinator.request_download_shutdown()
+    try:
+        with pytest.raises(ModelDownloadCanceled):
+            local_model_download.download_model_via_worker_process(
+                "no-such-model", "", cancel_check=lambda: False
+            )
+    finally:
+        coordinator.reset_download_shutdown_for_tests()

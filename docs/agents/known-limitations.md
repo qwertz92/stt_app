@@ -25,12 +25,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   "loadable from Model Dir" (`WhisperModel(download_root=...)` reads one
   root). `cached_model_paths` / `delete_cached_model` still reach it. Fix needs
   per-model paths in the scan subprocess protocol.
-- **Cancel reaches a download only while it waits for the slot**, not during
-  the transfer (`run_coordinated_download` passes `cancel_check` only into
-  `acquire()`): `snapshot_download` has no cancel hook and the ModelScope loop
-  no poll. With `keep_onnx_model_loaded` off, a Cohere/Granite load-path
-  download cannot be cancelled and holds the `max_workers=1` worker. Proper
-  fix: route that download through the worker process the Local tab uses.
 - **Two input devices with the same name are one entry**:
   `resolve_input_device` opens the first matching index. Names survive
   re-enumeration and reboot; PortAudio indices do not.

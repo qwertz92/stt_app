@@ -239,3 +239,41 @@ def test_the_download_gets_the_base_check_not_the_raw_attribute(
     # The point of the base method: a check that raises is absorbed, not
     # propagated into the download.
     assert check() is False
+
+
+@pytest.mark.parametrize("make_loader", _ENGINES)
+def test_every_load_path_download_runs_in_the_cancelable_worker(
+    monkeypatch, make_loader
+):
+    """`snapshot_download` has no cancel hook, so a load-path download in the
+    calling thread could not be stopped once it had the slot, and it held the
+    single worker thread for the whole transfer. The download must run in the
+    worker process, with the transcriber's own cancel check reaching it."""
+    seen: list[dict] = []
+
+    def _record(*_args, **kwargs):
+        seen.append(kwargs)
+
+    for target in (
+        "stt_app.local_model_download.download_model_via_worker_process",
+        "stt_app.transcriber.local_nemotron.download_model_via_worker_process",
+        "stt_app.transcriber.local_webgpu_asr.download_model_via_worker_process",
+    ):
+        monkeypatch.setattr(target, _record)
+
+    def _run_the_download(_model, _model_dir, download, **_kwargs):
+        download()
+
+    transcriber, load = make_loader(monkeypatch, _run_the_download)
+    flag = {"canceled": False}
+    transcriber.set_cancel_check(lambda: flag["canceled"])
+    try:
+        load()
+    except Exception:
+        pass  # the snapshot is still missing afterwards; the download is the point
+
+    assert len(seen) == 1
+    cancel_check = seen[0]["cancel_check"]
+    assert cancel_check() is False
+    flag["canceled"] = True
+    assert cancel_check() is True

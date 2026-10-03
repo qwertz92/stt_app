@@ -940,16 +940,21 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             destination, self.model_size
         ):
             return
+        from ..local_model_download import download_model_via_worker_process
         from ..model_download_coordinator import run_coordinated_download
 
+        # `_is_cancel_requested`, not the raw attribute: a check that raises
+        # must never fail the work, and the coordinator re-raises whatever
+        # escapes it. The worker process makes the cancel reach the transfer.
         with canceled_download_is_a_cancel():
             run_coordinated_download(
                 self.model_size,
                 self._model_dir,
-                lambda: download_model_snapshot(self.model_size, self._model_dir),
-                # `_is_cancel_requested`, not the raw attribute: a check that
-                # raises must never fail the work, and the coordinator re-raises
-                # whatever escapes it.
+                lambda: download_model_via_worker_process(
+                    self.model_size,
+                    self._model_dir,
+                    cancel_check=self._is_cancel_requested,
+                ),
                 cancel_check=self._is_cancel_requested,
             )
 

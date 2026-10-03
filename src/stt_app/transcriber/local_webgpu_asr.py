@@ -32,6 +32,7 @@ from ..config import (
     effective_preferred_device,
     language_modes_for_selection,
 )
+from ..local_model_download import download_model_via_worker_process
 from ..model_download_coordinator import run_coordinated_download
 from ..model_download_progress import (
     ProgressHook,
@@ -1023,8 +1024,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 run_coordinated_download(
                     self.model_size,
                     self.model_dir,
-                    lambda: download_webgpu_model_snapshot(
-                        self.model_size, self.model_dir
+                    lambda: download_model_via_worker_process(
+                        self.model_size,
+                        self.model_dir,
+                        cancel_check=self._is_cancel_requested,
                     ),
                     # `_is_cancel_requested`, not the raw attribute: a check that
                     # raises must never fail the work, and the coordinator re-raises

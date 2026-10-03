@@ -159,15 +159,20 @@ def resolve_or_download_onnx_model(
             f"Local model '{model_size}' is not cached locally. "
             f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
         )
+    from ..local_model_download import download_model_via_worker_process
     from ..model_download_coordinator import run_coordinated_download
-    from .local_faster_whisper import download_model_snapshot
+
+    def _canceled() -> bool:
+        return cancel_check is not None and cancel_check()
 
     # Through the single slot, like every other download in the process.
     with canceled_download_is_a_cancel():
         run_coordinated_download(
             model_size,
             model_dir,
-            lambda: download_model_snapshot(model_size, model_dir),
+            lambda: download_model_via_worker_process(
+                model_size, model_dir, cancel_check=_canceled
+            ),
             cancel_check=cancel_check,
         )
     cached = resolve_cached_webgpu_model_path(model_size, model_dir)
