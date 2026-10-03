@@ -751,17 +751,18 @@ writes that setting.
 
 The **Run Benchmark** window lists every case the current selection will measure
 before anything starts: one row per model, device target, and compute type,
-numbered in the order they run. Each row changes to *Running...* and then to its
-measured status; after a cancel or a failure everything that never delivered a
-result reads *Skipped*. While a run is active the Benchmark tab shows a progress
-bar next to its status line, and the button beside it changes from
-**Run Benchmark...** to **Show Progress...**, which brings the running window
-back without stopping the run.
+numbered in the order they run. Each row changes to *Running...* (counting the
+case's elapsed time) and then to its measured status; after a cancel or a failure
+everything that never delivered a result reads *Skipped*. While a run is active
+the Benchmark tab shows a progress bar next to its status line, and the button
+beside it changes from **Run Benchmark...** to **Show Progress...**, which brings
+the running window back without stopping the run.
 
-Benchmark History is a real column-based table rather than a text summary. Load
-an entry and open the **Transcripts** result tab to compare the complete output
-from every model, device target, and measured run. Selecting a row shows the
-full transcript below the comparison table. The consistency column compares
+Benchmark History is a real column-based table rather than a text summary.
+Selecting a History row shows that run under **Results**; open the
+**Transcripts** result tab to compare the complete output from every model,
+device target, and measured run. Selecting a row there shows the full
+transcript below the comparison table. The consistency column compares
 each model/device case with its first measured run:
 
 - **Identical to run 1** means the text matches exactly.
