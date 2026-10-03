@@ -181,6 +181,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   clipboard alone, and a re-raise carries `allow_clipboard_fallback` across
   (inside `insert_text` a post-keystroke failure becomes a constructed
   `ClipboardContentionError`; a fresh exception defaulted to permissive).
+- **WM_PASTE is never sent to a Chromium window** (2026-10-03,
+  `_WM_PASTE_IGNORING_WINDOW_CLASSES`: `Chrome_WidgetWin_1`,
+  `Chrome_RenderWidgetHostHWND`). `_send_wm_paste` raises
+  `_WmPasteIgnoredError` before sending: in `wm_paste` mode that is the
+  paste's error (telling the user to choose Auto), in `auto` mode after a
+  failed SendInput it is folded into "Auto paste failed". Both are
+  pre-keystroke failures: the clipboard is put back and Insert is offered.
+  Why: into an Edge --app textarea `SendMessageTimeout(WM_PASTE)` succeeded,
+  the page saw no paste event and nothing landed, so the transaction
+  reported a paste that never happened (r27 B2, 2026-09-27; re-measured
+  2026-10-03 for the top-level window and its render-widget child alike;
+  Electron apps are the same window class). Reporting it as "may not have
+  been inserted" was rejected: that withholds Insert, while the text
+  demonstrably did not land.
 - **Deferred queue inserts are coalesced**: `_flush_deferred_background_results`
   groups token-ordered results by captured target, one paste per group
   (each paste is a clipboard race window). Only this flush joins texts,
