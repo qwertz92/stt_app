@@ -9178,3 +9178,16 @@ field". Lesson: a detector built from one application's measurements needs
 a run against the applications that draw their own caret before its
 verdict may reach the user. WM_PASTE is no longer sent to Chromium windows
 (B2): it was answered with success and ignored.
+
+The review round on the same day found the doubtful row's life cycle
+wrong rather than the detector: a false verdict left a row for text that
+had landed, F10 joined it to the next failed paste and pasted it again; a
+queued paste's report painted over another job's Insert offer; a re-paste
+inside the check window played the tone as confirmed and then got a stale
+row. A probe also read "not a text field" 20 times of 20 on an Electron
+window, most likely the Claude desktop app. Doubtful rows are now pasted
+by F10 only alone and are dropped by the next paste, the report paints only
+over its own paste's screen, every check logs its evidence, and
+`scripts/diagnose_paste_target.py` measures any window. Lesson: a verdict
+that can be wrong must not feed an action that repeats a paste, and real
+use has to log enough to show where it is wrong.
