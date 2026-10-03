@@ -467,6 +467,54 @@ def _phrases(*texts: str):
     ]
 
 
+def _wav_declaring(seconds: int) -> bytes:
+    """A 16 kHz mono 16-bit WAV whose header declares `seconds` of audio and
+    whose data is empty: the declared duration is what the request reads."""
+    import struct
+
+    data_bytes = seconds * 32_000
+    return (
+        b"RIFF"
+        + struct.pack("<I", 36 + data_bytes)
+        + b"WAVEfmt "
+        + struct.pack("<IHHIIHH", 16, 1, 1, 16_000, 32_000, 2, 16)
+        + b"data"
+        + struct.pack("<I", data_bytes)
+    )
+
+
+class TestAzureRequestTimeout:
+    """The request is synchronous and answers once the whole recording is
+    transcribed; Microsoft documents only that fast transcription runs "faster
+    than real-time", so the recording's own duration is the longest it can
+    take. The 120 s socket timeout was sized for a dictation, and an hour-long
+    part (the engine's bound) hit it before an answer was due."""
+
+    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    def test_an_hour_of_audio_waits_its_duration_plus_the_base_timeout(
+        self, mock_urlopen
+    ):
+        mock_urlopen.side_effect = _phrases("text")
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+
+        t.transcribe_batch(_wav_declaring(3600))
+
+        assert mock_urlopen.call_args.kwargs["timeout"] == 3600 + 120
+
+    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    def test_a_dictation_and_an_unreadable_file_keep_the_base_timeout(
+        self, mock_urlopen
+    ):
+        mock_urlopen.side_effect = _phrases("a", "b")
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+
+        t.transcribe_batch(_wav_seconds(0.0))
+        t.transcribe_batch(b"ID3 not a wav")
+
+        timeouts = [call.kwargs["timeout"] for call in mock_urlopen.call_args_list]
+        assert timeouts == [120, 120]
+
+
 class TestAzureLongRecordings:
     """The fast-transcription reference takes audio "shorter than 2 hours ...
     smaller than 250 MB". The bound is lowered here so the recording can be

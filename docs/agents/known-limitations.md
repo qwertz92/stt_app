@@ -84,8 +84,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   with nothing. Deliberate: the error direction is a marker to delete, not
   lost speech (docs/agents/remote-providers.md). A real speech detector
   (the Silero work) would be the better judge.
-- **An Azure part of up to an hour has a 120 s socket timeout**: the factory
-  passes no `request_timeout_s`. Not observed; no Azure resource (2026-09-27).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,
   Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
   2026-10-03: a low-pass filter changes the samples every imported file feeds
