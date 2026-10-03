@@ -306,6 +306,53 @@ def test_a_verdict_that_arrives_after_a_later_paste_lists_no_row(monkeypatch, tm
     _ = app
 
 
+def test_a_repaste_inside_the_check_window_is_neither_confirmed_nor_reported(
+    monkeypatch, tmp_path
+):
+    """The first check still holds the worker, so the re-paste's own check
+    is refused: that played the tone as if confirmed, and the first verdict
+    then reported a paste the re-paste had already repeated."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    _dictate(controller, "hello world")
+    check.accept = False
+
+    controller.repaste_last_transcript()
+    assert [call[0] for call in inserter.calls] == ["hello world", "hello world"]
+    assert beeps == []
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    assert beeps == []
+    assert messages == []
+    assert _rows(overlay) == []
+    assert overlay.states[-1] == ("Done", "hello world")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_repaste_of_the_same_text_leaves_the_verdict_to_its_own_check(
+    monkeypatch, tmp_path
+):
+    check = FakePasteTargetCheck()
+    controller, app, overlay, _inserter, beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    _dictate(controller, "hello world")
+    controller.repaste_last_transcript()
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)  # the first paste's, now stale
+    assert _rows(overlay) == [] and beeps == [] and messages == []
+    check.answer(VERDICT_TEXT_FIELD)  # the re-paste's own
+
+    assert beeps == [1]
+    assert overlay.states[-1] == ("Done", "hello world")
+    controller.shutdown()
+    _ = app
+
+
 def test_a_repaste_into_no_text_field_again_stays_listed(monkeypatch, tmp_path):
     check = FakePasteTargetCheck()
     controller, app, overlay, _inserter, beeps = _make(monkeypatch, tmp_path, check)

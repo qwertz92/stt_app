@@ -6378,7 +6378,9 @@ class DictationController(QtCore.QObject):
             capture=self._audio_capture,
         )
 
-    def _check_paste_target(self, pending: _PasteCheck) -> None:
+    def _check_paste_target(
+        self, pending: _PasteCheck, *, tone_if_refused: bool = True
+    ) -> None:
         """A paste reported success: check its target, then play the tone.
 
         A SendInput Ctrl+V into a focused button, list item or page body
@@ -6387,12 +6389,27 @@ class DictationController(QtCore.QObject):
         worker whether the focus shows a caret; its answer arrives through
         `paste_target_checked`. Without a check -- none configured, one
         still running, a thread that cannot start -- the tone plays at once
-        and nothing else changes. Nothing here waits.
+        and nothing else changes; a re-paste passes ``tone_if_refused``
+        False, since its check is refused exactly when it repeats a paste
+        whose check still runs, and the tone would confirm nothing. Nothing
+        here waits.
+
+        A check still waiting for a paste of the same text is dropped: this
+        paste repeated it, so the earlier verdict -- read before it -- would
+        report as missing a text the user has just pasted again.
         """
         checker = self._paste_target_check
         if checker is None or self._shutdown_started:
             self._play_completion_beep()
             return
+        repeated = [
+            check_id
+            for check_id, waiting in self._paste_checks.items()
+            if waiting.text.strip() == pending.text.strip()
+        ]
+        for check_id in repeated:
+            del self._paste_checks[check_id]
+            self._logger.info("paste_target_check id=%d dropped=repeated", check_id)
         self._paste_check_counter += 1
         check_id = self._paste_check_counter
         emit = self.paste_target_checked.emit
@@ -6408,7 +6425,8 @@ class DictationController(QtCore.QObject):
             self._log_paste_target_check(
                 check_id, VERDICT_UNKNOWN, "note=not_started", pending
             )
-            self._play_completion_beep()
+            if tone_if_refused:
+                self._play_completion_beep()
             return
         self._paste_checks[check_id] = pending
         QtCore.QTimer.singleShot(
@@ -7892,7 +7910,8 @@ class DictationController(QtCore.QObject):
                     identity="The transcript was",
                     background=True,
                     takes_shown_pair=False,
-                )
+                ),
+                tone_if_refused=False,
             )
             return
         if display_entry is not self._KEEP_DISPLAY:
@@ -7916,7 +7935,8 @@ class DictationController(QtCore.QObject):
                 identity="The transcript was",
                 background=False,
                 takes_shown_pair=False,
-            )
+            ),
+            tone_if_refused=False,
         )
 
     def show_overlay_notice(self, message: str) -> None:

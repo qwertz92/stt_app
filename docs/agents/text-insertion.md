@@ -317,7 +317,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   doubtful would also collect a row per dictation. A later "text field"
   verdict in the same window was rejected as proof of a false one: clicking
   into the field after pasting onto a button is the case the report exists
-  for, and in an always-doubtful window it never comes.
+  for, and in an always-doubtful window it never comes. A new paste of the
+  same text drops a check still waiting for it (its verdict was read before
+  the repeat), and a re-paste whose own check is refused -- the earlier one
+  still holds the worker -- plays no tone (`tone_if_refused`): before, it
+  played the tone as confirmed and the earlier verdict then listed a row
+  over the re-paste's Done (2026-10-03 review). Two dictations of the same
+  text inside one check window therefore get one verdict and one tone.
   Why: a SendInput Ctrl+V into a focused button, list item or page body of
   a Chromium page reported success and inserted nothing (r27 B1). Measured
   on 2026-10-03 with the production reader against real windows (four
