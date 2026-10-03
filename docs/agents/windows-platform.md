@@ -17,8 +17,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   ONNX/WebGPU runner opened a window on every Cohere/Granite transcription
   on an installed work machine, and closing it killed the runner, which the
   next transcription started again (fixed 2026-10-03). `run_bounded` adds
-  the flag itself; `tests/test_child_process_windows.py` fails on any
-  `subprocess` call in `src/stt_app` that passes no `creationflags`.
+  the flag itself; `tests/test_child_process_windows.py` fails on a
+  `subprocess` spawn call in `src/stt_app` (aliases included) without
+  `creationflags`. It cannot see `QProcess`, `os.startfile` or a `**kwargs`
+  spread's contents: those sites start GUI programs or are checked by hand.
 - **Update checks use GitHub Releases directly** (`update_checker.py`): one
   asynchronous check after startup, a tray notification only for a newer
   release, manual checks in Settings and tray (a manual request during the

@@ -25,10 +25,30 @@ SOURCE_ROOT = Path(__file__).resolve().parents[1] / "src" / "stt_app"
 _SPAWNING_FUNCTIONS = {"Popen", "run", "call", "check_call", "check_output"}
 
 
+def _subprocess_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """Names bound to the module (`import subprocess as sp`) and to its
+    spawning functions (`from subprocess import Popen`)."""
+    modules: set[str] = set()
+    functions: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            for alias in node.names:
+                if alias.name in _SPAWNING_FUNCTIONS:
+                    functions.add(alias.asname or alias.name)
+    return modules, functions
+
+
 def _spawn_calls_without_window_flags() -> list[str]:
     missing: list[str] = []
     for path in sorted(SOURCE_ROOT.rglob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        modules, functions = _subprocess_aliases(tree)
+        # `update_installer` takes `runner=subprocess.run` as a seam.
+        functions.add("runner")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
@@ -37,16 +57,18 @@ def _spawn_calls_without_window_flags() -> list[str]:
                 isinstance(func, ast.Attribute)
                 and func.attr in _SPAWNING_FUNCTIONS
                 and isinstance(func.value, ast.Name)
-                and func.value.id == "subprocess"
-            ) or (
-                # `update_installer` takes `runner=subprocess.run` as a seam.
-                isinstance(func, ast.Name) and func.id == "runner"
-            )
+                and func.value.id in modules
+            ) or (isinstance(func, ast.Name) and func.id in functions)
             if not spawns:
                 continue
-            keywords = {keyword.arg for keyword in node.keywords}
-            # `None` is a `**kwargs` spread, which the call site fills itself.
-            if "creationflags" in keywords or None in keywords:
+            flags = [kw.value for kw in node.keywords if kw.arg == "creationflags"]
+            # A `**kwargs` spread (`run_bounded`, `benchmark_environment`) is
+            # filled by its call site; `run_bounded` has its own test below.
+            spread = any(kw.arg is None for kw in node.keywords)
+            literal_zero = any(
+                isinstance(value, ast.Constant) and not value.value for value in flags
+            )
+            if (flags and not literal_zero) or (spread and not flags):
                 continue
             missing.append(f"{path.relative_to(SOURCE_ROOT)}:{node.lineno}")
     return missing

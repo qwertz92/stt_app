@@ -628,8 +628,8 @@ def _command_lines(args: list[str], *, timeout: float = 3.0) -> list[str]:
     if shutil.which(args[0]) is None:
         return []
     kwargs: dict[str, Any] = {}
-    if no_window_flags():
-        kwargs["creationflags"] = no_window_flags()
+    if flags := no_window_flags():
+        kwargs["creationflags"] = flags
     try:
         completed = subprocess.run(
             args,
