@@ -178,14 +178,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   a NULL owner, so a clipboard manager can still close it under us; three
   reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
   and one paste runs up to four (capture, write, read-back, changed-after-set
-  read), so about 1.3 s before it reports contention.
+  read), so about 1.3 s before it reports contention. Kept 2026-10-03 (by
+  design): an owner window would close it but blocks every other program's
+  `EmptyClipboard` without a message pump (rejected in
+  `docs/agents/text-insertion.md`).
 - **A close lost between the text write and the Win+V exclusion formats
   publishes the transcript without them**: a clipboard manager that closes
   our open right after `SetClipboardText` sees the clipboard with the text
   alone, and Windows may list it in Win+V history; the exclusion sets that
-  follow fail and log `clipboard_history_exclusion_partial`. Not closed: the
-  formats cannot be set before the text (`EmptyClipboard` would drop them),
-  and the race is the 1418 one above. Separately and on purpose, the
+  follow fail and log `clipboard_history_exclusion_partial`. Not closed, and
+  the race is the 1418 one above. Kept 2026-10-03 (cost vs effect): setting
+  the formats between `EmptyClipboard` and the text is possible, but a close
+  lost after them then leaves our own formats on the clipboard, which
+  `_refuse_if_written_since_our_empty` would read as a foreign write and
+  refuse the retried paste -- trading a cosmetic Win+V entry for a failed
+  paste; teaching that check our own formats is ~3 h. Separately and on purpose, the
   `copy_on_error` fallback (`QGuiApplication.clipboard().setText`) leaves a
   failed paste's transcript on the clipboard as an ordinary copy, so it is
   in Win+V: the user is meant to paste it by hand.
