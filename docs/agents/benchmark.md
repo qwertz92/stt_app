@@ -120,6 +120,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
     and with twelve models it needed a scroll at the default size.
   - The audio line is derived from the field on every edit
     (`_update_benchmark_audio_status`: none / "File not found" / "Selected"),
+    read through `_benchmark_audio_path`, which strips the double quotes of
+    Explorer's "Copy as path" for the line, the Run gate and the run,
     two lines reserved, minimum width 1 px like the window status (a long
     file name otherwise widened the content to 1464 px).
   - A run's plan comes from options snapshotted at its start; the

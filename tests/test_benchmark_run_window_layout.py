@@ -123,3 +123,39 @@ def test_the_audio_line_says_why_a_typed_path_cannot_run(tmp_path):
     assert label.text() == "No audio sample selected."
     assert dialog.run_benchmark_button.isEnabled() is False
     _ = app
+
+
+def test_a_quoted_path_from_explorer_is_accepted_and_used_unquoted(
+    monkeypatch, tmp_path
+):
+    """Explorer's "Copy as path" wraps the path in double quotes, and the
+    quoted text is no file: the line said "File not found" and Run stayed
+    disabled for a file that exists."""
+    seen: dict[str, object] = {}
+
+    def _fake_run(**kwargs):
+        seen.update(kwargs)
+        return []
+
+    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", _fake_run)
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_benchmark.collect_benchmark_environment",
+        lambda: None,
+    )
+    dialog, app, _window = _shown_window(tmp_path, ["small"])
+    present = tmp_path / "sample.wav"
+    present.write_bytes(b"RIFF")
+
+    dialog.benchmark_audio_edit.setText(f' "{present}" ')
+
+    assert dialog.benchmark_audio_status_label.text() == f"Selected: {present}"
+    assert dialog.run_benchmark_button.isEnabled() is True
+
+    dialog._run_local_benchmark()
+    thread = dialog._active_benchmark_thread
+    if thread is not None:
+        thread.join(5)
+    _settle(app)
+
+    assert seen.get("audio_path") == str(present)
+    _ = app

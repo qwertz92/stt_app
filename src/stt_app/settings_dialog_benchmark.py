@@ -1911,6 +1911,15 @@ class _BenchmarkMixin:
         # `setText` emits no `textChanged` for an unchanged text.
         self._update_benchmark_audio_status()
 
+    def _benchmark_audio_path(self) -> str:
+        """The audio field's path as the run uses it.
+
+        Without surrounding whitespace and double quotes: Explorer's "Copy as
+        path" wraps the path in quotes, and the quoted text is no file, so a
+        pasted path read "File not found" for a file that exists.
+        """
+        return self.benchmark_audio_edit.text().strip().strip('"').strip()
+
     def _update_benchmark_audio_status(self) -> None:
         """The single writer of the line under the audio field.
 
@@ -1919,7 +1928,7 @@ class _BenchmarkMixin:
         and a mistyped path left "No audio sample selected." beside a
         disabled Run button with nothing saying why.
         """
-        selected = self.benchmark_audio_edit.text().strip()
+        selected = self._benchmark_audio_path()
         if not selected:
             text, color = "No audio sample selected.", "#555"
         elif Path(selected).is_file():
@@ -2004,7 +2013,7 @@ class _BenchmarkMixin:
         self.open_benchmark_window_button.setText(
             _BENCHMARK_RUN_BUTTON_BUSY_TEXT if busy else _BENCHMARK_RUN_BUTTON_IDLE_TEXT
         )
-        audio_path = self.benchmark_audio_edit.text().strip()
+        audio_path = self._benchmark_audio_path()
         has_audio = bool(audio_path) and Path(audio_path).is_file()
         has_models = bool(self._selected_benchmark_model_names())
 
@@ -2157,7 +2166,7 @@ class _BenchmarkMixin:
         if self._active_benchmark_thread is not None:
             return
 
-        audio_path = self.benchmark_audio_edit.text().strip()
+        audio_path = self._benchmark_audio_path()
         if not audio_path or not Path(audio_path).is_file():
             self._set_benchmark_status(
                 "Choose a valid audio file before starting the benchmark.",
