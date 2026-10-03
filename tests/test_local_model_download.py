@@ -619,3 +619,85 @@ def test_a_load_path_download_stops_for_a_shutdown(monkeypatch):
             )
     finally:
         coordinator.reset_download_shutdown_for_tests()
+
+
+def test_a_load_path_download_is_not_canceled_while_the_user_queued_the_model(
+    monkeypatch,
+):
+    """A Local-tab request for the same model waits for this download to
+    finish and joins it; killing the transfer would restart it from zero. As
+    on the preload path, the cancel is not honored while the user wants the
+    model (the app shutdown still is)."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+
+    _stub_worker(monkeypatch, "import time; time.sleep(1.0)")
+    model_download_coordinator().register_explicit_interest("no-such-model", "")
+    processes = []
+    real_start = local_model_download.start_model_download_process
+    monkeypatch.setattr(
+        local_model_download,
+        "start_model_download_process",
+        lambda *a, **k: processes.append(real_start(*a, **k)) or processes[-1],
+    )
+
+    local_model_download.download_model_via_worker_process(
+        "no-such-model", "", cancel_check=lambda: True
+    )
+
+    assert processes[0].returncode == 0, "the worker was killed instead of finishing"
+
+
+def _cancel_after_a_moment():
+    """A cancel that arrives once the worker is running."""
+    started = time.monotonic()
+    return lambda: time.monotonic() - started > 0.3
+
+
+def test_a_canceled_load_path_download_removes_its_partials(monkeypatch):
+    """The killed child leaves a multi-GB `.incomplete` behind, as the
+    preload path's cancel would have cleaned up."""
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+    from stt_app.transcriber import local_faster_whisper
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    cleaned: list[tuple[str, str]] = []
+
+    def _cleanup(model_name, model_dir=""):
+        cleaned.append((model_name, model_dir))
+        return local_faster_whisper.IncompleteCleanup(1, 10, 0)
+
+    monkeypatch.setattr(
+        local_faster_whisper, "cleanup_incomplete_model_download", _cleanup
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "dir", cancel_check=_cancel_after_a_moment()
+        )
+
+    assert cleaned == [("no-such-model", "dir")]
+
+
+def test_a_canceled_load_path_download_keeps_partials_a_waiter_resumes(monkeypatch):
+    from stt_app.model_download_coordinator import (
+        ModelDownloadCanceled,
+        model_download_coordinator,
+    )
+    from stt_app.transcriber import local_faster_whisper
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    coordinator = model_download_coordinator()
+    coordinator._waiters[("no-such-model", "")] = 1
+    cleaned: list[str] = []
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "cleanup_incomplete_model_download",
+        lambda *a, **k: cleaned.append("called"),
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=_cancel_after_a_moment()
+        )
+
+    assert cleaned == []

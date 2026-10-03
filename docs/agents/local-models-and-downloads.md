@@ -136,8 +136,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`local_model_download.download_model_via_worker_process`, polling
     `cancel_check` and the shutdown flag every 0.1 s, terminating the child):
     `snapshot_download` has no cancel hook, so in the calling thread a Cancel
-    reached it only while it waited for the slot (2026-10-03). Progress is not
-    reported there; the failure text is the child's last stderr line.
+    reached it only while it waited for the slot (2026-10-03). The preload
+    path's rules apply: a cancel is not honored while `has_explicit_interest`
+    (the Local-tab request joins the finished download instead of restarting
+    from zero), and an honored one calls `cleanup_incomplete_model_download`
+    unless `has_waiting_download` (leftovers are logged as
+    `model_download_canceled_partials_left`; the controller's tray note is not
+    reachable from here). A shutdown keeps the partials for the orphan sweep.
+    Progress is not displayed there; the failure text is the child's last
+    stderr line.
     `WhisperModel(...)` downloads in its constructor, so `_ensure_model`
     fetches via the slot first, gated on `download_destination_dir` +
     `_has_valid_model_snapshot`; `find_cached_models` is too broad.

@@ -15,6 +15,7 @@ from pathlib import Path
 from .model_download_coordinator import (
     ModelDownloadCanceled,
     download_shutdown_requested,
+    model_download_coordinator,
 )
 from .model_download_progress import (
     DOWNLOAD_EVENT_PREFIX,
@@ -145,14 +146,27 @@ def download_model_via_worker_process(
     terminate. The caller holds the download slot, as it does for any
     download (`run_coordinated_download`).
 
+    The cancel follows the preload path's rules. It is not honored while the
+    user queued this model on the Local tab: that request waits for this
+    download and joins it, and killing the transfer would restart it from
+    zero. After a cancel that was honored, the killed child's partials are
+    removed unless another caller waits for this model and resumes from them
+    (`cleanup_incomplete_model_download`).
+
     Raises `ModelDownloadCanceled` when `cancel_check` or the app shutdown
-    fires (the partials stay: the next download's orphan sweep clears
-    `*.incomplete` and the mirror resumes `*.ms-part`), and `RuntimeError`
-    carrying the worker's last stderr line when it fails.
+    fires (on a shutdown the partials stay: the next download's orphan sweep
+    clears `*.incomplete` and the mirror resumes `*.ms-part`), and
+    `RuntimeError` carrying the worker's last stderr line when it fails.
     """
+    coordinator = model_download_coordinator()
+
+    def _user_canceled() -> bool:
+        return cancel_check() and not coordinator.has_explicit_interest(
+            model_name, model_dir
+        )
 
     def _stop() -> bool:
-        return download_shutdown_requested() or cancel_check()
+        return download_shutdown_requested() or _user_canceled()
 
     if _stop():
         raise ModelDownloadCanceled("Model download canceled.")
@@ -169,6 +183,14 @@ def download_model_via_worker_process(
                 break
             except subprocess.TimeoutExpired:
                 continue
+    except ModelDownloadCanceled:
+        terminate_model_download_process(process)
+        release_model_download_process(process)
+        if not download_shutdown_requested() and not coordinator.has_waiting_download(
+            model_name, model_dir
+        ):
+            _remove_canceled_partials(model_name, model_dir)
+        raise
     except BaseException:
         terminate_model_download_process(process)
         release_model_download_process(process)
@@ -176,6 +198,23 @@ def download_model_via_worker_process(
     detail = model_download_process_error(process)
     if process.returncode != 0:
         raise RuntimeError(detail or f"Model download failed for '{model_name}'.")
+
+
+def _remove_canceled_partials(model_name: str, model_dir: str) -> None:
+    """Remove what a canceled download left; say so when something stays.
+
+    Imported here for the reason `_clear_orphaned_partials` is: this module is
+    loaded by the GUI at start-up and must not pull the transcriber package in.
+    """
+    from .transcriber.local_faster_whisper import cleanup_incomplete_model_download
+
+    left = cleanup_incomplete_model_download(model_name, model_dir).left_files
+    if left:
+        _logger.warning(
+            "model_download_canceled_partials_left model=%s files=%d",
+            model_name,
+            left,
+        )
 
 
 def _error_log_lock(process) -> threading.Lock:

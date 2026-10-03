@@ -627,8 +627,10 @@ def download_model_snapshot(
     `progress_hook` is how the download worker turns huggingface_hub's own
     accounting into the percentage the UI shows; see
     `model_download_progress.hub_progress_tqdm_class`. Without one nothing is
-    measured and no bar is installed, which is the call the transcribers' own
-    load-path downloads and `scripts/download_model.py` make.
+    measured and no bar is installed, which is the call `scripts/download_model.py`
+    makes. The transcribers' own load-path downloads run in the worker process
+    (`local_model_download.download_model_via_worker_process`), which passes a
+    hook but does not display it.
 
     The two pieces of housekeeping below run either way, because both are
     about the download itself rather than about reporting it.
