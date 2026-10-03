@@ -516,6 +516,62 @@ def test_the_configured_threshold_decides_whether_an_empty_part_held_sound(
     assert text == expected
 
 
+def _recording_with_middle(replacement) -> bytes:
+    """Three parts; the middle one is `replacement(sample_count)`."""
+    samples, first_gap, second_gap = _three_part_recording()
+    middle = slice(first_gap.stop, second_gap.start)
+    samples[middle] = replacement(middle.stop - middle.start)
+    return _wav_bytes(samples)
+
+
+def _speech(count: int) -> np.ndarray:
+    from speech_fixtures import concat, speech_excerpts
+
+    excerpts = list(speech_excerpts().values())
+    pieces: list[np.ndarray] = []
+    while sum(piece.size for piece in pieces) < count:
+        pieces.append(excerpts[len(pieces) % len(excerpts)])
+    return concat(*pieces)[:count]
+
+
+def _typing(count: int) -> np.ndarray:
+    from speech_fixtures import typing
+
+    # Keystrokes: loud enough to pass the level gate, and not speech.
+    return typing(120, count / AUDIO_SAMPLE_RATE)[:count]
+
+
+@pytest.mark.parametrize(
+    ("middle", "expected"),
+    [
+        (_speech, "erster teil [no text returned for 0:16-0:31] dritter teil"),
+        (_typing, "erster teil dritter teil"),
+    ],
+    ids=["speech-leaves-a-marker", "typing-is-skipped"],
+)
+def test_an_empty_part_above_the_gate_is_judged_by_the_speech_check(
+    real_silero, middle, expected
+):
+    """The level alone called a part that only held noise or a click "sound",
+    so a provider's empty answer for it left a marker over a stretch with
+    nothing to say, and the recording was kept as failed. The Silero check the
+    whole-recording gate uses answers the question the level cannot: a part
+    both of its scans find speech-free is skipped like a silent one, and one
+    with speech still leaves the marker."""
+    requests = _Requests(["erster teil", "", "dritter teil"])
+
+    text = transcribe_in_parts(
+        _recording_with_middle(middle),
+        requests,
+        limit=_LIMIT,
+        progress_text=_UPLOAD,
+        raise_if_canceled=_never_canceled,
+        silence_threshold=DEFAULT_SILENCE_GATE_THRESHOLD,
+    )
+
+    assert text == expected
+
+
 def test_one_part_is_todays_request_its_message_and_its_error():
     source = _wav_bytes(_noise(2.0))
     failure = TranscriptionError("Example: Rate limit exceeded (HTTP 429).")

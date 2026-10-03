@@ -70,14 +70,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   language detection runs per part, no previous-part prompt (vocabulary goes
   with every part). A cancel between parts discards finished parts (audio
   stays reachable via Import/recovery, not Retry); a request in flight runs on.
-- **A gap marker can stand for a stretch without words.** An empty part is
-  judged by its loudest 100 ms window against the user's silence-gate
-  threshold, so a part holding only noise or a click -- a last part can be
-  20 ms, e.g. a hotkey click after 180.4 s of `gpt-4o-transcribe` -- leaves
-  `[no text returned for ...]` in the transcript if the provider answers it
-  with nothing. Deliberate: the error direction is a marker to delete, not
-  lost speech (docs/agents/remote-providers.md). A real speech detector
-  (the Silero work) would be the better judge.
+- **A gap marker can still stand for a stretch without words.** An empty
+  part is judged by its loudest 100 ms window against the user's silence-gate
+  threshold, then by the Silero check; noise the batch speech check lets
+  through (see above) -- room tone, a thump -- leaves
+  `[no text returned for ...]` if the provider answers the part with nothing.
+  Deliberate: the error direction is a marker to delete, not lost speech
+  (docs/agents/remote-providers.md).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,
   Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
   2026-10-03: a low-pass filter changes the samples every imported file feeds

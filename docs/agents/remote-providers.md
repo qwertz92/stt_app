@@ -231,7 +231,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **An empty part never fails the recording (2026-10-01, owner's call).** A
     part that holds sound -- loudest 100 ms window >= the silence gate's
     threshold *as the user set it* (passed by the factory to OpenAI, Groq,
-    Azure and the custom endpoint, and part of their runtime identity), or
+    Azure and the custom endpoint, and part of their runtime identity) and
+    not found speech-free by the Silero check (`silero_vad.check_speech_wav`,
+    both scans, whole part, run on the worker thread; 2026-10-03) -- or
     unmeasurable -- leaves `[no text returned for m:ss-m:ss]` in its place
     (adjacent gaps share one marker; start rounded down, end up, so a
     short tail never reads `3:00-3:00`) and logs `remote_audio_part_empty`
@@ -250,10 +252,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     and the marker is the one channel that reaches the overlay, the document
     and history without a new controller path. Only a recording of which no
     part returned text while one held sound fails, the single request's
-    "Empty model text is a failure" rule. A speech-run check
-    (`vad.measure_longest_speech_run_s`) instead of the level was considered
-    and left out: with a marker instead of a failure, a false "sound" costs a
-    marker to delete, a false "silent" costs speech without a trace.
+    "Empty model text is a failure" rule. The Silero
+    check was added on 2026-10-03 as a second judge behind the level, not
+    instead of it: a false "sound" costs a marker to delete, a false
+    "silent" costs speech without a trace, so it turns "sound" into "silent"
+    only when both scans of the whole part stay below the cut (and the
+    provider already returned nothing for that part). A speech-run check
+    (`vad.measure_longest_speech_run_s`) was considered and left out.
   - Split, not compressed (new dependency; OpenAI rejects FLAC).
   - Sent whole: Deepgram (2 GB), ElevenLabs (3 GB / 10 h), AssemblyAI
     (2.2 GB / 10 h), Fun-ASR (streams).

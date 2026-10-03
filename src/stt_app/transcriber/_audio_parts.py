@@ -21,7 +21,8 @@ from typing import NamedTuple
 
 import numpy as np
 
-from ..config import RemotePartLimit
+from .. import silero_vad
+from ..config import SILERO_BATCH_STOP_AFTER_SPEECH_S, RemotePartLimit
 from ..vad import measure_peak_windowed_rms
 from ._http_utils import recovered_text_suffix
 from ._pcm_audio import pcm16_wav_bytes, split_into_passes
@@ -123,16 +124,30 @@ def _size_bytes(audio_source: AudioInput) -> int | None:
 
 
 def _holds_sound(part: AudioInput, threshold: float) -> bool:
-    """Whether a part's loudest 100 ms window reaches `threshold`, the silence
-    gate's threshold as the user set it.
+    """Whether an empty part may hold speech the provider failed to return.
 
-    Unmeasurable counts as sound: calling a part silent without having
-    measured it is how a stretch of speech would be dropped unmarked.
+    First the level: a part whose loudest 100 ms window stays below
+    `threshold`, the silence gate's threshold as the user set it, is silent.
+    Then the Silero speech check the whole-recording gate uses
+    (`silero_vad.check_speech_wav`, both scans, so quiet speech is not
+    missed): a part it finds speech-free is a click or noise, not a stretch
+    the provider skipped, and gets no marker. The scan runs on this worker
+    thread over the whole part -- about 1.6 ms per second of speechless audio
+    per scan, only for a part the provider answered with nothing.
+
+    Unmeasurable counts as sound, at both steps: calling a part silent
+    without having measured it is how a stretch of speech would be dropped
+    unmarked.
     """
     if not isinstance(part, (bytes, bytearray)):
         return True
     level = measure_peak_windowed_rms(bytes(part))
-    return level is None or level >= threshold
+    if level is not None and level < threshold:
+        return False
+    speech = silero_vad.check_speech_wav(
+        bytes(part), stop_after_speech_s=SILERO_BATCH_STOP_AFTER_SPEECH_S
+    )
+    return speech is None or not speech.no_speech
 
 
 def wav_seconds(audio: AudioInput) -> float:
