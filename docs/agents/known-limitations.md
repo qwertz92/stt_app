@@ -179,15 +179,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
   restoring the user's own content may add their copy to Win+V again, as
   before.
-- **`close_if_idle` is not bounded against its own closes**: a
-  `request_restart` after its generation bump reopens and each own close
-  re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
-  serialize on `_audio_device_refresh_lock`, off Qt.
 - **`Thread.start` guards catch `RuntimeError` only**
   (`fd1b50a`/`c98f57e`, settings dialog's six); a `MemoryError` escapes.
-- **`WarmMicrophoneStream.close()` does not wait for a helper's close in
-  flight** (drains `_retiring` and returns). Only `shutdown()` calls it;
-  `close_if_idle` is the call that waits.
 - **Copy yields the pending offer after an edit made while one is pending**,
   and Edit stays disabled until the offer is retired. Offer semantics.
 - **The benchmark's 6 s environment query can be outlived by a grandchild**

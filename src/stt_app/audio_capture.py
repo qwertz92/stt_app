@@ -145,6 +145,13 @@ class WarmMicrophoneStream:
             return self._opened_device_key if self._stream is not None else None
 
     _CLOSE_WAIT_S = 10.0
+    # `close_if_idle` closes at most this many streams itself before it gives
+    # up: each own close re-arms `_CLOSE_WAIT_S`, so without a count a restart
+    # landing during every close kept the call going as long as it kept coming.
+    _MAX_OWN_CLOSES = 4
+    # `close` runs on the Qt thread at shutdown, so its wait for a helper's
+    # close is short; `close_if_idle` runs off Qt and waits `_CLOSE_WAIT_S`.
+    _CLOSE_JOIN_S = 2.5
 
     @property
     def is_opening(self) -> bool:
@@ -519,6 +526,7 @@ class WarmMicrophoneStream:
         # the budget -- so the budget bounds one wait for another thread's
         # work and never the own closes (see the docstring).
         deadline: float | None = None
+        own_closes = 0
         with self._lock:
             if self._consumer is not None:
                 return False
@@ -532,6 +540,19 @@ class WarmMicrophoneStream:
         while True:
             with self._idle:
                 if self._consumer is not None:
+                    return False
+                if own_closes >= self._MAX_OWN_CLOSES and (
+                    self._stream is not None
+                    or self._retiring
+                    or self._starting
+                    or self._closes_in_flight
+                ):
+                    if self._logger is not None:
+                        self._logger.warning(
+                            "warm_microphone_stream_busy restarts_after_close=%d; "
+                            "device re-enumeration deferred",
+                            own_closes,
+                        )
                     return False
                 stream = self._stream
                 self._stream = None
@@ -556,7 +577,9 @@ class WarmMicrophoneStream:
                         return False
                     self._idle.wait(remaining)
                     continue
-            if self._close_retiring():
+            closed = self._close_retiring()
+            if closed:
+                own_closes += closed
                 deadline = None
 
     def close(self) -> None:
@@ -580,6 +603,19 @@ class WarmMicrophoneStream:
             if stream is not None:
                 self._retiring.append(stream)
         self._close_retiring()
+        # A helper's close in flight is not in `_retiring` any more; waiting
+        # for it keeps the live-stream registry clear when this returns.
+        with self._idle:
+            if (
+                not self._idle.wait_for(
+                    lambda: not self._closes_in_flight, timeout=self._CLOSE_JOIN_S
+                )
+                and self._logger is not None
+            ):
+                self._logger.warning(
+                    "warm_microphone_stream_close_unfinished closes_in_flight=%d",
+                    self._closes_in_flight,
+                )
 
     def _close_and_reopen(self, generation: int) -> None:
         self._close_retiring()

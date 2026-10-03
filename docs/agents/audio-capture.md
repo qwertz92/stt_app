@@ -54,9 +54,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     `_stream` after each close, and answers True only with nothing in flight
     after its own closes. `_CLOSE_WAIT_S` bounds waits on *other threads*;
     its own closes run to completion and re-arm the budget only when
-    `_close_retiring` reports it closed something. Accepted gap: a restart
-    issued after the bump is closed by this call, unbounded (Known
-    limitations).
+    `_close_retiring` reports it closed something. A restart issued after the
+    bump is closed by this call too, but at most `_MAX_OWN_CLOSES` (4) streams
+    in all: past that it answers False and logs `warm_microphone_stream_busy
+    restarts_after_close=N`, and the deferred refresh reopens (measured before
+    the cap: 25 restarts kept it closing for 3.14 s against a 0.4 s budget).
+  - **`close` also waits for a helper's close in flight**, bounded by
+    `_CLOSE_JOIN_S` (2.5 s, not `_CLOSE_WAIT_S`: `shutdown()` calls it on the Qt
+    thread), so the live-stream registry is clear when it returns; a wait that
+    runs out logs `warm_microphone_stream_close_unfinished`.
 - **A retired stream stays reachable until closed** (`_retiring`, drained by
   `_close_retiring`, first comer closes; a superseded open's stream too).
   `_spawn_or_run` closes on the calling thread when no helper can start and

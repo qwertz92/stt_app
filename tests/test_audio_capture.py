@@ -1510,3 +1510,70 @@ def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(
     )
     assert elapsed < 1.0, f"the hand-overs re-armed the budget: {elapsed:.2f}s"
     assert len(helpers) >= 1, "no hand-over reached the retiring branch"
+
+
+def test_warm_close_if_idle_gives_up_on_a_restart_storm_after_a_few_own_closes(
+    monkeypatch,
+):
+    """Each own close re-arms the budget, so a producer that lands a new
+    stream during every close kept the call closing for as long as it kept
+    producing (25 restarts: 3.14 s against a 0.4 s budget). The own closes are
+    capped; past the cap the call answers False like any other wait that ran
+    out, and the deferred refresh reopens."""
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _TimedCloseStream)
+    _TimedCloseStream.close_delays = []
+    live_before = audio_devices.live_stream_count()
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    real_close_retiring = warm._close_retiring
+    restarts: list[int] = []
+
+    def _close_then_restart():
+        closed = real_close_retiring()
+        if len(restarts) < 50:
+            restarts.append(1)
+            warm.ensure_started()  # a generation-less open lands mid-close
+        return closed
+
+    monkeypatch.setattr(warm, "_close_retiring", _close_then_restart)
+    try:
+        answer = warm.close_if_idle()
+    finally:
+        monkeypatch.setattr(warm, "_close_retiring", real_close_retiring)
+        warm.close()
+
+    assert answer is False
+    assert len(restarts) <= WarmMicrophoneStream._MAX_OWN_CLOSES
+    assert audio_devices.live_stream_count() == live_before
+
+
+def test_warm_close_waits_for_a_close_a_helper_has_in_flight(monkeypatch):
+    """`close()` drained `_retiring` and returned while a restart helper was
+    still inside `stream.close()`, so the registry was not clear when it
+    answered."""
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _TimedCloseStream)
+    _TimedCloseStream.close_delays = [0.5]
+    live_before = audio_devices.live_stream_count()
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm.request_restart()
+    assert _wait_until(lambda: warm._closes_in_flight == 1), "no close in flight"
+
+    warm.close()
+
+    assert warm._closes_in_flight == 0
+    assert audio_devices.live_stream_count() == live_before
+
+
+def test_warm_close_gives_up_on_a_helper_close_that_never_finishes(monkeypatch):
+    monkeypatch.setattr(WarmMicrophoneStream, "_CLOSE_JOIN_S", 0.2)
+    warm = _warm_with_blocking_close(monkeypatch)
+    warm.request_restart()
+    first = _BlockingCloseStream.instances[0]
+    assert _wait_until(first.closing.is_set)
+    started = time.perf_counter()
+    try:
+        warm.close()
+        assert time.perf_counter() - started < 2.0
+    finally:
+        first.release.set()
