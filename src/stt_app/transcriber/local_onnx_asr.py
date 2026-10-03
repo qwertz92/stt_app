@@ -195,8 +195,11 @@ def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
 
 # Frames decoded per block by `_read_wav_float32`: 256 Ki frames is 0.5-3 MB of
 # PCM for one to six channels, and a block's float32 copy and channel mean add
-# at most three times that.
+# at most three times that. A header may declare thousands of channels, which
+# would make the same frame count that many times larger, so a block is also
+# capped at the bytes six channels take.
 _WAV_BLOCK_FRAMES = 1 << 18
+_WAV_BLOCK_MAX_BYTES = _WAV_BLOCK_FRAMES * 2 * 6
 
 
 def _source_size(source: str | Path | io.BytesIO) -> int:
@@ -261,9 +264,10 @@ def _decode_pcm16_blocks(
     frame_bytes = 2 * channels
     capacity = min(declared_frames, source_bytes // frame_bytes)
     waveform = np.empty(capacity, dtype=np.float32)
+    block_frames = max(1, min(_WAV_BLOCK_FRAMES, _WAV_BLOCK_MAX_BYTES // frame_bytes))
     filled = 0
     while filled < capacity:
-        raw = handle.readframes(min(_WAV_BLOCK_FRAMES, capacity - filled))
+        raw = handle.readframes(min(block_frames, capacity - filled))
         frames = len(raw) // frame_bytes
         if frames == 0:
             break

@@ -149,3 +149,25 @@ def test_decoding_holds_about_one_mono_float32_copy_not_five_file_sizes(
     # The result plus one block (a few MB) and the interpreter's small change.
     assert peak <= waveform.nbytes + 16 * 1024 * 1024
     assert peak < 3 * file_bytes
+
+
+def test_an_absurd_channel_count_does_not_make_one_block_read_huge(monkeypatch):
+    """A block was a fixed number of frames, so a header declaring thousands of
+    channels made one `readframes` call (and its float32 copy and mean) that
+    many times the nominal block. The block's bytes are capped as well."""
+    channels = 2048
+    frames = _random_pcm(channels * 2048)
+    payload = _wav(frames, channels=channels)
+    requested: list[int] = []
+    real_readframes = wave.Wave_read.readframes
+
+    def _record(self, count):
+        requested.append(count * 2 * channels)
+        return real_readframes(self, count)
+
+    monkeypatch.setattr(wave.Wave_read, "readframes", _record)
+
+    waveform, _ = _read_wav_float32(io.BytesIO(payload))
+
+    assert max(requested) <= local_onnx_asr._WAV_BLOCK_MAX_BYTES
+    assert waveform.tobytes() == _reference_decode(frames, channels).tobytes()

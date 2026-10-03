@@ -348,7 +348,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     by the header's frame count. Peak is the result plus one block: 1.01x the
     file for a 480 MB stereo 48 kHz WAV, where decoding the whole data chunk
     and converting it twice peaked at 5.0x (measured 2026-10-03 with
-    tracemalloc). The output is byte-identical to the whole-file decode.
+    tracemalloc). The output is byte-identical to the whole-file decode. A
+    block is also capped at `_WAV_BLOCK_MAX_BYTES` (the bytes six channels
+    take), so a header declaring thousands of channels reads fewer frames per
+    block instead of a block that many times larger.
   - `resample_linear` interpolates in blocks of 65,536 target samples
     (`_RESAMPLE_BLOCK`), bit-identical to the former whole-array version:
     `np.interp` only reads the two samples around a position, so each block
