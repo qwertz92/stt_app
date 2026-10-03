@@ -13,18 +13,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `coordinator.acquire(...)` in `_download_model_for_preload` /
   `run_coordinated_download`. Only a `KeyboardInterrupt` in a console run hits
   it; every fix reshapes locking and moves the window. Only the cross-process
-  download lock was closed (its loser is every other process).
+  download lock was closed (its loser is every other process). Kept
+  (2026-10-03, cost vs effect): no signal-safe form exists in Python, and a
+  stranded slot needs a console run and an interrupt in a window of a few
+  bytecodes; a restructure is about a day with nothing to measure it against.
 - **`_teardown_pending_stream_connect` swallows a `KeyboardInterrupt`**
   (`except BaseException` by design, best-effort cleanup). Console runs only.
 - **The download slot is not enforced across Windows user accounts**: the lock
   lives under each user's `%APPDATA%` (`appdata_root() / "locks"`); two
   accounts sharing one Model Dir can corrupt it. Not an offered configuration;
   `_download_lock_dir`'s docstring says why the lock is not in the cache.
+  Kept (2026-10-03, owner decision needed): a machine-wide lock location
+  (`%PROGRAMDATA%`) needs a permissions design for a configuration nobody
+  uses; about 2 h plus the decision.
 - **With a custom Model Dir, a faster-whisper copy only in the default HF
   cache cannot be deleted from the Models tab**: the inventory answers
   "loadable from Model Dir" (`WhisperModel(download_root=...)` reads one
   root). `cached_model_paths` / `delete_cached_model` still reach it. Fix needs
-  per-model paths in the scan subprocess protocol.
+  per-model paths in the scan subprocess protocol. Kept (2026-10-03): the
+  scan side is about an hour, but the Models tab needs a row state "in the
+  default cache, not used" (`settings_dialog_local.py`, another owner's file),
+  about 3 h with its layout tests.
 - Streaming inserts are append-only; focus-change detection is polled, so a
   very brief switch can be missed.
 - **The post-pause append gate is energy plus a speech check that admits
@@ -33,7 +42,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   (0.064-0.227 against the 0.08 cut) and can append one hallucinated window;
   the damage stays bounded by `protected_prefix`. With the silence gate off
   the speech check does not run and the gate is energy alone, as before. A
-  word under 80 ms voiced is still dropped by the energy run.
+  word under 80 ms voiced is still dropped by the energy run. Kept
+  (2026-10-03): needs recorded knocks and typing, which only the owner's
+  microphone can supply; half a day to measure and recalibrate the cut.
 - **The batch speech check lets much noise through, by design.** With its
   amplified second scan, the SYNTHETIC calibration skips a knock 1 time in
   50, typing at 160 wpm never, a fan rarely, a thump 32 times and room tone
@@ -50,23 +61,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **The batch speech check is off for a stop that comes before its model
   loaded**: the stop is transcribed as before (`silero_speech_seconds=loading`)
   rather than waiting on the Qt thread. Only the first second or so after
-  start, or after turning the gate on, is affected.
+  start, or after turning the gate on, is affected. Kept (2026-10-03, by
+  design): a stop inside that window needs a recording shorter than the
+  graph's load (0.1-0.3 s); waiting for it would freeze the Qt thread.
 - **The pause mechanism is inert in a room above the silence gate**: noise
   over `silence_gate_threshold` means `silent_seconds` never accumulates,
   `new_segment` never fires, `segment_floor` is never set. Logged once per
   session as `streaming_noise_floor_above_gate` after 20 s of above-gate audio
-  (rolling; cannot tell a loud room from 20 s of pause-free speech).
+  (rolling; cannot tell a loud room from 20 s of pause-free speech). Kept
+  (2026-10-03): a pause threshold relative to the measured noise floor needs
+  noisy-room recordings to calibrate; about a day with the owner's samples.
 - **The energy gate's numbers are synthetic; the speech check's noise side
   is too**: `samples/benchmark_sample.wav` (from
   `scripts/generate_sample_audio.py`) is sine tones, so do not move the
   energy threshold on synthetic evidence. The Silero cuts were calibrated on
   real speech (six LibriSpeech excerpts in `tests/data`, 25 clips and the
   owner's recordings, aggregates only) but on SYNTHETIC non-speech only: no
-  recorded cough, fan, room or keyboard was measured.
+  recorded cough, fan, room or keyboard was measured. Kept (2026-10-03,
+  needs the owner's recordings): nothing here can be fixed without them.
 - **Remote batch parts are independent**: a sentence across a cut is split,
   language detection runs per part, no previous-part prompt (vocabulary goes
   with every part). A cancel between parts discards finished parts (audio
   stays reachable via Import/recovery, not Retry); a request in flight runs on.
+  By design: a previous-part prompt differs per provider and is not offered
+  by all of them; the cut sits at the quietest point to keep splits rare.
 - **A gap marker can still stand for a stretch without words.** An empty
   part is judged by its loudest 100 ms window against the user's silence-gate
   threshold, then by the Silero check; noise the batch speech check lets
@@ -78,8 +96,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
   2026-10-03: a low-pass filter changes the samples every imported file feeds
   the models, with no word-error-rate measurement behind it. App recordings are
-  16 kHz; only imports and benchmark samples reach it.
-- ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
+  16 kHz; only imports and benchmark samples reach it. Kept (2026-10-03,
+  owner decision needed): the filter is an hour of work, the word-error-rate
+  comparison on resampled imports that would justify it about half a day.
+- ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE). By design.
 - **Clipboard restore is not lossless.** Every HGLOBAL format is restored, but
   not: GDI-handle/owner-drawn formats (`CF_BITMAP` is resynthesized from
   `CF_DIB`; `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`,
@@ -90,7 +110,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `CF_DSPTEXT` comes back without its `CF_OWNERDISPLAY` (harmless).
 - The NVIDIA *NeMo* runtime is intentionally unimplemented (Parakeet via
   onnx-asr, Nemotron via ORT GenAI); see
-  `docs/local-asr-model-candidates-2026.md`.
+  `docs/local-asr-model-candidates-2026.md`. By design.
 - **One insert offer at a time; a later failure replaces an earlier one.** In
   a flush, an earlier pre-keystroke failure (Insert useful) is replaced by a
   later post-keystroke one (Insert withheld); the earlier text is in history
@@ -203,7 +223,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Two history entries equal in every field are one entry to Edit and
   Delete**: `update_entry` / `delete_entries` use `list.index` on the
   `TranscriptHistoryEntry` dataclass. The app never writes such a pair (every
-  recording has an id); fixing needs an id in the schema.
+  recording has an id); fixing needs an id in the schema. Kept (2026-10-03,
+  cost vs effect): two identical entries look the same wherever they sit, so
+  the only visible effect is an edit landing in the other row; an id means a
+  schema change and the history dialog's row identity, about 3 h.
 - **The readiness probe cannot see a browser renderer's delay**: for
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;
