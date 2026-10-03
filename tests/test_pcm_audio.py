@@ -3,9 +3,12 @@ work: the Nemotron and Granite CTC runtimes both hand it the rate as read."""
 
 from __future__ import annotations
 
+import tracemalloc
+
 import numpy as np
 import pytest
 
+from stt_app.transcriber import _pcm_audio
 from stt_app.transcriber._pcm_audio import (
     MIN_SOURCE_SAMPLE_RATE_HZ,
     resample_linear,
@@ -43,6 +46,63 @@ def test_every_rate_a_recorder_writes_comes_out_at_the_target_length(rate):
     assert resampled.size == 16_000
     expected = np.linspace(-1.0, 1.0, 16_000, dtype=np.float64)
     assert float(np.abs(resampled - expected).max()) < 1e-6
+
+
+def _whole_array_resample(samples: np.ndarray, source_rate: int, target_rate: int):
+    """The resampler as it was before it worked block by block: one position
+    array per side, over the whole waveform."""
+    target_length = max(1, round(samples.size * target_rate / source_rate))
+    return np.asarray(
+        np.interp(
+            np.linspace(0, samples.size - 1, target_length, dtype=np.float64),
+            np.arange(samples.size, dtype=np.float64),
+            samples,
+        ),
+        dtype=np.float32,
+    )
+
+
+@pytest.mark.parametrize(
+    ("source_rate", "size"),
+    [
+        (48_000, 100_003),
+        (44_100, 77_777),
+        (22_050, 5_000),
+        (8_000, 4_099),
+        (16_001, 9_001),
+    ],
+)
+def test_blockwise_resampling_is_bit_identical_to_the_whole_array_version(
+    monkeypatch, source_rate, size
+):
+    """Blocks of 1000 target samples, so every block boundary and the last
+    partial block are crossed; the interpolation is local, so the bits do not
+    depend on where a block starts."""
+    monkeypatch.setattr(_pcm_audio, "_RESAMPLE_BLOCK", 1000)
+    samples = np.random.default_rng(5).uniform(-1, 1, size).astype(np.float32)
+
+    resampled = resample_linear(samples, source_rate, 16_000)
+
+    expected = _whole_array_resample(samples, source_rate, 16_000)
+    assert resampled.dtype == np.float32
+    assert resampled.tobytes() == expected.tobytes()
+
+
+def test_resampling_holds_the_result_and_one_block_not_float64_position_arrays():
+    """Measured with tracemalloc (2026-10-03): 20 M samples of 48 kHz audio,
+    416 s, peaked at 427 MB through the whole-array version, which is the
+    ~3.7 GB per hour of the former known limitation; the block-wise one peaks
+    at its 27 MB result plus a block."""
+    samples = np.zeros(20_000_000, dtype=np.float32)
+
+    tracemalloc.start()
+    try:
+        resampled = resample_linear(samples, 48_000, 16_000)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert peak <= resampled.nbytes + 32 * 1024 * 1024
 
 
 def test_audio_already_at_the_target_rate_is_returned_as_it_is():

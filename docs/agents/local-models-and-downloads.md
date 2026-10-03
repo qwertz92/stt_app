@@ -319,6 +319,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     file for a 480 MB stereo 48 kHz WAV, where decoding the whole data chunk
     and converting it twice peaked at 5.0x (measured 2026-10-03 with
     tracemalloc). The output is byte-identical to the whole-file decode.
+  - `resample_linear` interpolates in blocks of 65,536 target samples
+    (`_RESAMPLE_BLOCK`), bit-identical to the former whole-array version:
+    `np.interp` only reads the two samples around a position, so each block
+    gets its own slice of the integer grid. Peak is the float32 result plus
+    about 4 MB (30.9 MB for a 26.7 MB result); the whole-array version held
+    float64 position arrays, 427 MB for 416 s of 48 kHz audio (3.7 GB an
+    hour). No anti-aliasing: see known-limitations.
   - `resample_linear` refuses rates below `MIN_SOURCE_SAMPLE_RATE_HZ` (8 kHz,
     also onnx-asr's `WrongSampleRateError` limit): a 1 Hz header turned 3 KB
     into 25.6 M samples. The readers' `<= 0` guards stay; `transcribe_batch`

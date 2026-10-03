@@ -26,6 +26,9 @@ from .base import TranscriptionError
 # floor the factor is at most two.
 MIN_SOURCE_SAMPLE_RATE_HZ = 8_000
 
+# Target samples interpolated per block by `resample_linear`.
+_RESAMPLE_BLOCK = 1 << 16
+
 
 def resample_linear(
     samples: np.ndarray,
@@ -55,17 +58,26 @@ def resample_linear(
     if source_rate == target_rate or samples.size <= 1:
         return np.asarray(samples, dtype=np.float32)
     target_length = max(1, round(samples.size * target_rate / source_rate))
-    source_positions = np.arange(samples.size, dtype=np.float64)
-    target_positions = np.linspace(
-        0,
-        samples.size - 1,
-        target_length,
-        dtype=np.float64,
-    )
-    return np.asarray(
-        np.interp(target_positions, source_positions, samples),
-        dtype=np.float32,
-    )
+    # `np.linspace(0, size - 1, target_length)` is `index * step`, with the
+    # last position set to `size - 1`; computing a block of it at a time gives
+    # the same float64 values without the whole array.
+    last = samples.size - 1
+    step = last / (target_length - 1) if target_length > 1 else 0.0
+    resampled = np.empty(target_length, dtype=np.float32)
+    for start in range(0, target_length, _RESAMPLE_BLOCK):
+        stop = min(start + _RESAMPLE_BLOCK, target_length)
+        positions = np.arange(start, stop, dtype=np.float64) * step
+        if stop == target_length and target_length > 1:
+            positions[-1] = last
+        # `np.interp` only looks at the two samples around a position, so a
+        # block gets its own slice of the integer grid and the bits equal the
+        # whole-array result. The slice spans the block (1.5 MB at 48 kHz)
+        # instead of one float64 per input sample (3.7 GB an hour of 48 kHz).
+        first = int(positions[0])
+        end = min(int(np.ceil(positions[-1])) + 1, samples.size)
+        grid = np.arange(first, end, dtype=np.float64)
+        resampled[start:stop] = np.interp(positions, grid, samples[first:end])
+    return resampled
 
 
 # How far back from the end of a window the split point is looked for. The cut

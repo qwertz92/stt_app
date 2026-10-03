@@ -87,8 +87,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **An Azure part of up to an hour has a 120 s socket timeout**: the factory
   passes no `request_timeout_s`. Not observed; no Azure resource (2026-09-27).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,
-  Nemotron and Granite CTC): no anti-aliasing, and float64 position arrays
-  cost ~3.7 GB per hour of 48 kHz import (2026-09-19). App recordings are
+  Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
+  2026-10-03: a low-pass filter changes the samples every imported file feeds
+  the models, with no word-error-rate measurement behind it. App recordings are
   16 kHz; only imports and benchmark samples reach it.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - **Clipboard restore is not lossless.** Every HGLOBAL format is restored, but
