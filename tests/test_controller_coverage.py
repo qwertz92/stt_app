@@ -6021,6 +6021,51 @@ def test_a_suspended_stream_does_not_paste_into_the_other_window(monkeypatch):
     _ = app
 
 
+def test_a_partial_after_a_switch_checks_the_focus_before_it_pastes(monkeypatch):
+    """The focus poll ticks every 25 ms; a partial that lands between the
+    switch and the next tick used to paste into the other window. The partial
+    reads the focus itself now, so only the milliseconds to the keystroke
+    (the inserter's own foreground check) remain."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _s, **kw: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
+    try:
+        controller.start_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not controller._streaming_recording:
+            app.processEvents()
+            time.sleep(0.01)
+        base = "das ist ein laengerer satz mit vielen stabilen woertern"
+        controller._on_transcription_partial(base)
+        controller._on_transcription_partial(base + " und noch mehr davon")
+        pasted_before = len(inserter.calls)
+        assert pasted_before >= 1, "live insertion was not running to begin with"
+
+        # The switch happens and no poll tick has run yet.
+        focus_helper.current = 987654
+        controller._on_transcription_partial(base + " und noch mehr davon hier")
+        controller._on_transcription_partial(base + " und noch mehr davon hier auch")
+
+        assert len(inserter.calls) == pasted_before, (
+            f"pasted into the foreign window before the poll noticed: {inserter.calls}"
+        )
+        assert controller._stream_insertion_suspended is True
+    finally:
+        controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize(
     "spelling",
     [

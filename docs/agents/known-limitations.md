@@ -34,8 +34,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Two input devices with the same name are one entry**:
   `resolve_input_device` opens the first matching index. Names survive
   re-enumeration and reboot; PortAudio indices do not.
-- Streaming inserts are append-only; focus-change detection is polled, so a
-  very brief switch can be missed.
 - **The post-pause append gate is energy plus a speech check that admits
   most knocks.** With the silence gate on, Silero refuses most thumps and
   fast typing after a pause, but a knuckle knock still passes 47 times in 50

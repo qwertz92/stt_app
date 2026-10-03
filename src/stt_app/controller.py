@@ -6988,6 +6988,11 @@ class DictationController(QtCore.QObject):
                 beep=STREAMING_BEEP_ON_ABORT,
             )
             return
+        if STREAMING_LIVE_INSERT_ENABLED:
+            # The timer ticks every STREAMING_FOCUS_POLL_MS; a partial that
+            # arrives between a window switch and the next tick must not
+            # paste into the new window, so the same check runs here first.
+            self._on_stream_focus_poll()
         if STREAMING_LIVE_INSERT_ENABLED and not self._stream_insertion_suspended:
             previous_committed = self._stream_text_state.committed_text
             append = self._stream_text_state.apply_partial_append_only(text)

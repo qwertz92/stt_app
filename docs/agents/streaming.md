@@ -118,7 +118,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   extending `committed_text` stays only in history). Arm the poll timer
   unconditionally; keep updating `live_text` (preferred by
   `_current_streaming_partial_text`). `STREAMING_ABORT_ON_FOCUS_CHANGE`
-  still selects the hard abort; its tests opt in.
+  still selects the hard abort; its tests opt in. A partial runs the same
+  check itself before it pastes (`_on_transcription_partial` calls
+  `_on_stream_focus_poll`): with the 25 ms timer alone a partial landing
+  between a switch and the next tick pasted into the new window (measured in
+  a test with no tick, 2026-10-03). What remains is the few milliseconds
+  between that check and the keystroke, where the inserter's own foreground
+  re-read (`docs/agents/text-insertion.md`) stands guard.
 - **The post-pause speech measurement buckets at 20 ms**
   (`STREAMING_SPEECH_RUN_WINDOW_MS`, a required keyword of
   `measure_longest_speech_run_s`, never defaulted to
