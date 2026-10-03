@@ -22,8 +22,9 @@ of the 10 readings prints the verdict and its evidence:
     unknown          the check cannot tell; a paste there is reported as
                      before the check existed
 
-The evidence holds window class names and caret answers only, never window
-titles or text, so the output can be pasted into a bug report as it is.
+The evidence holds window class names and caret answers only -- no window
+titles and no text. A class name can still name the application (some carry
+an executable name or a GUID), so look over the output before sharing it.
 Nothing is pasted, typed or clicked, the clipboard is not touched, and the
 app's settings folder is not read: APPDATA points at a throwaway folder that
 is deleted on exit.
