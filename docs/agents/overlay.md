@@ -100,8 +100,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
   differs by colour only
   (`QLabel[queueRowKind="undelivered"]`). The title counts the two apart
-  (`_queue_title`: "Transcribing N files", "N transcripts not inserted", or
-  both joined by " · "). Both buttons emit `queue_cancel_requested`.
+  (`_queue_title`: "Transcribing N recordings" -- it said "files" until
+  2026-10-03 (UX review item 6g), though the user handled no file --, "N
+  transcripts not inserted", or both joined by " · "). Both buttons emit `queue_cancel_requested`.
 - **A dragged overlay is clamped from where the user put it**, not from
   `self.pos()` (a tall result pushed it up for good). The remembered position
   and `_manual_positioned` have one writer, `_claim_manual_position`. A

@@ -159,10 +159,14 @@ def _queue_entry(item) -> tuple[int, str, str]:
 
 
 def _queue_title(entries) -> str:
-    """Count running transcriptions and waiting inserts apart."""
+    """Count running transcriptions and waiting inserts apart.
+
+    A queued job is a dictation recording, which the tray's messages call
+    "Recording HH:MM:SS"; "file" named something the user never handled.
+    """
     waiting = sum(1 for _t, _l, kind in entries if kind == QUEUE_ROW_KIND_UNDELIVERED)
     running = len(entries) - waiting
-    transcribing = f"Transcribing {running} file" + ("" if running == 1 else "s")
+    transcribing = f"Transcribing {running} recording" + ("" if running == 1 else "s")
     if not waiting:
         return transcribing
     if not running:

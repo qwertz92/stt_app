@@ -2404,7 +2404,7 @@ def test_a_waiting_insert_row_offers_dismiss_and_reads_as_not_inserted():
 @pytest.mark.parametrize(
     ("items", "title"),
     [
-        ([(1, "a"), (2, "b")], "Transcribing 2 files"),
+        ([(1, "a"), (2, "b")], "Transcribing 2 recordings"),
         ([(-1, "x", QUEUE_ROW_KIND_UNDELIVERED)], "1 transcript not inserted"),
         (
             [
@@ -2415,7 +2415,12 @@ def test_a_waiting_insert_row_offers_dismiss_and_reads_as_not_inserted():
         ),
         (
             [(1, "a"), (-1, "x", QUEUE_ROW_KIND_UNDELIVERED)],
-            "Transcribing 1 file · 1 not inserted",
+            "Transcribing 1 recording · 1 not inserted",
+        ),
+        (
+            [(n, "a") for n in range(1, 13)]
+            + [(-n, "x", QUEUE_ROW_KIND_UNDELIVERED) for n in range(1, 13)],
+            "Transcribing 12 recordings · 12 not inserted",
         ),
     ],
 )
@@ -2426,6 +2431,12 @@ def test_the_queue_title_counts_transcriptions_and_waiting_inserts_apart(items, 
     overlay.set_transcription_queue(items)
 
     assert overlay._queue_title_label.text() == title
+    # The title is a plain label: a header wider than the controls row would
+    # widen the overlay.
+    assert (
+        overlay._queue_header_widget.sizeHint().width()
+        <= overlay._controls_widget.sizeHint().width()
+    )
 
 
 def _real_undelivered_labels():
