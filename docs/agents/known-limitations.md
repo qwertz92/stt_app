@@ -191,18 +191,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **The benchmark environment (median 2.2 s PowerShell) runs before the first
   cancel check**; a shutdown joins for 2.5 s: a worker it outlasts saves
   nothing, one it ends is saved as canceled.
-- **`_model_cache_dirs` does not fold a `\\?\`-prefixed Model Dir** with its
-  plain spelling (`realpath`), so a held partial counts twice. The app writes
-  no such path.
-- **`_unlink_partial` leaves a partial writable** when its retry is refused
-  for another reason after clearing read-only. Harmless.
-- **Three recorded properties of the `_unlink_partial` 10 ms retry**
-  (measured, not changed): `removed_bytes` credits the size read before the
-  first attempt; the 10 ms is paid serially per refused file (50 held
-  partials: 0.53 s) on the queue worker, the preload worker or the script,
-  never on Qt; two concurrent cleanups over one tree over-count
-  `removed_files` (84 of 4,000), because Windows accepts a second delete of a
-  file whose delete is in flight.
+- **Two recorded properties of the partial-removal retry** (measured, not
+  changed; the per-file pause and the writable leftover were fixed 2026-10-03):
+  `removed_bytes` credits the size read before the first attempt; two
+  concurrent cleanups over one tree over-count `removed_files` (84 of 4,000),
+  because Windows accepts a second delete of a file whose delete is in flight.
+  Both only skew a count in a message; the second needs two cleanups at once.
 - **A minimised Run Benchmark window or pop-out returns with the settings
   dialog** (Windows restores `Qt.Window` owned windows with their owner; the
   owner relation keeps them above it).

@@ -56,11 +56,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - `cleanup_incomplete_model_download` counts after a successful unlink and
     returns `IncompleteCleanup(removed_files, removed_bytes, left_files)`;
     `_CleanupOutcome.left_files` yields "could not be removed: still in use"
-    (`scripts/download_model.py` has its own). `_unlink_partial` retries a
-    refused unlink once after 10 ms (clearing read-only first), then asks
-    `exists()`: a file another program is deleting refuses, then vanishes.
-  - `_model_cache_dirs` dedupes roots by `realpath`, not `normpath` (8.3 short
-    names counted a held partial twice); returned paths keep user spelling.
+    (`scripts/download_model.py` has its own). `_remove_partials_under` tries
+    every partial once (`_unlink_once`), clears read-only on the refused ones,
+    pauses 10 ms once for the whole sweep, then retries them
+    (`_retry_unlink`) and asks `exists()`: a file another program is deleting
+    refuses, then vanishes. A file that stays gets its read-only attribute
+    back.
+  - `_model_cache_dirs` dedupes roots by `_same_directory_key` (`realpath`
+    with an extended-length `\\?\` prefix folded away), not `normpath` (8.3
+    short names and the prefixed spelling counted a held partial twice);
+    returned paths keep user spelling.
   - Preloads report it too: `_note_preload_cleanup` (by generation), appended
     by `_on_model_preload_done` for an explicit cancel and for a save leaving
     the local engine (no `_preload_cancel_requested`; failure arm).

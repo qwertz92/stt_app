@@ -128,6 +128,25 @@ class _StreamingSession:
     result: _StreamResult = field(default_factory=_StreamResult)
 
 
+_EXTENDED_PREFIX = "\\\\?\\"
+_EXTENDED_UNC_PREFIX = _EXTENDED_PREFIX + "UNC\\"
+
+
+def _same_directory_key(path: Path) -> Path:
+    r"""`realpath` of a directory with the extended-length prefix folded away.
+
+    `realpath` keeps a `\\?\` the caller wrote, so `\\?\C:\cache` and
+    `C:\cache` named one directory and were two keys. The prefix is dropped
+    for both of its forms (`\\?\C:\...` and `\\?\UNC\server\share`).
+    """
+    real = os.path.realpath(path)
+    if real.startswith(_EXTENDED_UNC_PREFIX):
+        real = "\\\\" + real[len(_EXTENDED_UNC_PREFIX) :]
+    elif real.startswith(_EXTENDED_PREFIX) and real[5:6] == ":":
+        real = real[len(_EXTENDED_PREFIX) :]
+    return Path(real)
+
+
 def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     """Return possible cache directories for a model.
 
@@ -157,9 +176,9 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
         # leaves a missing one as spelled. The returned paths keep the
         # spelling the user gave apart from what `normpath` folds (a trailing
         # separator, forward slashes, `..`); an 8.3 name and a `\\?\` prefix
-        # survive.
+        # survive in them, while the key folds the prefix away.
         base = Path(os.path.normpath(base_dir))
-        key = Path(os.path.realpath(base))
+        key = _same_directory_key(base)
         if key in seen:
             continue
         seen.add(key)
@@ -308,22 +327,37 @@ _ALL_PARTIAL_PATTERNS = ("*.incomplete", "*.ms-part")
 _PARTIAL_RETRY_DELAY_S = 0.01
 
 
-def _clear_read_only(path: Path) -> None:
-    """Give a read-only file its write bit back, best-effort."""
+def _clear_read_only(path: Path) -> int | None:
+    """Give a read-only file its write bit back, best-effort.
+
+    Returns the mode to restore if the attribute was cleared, else None.
+    """
     try:
         mode = path.stat().st_mode
     except OSError:
-        return
+        return None
     if mode & stat.S_IWRITE:
-        return
+        return None
     try:
         path.chmod(mode | stat.S_IWRITE)
     except OSError:
-        pass
+        return None
+    return mode
 
 
-def _unlink_partial(path: Path) -> str:
-    """Remove one partial file; say whether it was removed, gone, or left.
+def _unlink_once(path: Path) -> str | None:
+    """First unlink attempt: removed, gone, or None when it was refused."""
+    try:
+        path.unlink()
+        return _PARTIAL_REMOVED
+    except FileNotFoundError:
+        return _PARTIAL_GONE
+    except OSError:
+        return None
+
+
+def _retry_unlink(path: Path, original_mode: int | None) -> str:
+    """Second attempt at a refused partial: removed, gone, or left.
 
     A refused unlink means "held by another program" only while the file
     stays on the disk. Windows refuses the unlink with ERROR_ACCESS_DENIED
@@ -332,9 +366,16 @@ def _unlink_partial(path: Path) -> str:
     is gone a moment later; counted as left, that was 343 files "could not
     be removed: still in use" on an empty disk (measured with a racing
     deleter), and `exists()` alone still answered True for a few of them
-    inside that moment. One retry after a short pause tells the cases
-    apart: a held file is refused again, a file being deleted is not found,
-    and a lock that was only transient lets the retry remove it.
+    inside that moment. A retry after a pause tells the cases apart: a held
+    file is refused again, a file being deleted is not found, and a lock
+    that was only transient lets the retry remove it. A read-only partial
+    is refused for good and is not "in use": a backup tool restored it, or
+    a copy carried the attribute over. It is as unusable as any other
+    partial -- the mirror's resume could not append to a read-only file, and
+    huggingface_hub reads none of its own back -- so the caller cleared the
+    attribute before the pause (measured: reported as "still in use" on
+    every cleanup with nothing holding it), and a file that stays gets it
+    back (`original_mode`), so the cleanup leaves it as it found it.
     """
     try:
         path.unlink()
@@ -342,22 +383,14 @@ def _unlink_partial(path: Path) -> str:
     except FileNotFoundError:
         return _PARTIAL_GONE
     except OSError:
-        pass
-    # A read-only partial is refused for good and is not "in use": a backup
-    # tool restored it, or a copy carried the attribute over. It is as
-    # unusable as any other partial -- the mirror's resume could not append to
-    # a read-only file, and huggingface_hub reads none of its own back -- so
-    # the attribute is cleared and the retry decides (measured: reported as
-    # "still in use" on every cleanup with nothing holding it).
-    _clear_read_only(path)
-    time.sleep(_PARTIAL_RETRY_DELAY_S)
-    try:
-        path.unlink()
-        return _PARTIAL_REMOVED
-    except FileNotFoundError:
-        return _PARTIAL_GONE
-    except OSError:
-        return _PARTIAL_LEFT if path.exists() else _PARTIAL_GONE
+        if not path.exists():
+            return _PARTIAL_GONE
+    if original_mode is not None:
+        try:
+            path.chmod(original_mode)
+        except OSError:
+            pass
+    return _PARTIAL_LEFT
 
 
 def _partials_below(root: Path, patterns: tuple[str, ...]) -> list[Path]:
@@ -398,6 +431,10 @@ def _remove_partials_under(root: Path, patterns: tuple[str, ...]) -> IncompleteC
     left_files = 0
     if not root.is_dir():
         return IncompleteCleanup()
+    # Every file gets its first attempt before the one pause, so the pause is
+    # paid once per sweep and not once per refused file (50 held partials took
+    # 0.53 s with a pause each).
+    refused: list[tuple[Path, int, int | None]] = []
     for path in _partials_below(root, patterns):
         if not path.is_file():
             continue
@@ -405,12 +442,21 @@ def _remove_partials_under(root: Path, patterns: tuple[str, ...]) -> IncompleteC
             size = path.stat().st_size
         except OSError:
             continue
-        outcome = _unlink_partial(path)
-        if outcome == _PARTIAL_REMOVED:
+        outcome = _unlink_once(path)
+        if outcome is None:
+            refused.append((path, size, _clear_read_only(path)))
+        elif outcome == _PARTIAL_REMOVED:
             removed_files += 1
             removed_bytes += size
-        elif outcome == _PARTIAL_LEFT:
-            left_files += 1
+    if refused:
+        time.sleep(_PARTIAL_RETRY_DELAY_S)
+        for path, size, original_mode in refused:
+            outcome = _retry_unlink(path, original_mode)
+            if outcome == _PARTIAL_REMOVED:
+                removed_files += 1
+                removed_bytes += size
+            elif outcome == _PARTIAL_LEFT:
+                left_files += 1
     return IncompleteCleanup(removed_files, removed_bytes, left_files)
 
 
