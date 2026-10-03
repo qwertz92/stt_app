@@ -224,7 +224,10 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(
     assert dialog._benchmark_cancel_event is None
     assert dialog._background_work_active() is False
     assert dialog.run_benchmark_button.isEnabled() is True
-    assert "Could not start the benchmark" in dialog.benchmark_status_label.text()
+    status = dialog.benchmark_status_label.text()
+    assert "Could not start the benchmark" in status
+    # `str(MemoryError())` is empty; the line must still name a reason.
+    assert status.endswith(str(error) or type(error).__name__), status
     # The Details overview was primed with the running summary before the
     # thread was started, and `setPlainText` puts that into its Status row --
     # so it went on reading "running" next to a status line saying the run

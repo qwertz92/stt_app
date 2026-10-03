@@ -2411,7 +2411,7 @@ class _BenchmarkMixin:
             self._active_benchmark_thread = None
             self._benchmark_cancel_event = None
             # A `MemoryError` usually carries no message.
-            message = f"Could not start the benchmark: {exc or type(exc).__name__}"
+            message = f"Could not start the benchmark: {str(exc) or type(exc).__name__}"
             self._set_benchmark_status(message, "#b71c1c")
             # The summary view was already primed with the running summary a
             # few lines above, and `setPlainText` puts that straight into the
