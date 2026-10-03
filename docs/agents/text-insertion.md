@@ -293,8 +293,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   text field": no completion tone; an insertable `_UndeliveredInsert` row
   with `outside_text_field`; the tray (`background_insertion_failed`) for
   a queued paste or when the overlay moved on; on the overlay, while it
-  still shows what the paste painted (`_PasteCheck.overlay_shown`, never
-  over a session), an Error "pasted, but the focused element does not look
+  still shows what the paste painted (`_PasteCheck.overlay_shown`: only the
+  paste's own "Done" or Idle, never a session and never another job's Done
+  or Error -- a queued paste paints nothing, and painting over a failed
+  paste's or a streaming tail's offer took that Insert away, 2026-10-03
+  review), an Error "pasted, but the focused element does not look
   like a text field. If nothing appeared, click into the field and press
   Insert" with the Insert offer (`_paint_insert_offer`, shared with the
   failed queued paste). A re-paste or Insert that then pastes it retires

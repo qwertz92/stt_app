@@ -34,6 +34,7 @@ from stt_app.paste_target_check import (
     CaretReading,
 )
 from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
 
@@ -394,6 +395,84 @@ def test_a_queued_paste_into_no_text_field_reaches_the_tray(monkeypatch, tmp_pat
     assert overlay.states[-1][0] == "Listening"
     assert beeps == []
     assert len(_rows(overlay)) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_report_never_paints_over_another_jobs_result(monkeypatch, tmp_path):
+    """A queued paste paints nothing, so what the overlay showed at its
+    paste was another job's result: here B's failed paste with its Insert.
+    The doubtful report for A replaced it, and B's Insert was gone."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    real_insert = inserter.insert_text_with_options
+
+    def _b_fails(text, target_hwnd=None, paste_mode="auto", restore_clipboard=True):
+        if text == "transcript B":
+            inserter.calls.append((text, target_hwnd, paste_mode))
+            raise TextInsertionError("failed insert")
+        return real_insert(text, target_hwnd, paste_mode, restore_clipboard)
+
+    inserter.insert_text_with_options = _b_fails
+    controller.start_recording()
+    controller.stop_recording()
+    token_a = controller._active_request_token
+    # B goes to another window, so A's paste is not joined to B's.
+    focus = controller._window_focus_helper
+    focus.captured, focus.captured_focus, focus.captured_caret = 111, 222, 333
+    controller.start_recording()
+    controller.stop_recording()
+    # B finishes first and its paste fails: its Error with Insert is shown.
+    controller._on_transcription_ready(
+        "transcript B", request_token=controller._active_request_token
+    )
+    b_screen = overlay.states[-1]
+    assert b_screen[0] == "Error" and "transcript B" in b_screen[1]
+    # A, still transcribing in the background, is pasted when it finishes.
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    assert [call[0] for call in inserter.calls] == ["transcript B", "transcript A"]
+    assert overlay.states[-1] == b_screen
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    assert overlay.states[-1] == b_screen
+    assert controller._insert_action_text == "transcript B"
+    assert len(messages) == 1 and "does not look like a text field" in messages[0]
+    assert beeps == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_repaste_report_never_paints_over_an_offer_it_kept(monkeypatch, tmp_path):
+    """The tray re-paste pasted a text the shown offer is no part of (a
+    streaming tail's offer, in the review): the offer stayed on screen, and
+    the doubtful report must not take it away."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    inserter.should_fail = True
+    _dictate(controller, "tail words")
+    inserter.should_fail = False
+    offer_screen = overlay.states[-1]
+    assert offer_screen[0] == "Error"
+    # `_last_transcript` moved on without the offer, as a failed queued
+    # streaming job's rescued partial does; no row is waiting.
+    controller._dismiss_undelivered()
+    controller._set_last_transcript("other words", None)
+
+    controller.repaste_last_transcript()
+    assert inserter.calls[-1][0] == "other words"
+    assert controller._insert_action_text == "tail words"
+    kept = overlay.states[-1]
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    assert overlay.states[-1] == kept
+    assert controller._insert_action_text == "tail words"
+    assert len(messages) == 1 and "does not look like a text field" in messages[0]
     controller.shutdown()
     _ = app
 

@@ -316,10 +316,12 @@ class _PasteCheck:
     # A queued paste, or one made while a session owned the overlay: the
     # tray always carries its report.
     background: bool
-    # The overlay's `(state, detail)` right after the paste. A doubtful
-    # report paints only over exactly this; anything newer keeps the screen
-    # and the report goes to the tray.
-    overlay_shown: tuple[str, str]
+    # The overlay's `(state, detail)` right after the paste, when that is
+    # the paste's own "Done" or Idle; None when it is anything else -- a
+    # queued paste paints nothing, so the overlay may hold another job's
+    # finished result. A doubtful report paints only over exactly this;
+    # anything newer, or None, keeps the screen and the tray carries it.
+    overlay_shown: tuple[str, str] | None
     # Whether a report painted on the overlay moves the shown transcript and
     # its Edit target to this paste, as a failed queued paste does. False
     # where the overlay already shows this text with the right pair.
@@ -6347,15 +6349,23 @@ class DictationController(QtCore.QObject):
         """The check of the paste that just reported success.
 
         Built after the paste's own overlay paint, so a doubtful report
-        paints over exactly what the user saw for it and nothing newer.
+        paints over exactly what the user saw for it and nothing newer --
+        and only when that is this paste's own "Done" or an idle overlay.
+        A queued paste paints nothing: the overlay then shows another job's
+        result -- a failed paste's or a streaming tail's Insert offer, whose
+        tail has no row -- and painting over it took that Insert away (the
+        2026-10-03 review). A re-paste that kept another text's offer on
+        screen (`_paint_status_keeping_offer`) is the same case.
         """
+        shown = (self._overlay.state, self._overlay.detail)
+        own = shown[0] == "Idle" or shown == ("Done", text)
         return _PasteCheck(
             text=text,
             history_entry=history_entry,
             created_at=created_at,
             identity=identity,
             background=background,
-            overlay_shown=(self._overlay.state, self._overlay.detail),
+            overlay_shown=shown if own else None,
             takes_shown_pair=takes_shown_pair,
             foreground=self._last_insert_foreground,
             paste_serial=self._paste_serial,
@@ -6469,6 +6479,7 @@ class DictationController(QtCore.QObject):
             not superseded
             and not self._overlay_session_active()
             and not self._foreground_delivery_pending
+            # A None snapshot (not this paste's screen) never matches.
             and (self._overlay.state, self._overlay.detail) == pending.overlay_shown
         )
         if pending.background or not overlay_free:

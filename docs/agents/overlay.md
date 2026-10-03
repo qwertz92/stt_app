@@ -100,3 +100,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
 - **No delayed writer paints over Done or Error** (they hold the transcript
   and the only Retry/Insert recovery). `_on_preload_progress_poll` (600 ms)
   reads `OverlayUI.state`; `FakeOverlay` in `tests/conftest.py` mirrors it.
+  One exception, scoped to its own result: the paste target check's
+  doubtful report (`_report_paste_outside_text_field`) replaces the "Done"
+  its own paste painted, or an idle overlay, and only while that exact
+  `(state, detail)` is still shown (`_PasteCheck.overlay_shown`); another
+  job's Done or Error -- a queued paste paints nothing, a re-paste may keep
+  another text's offer -- is never painted over, and the tray carries it.
