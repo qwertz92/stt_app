@@ -46,7 +46,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 from .config import PASTE_TARGET_CHECK_RECHECK_DELAYS_S
-from .window_focus import GUITHREADINFO
+from .window_focus import CHROMIUM_WINDOW_CLASSES, GUITHREADINFO, window_class_name
 
 VERDICT_TEXT_FIELD = "text_field"
 VERDICT_NOT_TEXT_FIELD = "not_text_field"
@@ -59,13 +59,6 @@ _CHILDID_SELF = 0
 _STATE_SYSTEM_INVISIBLE = 0x00008000
 _VT_I4 = 3
 _COINIT_MULTITHREADED = 0x0
-# The windows whose "no caret" was measured to mean "no text field": Chromium
-# hosts its whole page in the top-level `Chrome_WidgetWin_1`, older builds
-# and some embedders in a `Chrome_RenderWidgetHostHWND` child.
-_CHROMIUM_WINDOW_CLASSES = frozenset(
-    {"Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"}
-)
-_WINDOW_CLASS_BUFFER_CHARS = 256
 # IAccessible vtable slots (IUnknown 0-2, IDispatch 3-6, then oleacc.h order).
 _VTBL_RELEASE = 2
 _VTBL_GET_ACC_STATE = 14
@@ -159,12 +152,6 @@ class _Win32CaretReader:
         self._user32.GetWindowThreadProcessId.restype = wintypes.DWORD
         self._user32.GetGUIThreadInfo.argtypes = (wintypes.DWORD, ctypes.c_void_p)
         self._user32.GetGUIThreadInfo.restype = wintypes.BOOL
-        self._user32.GetClassNameW.argtypes = (
-            wintypes.HWND,
-            wintypes.LPWSTR,
-            ctypes.c_int,
-        )
-        self._user32.GetClassNameW.restype = ctypes.c_int
         self._oleacc = ctypes.WinDLL("oleacc")
         self._oleacc.AccessibleObjectFromWindow.argtypes = (
             wintypes.HWND,
@@ -192,10 +179,7 @@ class _Win32CaretReader:
         return bool(info.hwndCaret), int(info.hwndFocus or 0) or None
 
     def window_class(self, hwnd: int) -> str:
-        buffer = ctypes.create_unicode_buffer(_WINDOW_CLASS_BUFFER_CHARS)
-        if not self._user32.GetClassNameW(hwnd, buffer, _WINDOW_CLASS_BUFFER_CHARS):
-            return ""
-        return buffer.value
+        return window_class_name(self._user32, hwnd)
 
     def msaa_caret(self, hwnd: int) -> tuple[bool, int] | None:
         """(caret invisible, caret width), or None when MSAA did not answer."""
@@ -258,7 +242,7 @@ def read_focused_caret(
         return CaretReading(VERDICT_TEXT_FIELD, foreground, "gui=caret")
     focus = focus or foreground
     window_class = reader.window_class(focus)
-    if window_class not in _CHROMIUM_WINDOW_CLASSES:
+    if window_class not in CHROMIUM_WINDOW_CLASSES:
         # Its own caret, if it draws one, is invisible to both sources.
         return CaretReading(
             VERDICT_UNKNOWN, foreground, f"gui=none class={window_class[:40]}"

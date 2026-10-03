@@ -26,6 +26,7 @@ from .config import (
     SENDINPUT_RETRY_SLEEP_S,
     WM_PASTE_TIMEOUT_MS,
 )
+from .window_focus import CHROMIUM_WINDOW_CLASSES, window_class_name
 
 try:
     import win32clipboard  # type: ignore
@@ -342,8 +343,8 @@ _FIRST_REGISTERED_CLIPBOARD_FORMAT = 0xC000
 # What `SetClipboardData` requires of the block it is given.
 GMEM_MOVEABLE = 0x0002
 
-# Window classes whose window procedure ignores WM_PASTE. Measured into an
-# Edge --app page with a focused textarea (r27 paste investigation,
+# Chromium window classes (`window_focus.CHROMIUM_WINDOW_CLASSES`) ignore
+# WM_PASTE. Measured into an Edge --app page with a focused textarea (r27 paste investigation,
 # 2026-09-27; on 2026-10-03 to the top-level window and to its
 # `Chrome_RenderWidgetHostHWND` child alike): `SendMessageTimeout(WM_PASTE)`
 # succeeded, the page saw no paste event and nothing was inserted, so the
@@ -351,10 +352,6 @@ GMEM_MOVEABLE = 0x0002
 # Slack, ...) are Chromium windows of the same class. WM_PASTE is not sent to
 # them at all: the paste fails cleanly before any keystroke, the clipboard is
 # put back and the Insert offer can paste it once SendInput works again.
-_WM_PASTE_IGNORING_WINDOW_CLASSES = frozenset(
-    {"Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"}
-)
-_WINDOW_CLASS_BUFFER_CHARS = 256
 
 _UNAVAILABLE_CLIPBOARD_TEXT = object()
 # "No pending restore handed a previous clipboard state over to this
@@ -1296,7 +1293,7 @@ class Win32ClipboardBackend:
         if hwnd == 0:
             return False
         window_class = self._window_class_name(hwnd)
-        if window_class in _WM_PASTE_IGNORING_WINDOW_CLASSES:
+        if window_class in CHROMIUM_WINDOW_CLASSES:
             raise _WmPasteIgnoredError(window_class)
         sent, last_error = self._send_message_timeout_result(
             hwnd, WM_PASTE, WM_PASTE_TIMEOUT_MS
@@ -1326,19 +1323,7 @@ class Win32ClipboardBackend:
         return False
 
     def _window_class_name(self, hwnd: int) -> str:
-        get_class_name = getattr(self._user32, "GetClassNameW", None)
-        if get_class_name is None:
-            return ""
-        get_class_name.argtypes = (
-            ctypes.wintypes.HWND,
-            ctypes.wintypes.LPWSTR,
-            ctypes.c_int,
-        )
-        get_class_name.restype = ctypes.c_int
-        buffer = ctypes.create_unicode_buffer(_WINDOW_CLASS_BUFFER_CHARS)
-        if not get_class_name(hwnd, buffer, _WINDOW_CLASS_BUFFER_CHARS):
-            return ""
-        return buffer.value
+        return window_class_name(self._user32, hwnd)
 
     def _send_message_timeout(self, hwnd: int, message: int, timeout_ms: int) -> bool:
         sent, _last_error = self._send_message_timeout_result(hwnd, message, timeout_ms)

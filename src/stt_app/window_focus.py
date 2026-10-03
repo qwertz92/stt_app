@@ -49,6 +49,40 @@ _SHELL_SURFACE_CLASSES = frozenset(
     }
 )
 _WINDOW_CLASS_BUFFER_CHARS = 256
+# Chromium hosts a whole page -- Edge, Chrome and every Electron app -- in the
+# top-level `Chrome_WidgetWin_1`; older builds and some embedders put a
+# `Chrome_RenderWidgetHostHWND` child in front of it. Its window procedure
+# ignores WM_PASTE (`text_inserter`), and its MSAA caret is the one "no caret"
+# answer measured to mean "no text field" (`paste_target_check`).
+CHROMIUM_WINDOW_CLASSES = frozenset(
+    {"Chrome_WidgetWin_1", "Chrome_RenderWidgetHostHWND"}
+)
+
+
+def window_class_name(user32, hwnd: int) -> str:
+    """`GetClassNameW` on the caller's own `user32` handle; "" if unreadable.
+
+    The signature is declared here, on that handle, so no caller has to;
+    a test double that does not take attributes keeps its own.
+    """
+    get_class_name = getattr(user32, "GetClassNameW", None)
+    if get_class_name is None:
+        return ""
+    try:
+        get_class_name.argtypes = (
+            ctypes.wintypes.HWND,
+            ctypes.wintypes.LPWSTR,
+            ctypes.c_int,
+        )
+        get_class_name.restype = ctypes.c_int
+    except AttributeError:
+        pass
+    buffer = ctypes.create_unicode_buffer(_WINDOW_CLASS_BUFFER_CHARS)
+    try:
+        copied = get_class_name(hwnd, buffer, _WINDOW_CLASS_BUFFER_CHARS)
+    except Exception:
+        return ""
+    return buffer.value if copied else ""
 
 
 def _declare_user32(user32) -> None:
@@ -88,10 +122,6 @@ def _declare_user32(user32) -> None:
             wintypes.DWORD,
         ),
         "GetGUIThreadInfo": ((wintypes.DWORD, ctypes.c_void_p), wintypes.BOOL),
-        "GetClassNameW": (
-            (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int),
-            ctypes.c_int,
-        ),
     }
     for name, (argtypes, restype) in signatures.items():
         function = getattr(user32, name, None)
@@ -169,19 +199,8 @@ class Win32WindowFocusHelper:
             hwnd
         )
 
-    def _window_class_name(self, hwnd: int) -> str:
-        get_class_name = getattr(self._user32, "GetClassNameW", None)
-        if get_class_name is None:
-            return ""
-        buffer = ctypes.create_unicode_buffer(_WINDOW_CLASS_BUFFER_CHARS)
-        try:
-            get_class_name(hwnd, buffer, _WINDOW_CLASS_BUFFER_CHARS)
-        except Exception:
-            return ""
-        return buffer.value
-
     def _is_shell_surface(self, hwnd: int) -> bool:
-        return self._window_class_name(hwnd) in _SHELL_SURFACE_CLASSES
+        return window_class_name(self._user32, hwnd) in _SHELL_SURFACE_CLASSES
 
     def _is_own_non_target_window(self, hwnd: int) -> bool:
         process_id = ctypes.wintypes.DWORD()
