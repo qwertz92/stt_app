@@ -595,6 +595,69 @@ def test_a_secret_is_scrubbed_from_any_other_error_detail(runs, server, use_comm
     assert "Bad header Bearer [hidden] sent" in message
 
 
+_CUT_KEY = "sk-secret-TOKEN-123abc"
+
+
+# Visible ASCII a header accepts, but JSON writes escaped.
+_ESCAPED_KEY = 'sk"-s\\ecret-123abc'
+
+
+@pytest.mark.parametrize(
+    ("build", "key"),
+    [
+        pytest.param(
+            lambda key: _http_error(
+                400, json.dumps({"error": {"message": "x" * 290 + key}})
+            ),
+            _CUT_KEY,
+            id="json-error-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: _http_error(502, "y" * 295 + key + " more"),
+            _CUT_KEY,
+            id="text-error-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: _http_error(401, json.dumps({"error": "z" * 295 + key})),
+            _CUT_KEY,
+            id="401-reason-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: "w" * 70 + key,
+            _CUT_KEY,
+            id="200-not-json-excerpt-capped-at-80",
+        ),
+        pytest.param(
+            lambda key: _http_error(
+                400, json.dumps({"error": {"message": "q" * 290 + key}})
+            ),
+            _ESCAPED_KEY,
+            id="key-that-json-escapes",
+        ),
+    ],
+)
+def test_a_credential_at_a_truncation_point_leaves_no_fragment(server, build, key):
+    """The scrub ran after the 300-character cap in the HTTP reader and the
+    80-character cap of an excerpt, so a key echoed near the cut left its
+    first characters visible (review of 2026-10-03): redaction now comes
+    before any cut."""
+    server(build(key))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=key).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert key[:5] not in message, message
+    assert json.dumps(key)[1:7] not in message, message
+
+
+def test_a_refusal_with_a_credential_at_the_cut_leaves_no_fragment(server):
+    server(
+        {"choices": [{"message": {"content": None, "refusal": "r" * 70 + _CUT_KEY}}]}
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=_CUT_KEY, api_mode="chat").transcribe_batch(WAV)
+    assert "sk-" not in str(raised.value), str(raised.value)
+
+
 def test_a_secret_is_scrubbed_from_the_model_list_error_too(server):
     secret = "sk-secret-TOKEN-123"
     server(_http_error(500, f'{{"error": "key {secret} broke"}}'))

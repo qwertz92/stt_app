@@ -414,7 +414,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     error raised while sending a request or listing models passes
     `_errors_scrubbed`, which replaces the active token and the stored key
     with `[hidden]` (only credentials of 8+ characters: `none` is a
-    placeholder and would be cut out of ordinary words). A gateway's 401
+    placeholder and would be cut out of ordinary words). **The scrub runs
+    before every cut** (2026-10-03): the readers that shorten server text
+    (`read_http_error_detail` 300 characters, `body_excerpt` 80,
+    `reply_error_text` 300, a block page's title) take a `redact` callable
+    (`self._scrub`) and apply it to the decoded text and to each extracted
+    field first; scrubbed afterwards, a key that straddled the cut left its
+    first characters (`...xxxsk-secret`). `_scrub` also replaces the key as
+    JSON writes it (`"` and `\` escaped). `_errors_scrubbed` stays as the
+    net over whatever else reaches a message. A gateway's 401
     reason ("Key expired on ...") is shown after the standard text, except
     when it holds the credential: then it is dropped rather than masked,
     because a partly masked key is still part of the key (LiteLLM answers

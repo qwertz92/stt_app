@@ -617,8 +617,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         ]
 
     def _scrub(self, text: str) -> str:
+        """`text` without the credentials, also as JSON writes them (a key
+        holding `"` or `\\` appears escaped in a JSON body)."""
         for secret in self._secrets():
-            text = text.replace(secret, _SCRUBBED)
+            for form in {json.dumps(secret)[1:-1], secret}:
+                text = text.replace(form, _SCRUBBED)
         return text
 
     @contextlib.contextmanager
@@ -646,11 +649,14 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 if self._key_command
                 else "the API key"
             )
-            reason = read_http_error_detail(exc) if detail is None else detail
+            reason = (
+                read_http_error_detail(exc, self._scrub) if detail is None else detail
+            )
             # A gateway's reason ("Key expired on ...") tells what to do, but
             # one that echoes the key it refused is dropped, not masked: a
-            # partly masked key is still part of the key.
-            if any(secret in reason for secret in self._secrets()):
+            # partly masked key is still part of the key. Read through the
+            # scrub, so the credential is found before the reader cuts it.
+            if _SCRUBBED in reason:
                 reason = ""
             return TranscriptionError(
                 f"{_PROVIDER_NAME}: authentication failed (HTTP 401); the "
@@ -661,7 +667,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 f"{_PROVIDER_NAME}: rate limit exceeded (HTTP 429). Wait a "
                 "moment and try again."
             )
-        suffix = f": {detail}" if detail else http_error_suffix(exc)
+        suffix = f": {detail}" if detail else http_error_suffix(exc, self._scrub)
         hint = ""
         if exc.code in (404, 405):
             hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
@@ -829,7 +835,10 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         # JSON -- "Internal Server Error" from a proxy -- is an error, not a
         # transcript to paste (review of 2026-10-01).
         return transcript_from_json(
-            payload, prefix=_PROVIDER_NAME, accept_bare_string=True
+            payload,
+            prefix=_PROVIDER_NAME,
+            accept_bare_string=True,
+            redact=self._scrub,
         )
 
     def _chat_instruction(self) -> str:
@@ -911,7 +920,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             if exc.code != 400 or not self._send_reasoning_effort:
                 raise
             # Read once: the body is a stream, and the error below needs it.
-            detail = read_http_error_detail(exc)
+            detail = read_http_error_detail(exc, self._scrub)
             lowered = detail.lower()
             if "reasoning" not in lowered and "thinking" not in lowered:
                 raise self._http_error(exc, "transcription", detail) from exc
@@ -923,8 +932,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             payload = self._post_chat(self._chat_body(audio_bytes, filename))
         return self._chat_text(payload)
 
-    @staticmethod
-    def _chat_text(payload: bytes) -> str:
+    def _chat_text(self, payload: bytes) -> str:
         parsed = None
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
@@ -932,7 +940,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             message = choice["message"]
             content = message.get("content")
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-            error_text = reply_error_text(parsed)
+            error_text = reply_error_text(parsed, self._scrub)
             if error_text:
                 raise TranscriptionError(
                     f"{_PROVIDER_NAME}: the endpoint answered HTTP 200 with an "
@@ -959,7 +967,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             refusal = message.get("refusal")
             if isinstance(refusal, str) and refusal.strip():
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusal)}"
+                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{body_excerpt(refusal, self._scrub)}"
                 )
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no text "
@@ -981,7 +990,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             ]
             if not texts and refusals:
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusals[0])}"
+                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{body_excerpt(refusals[0], self._scrub)}"
                 )
             content = " ".join(texts)
         if not isinstance(content, str):

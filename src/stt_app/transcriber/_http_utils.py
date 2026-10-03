@@ -12,6 +12,7 @@ import json
 import re
 import secrets
 import urllib.error
+from collections.abc import Callable
 from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
@@ -101,6 +102,15 @@ def normalize_transcript_text(value: object) -> str:
 _BYTE_ORDER_MARK = b"\xef\xbb\xbf"
 _BODY_EXCERPT_MAX_CHARS = 80
 
+# Takes text the server sent and returns it with credentials removed. Applied
+# before any cut to a maximum length: scrubbed afterwards, a key that straddles
+# the cut leaves its first characters in the message (review of 2026-10-03).
+Redactor = Callable[[str], str]
+
+
+def _unredacted(text: str) -> str:
+    return text
+
 
 def is_markup_page(payload: bytes) -> bool:
     """Whether a response body is an HTML or XML page rather than JSON.
@@ -113,11 +123,11 @@ def is_markup_page(payload: bytes) -> bool:
     return payload.lstrip().removeprefix(_BYTE_ORDER_MARK).lstrip().startswith(b"<")
 
 
-def body_excerpt(payload: bytes | str) -> str:
+def body_excerpt(payload: bytes | str, redact: Redactor = _unredacted) -> str:
     """The start of a body on one line, short enough for an error message."""
     if isinstance(payload, bytes):
         payload = payload.decode("utf-8-sig", errors="replace")
-    text = " ".join(payload.split())
+    text = " ".join(redact(payload).split())
     if len(text) > _BODY_EXCERPT_MAX_CHARS:
         text = text[: _BODY_EXCERPT_MAX_CHARS - 3] + "..."
     return text
@@ -146,7 +156,7 @@ def is_html_page(payload: bytes) -> bool:
     return _HTML_START.match(head.lstrip()) is not None
 
 
-def markup_page_description(payload: bytes) -> str:
+def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> str:
     """What to say about an HTML page that came where JSON was expected.
 
     The page's own `<title>` ("Zscaler - Access Denied", "413 Request Entity
@@ -160,14 +170,18 @@ def markup_page_description(payload: bytes) -> str:
         title = _PAGE_TAG.sub(
             " ", html.unescape(match.group(1).decode("utf-8", errors="replace"))
         )
-        title = body_excerpt(title)
+        title = body_excerpt(title, redact)
         if title:
             return f'an HTML page titled "{title}" {_MARKUP_ERROR_HINT}'
     return f"an HTML page {_MARKUP_ERROR_HINT}"
 
 
 def transcript_from_json(
-    payload: bytes, *, prefix: str, accept_bare_string: bool = False
+    payload: bytes,
+    *,
+    prefix: str,
+    accept_bare_string: bool = False,
+    redact: Redactor = _unredacted,
 ) -> str:
     """The ``text`` of a transcription answer, or an error naming what came.
 
@@ -187,7 +201,7 @@ def transcript_from_json(
     try:
         parsed = json.loads(payload.decode("utf-8-sig", errors="replace"))
     except ValueError as exc:
-        excerpt = body_excerpt(payload)
+        excerpt = body_excerpt(payload, redact)
         raise TranscriptionError(
             f"{prefix}: the answer is not JSON"
             + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
@@ -196,7 +210,7 @@ def transcript_from_json(
         return normalize_transcript_text(parsed)
     value = parsed.get("text") if isinstance(parsed, dict) else None
     if not isinstance(value, str):
-        error_text = reply_error_text(parsed)
+        error_text = reply_error_text(parsed, redact)
         if error_text:
             raise TranscriptionError(
                 f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
@@ -282,7 +296,7 @@ def nested_error_text(value: object) -> str:
     return ""
 
 
-def reply_error_text(parsed: object) -> str:
+def reply_error_text(parsed: object, redact: Redactor = _unredacted) -> str:
     """The text of an `error` member of a reply that answered HTTP 200, or "".
 
     Some gateways report a failed backend call inside a 200 reply
@@ -295,10 +309,12 @@ def reply_error_text(parsed: object) -> str:
         return ""
     error = parsed.get("error")
     text = error.strip() if isinstance(error, str) else nested_error_text(error)
-    return text[:300]
+    return redact(text)[:300]
 
 
-def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
+def read_http_error_detail(
+    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
+) -> str:
     """Return what the provider actually said, or "" when it said nothing.
 
     `HTTPError.reason` is only the status phrase -- "Bad Request" -- so a
@@ -316,8 +332,11 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     if is_html_page(payload):
         # A proxy's block page (403 Zscaler, 407, nginx 413), not the
         # provider's answer: reported by its title instead of pasted.
-        return f"the reply was {markup_page_description(payload)}"
-    raw = payload.decode("utf-8", errors="replace")
+        return f"the reply was {markup_page_description(payload, redact)}"
+    # Credentials come out of the body before it is parsed and out of every
+    # extracted text before it is cut to 300 characters (a JSON-escaped form of
+    # a credential survives the first and is caught by the second).
+    raw = redact(payload.decode("utf-8", errors="replace"))
     if not raw:
         return ""
     try:
@@ -347,25 +366,27 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
             # with the phrase).
             error, detail = error.strip(), detail.strip()
             if detail.lower().startswith(error.lower()):
-                return detail[:300]
-            return f"{error}: {detail}"[:300]
+                return redact(detail)[:300]
+            return redact(f"{error}: {detail}")[:300]
         for key in ("error", "message", "detail", "err_msg"):
             value = parsed.get(key)
             if isinstance(value, dict):
                 unwrapped = nested_error_text(value)
                 if unwrapped:
-                    return unwrapped[:300]
+                    return redact(unwrapped)[:300]
                 continue
             if isinstance(value, str) and value.strip():
-                return value.strip()[:300]
+                return redact(value.strip())[:300]
         # Anything else -- a number, a list, an empty object -- reads better as
         # the JSON text itself than as `str()` of one field.
     return raw.strip()[:300]
 
 
-def http_error_suffix(exc: urllib.error.HTTPError) -> str:
+def http_error_suffix(
+    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
+) -> str:
     """`": <what the provider said>"`, falling back to the status phrase."""
-    detail = read_http_error_detail(exc)
+    detail = read_http_error_detail(exc, redact)
     return f": {detail}" if detail else f": {exc.reason}"
 
 
