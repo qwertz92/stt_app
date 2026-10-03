@@ -6338,17 +6338,15 @@ class DictationController(QtCore.QObject):
         emit = self.paste_target_checked.emit
         try:
             started = checker.request(
-                lambda reading: emit(check_id, reading.verdict, reading.detail),
+                lambda reading: emit(check_id, reading.verdict, reading.evidence()),
                 expected_foreground=pending.foreground,
             )
         except Exception:
             self._logger.exception("paste_target_check could not start")
             started = False
         if not started:
-            self._logger.info(
-                "paste_target_check id=%d verdict=%s detail=not_started",
-                check_id,
-                VERDICT_UNKNOWN,
+            self._log_paste_target_check(
+                check_id, VERDICT_UNKNOWN, "note=not_started", pending
             )
             self._play_completion_beep()
             return
@@ -6356,25 +6354,38 @@ class DictationController(QtCore.QObject):
         QtCore.QTimer.singleShot(
             PASTE_TARGET_CHECK_TIMEOUT_MS,
             self,
-            lambda: self._on_paste_target_checked(check_id, VERDICT_UNKNOWN, "timeout"),
+            lambda: self._on_paste_target_checked(
+                check_id, VERDICT_UNKNOWN, "note=timeout"
+            ),
+        )
+
+    def _log_paste_target_check(
+        self, check_id: int, verdict: str, evidence: str, pending: _PasteCheck
+    ) -> None:
+        """One INFO line per check: verdict, evidence, never the text.
+
+        `evidence` is `CaretReading.evidence()` -- class names and caret
+        answers -- or the reason no reading exists, so the log of real use
+        shows which applications the check misjudges.
+        """
+        self._logger.info(
+            "paste_target_check id=%d verdict=%s %s background=%s chars=%d",
+            check_id,
+            verdict,
+            evidence,
+            pending.background,
+            len(pending.text),
         )
 
     @QtCore.Slot(int, str, str)
     def _on_paste_target_checked(
-        self, check_id: int, verdict: str, detail: str
+        self, check_id: int, verdict: str, evidence: str
     ) -> None:
         """The check's answer, or its timeout -- whichever comes first."""
         pending = self._paste_checks.pop(check_id, None)
         if pending is None:
             return
-        self._logger.info(
-            "paste_target_check id=%d verdict=%s detail=%s background=%s chars=%d",
-            check_id,
-            verdict,
-            detail,
-            pending.background,
-            len(pending.text),
-        )
+        self._log_paste_target_check(check_id, verdict, evidence, pending)
         if self._shutdown_started:
             return
         if verdict != VERDICT_NOT_TEXT_FIELD:

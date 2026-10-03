@@ -58,7 +58,18 @@ class FakePasteTargetCheck:
 
     def answer(self, verdict):
         callback = self.callbacks.pop(0)
-        callback(CaretReading(verdict, 987, "fake"))
+        callback(
+            CaretReading(
+                verdict,
+                987,
+                window_class="Chrome_WidgetWin_1",
+                focus_class="Chrome_RenderWidgetHostHWND",
+                gui_caret="none",
+                msaa_caret="invisible",
+                width=0,
+                rechecks=2,
+            )
+        )
 
     def close(self):
         self.closed = True
@@ -143,6 +154,48 @@ def test_a_paste_into_no_text_field_is_reported_with_insert_and_no_tone(
     assert beeps == []
     rows = _rows(overlay)
     assert len(rows) == 1 and rows[0].startswith("Not in a text field")
+    controller.shutdown()
+    _ = app
+
+
+def _check_lines(caplog):
+    return [
+        record
+        for record in caplog.records
+        if record.getMessage().startswith("paste_target_check ")
+    ]
+
+
+def test_every_check_logs_one_info_line_with_its_evidence_and_no_text(
+    monkeypatch, tmp_path, caplog
+):
+    """Real use must show which applications the check misjudges."""
+    caplog.set_level(logging.INFO, logger="test.controller.paste_target_check")
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, _inserter, _beeps = _make(monkeypatch, tmp_path, check)
+
+    _dictate(controller, "hello world")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    lines = _check_lines(caplog)
+    assert len(lines) == 1
+    assert lines[0].levelno == logging.INFO
+    message = lines[0].getMessage()
+    assert (
+        "verdict=not_text_field window_class=Chrome_WidgetWin_1 "
+        "focus_class=Chrome_RenderWidgetHostHWND gui_caret=none "
+        "msaa_caret=invisible width=0 rechecks=2"
+    ) in message
+    assert "hello" not in message and "world" not in message
+
+    # A check that could not start logs the same line, with its reason.
+    check.accept = False
+    caplog.clear()
+    _dictate(controller, "second take")
+    lines = _check_lines(caplog)
+    assert len(lines) == 1
+    assert "verdict=unknown" in lines[0].getMessage()
+    assert "note=not_started" in lines[0].getMessage()
     controller.shutdown()
     _ = app
 

@@ -43,7 +43,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .config import PASTE_TARGET_CHECK_RECHECK_DELAYS_S
 from .window_focus import CHROMIUM_WINDOW_CLASSES, GUITHREADINFO, window_class_name
@@ -65,14 +65,59 @@ _VTBL_GET_ACC_STATE = 14
 _VTBL_ACC_LOCATION = 22
 
 
+# The longest class name a log token keeps; real ones are far shorter.
+_LOG_TOKEN_MAX_CHARS = 64
+
+
+def _log_token(value: str) -> str:
+    """One space-free ASCII token, so a class name cannot break the line."""
+    token = "".join(
+        character
+        if character.isascii() and character.isprintable() and not character.isspace()
+        else "_"
+        for character in value[:_LOG_TOKEN_MAX_CHARS]
+    )
+    return token or "-"
+
+
 @dataclass(frozen=True, slots=True)
 class CaretReading:
-    """One reading of the foreground's caret, for the verdict and the log."""
+    """One reading of the foreground's caret: the verdict and its evidence.
+
+    The evidence fields hold only what Windows answered about windows and
+    carets -- class names, never window titles or text -- so every check can
+    log them and real use shows which application the check misjudges.
+    """
 
     verdict: str
     foreground: int | None
-    # Short ASCII evidence for the log line, e.g. "gui=none msaa=invisible w=0".
-    detail: str
+    window_class: str = ""
+    focus_class: str = ""
+    # "caret", "none" or "unreadable"; "" when the reading stopped before.
+    gui_caret: str = ""
+    # "visible", "invisible", "unanswered", or "not_asked" when the verdict
+    # did not need MSAA (a Win32 caret, or a window outside Chromium).
+    msaa_caret: str = "not_asked"
+    width: int | None = None
+    # Readings after the first; only "no caret" is read again.
+    rechecks: int = 0
+    # Why the reading is unknown before any caret was read, e.g.
+    # "foreground_changed".
+    note: str = ""
+
+    def evidence(self) -> str:
+        """The log line's fields after the verdict, one `key=value` each."""
+        fields = [
+            f"window_class={_log_token(self.window_class)}",
+            f"focus_class={_log_token(self.focus_class)}",
+            f"gui_caret={_log_token(self.gui_caret)}",
+            f"msaa_caret={_log_token(self.msaa_caret)}",
+            f"width={'-' if self.width is None else self.width}",
+            f"rechecks={self.rechecks}",
+        ]
+        if self.note:
+            fields.append(f"note={_log_token(self.note)}")
+        return " ".join(fields)
 
 
 class _GUID(ctypes.Structure):
@@ -231,30 +276,49 @@ def read_focused_caret(
     """One reading: does the foreground's focused element show a caret?"""
     foreground = reader.foreground()
     if foreground is None:
-        return CaretReading(VERDICT_UNKNOWN, None, "no foreground")
+        return CaretReading(VERDICT_UNKNOWN, None, note="no_foreground")
+    window_class = reader.window_class(foreground)
     if expected_foreground and foreground != expected_foreground:
-        return CaretReading(VERDICT_UNKNOWN, foreground, "foreground changed")
+        return CaretReading(
+            VERDICT_UNKNOWN,
+            foreground,
+            window_class=window_class,
+            note="foreground_changed",
+        )
     gui = reader.gui_caret(foreground)
     if gui is None:
-        return CaretReading(VERDICT_UNKNOWN, foreground, "gui=unreadable")
-    has_caret_window, focus = gui
-    if has_caret_window:
-        return CaretReading(VERDICT_TEXT_FIELD, foreground, "gui=caret")
-    focus = focus or foreground
-    window_class = reader.window_class(focus)
-    if window_class not in CHROMIUM_WINDOW_CLASSES:
-        # Its own caret, if it draws one, is invisible to both sources.
         return CaretReading(
-            VERDICT_UNKNOWN, foreground, f"gui=none class={window_class[:40]}"
+            VERDICT_UNKNOWN,
+            foreground,
+            window_class=window_class,
+            gui_caret="unreadable",
         )
+    has_caret_window, focus = gui
+    focus = focus or foreground
+    focus_class = window_class if focus == foreground else reader.window_class(focus)
+    seen = CaretReading(
+        VERDICT_UNKNOWN,
+        foreground,
+        window_class=window_class,
+        focus_class=focus_class,
+        gui_caret="caret" if has_caret_window else "none",
+    )
+    if has_caret_window:
+        return replace(seen, verdict=VERDICT_TEXT_FIELD)
+    if focus_class not in CHROMIUM_WINDOW_CLASSES:
+        # Its own caret, if it draws one, is invisible to both sources.
+        return seen
     msaa = reader.msaa_caret(focus)
     if msaa is None:
-        return CaretReading(VERDICT_UNKNOWN, foreground, "gui=none msaa=unanswered")
+        return replace(seen, msaa_caret="unanswered")
     invisible, width = msaa
-    detail = f"gui=none msaa={'invisible' if invisible else 'visible'} w={width}"
-    if invisible or width <= 0:
-        return CaretReading(VERDICT_NOT_TEXT_FIELD, foreground, detail)
-    return CaretReading(VERDICT_TEXT_FIELD, foreground, detail)
+    verdict = VERDICT_NOT_TEXT_FIELD if invisible or width <= 0 else VERDICT_TEXT_FIELD
+    return replace(
+        seen,
+        verdict=verdict,
+        msaa_caret="invisible" if invisible else "visible",
+        width=width,
+    )
 
 
 def check_paste_target(
@@ -271,11 +335,11 @@ def check_paste_target(
     """
     reading = read(expected_foreground)
     reference = expected_foreground or reading.foreground
-    for delay_s in recheck_delays_s:
+    for rechecks, delay_s in enumerate(recheck_delays_s, start=1):
         if reading.verdict != VERDICT_NOT_TEXT_FIELD:
             return reading
         sleep(delay_s)
-        reading = read(reference)
+        reading = replace(read(reference), rechecks=rechecks)
     return reading
 
 
@@ -358,7 +422,7 @@ class PasteTargetCheck:
 
     def _check(self, reader, expected_foreground: int | None) -> CaretReading:
         if reader is None:
-            return CaretReading(VERDICT_UNKNOWN, None, "reader unavailable")
+            return CaretReading(VERDICT_UNKNOWN, None, note="reader_unavailable")
         try:
             return check_paste_target(
                 lambda expected: read_focused_caret(reader, expected),
@@ -367,7 +431,9 @@ class PasteTargetCheck:
             )
         except Exception as exc:
             # Report-only: whatever went wrong, the paste stands as reported.
-            return CaretReading(VERDICT_UNKNOWN, None, f"error={type(exc).__name__}")
+            return CaretReading(
+                VERDICT_UNKNOWN, None, note=f"error_{type(exc).__name__}"
+            )
 
 
 def _initialize_com_multithreaded() -> bool:

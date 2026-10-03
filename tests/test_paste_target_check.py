@@ -34,7 +34,9 @@ class _Reader:
         self._window_class = window_class
         self.msaa_windows = []
 
-    def window_class(self, _hwnd):
+    def window_class(self, hwnd):
+        if isinstance(self._window_class, dict):
+            return self._window_class.get(hwnd, "")
         return self._window_class
 
     def foreground(self):
@@ -91,6 +93,47 @@ def test_msaa_is_asked_about_the_focus_window_not_the_top_level():
     assert reader.msaa_windows == [0x200]
 
 
+def test_a_reading_carries_its_evidence_for_the_log_line():
+    """Real use must produce data: class names and caret answers, no text."""
+    reader = _Reader(
+        foreground=0x100,
+        gui=(False, 0x200),
+        msaa=(True, 0),
+        window_class={
+            0x100: "Chrome_WidgetWin_1",
+            0x200: "Chrome_RenderWidgetHostHWND",
+        },
+    )
+    reading = check_paste_target(
+        lambda expected: read_focused_caret(reader, expected),
+        expected_foreground=None,
+        recheck_delays_s=(0.1, 0.25),
+        sleep=lambda _s: None,
+    )
+    assert reading.verdict == VERDICT_NOT_TEXT_FIELD
+    assert reading.evidence() == (
+        "window_class=Chrome_WidgetWin_1 focus_class=Chrome_RenderWidgetHostHWND "
+        "gui_caret=none msaa_caret=invisible width=0 rechecks=2"
+    )
+
+
+def test_evidence_says_what_was_not_read_and_why():
+    reading = read_focused_caret(
+        _Reader(gui=(True, 0x200), window_class={0x100: "Notepad", 0x200: "Edit"})
+    )
+    assert reading.evidence() == (
+        "window_class=Notepad focus_class=Edit gui_caret=caret msaa_caret=not_asked "
+        "width=- rechecks=0"
+    )
+    reading = read_focused_caret(_Reader(foreground=0x999), expected_foreground=0x100)
+    assert reading.evidence().endswith("rechecks=0 note=foreground_changed")
+
+
+def test_a_class_name_cannot_break_the_log_line():
+    reading = read_focused_caret(_Reader(window_class="My App\u00e9 =x"))
+    assert "window_class=My_App__=x " in reading.evidence()
+
+
 def test_another_foreground_than_the_pasted_one_is_unknown():
     """The user switched windows after the paste: its caret says nothing."""
     reading = read_focused_caret(_Reader(foreground=0x999), expected_foreground=0x100)
@@ -102,7 +145,7 @@ def _scripted(*verdicts):
 
     def read(expected):
         calls.append(expected)
-        return CaretReading(verdicts[len(calls) - 1], 0x100, "scripted")
+        return CaretReading(verdicts[len(calls) - 1], 0x100)
 
     return read, calls
 

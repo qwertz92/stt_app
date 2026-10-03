@@ -323,6 +323,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   the wrong element, it calls a contenteditable a Group and the body an
   editable Document, and a UIA client may switch an Electron app into its
   screen-reader mode.
+  - **Every check logs one INFO line, and a script reads any window**
+    (2026-10-03): `paste_target_check id= verdict= window_class=
+    focus_class= gui_caret= msaa_caret= width= rechecks= [note=]
+    background= chars=` (`CaretReading.evidence()`: class names and caret
+    answers, never a title or text; `note=` names why there is no reading,
+    e.g. `not_started`, `timeout`, `foreground_changed`).
+    `scripts/diagnose_paste_target.py` counts down 5 s, then runs the
+    production `PasteTargetCheck` 10 times against whatever has the focus
+    and prints the same fields. Why: a review's read-only probe got "not a
+    text field" 20 of 20 times on a foreground `Chrome_WidgetWin_1` window,
+    most likely the Claude desktop app the owner dictates into, with the
+    focus location unknown; real use and the script now produce the data
+    to tell which Electron prompts misread. Sample: an Edge --app textarea
+    `text_field ... msaa_caret=visible width=1 rechecks=0` in 2-4 ms (18 ms
+    first), its button `not_text_field ... msaa_caret=invisible width=0
+    rechecks=2` in about 360 ms.
 - **The overlay's Insert pastes the text that failed** (a streaming
   finalize's tail past `committed_text`, not all of `_last_transcript`).
   `_insert_action_text` is written by both paths that paint the Insert action

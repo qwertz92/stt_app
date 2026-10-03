@@ -761,7 +761,7 @@ def part_f_edit(checks: common.Checks, windows: ProbeWindows) -> dict:
     time.sleep(0.2)
     reading = check_paste_target()
     verdict = reading.verdict if reading else "no answer"
-    detail = reading.detail if reading else ""
+    detail = reading.evidence() if reading else ""
     checks.verdict(
         PASTE_TARGET_EDIT_CHECK,
         verdict == VERDICT_TEXT_FIELD,
@@ -912,7 +912,7 @@ def part_f_edge(checks: common.Checks) -> dict:
             time.sleep(0.3)
             reading = check_paste_target()
             verdict = reading.verdict if reading else "no answer"
-            detail = reading.detail if reading else ""
+            detail = reading.evidence() if reading else ""
             results[element] = {"verdict": verdict, "detail": detail}
             checks.verdict(
                 name, verdict == wanted, f"verdict={verdict} detail={detail}"

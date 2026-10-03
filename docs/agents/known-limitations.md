@@ -127,7 +127,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   update was pending; the new Notepad would have opened a tab in the
   owner's own window); the new Notepad is not a Chromium window, so it
   cannot be reported as doubtful. Streaming live inserts and the finalize
-  tail are not checked.
+  tail are not checked. An Electron app's prompt may read as "not a text
+  field": a review's read-only probe got that verdict 20 of 20 times on a
+  foreground `Chrome_WidgetWin_1` window, most likely the Claude desktop
+  app, focus location unknown; its pastes would then be reported as
+  doubtful. Unmeasured until the owner runs `scripts/diagnose_paste_target.py`
+  in the apps he dictates into.
 - **A hung paste target holds the check's one worker**: the MSAA call is a
   cross-process `WM_GETOBJECT`; while it waits, later pastes are not
   checked (refused at once, "unknown") and the completion tone of the
