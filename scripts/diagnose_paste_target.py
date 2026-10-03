@@ -51,22 +51,40 @@ DEFAULT_INTERVAL_SECONDS = 0.5
 READING_TIMEOUT_SECONDS = 5.0
 
 
+def _non_negative(kind):
+    """An argparse type that refuses a negative number with a clear message."""
+
+    def parse(text: str):
+        try:
+            value = kind(text)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"not a number: {text!r}") from None
+        if value < 0:
+            raise argparse.ArgumentTypeError("must not be negative")
+        return value
+
+    return parse
+
+
 def _parse_arguments(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         "--delay",
-        type=int,
+        type=_non_negative(int),
         default=DEFAULT_DELAY_SECONDS,
         help="seconds to click into the target before the first reading",
     )
     parser.add_argument(
-        "--count", type=int, default=DEFAULT_COUNT, help="number of readings"
+        "--count",
+        type=_non_negative(int),
+        default=DEFAULT_COUNT,
+        help="number of readings",
     )
     parser.add_argument(
         "--interval",
-        type=float,
+        type=_non_negative(float),
         default=DEFAULT_INTERVAL_SECONDS,
         help="seconds between readings",
     )
@@ -83,16 +101,22 @@ def _sandbox_environment(sandbox: Path) -> None:
         sys.path.insert(0, str(SRC_DIR))
 
 
-def _read_once(check) -> tuple[object | None, float]:
-    """One check through the production worker; (reading, milliseconds)."""
+def _read_once(check) -> tuple[object | None, float, str]:
+    """One check through the production worker.
+
+    Returns (reading, milliseconds, why it is missing); the reason is ""
+    when a reading arrived.
+    """
     done = threading.Event()
     readings = []
     started = time.perf_counter()
     if not check.request(lambda reading: (readings.append(reading), done.set())):
-        return None, 0.0
+        return None, 0.0, "no answer (the previous check is still running)"
     done.wait(READING_TIMEOUT_SECONDS)
     elapsed_ms = (time.perf_counter() - started) * 1000
-    return (readings[0] if readings else None), elapsed_ms
+    if not readings:
+        return None, elapsed_ms, f"no answer within {READING_TIMEOUT_SECONDS:g} s"
+    return readings[0], elapsed_ms, ""
 
 
 def _run(arguments: argparse.Namespace) -> int:
@@ -105,10 +129,10 @@ def _run(arguments: argparse.Namespace) -> int:
     check = PasteTargetCheck()
     try:
         for index in range(1, arguments.count + 1):
-            reading, elapsed_ms = _read_once(check)
+            reading, elapsed_ms, missing = _read_once(check)
             if reading is None:
                 verdicts["no answer"] += 1
-                print(f"{index:2d}  no answer (the previous check is still running)")
+                print(f"{index:2d}  {missing}", flush=True)
             else:
                 verdicts[reading.verdict] += 1
                 print(
