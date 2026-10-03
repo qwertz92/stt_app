@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 from test_benchmark_results_ux import _history_dialog, _stored_entry
 
 
@@ -117,6 +117,78 @@ def test_a_finished_run_keeps_its_status_line_when_its_row_is_selected(tmp_path)
     selected = dialog._selected_benchmark_history_entry()
     assert selected is not None
     assert selected.summary == entry.summary
+    _ = app
+
+
+def _finish_with_a_failed_save(monkeypatch, dialog):
+    """A run whose history write is refused: Results holds the only copy."""
+    fresh = _stored_entry("unsaved run")
+    fresh.summary = "Benchmark summary:\nunsaved"
+
+    def _refuse(_entry):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(dialog._benchmark_history_store, "add_entry", _refuse)
+    dialog._on_benchmark_finished(
+        True,
+        fresh.summary,
+        {"cases": fresh.cases, "options": fresh.options, "status": "completed"},
+    )
+    assert "history could not be saved" in dialog.benchmark_status_label.text()
+    return dialog._current_benchmark_entry
+
+
+def _answer(monkeypatch, answer) -> list[str]:
+    asked: list[str] = []
+
+    def _question(_parent, _title, text, *_args, **_kwargs):
+        asked.append(text)
+        return answer
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", staticmethod(_question))
+    return asked
+
+
+def _click_row(dialog, row: int) -> None:
+    """One user click on a History row, as the mouse delivers it."""
+    table = dialog.benchmark_history_list
+    rect = table.visualRect(table.model().index(row, 0))
+    QtTest.QTest.mouseClick(table.viewport(), QtCore.Qt.LeftButton, pos=rect.center())
+
+
+def test_a_selection_asks_before_replacing_a_result_that_was_not_saved(
+    monkeypatch, tmp_path
+):
+    """When the history write failed at the finish, Results holds the run's
+    only copy (Export Loaded can still save it); one click on any row
+    replaced it silently."""
+    dialog, app, _first, second = _two_runs(tmp_path)
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.show()
+    app.processEvents()
+    unsaved = _finish_with_a_failed_save(monkeypatch, dialog)
+    asked = _answer(monkeypatch, QtWidgets.QMessageBox.No)
+
+    _click_row(dialog, 0)
+
+    assert len(asked) == 1
+    assert "not saved" in asked[0]
+    assert dialog._current_benchmark_entry is unsaved
+    # Keep restores the selection as it was: nothing, the run is not a row.
+    assert dialog._selected_benchmark_history_entry() is None
+
+    asked = _answer(monkeypatch, QtWidgets.QMessageBox.Yes)
+    _click_row(dialog, 0)
+
+    assert len(asked) == 1
+    assert dialog._current_benchmark_entry.identity_key() == second.identity_key()
+
+    # A saved run is replaced without asking.
+    asked = _answer(monkeypatch, QtWidgets.QMessageBox.No)
+    _click_row(dialog, 1)
+
+    assert asked == []
+    dialog.hide()
     _ = app
 
 

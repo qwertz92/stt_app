@@ -1056,6 +1056,9 @@ class _BenchmarkMixin:
         layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+        # True while Results shows a finished run whose history write failed:
+        # Results then holds its only copy, and a selection asks first.
+        self._benchmark_shown_entry_unsaved = False
         self._build_benchmark_window()
 
     def _build_benchmark_history_box(self) -> QtWidgets.QGroupBox:
@@ -2048,6 +2051,7 @@ class _BenchmarkMixin:
     def _clear_benchmark_results(self) -> None:
         # The History selection names the run on show, so it goes too.
         self._deselect_benchmark_history()
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
@@ -2226,6 +2230,7 @@ class _BenchmarkMixin:
         )
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_options = options
         self._current_benchmark_environment = None
         cancel_event = threading.Event()
@@ -2531,6 +2536,7 @@ class _BenchmarkMixin:
                 self._benchmark_history_store.add_entry(entry)
             except Exception as exc:
                 history_error = str(exc)
+                self._benchmark_shown_entry_unsaved = True
                 self._refresh_benchmark_history_list()
             else:
                 self._refresh_benchmark_history_list(select_entry=entry)
@@ -2830,7 +2836,32 @@ class _BenchmarkMixin:
             current is not None and current.identity_key() == entry.identity_key()
         ):
             return
+        if not self._may_replace_shown_benchmark_result():
+            # Keep: the shown run is no row, so the selection before this
+            # click was none, and it goes back to that without a reload.
+            self._deselect_benchmark_history()
+            return
         self._load_benchmark_history_entry(entry)
+
+    def _may_replace_shown_benchmark_result(self) -> bool:
+        """Ask before a load replaces a run that only Results still holds.
+
+        A finished run whose history write failed is in no row; a click on
+        any row replaced it silently, and only Export Loaded could still
+        have saved it.
+        """
+        if not self._benchmark_shown_entry_unsaved:
+            return True
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Replace unsaved result",
+            "The run shown in Results was not saved to Benchmark History; "
+            "Export Loaded... is the only way to keep it.\n\n"
+            "Show the selected run instead and discard the shown one?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return answer == QtWidgets.QMessageBox.Yes
 
     def _deselect_benchmark_history(self) -> None:
         """Clear the History selection without loading anything."""
@@ -2864,9 +2895,13 @@ class _BenchmarkMixin:
             first = self.benchmark_history_list.item(item.row(), 0)
             entry = first.data(QtCore.Qt.UserRole) if first is not None else None
         if isinstance(entry, BenchmarkHistoryEntry):
+            if not self._may_replace_shown_benchmark_result():
+                self._deselect_benchmark_history()
+                return
             self._load_benchmark_history_entry(entry)
 
     def _load_benchmark_history_entry(self, entry: BenchmarkHistoryEntry) -> None:
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_entry = entry
         self._current_benchmark_options = entry.options
         self._current_benchmark_environment = entry.environment
