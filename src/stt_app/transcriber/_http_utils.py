@@ -7,7 +7,9 @@ error formatting.
 
 from __future__ import annotations
 
+import html
 import json
+import re
 import secrets
 import urllib.error
 from pathlib import Path
@@ -119,6 +121,31 @@ def body_excerpt(payload: bytes | str) -> str:
     if len(text) > _BODY_EXCERPT_MAX_CHARS:
         text = text[: _BODY_EXCERPT_MAX_CHARS - 3] + "..."
     return text
+
+
+_PAGE_TITLE = re.compile(rb"<title[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
+_PAGE_TAG = re.compile(r"<[^>]*>")
+_MARKUP_ERROR_HINT = "(a proxy or firewall block page?)"
+
+
+def markup_page_description(payload: bytes) -> str:
+    """What to say about an HTML page that came where JSON was expected.
+
+    The page's own `<title>` ("Zscaler - Access Denied", "413 Request Entity
+    Too Large") as text only -- tags dropped, entities decoded, one line, 80
+    characters -- or a fixed sentence when there is none. The page itself is
+    never shown: it is a proxy's, not the provider's, and as markup it
+    filled the message (review of 2026-10-03).
+    """
+    match = _PAGE_TITLE.search(payload)
+    if match:
+        title = _PAGE_TAG.sub(
+            " ", html.unescape(match.group(1).decode("utf-8", errors="replace"))
+        )
+        title = body_excerpt(title)
+        if title:
+            return f'an HTML page titled "{title}" {_MARKUP_ERROR_HINT}'
+    return f"an HTML page {_MARKUP_ERROR_HINT}"
 
 
 def transcript_from_json(
@@ -243,9 +270,14 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     read itself is capped too -- see `_MAX_ERROR_BODY_BYTES`.
     """
     try:
-        raw = exc.read(_MAX_ERROR_BODY_BYTES).decode("utf-8", errors="replace")
+        payload = exc.read(_MAX_ERROR_BODY_BYTES)
     except Exception:
         return ""
+    if is_markup_page(payload):
+        # A proxy's block page (403 Zscaler, 407, nginx 413), not the
+        # provider's answer: reported by its title instead of pasted.
+        return f"the reply was {markup_page_description(payload)}"
+    raw = payload.decode("utf-8", errors="replace")
     if not raw:
         return ""
     try:

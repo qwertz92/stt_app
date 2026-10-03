@@ -82,8 +82,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   idempotent** (stream body): call it once per `HTTPError`.
 - **Never build a provider error from `HTTPError.reason`** (status phrase
   only). `_http_utils.read_http_error_detail` / `http_error_suffix` is the one
-  reader for all five REST providers: capped at 300 chars, status phrase when
-  the body is empty or unreadable.
+  reader for all REST providers: capped at 300 chars, status phrase when
+  the body is empty or unreadable. **A markup body (`is_markup_page`) is
+  never pasted** (2026-10-03): a proxy's 403/407/413 block page is reported
+  as `the reply was an HTML page titled "<title>" (a proxy or firewall block
+  page?)` (title as text only, 80 characters) or, without a `<title>`, the
+  same sentence without it (`markup_page_description`).
 - **Every REST call passes `create_ssl_context()`**: `urllib` ignores
   `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
   proxy while the SDK worked. `format_ssl_error_message` is the shared text

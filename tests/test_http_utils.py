@@ -104,11 +104,65 @@ def test_the_error_detail_is_what_the_provider_said_not_the_status_phrase():
 
 
 def test_a_non_json_error_body_is_passed_through_and_capped():
-    """A provider must not be able to push an HTML error page into a dialog."""
-    assert read_http_error_detail(_http_error(b"<html>Gateway timeout</html>")) == (
-        "<html>Gateway timeout</html>"
+    assert read_http_error_detail(_http_error(b"upstream request timeout")) == (
+        "upstream request timeout"
     )
     assert len(read_http_error_detail(_http_error(b'"' + b"x" * 900 + b'"'))) == 300
+
+
+@pytest.mark.parametrize(
+    ("body", "title"),
+    [
+        pytest.param(
+            b"<html><head><title>Zscaler - Access Denied</title></head><body>"
+            + b"blocked by policy " * 40
+            + b"</body></html>",
+            "Zscaler - Access Denied",
+            id="proxy-403",
+        ),
+        pytest.param(
+            b"<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n"
+            b"<body><center><h1>413 Request Entity Too Large</h1></center></body></html>",
+            "413 Request Entity Too Large",
+            id="nginx-413",
+        ),
+        pytest.param(
+            b"\xef\xbb\xbf<!DOCTYPE html><TITLE>\n  Proxy &amp; Auth\n</TITLE>",
+            "Proxy & Auth",
+            id="bom-entities-whitespace",
+        ),
+        pytest.param(
+            b"<html><title>" + b"x" * 400 + b"</title></html>",
+            "x" * 77 + "...",
+            id="long-title",
+        ),
+    ],
+)
+def test_a_markup_error_page_is_reported_by_its_title_not_pasted(body, title):
+    """A proxy's block page (403 Zscaler, 407, nginx 413) used to be pasted
+    into the message as markup (review of 2026-10-03)."""
+    detail = read_http_error_detail(_http_error(body))
+
+    assert detail == (
+        f'the reply was an HTML page titled "{title}" (a proxy or firewall block page?)'
+    )
+    assert "<" not in detail
+    assert http_error_suffix(_http_error(body)) == f": {detail}"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"<html><body><h1>502 Bad Gateway</h1></body></html>",
+        b"<html><title></title></html>",
+        b"<html><title>never closed",
+        b'<?xml version="1.0"?><Error><Code>Denied</Code></Error>',
+    ],
+)
+def test_a_markup_error_page_without_a_title_is_named_as_a_page(body):
+    assert read_http_error_detail(_http_error(body)) == (
+        "the reply was an HTML page (a proxy or firewall block page?)"
+    )
 
 
 def test_an_unreadable_or_empty_body_falls_back_to_the_status_phrase():
