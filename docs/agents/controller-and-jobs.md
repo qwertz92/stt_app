@@ -108,7 +108,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     the same failure promoted again (a failed retry) is the slot already and
     is not stacked. `_retire_retry_audio_delivered_by` clears the slot and
     brings the newest older failure forward, and drops an older entry that
-    is itself the delivered recording. Retry still takes the slot only.
+    is itself the delivered recording; the background delivery of a result
+    runs it too, so a retry delivered behind a newer recording resolves its
+    failure. Retry still takes the slot only.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints

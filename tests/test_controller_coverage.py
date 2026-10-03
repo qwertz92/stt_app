@@ -2535,6 +2535,39 @@ def test_a_second_failure_keeps_the_first_one_retryable():
     _ = app
 
 
+def test_a_retry_delivered_in_the_background_resolves_its_failure():
+    """The retry's result arrives while a newer recording owns the session:
+    it is delivered to history like any queued result, and the failure it
+    retried must not stay retryable (a Retry would transcribe and paste it
+    a second time)."""
+    controller, app, _captured, _store = _a_failure_then_queued_failures()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+    controller._register_transcription_job(70, settings, "batch")
+    controller._active_request_token = 70
+
+    controller._on_transcription_ready("Q retried", request_token=retry_token)
+
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert controller._older_failed_audio == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_retry_is_the_slot_again_and_is_not_stacked():
+    controller, app, _captured, _store = _a_failure_then_queued_failures()
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+
+    controller._on_transcription_failed("still failing", request_token=retry_token)
+
+    assert controller._last_failed_wav_bytes == b"wav-Q0"
+    assert controller._older_failed_audio == [(b"wav-W", "rec-W")]
+    controller.shutdown()
+    _ = app
+
+
 def test_only_the_newest_failures_stay_retryable():
     """Memory is bounded: three failures are held, the oldest goes first."""
     controller, app, _captured, _store = _a_failure_then_queued_failures(

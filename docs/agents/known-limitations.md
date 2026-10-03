@@ -11,8 +11,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `incremented = True` in `_acquire_transcriber_runtime`, `acquired = True` in
   `_download_local_model_in_subprocess`, and the `try:` after
   `coordinator.acquire(...)` in `_download_model_for_preload` /
-  `run_coordinated_download`. Only a `KeyboardInterrupt` hits it, and the app
-  cannot raise one: `main._install_signal_handlers` replaces Python's SIGINT
+  `run_coordinated_download`. Only a `KeyboardInterrupt` hits it, and the GUI app
+  cannot raise one (its download script `scripts/download_model.py` and a
+  download worker child may): `main._install_signal_handlers` replaces Python's SIGINT
   handler with one that only calls `app.quit()`, and nothing else raises
   asynchronously (checked 2026-10-03). Kept as depth: every fix reshapes
   locking and moves the window (~3 h, no gain). Only the cross-process
@@ -219,8 +220,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `request_restart` after its generation bump reopens and each own close
   re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
   serialize on `_audio_device_refresh_lock`, off Qt.
-- **The settings dialog's six `Thread.start` guards catch `RuntimeError`
-  only** (`fd1b50a`/`c98f57e`); a `MemoryError` escapes. The controller's
+- **Thread-start guards outside the controller catch `RuntimeError` only**
+  (the settings dialog's, `fd1b50a`/`c98f57e`; the VAD auto-stop thread in
+  `audio_capture.py`, the download progress reader in
+  `local_model_download.py`, the Silero load thread in `silero_vad.py`); a
+  `MemoryError` escapes. The controller's
   three (completion tone, device refresh worker, preload submit) and the
   paste target check's worker start catch `Exception` since 2026-10-03.
 - **`WarmMicrophoneStream.close()` does not wait for a helper's close in
@@ -293,7 +297,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   with `source_recording_id` "" on both, identical audio cross-retires the
   retry slot. Needs two refused writes and byte-identical audio. Kept
   2026-10-03 (cost vs effect): closing it needs a per-failure identity on the
-  jobs (~3 h, 78 references to the slot in the tests); the trigger does not
+  jobs (~3 h, about 80 references to the slot in the tests); the trigger does not
   occur with microphone audio.
 - **A benchmark's device decision is per run, with no "forget" button**:
   `measured_fastest_devices` reads one run; fewer than two measured devices

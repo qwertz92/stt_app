@@ -5766,7 +5766,9 @@ class DictationController(QtCore.QObject):
                 # A newer recording owns the live session, or this job was asked
                 # to stop. Keep the live session untouched and deliver this
                 # queued result on its own (history and/or its own window).
-                self._drop_request_audio(request_token)
+                # Its delivery resolves a failure it was the retry of, as on
+                # the foreground road.
+                self._retire_retry_audio_delivered_by(request_token, job)
                 if self._active_request_token == request_token:
                     self._active_request_token = None
                     self._last_transcribe_settings = None
