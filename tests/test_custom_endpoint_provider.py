@@ -832,22 +832,37 @@ def test_the_program_is_searched_like_createprocess_before_path(tmp_path, monkey
 @pytest.mark.skipif(
     provider_module.os.name != "nt", reason="PATHEXT resolution is Windows"
 )
-@pytest.mark.parametrize("script", ["helper.vbs", "helper.js"])
+@pytest.mark.parametrize(
+    ("script", "interpreter"),
+    [
+        ("helper.vbs", "cscript"),
+        ("helper.js", "cscript"),
+        ("helper.py", "python"),
+        ("helper.msc", ""),
+    ],
+)
 def test_a_script_pathext_resolves_to_is_refused_with_its_name(
-    tmp_path, monkeypatch, script
+    tmp_path, monkeypatch, script, interpreter
 ):
     """`shutil.which` finds `helper.vbs` through PATHEXT, but CreateProcess
     cannot start a script: the user got "not a valid Win32 application" with
     no hint. The message names the file and says what to do."""
     (tmp_path / script).write_text("", encoding="utf-8")
     monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("PATHEXT", ".EXE;.VBS;.JS;.PY;.MSC")
 
     with pytest.raises(TranscriptionError) as raised:
         provider_module._resolve_program(["helper"])
 
     message = str(raised.value)
     assert script in message.lower()
-    assert "interpreter" in message
+    if interpreter:
+        assert "interpreter" in message
+        assert f"{interpreter} " in message
+    else:
+        # No interpreter to name: generic advice, never another type's.
+        assert "cscript" not in message
+        assert "python " not in message
 
 
 @pytest.mark.parametrize("argument", ["a&b", "a|b", "a<b", "a>b", "a^b", "100%"])

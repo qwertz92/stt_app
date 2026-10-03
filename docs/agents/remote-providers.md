@@ -378,10 +378,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     ran `b`), so `_resolve_program` refuses such an argument for a batch
     target, naming the character, never the argument (it may be a secret).
     An unresolvable name stays as typed for the "not found" message. The
-    lookup order is CreateProcess's (`_createprocess_search_path`: the
-    application's directory, `System32`, the Windows directory, then PATH;
-    `shutil.which` puts the current directory first itself), and a file
-    `PATHEXT` finds that Windows cannot start (`.vbs`, `.js`) is refused by
+    lookup order approximates CreateProcess's (`_createprocess_search_path`:
+    the application's directory, `System32`, the Windows directory, then
+    PATH); `shutil.which` searches the current directory first, where
+    CreateProcess does so after the application's directory and not at all
+    when `NoDefaultCurrentDirectoryInExePath` is set, so a same-named tool in
+    the current directory can still win. A file `PATHEXT` finds that Windows
+    cannot start (`.vbs`, `.js`, `.py`, `.msc`) is refused by
     name with "call its interpreter explicitly" (2026-10-03).
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and

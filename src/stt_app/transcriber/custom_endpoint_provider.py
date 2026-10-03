@@ -364,6 +364,18 @@ _CMD_METACHARACTERS = re.compile(r'[&|<>^%"\r\n]')
 
 # What CreateProcess starts: programs, and batch files through cmd.exe.
 _STARTABLE_SUFFIXES = (".exe", ".com", ".cmd", ".bat")
+# The interpreter to name for the PATHEXT hits that are scripts; any other
+# suffix (`.msc`, ...) gets generic advice rather than another type's.
+_SCRIPT_INTERPRETERS = {
+    ".vbs": "cscript",
+    ".vbe": "cscript",
+    ".js": "cscript",
+    ".jse": "cscript",
+    ".wsf": "cscript",
+    ".wsh": "cscript",
+    ".py": "python",
+    ".pyw": "pythonw",
+}
 
 
 def _createprocess_search_path() -> str | None:
@@ -391,23 +403,29 @@ def _resolve_program(arguments: list[str]) -> list[str]:
     refused, naming the character and not the argument (it may be a secret).
     An unresolvable name is left as typed for the "not found" message.
 
-    The lookup order is CreateProcess's -- the application's directory, the
-    system directories, then PATH (the current directory comes first in
-    `shutil.which` itself, as it did for CreateProcess) -- so a same-named
-    tool earlier on PATH does not take the place of the one a key command
-    used to start. A file `PATHEXT` finds that Windows cannot start (a
-    `.vbs`, a `.js`) is refused by name, not left to fail with "not a valid
-    Win32 application".
+    The lookup order approximates CreateProcess's: the application's
+    directory, the system directories, then PATH. `shutil.which` searches the
+    current directory first, where CreateProcess searches it after the
+    application's directory (and not at all when
+    `NoDefaultCurrentDirectoryInExePath` is set), so a same-named tool in the
+    current directory can still win. A file `PATHEXT` finds that Windows
+    cannot start (a `.vbs`, a `.py`) is refused by name, not left to fail with
+    "not a valid Win32 application".
     """
     program = shutil.which(arguments[0], path=_createprocess_search_path())
     if program is None:
         return arguments
     if os.name == "nt" and not program.lower().endswith(_STARTABLE_SUFFIXES):
         name = Path(program).name
+        interpreter = _SCRIPT_INTERPRETERS.get(Path(program).suffix.lower())
+        advice = (
+            f"Call its interpreter explicitly (for example {interpreter} {name})"
+            if interpreter
+            else "Call the program that runs it explicitly"
+        )
         raise TranscriptionError(
             f"The key command resolves to {name}, which Windows cannot start "
-            f"directly. Call its interpreter explicitly (for example "
-            f"cscript {name}) or point the key command at a program."
+            f"directly. {advice} or point the key command at a program."
         )
     if program.lower().endswith((".cmd", ".bat")):
         for argument in arguments[1:]:
