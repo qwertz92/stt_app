@@ -2351,27 +2351,25 @@ class _BenchmarkMixin:
             daemon=True,
         )
         # `Thread.start()` can raise `RuntimeError` when the interpreter
-        # cannot create another thread. The busy marker is already set at
-        # that point, and nothing clears it but the completion signal that
-        # will never arrive -- so the dialog stays busy for the rest of the
-        # session: the control stays disabled and `reload_from_store` is
-        # deferred forever, silently.
+        # cannot create another thread, and `MemoryError` when it cannot
+        # allocate one. The busy marker is already set at that point, and
+        # nothing clears it but the completion signal that will never arrive
+        # -- so the dialog stays busy for the rest of the session: the control
+        # stays disabled and `reload_from_store` is deferred forever, silently.
         try:
             self._active_benchmark_thread.start()
-        except RuntimeError as exc:
+        except (RuntimeError, MemoryError) as exc:
             self._active_benchmark_thread = None
             self._benchmark_cancel_event = None
-            self._set_benchmark_status(
-                f"Could not start the benchmark: {exc}", "#b71c1c"
-            )
+            # A `MemoryError` usually carries no message.
+            message = f"Could not start the benchmark: {exc or type(exc).__name__}"
+            self._set_benchmark_status(message, "#b71c1c")
             # The summary view was already primed with the running summary a
             # few lines above, and `setPlainText` puts that straight into the
             # Overview's Status row -- so Details went on reading "running"
             # for a benchmark that never began, contradicting the status line
             # right next to it.
-            self.benchmark_results_panel.set_status_text(
-                f"Could not start the benchmark: {exc}"
-            )
+            self.benchmark_results_panel.set_status_text(message)
             # Nothing will run, so nothing is counted; the plan rows stay as
             # the selection's Pending list.
             self._set_benchmark_progress(0, 0)

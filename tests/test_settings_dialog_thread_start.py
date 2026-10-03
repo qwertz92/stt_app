@@ -15,6 +15,7 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
 from PySide6 import QtTest, QtWidgets
 from test_settings_dialog_connection import (
     _FakeLogger,
@@ -59,8 +60,11 @@ def _make_dialog(settings: AppSettings | None = None, **kwargs) -> SettingsDialo
     )
 
 
-def _refuse_new_threads(monkeypatch) -> None:
+def _refuse_new_threads(monkeypatch, error: BaseException | None = None) -> None:
     """Make every `threading.Thread.start()` raise, from here on.
+
+    `error` replaces the default `RuntimeError`: a starved interpreter can
+    also raise `MemoryError` there.
 
     The dialog mixins each import `threading` themselves, and this replaces the
     class on the one module object all of them resolve, so the site under test
@@ -69,7 +73,15 @@ def _refuse_new_threads(monkeypatch) -> None:
     leave every later assertion reading the scan's failure message instead of
     the one the site under test wrote.
     """
-    monkeypatch.setattr(threading, "Thread", _RefusingThread)
+    if error is None:
+        monkeypatch.setattr(threading, "Thread", _RefusingThread)
+        return
+
+    class _RaisingThread(_RefusingThread):
+        def start(self) -> None:
+            raise error
+
+    monkeypatch.setattr(threading, "Thread", _RaisingThread)
 
 
 def test_a_connection_test_that_cannot_start_gives_the_button_back(monkeypatch):
@@ -175,7 +187,14 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkey
     assert dialog._local_model_download_progress_timer.isActive() is False
 
 
-def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("can't start new thread"), MemoryError()],
+    ids=["RuntimeError", "MemoryError"],
+)
+def test_a_benchmark_that_cannot_start_gives_the_run_button_back(
+    monkeypatch, tmp_path, error
+):
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
     monkeypatch.setattr(
@@ -197,7 +216,7 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
         QtTest.QTest.qWait(25)
     dialog._set_benchmark_audio_path(str(audio_path))
     assert dialog.benchmark_models_list.count() == 1
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, error)
 
     dialog._run_local_benchmark()
 
