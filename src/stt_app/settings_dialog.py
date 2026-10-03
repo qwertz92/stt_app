@@ -78,7 +78,7 @@ from .settings_dialog_local import _LocalModelsMixin
 from .settings_dialog_persistence import _PersistenceMixin
 from .settings_dialog_remote import _RemoteProvidersMixin
 from .settings_dialog_unsaved import _UnsavedChangesMixin
-from .settings_store import SettingsStore
+from .settings_store import SettingsStore, listed_custom_models
 from .transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     delete_cached_model,
@@ -267,9 +267,14 @@ class SettingsDialog(
         # `AppSettings.custom_models`, written by Save like a widget value
         # (`_populate_setting_widgets` fills it, the unsaved-changes
         # fingerprint watches it).
-        self._custom_fetched_models: tuple[str, ...] = tuple(
-            self._loaded_settings.custom_models
+        # It belongs to one base URL (`custom_models_endpoint`): every list
+        # this session knows is kept per URL, and the one shown is the Base
+        # URL field's (`_on_custom_endpoint_changed`).
+        self._custom_fetched_models: tuple[str, ...] = listed_custom_models(
+            self._loaded_settings
         )
+        self._custom_models_by_endpoint: dict[str, tuple[str, ...]] = {}
+        self._custom_models_fetch_endpoint = ""
         self._custom_model_note = ""
         self._custom_model_note_error = False
         self._custom_models_fetch_id = 0

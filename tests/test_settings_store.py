@@ -1744,6 +1744,24 @@ def test_the_custom_endpoint_model_list_round_trips_in_order(tmp_path, monkeypat
     assert AppSettings.from_dict({"custom_models": "a,b"}).custom_models == ()
 
 
+def test_a_model_list_is_offered_only_for_the_base_url_that_listed_it():
+    """Save API Keys writes a new base URL without the list; the list of the
+    previous endpoint must not then pass for the new one's."""
+    from dataclasses import replace
+
+    from stt_app.settings_store import listed_custom_models
+
+    listed = AppSettings(
+        custom_endpoint="http://a.example/v1/",
+        custom_models=("m",),
+        custom_models_endpoint=" http://a.example/v1",
+    )
+    assert listed_custom_models(listed) == ("m",)
+    assert listed_custom_models(replace(listed, custom_endpoint="http://b/v1")) == ()
+    # A list saved before the endpoint was recorded belongs to no URL.
+    assert listed_custom_models(replace(listed, custom_models_endpoint="")) == ()
+
+
 def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     tmp_path,
 ):

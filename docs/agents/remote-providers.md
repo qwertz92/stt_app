@@ -459,7 +459,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (2026-10-03; in the unsaved-changes fingerprint, a list in the JSON --
     `to_dict` writes a list, since `load` rewrites a file that differs from
     the payload and a tuple never equals JSON's list) and offered again after
-    a restart; a failed Refresh keeps the previous list. Entries whose LiteLLM
+    a restart; a failed Refresh, or one that lists no models, keeps the
+    previous list (the note says so). **A list belongs to the base URL that
+    listed it** (`custom_models_endpoint`, `listed_custom_models`): the
+    dialog keeps one list per URL for the session and shows the Base URL
+    field's, and a saved list whose URL differs from `custom_endpoint` (Save
+    API Keys writes the URL alone) is not offered; changed from A to B and
+    saved, the dialog used to offer A's models as B's. Entries whose LiteLLM
     `mode` is `embedding`/`image_generation`/`rerank` are dropped,
     `audio_transcription` then `chat` sort first, and within each group an
     id that names a speech recognizer (`whisper`, `transcri`, `parakeet`,

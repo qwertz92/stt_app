@@ -153,6 +153,7 @@ def test_the_saved_model_list_is_offered_after_a_restart():
             custom_endpoint="http://localhost:8000/v1",
             custom_model="whisper-1",
             custom_models=("whisper-1", "gemini-2.5-flash"),
+            custom_models_endpoint="http://localhost:8000/v1",
             # A way to a key, so the note is not the missing-key warning.
             custom_key_command="print-token",
         )
@@ -193,6 +194,7 @@ def test_a_refresh_that_changed_the_list_is_an_unsaved_change(monkeypatch):
             custom_endpoint="http://x/v1",
             custom_model="whisper-1",
             custom_models=saved_list,
+            custom_models_endpoint="http://x/v1",
         ),
         secrets={"custom": "k"},
     )
@@ -244,6 +246,7 @@ def test_picking_the_current_list_entry_after_typing_replaces_the_typed_text(
             custom_endpoint="http://x/v1",
             custom_model="B",
             custom_models=("A", "B"),
+            custom_models_endpoint="http://x/v1",
         )
     )
     try:
@@ -322,5 +325,109 @@ def test_a_fetch_that_cannot_start_gives_the_button_back(monkeypatch):
         assert "Could not start the model fetch" in (
             dialog.remote_model_note_label.text()
         )
+    finally:
+        dialog.deleteLater()
+
+
+def _listed_models(dialog: SettingsDialog) -> list[str]:
+    combo = dialog.remote_model_combo
+    return [combo.itemData(i) for i in range(combo.count())]
+
+
+_ENDPOINT_A = "http://gateway-a.example/v1"
+_ENDPOINT_B = "http://gateway-b.example/v1"
+
+
+def _settings_with_a_list_from_a() -> AppSettings:
+    """A list refreshed against endpoint A, saved together with A."""
+    dialog, store = _dialog(
+        AppSettings(
+            engine="custom",
+            custom_endpoint=_ENDPOINT_A,
+            custom_model="a-model",
+            custom_key_command="print-token",
+        )
+    )
+    try:
+        dialog._custom_models_fetch_endpoint = _ENDPOINT_A
+        dialog._on_custom_models_fetched(
+            dialog._custom_models_fetch_id, True, ("a-model", "a-other")
+        )
+        dialog._save()
+        assert store.saved is not None
+        return store.saved
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_new_base_url_does_not_offer_the_old_endpoints_models():
+    """The list describes the endpoint it was refreshed against. Changed to
+    B and saved, the reopened dialog still offered A's models and said "2
+    models listed at the last Refresh"."""
+    stored = _settings_with_a_list_from_a()
+    dialog, store = _dialog(stored)
+    try:
+        assert "a-other" in _listed_models(dialog)
+
+        dialog.custom_endpoint_edit.setText(_ENDPOINT_B)
+
+        assert "a-other" not in _listed_models(dialog)
+        dialog._save()
+        assert store.saved is not None
+    finally:
+        dialog.deleteLater()
+    reopened, _store = _dialog(store.saved)
+    try:
+        assert "a-other" not in _listed_models(reopened)
+        assert "listed at the last Refresh" not in (
+            reopened.remote_model_note_label.text()
+        )
+    finally:
+        reopened.deleteLater()
+
+
+def test_going_back_to_the_old_base_url_offers_its_list_again():
+    stored = _settings_with_a_list_from_a()
+    dialog, _store = _dialog(stored)
+    try:
+        dialog.custom_endpoint_edit.setText(_ENDPOINT_B)
+        dialog.custom_endpoint_edit.setText(_ENDPOINT_A + "/")
+        assert "a-other" in _listed_models(dialog)
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_base_url_saved_with_the_api_keys_does_not_inherit_the_old_list():
+    """Save API Keys writes the URL but not the list; the list must not then
+    pass for the new endpoint's."""
+    stored = _settings_with_a_list_from_a()
+    dialog, store = _dialog(stored)
+    try:
+        dialog.custom_endpoint_edit.setText(_ENDPOINT_B)
+        dialog._save_api_keys_only()
+        assert store.saved is not None
+        assert store.saved.custom_endpoint == _ENDPOINT_B
+    finally:
+        dialog.deleteLater()
+    reopened, _store = _dialog(store.saved)
+    try:
+        assert "a-other" not in _listed_models(reopened)
+    finally:
+        reopened.deleteLater()
+
+
+def test_a_refresh_that_lists_nothing_keeps_the_saved_list():
+    """An endpoint that answered with no models (an outage, a key without
+    rights) wiped the saved list on the next Save, without saying so."""
+    stored = _settings_with_a_list_from_a()
+    dialog, _store = _dialog(stored)
+    try:
+        dialog._custom_models_fetch_endpoint = _ENDPOINT_A
+        dialog._on_custom_models_fetched(dialog._custom_models_fetch_id, True, ())
+
+        assert "a-other" in _listed_models(dialog)
+        note = dialog.remote_model_note_label.text()
+        assert "listed no models" in note and "kept" in note
+        assert not dialog.has_unsaved_changes()
     finally:
         dialog.deleteLater()

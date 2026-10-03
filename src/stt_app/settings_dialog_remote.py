@@ -531,9 +531,7 @@ class _RemoteProvidersMixin:
             "appended), e.g. https://llm-gateway.example.com/v1 or "
             "http://localhost:8000/v1."
         )
-        self.custom_endpoint_edit.textChanged.connect(
-            lambda _text: self._update_remote_model_note()
-        )
+        self.custom_endpoint_edit.textChanged.connect(self._on_custom_endpoint_changed)
         self.custom_key_command_edit = QtWidgets.QLineEdit()
         self.custom_key_command_edit.setPlaceholderText(
             "Optional, e.g. token-helper --print"

@@ -198,6 +198,7 @@ DEFAULTS = {
     "custom_api_mode": DEFAULT_CUSTOM_API_MODE,
     "custom_key_command": DEFAULT_CUSTOM_KEY_COMMAND,
     "custom_models": (),
+    "custom_models_endpoint": "",
     "assemblyai_region": DEFAULT_ASSEMBLYAI_REGION,
     "deepgram_region": DEFAULT_DEEPGRAM_REGION,
     "speechmatics_model": DEFAULT_SPEECHMATICS_MODEL,
@@ -334,6 +335,11 @@ class AppSettings:
     # restart. A cache of the endpoint's answer, not a list the chosen model
     # is checked against. No schema bump: an absent key is the empty list.
     custom_models: tuple[str, ...] = ()
+    # The base URL `custom_models` was listed by. A list is offered only
+    # while it matches `custom_endpoint` (`listed_custom_models`): Save API
+    # Keys writes a new URL without the list, and another endpoint's models
+    # must not pass for this one's.
+    custom_models_endpoint: str = ""
     # Data residency: "us" is the vendor's default endpoint (what every
     # build before these fields sent), "eu" its EU host. No schema bump:
     # an absent key is the default, and an older build keeps an unknown
@@ -771,6 +777,7 @@ class AppSettings:
             custom_api_mode=custom_api_mode,
             custom_key_command=_text_setting(merged.get("custom_key_command")),
             custom_models=normalize_custom_models(merged.get("custom_models")),
+            custom_models_endpoint=_text_setting(merged.get("custom_models_endpoint")),
             assemblyai_region=normalize_assemblyai_region(
                 merged.get("assemblyai_region")
             ),
@@ -1049,6 +1056,21 @@ def normalize_onnx_auto_preferred_devices(value: Any) -> dict[str, str]:
         if normalized in ONNX_MEASURABLE_DEVICES:
             cleaned[model] = normalized
     return {model: cleaned[model] for model in sorted(cleaned)}
+
+
+def custom_endpoint_identity(endpoint: str) -> str:
+    """A base URL as compared for `listed_custom_models`: a trailing slash
+    or surrounding blanks do not make another endpoint."""
+    return str(endpoint or "").strip().rstrip("/")
+
+
+def listed_custom_models(settings: AppSettings) -> tuple[str, ...]:
+    """The saved model list, if it was listed by the saved base URL."""
+    if custom_endpoint_identity(settings.custom_models_endpoint) != (
+        custom_endpoint_identity(settings.custom_endpoint)
+    ):
+        return ()
+    return tuple(settings.custom_models)
 
 
 def normalize_custom_models(value: Any) -> tuple[str, ...]:

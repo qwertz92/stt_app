@@ -65,6 +65,7 @@ from .settings_store import (
     _REMOTE_MODEL_FIELDS,
     AppSettings,
     apply_engine_model_selection,
+    custom_endpoint_identity,
 )
 
 # How each engine that reads the custom vocabulary passes it on, named after
@@ -1309,6 +1310,7 @@ class _GeneralTabMixin:
         if self._active_custom_models_fetch_thread is not None:
             return
         snapshot = self._custom_models_fetch_snapshot()
+        self._custom_models_fetch_endpoint = snapshot["endpoint"]
         self._custom_models_fetch_id += 1
         fetch_id = self._custom_models_fetch_id
         self.custom_fetch_models_button.setEnabled(False)
@@ -1356,24 +1358,61 @@ class _GeneralTabMixin:
             self._set_custom_model_note(f"Could not fetch models: {result}", error=True)
             return
         models = tuple(result) if isinstance(result, tuple) else ()
-        self._custom_fetched_models = models
-        chosen = self._remote_model_value_for_provider("custom")
         if not models:
-            text = "The endpoint offers no models this key can use."
-        elif chosen and chosen not in models:
+            # An outage or a key without rights answers like this too; the
+            # list from the last good answer stays rather than going with
+            # the next Save unannounced.
+            kept = len(self._custom_fetched_models)
+            text = "The endpoint listed no models this key can use." + (
+                f" The {kept} model{'s' if kept != 1 else ''} listed before are kept."
+                if kept
+                else ""
+            )
+            self._set_custom_model_note(text, error=True)
+            return
+        self._custom_models_by_endpoint[
+            custom_endpoint_identity(self._custom_models_fetch_endpoint)
+        ] = models
+        self._custom_fetched_models = self._custom_models_for_shown_endpoint()
+        chosen = self._remote_model_value_for_provider("custom")
+        if chosen and chosen not in models:
             text = (
                 f"The endpoint offers {len(models)} models, but not "
                 f"'{chosen}'. Pick one from the list."
             )
         else:
             text = f"The endpoint offers {len(models)} models. Pick one from the list."
-        self._set_custom_model_note(text, error=not models)
-        if not chosen and models:
+        self._set_custom_model_note(text)
+        if not chosen:
             self._remote_model_values["custom"] = models[0]
         self._update_remote_model_selector()
         self._update_import_model_selector()
         self._update_engine_indicator()
         self._schedule_unsaved_changes_refresh()
+
+    def _custom_models_for_shown_endpoint(self) -> tuple[str, ...]:
+        return self._custom_models_by_endpoint.get(
+            custom_endpoint_identity(self.custom_endpoint_edit.text()), ()
+        )
+
+    def _on_custom_endpoint_changed(self, _text: str = "") -> None:
+        """Offer the list the Base URL field's endpoint gave, and only that.
+
+        Changed from A to B and saved, the reopened dialog offered A's
+        models as B's ("2 models listed at the last Refresh"). Lists are
+        kept per URL for the session, so correcting a typo back to A brings
+        A's list back without a new Refresh.
+        """
+        models = self._custom_models_for_shown_endpoint()
+        if models != self._custom_fetched_models:
+            self._custom_fetched_models = models
+            # A Refresh note described the previous endpoint.
+            self._custom_model_note = ""
+            self._custom_model_note_error = False
+            self._update_remote_model_selector()
+            self._update_import_model_selector()
+        else:
+            self._update_remote_model_note()
 
     def _set_custom_model_note(self, text: str, *, error: bool = False) -> None:
         """The note under the model row reports the fetch while it is shown."""

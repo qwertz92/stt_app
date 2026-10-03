@@ -39,6 +39,8 @@ from .settings_dialog_helpers import (
 from .settings_store import (
     _REMOTE_REGION_FIELDS,
     AppSettings,
+    custom_endpoint_identity,
+    listed_custom_models,
     normalize_local_onnx_device,
 )
 
@@ -197,7 +199,16 @@ class _PersistenceMixin:
                 **remote_model_values(settings),
             }
         )
-        self._custom_fetched_models = tuple(settings.custom_models)
+        self._custom_models_by_endpoint = (
+            {
+                custom_endpoint_identity(settings.custom_models_endpoint): tuple(
+                    settings.custom_models
+                )
+            }
+            if settings.custom_models
+            else {}
+        )
+        self._custom_fetched_models = listed_custom_models(settings)
         if hasattr(self, "azure_endpoint_edit"):
             blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
             self.azure_endpoint_edit.setText(
@@ -840,6 +851,12 @@ class _PersistenceMixin:
             custom_api_mode=self._custom_api_mode_shown(),
             custom_key_command=self.custom_key_command_edit.text().strip(),
             custom_models=self._custom_fetched_models,
+            # The list on screen is always the Base URL field's.
+            custom_models_endpoint=(
+                custom_endpoint_identity(self.custom_endpoint_edit.text())
+                if self._custom_fetched_models
+                else ""
+            ),
             speechmatics_model=self._remote_model_value_for_provider("speechmatics"),
             mistral_model=self._remote_model_value_for_provider("mistral"),
             assemblyai_region=self._region_shown("assemblyai"),
