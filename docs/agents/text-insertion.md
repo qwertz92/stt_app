@@ -184,11 +184,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (inside `insert_text` a post-keystroke failure becomes a constructed
   `ClipboardContentionError`; a fresh exception defaulted to permissive).
 - **WM_PASTE is never sent to a Chromium window** (2026-10-03,
-  `_WM_PASTE_IGNORING_WINDOW_CLASSES`: `Chrome_WidgetWin_1`,
+  `window_focus.CHROMIUM_WINDOW_CLASSES`: `Chrome_WidgetWin_1`,
   `Chrome_RenderWidgetHostHWND`). `_send_wm_paste` raises
   `_WmPasteIgnoredError` before sending: in `wm_paste` mode that is the
-  paste's error (telling the user to choose Auto), in `auto` mode after a
-  failed SendInput it is folded into "Auto paste failed". Both are
+  paste's error, plus the advice to choose Auto; in `auto` mode after a
+  failed SendInput it is folded into "Auto paste failed" with the reason
+  only, since that user is in Auto already. Both are
   pre-keystroke failures: the clipboard is put back and Insert is offered.
   Why: into an Edge --app textarea `SendMessageTimeout(WM_PASTE)` succeeded,
   the page saw no paste event and nothing landed, so the transaction

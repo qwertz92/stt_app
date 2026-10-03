@@ -108,13 +108,17 @@ ERROR_CLIPBOARD_NOT_OPEN = 1418
 
 
 class _WmPasteIgnoredError(TextInsertionError):
-    """The target's window class ignores WM_PASTE; nothing was sent."""
+    """The target's window class ignores WM_PASTE; nothing was sent.
+
+    The message states only the reason. The advice to switch Paste mode to
+    Auto belongs to the `wm_paste` mode alone: Auto reaches WM_PASTE only
+    after Ctrl+V failed, and a user already in Auto cannot act on it.
+    """
 
     def __init__(self, window_class: str) -> None:
         super().__init__(
             f"{window_class} windows (Chromium and Electron apps) ignore "
-            "WM_PASTE, so the transcript was not pasted. Set Paste mode to "
-            "Auto to paste with Ctrl+V."
+            "WM_PASTE, so the transcript was not pasted."
         )
 
 
@@ -1202,8 +1206,13 @@ class Win32ClipboardBackend:
     def send_paste_with_mode(self, mode: str, target_hwnd: int | None = None) -> str:
         normalized = (mode or "auto").strip().lower()
         if normalized == "wm_paste":
-            if self._send_wm_paste(target_hwnd):
-                return "wm_paste"
+            try:
+                if self._send_wm_paste(target_hwnd):
+                    return "wm_paste"
+            except _WmPasteIgnoredError as ignored:
+                raise TextInsertionError(
+                    f"{ignored} Set Paste mode to Auto to paste with Ctrl+V."
+                ) from ignored
             raise TextInsertionError("WM_PASTE failed for target window.")
 
         if normalized == "send_input":

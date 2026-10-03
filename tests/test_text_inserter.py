@@ -1073,7 +1073,7 @@ def test_wm_paste_mode_refuses_a_chromium_window_before_sending(monkeypatch):
     # Nothing went out, so the paste failed cleanly: the clipboard is put
     # back and Insert is offered.
     assert not isinstance(raised.value, TextMayHaveBeenPastedError)
-    assert "Auto" in str(raised.value)
+    assert "Set Paste mode to Auto" in str(raised.value)
 
 
 def test_auto_mode_does_not_fall_back_to_wm_paste_for_a_chromium_window(monkeypatch):
@@ -1090,7 +1090,11 @@ def test_auto_mode_does_not_fall_back_to_wm_paste_for_a_chromium_window(monkeypa
 
     assert sent == []
     assert not isinstance(raised.value, TextMayHaveBeenPastedError)
-    assert "SendInput failed" in str(raised.value)
+    message = str(raised.value)
+    assert "SendInput failed" in message
+    assert "ignore WM_PASTE" in message
+    # The user is already in Auto: telling them to switch to it is wrong.
+    assert "Paste mode" not in message
 
 
 class _UnwritableClipboardBackend(GatedPasteBackend):
