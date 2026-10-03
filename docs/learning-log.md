@@ -9161,3 +9161,16 @@ rows and connection tests on API Keys, and one region selector per provider
   printed its token and exited 0 failed with a timeout because a grandchild
   held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
   in a Windows job object, and the call returns once the child exited.
+
+## 2026-10-03: dependency sweep
+
+`assemblyai` 1.5.5 to 1.6.1, `comtypes` 1.4.16 to 1.4.17, `onnxruntime-genai`
+0.16.0 to 0.17.1, `ruff` 0.16.10, plus transitive `huggingface-hub` 1.33.0 and
+`websockets` 17.2. Each was driven through its own code path (the real
+AssemblyAI SDK with only the network stubbed, the real `IMMNotificationClient`
+registration, one Nemotron pass in both modes), not only the suite. `av` 19.0.1
+was refused: `uv lock --upgrade` would have taken it, and faster-whisper 1.2.1
+cannot open a file with it, which no unit test of ours noticed because they stub
+the model. Lesson: a transitive package with an open lower bound (`av>=11`) is
+moved by the lock upgrade, so the code path that uses it has to run before the
+lock is committed; `av` is now a direct pin with its reason and a test.
