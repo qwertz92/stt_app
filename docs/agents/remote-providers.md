@@ -319,11 +319,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     base64 grows the body a third); the transcription style uses OpenAI's
     600 s / 25 MB.
   - **The key command wins over the stored key**, runs without a shell
-    (`shlex.split(posix=os.name != "nt")`, quotes stripped on Windows), with
+    (POSIX: `shlex.split`; Windows: `_split_windows_command`), with
     stdin closed, `CREATE_NO_WINDOW` and a 30 s timeout; its last stdout line
     is the token, cached `CUSTOM_KEY_COMMAND_TTL_S` (300 s); a 401 re-runs it
     once and retries once. Errors name the exit code and the last stderr
     line, never the token, and nothing logs it.
+    **Windows quoting (2026-10-03)**: a backslash is never an escape (paths
+    stay intact); a `"` groups anywhere in a word (`--opt="a b"`), a `'`
+    only at the start of a word, so `wsl.exe -e bash -lc 'echo x'` reaches
+    bash as one script and an apostrophe in `C:\Users\O'Brien` stays
+    literal; inside one kind of quote the other is literal; an unclosed
+    quote is refused. A literal `"` cannot be written (put it in a script).
+    Why not reject single quotes: the owner's helper is a WSL command, where
+    `'...'` is what everyone writes, and `shlex` with `posix=False` had
+    kept the quotes (`'echo x'` reached bash literally) and split
+    `--opt="a b"` in two. The exit code is judged **before** the output: a
+    failing helper that printed "Please run 'login' first" to stdout was
+    reported as a malformed token.
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
     then reads the pipes to the end, which a grandchild holding them

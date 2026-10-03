@@ -464,13 +464,21 @@ OpenAI-compatible provider. It is batch-only.
 
 **Key command.** When the endpoint needs a short-lived token, enter a command
 that prints it, for example `my-token-helper --print` or, from Windows into
-WSL, `wsl.exe -e /path/to/token-helper`. It runs without a shell and without a
-console window whenever a request needs a key; the last line it prints is
-sent as the Bearer token and reused for 5 minutes. An HTTP 401 re-runs it
-once. The command overrides a stored key. A command that fails, prints
-nothing or takes longer than 30 seconds fails the dictation with its exit
-code and the last line of its error output; the token itself is never logged
-or shown.
+WSL, `wsl.exe -e bash -lc 'my-token-helper --print'`. It runs without a shell
+and without a console window whenever a request needs a key; the last line it
+prints is sent as the Bearer token and reused for 5 minutes. An HTTP 401
+re-runs it once. The command overrides a stored key. A command that fails,
+prints nothing or takes longer than 30 seconds fails the dictation with its
+exit code and the last line of its error output; the token itself is never
+logged or shown.
+
+Quoting follows what you would type in a Windows console, with one addition:
+`"..."` groups words anywhere (`--query "a b"`, `--opt="a b"`), `'...'` groups
+a word that starts with it (`bash -lc 'echo x'`), a backslash is never an
+escape (so `C:\tools\helper.exe` and `"C:\Program Files\x\helper.exe"` work),
+and an apostrophe inside a word, as in `C:\Users\O'Brien\helper.exe`, is an
+ordinary character. A literal double quote cannot be written; put such a
+command into a script and run the script. An unclosed quote is reported.
 
 **Limits.** A recording longer than 10 minutes (transcription API) or
 5 minutes (chat style, whose request carries the audio base64-encoded) is

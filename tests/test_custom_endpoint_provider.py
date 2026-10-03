@@ -566,6 +566,54 @@ def test_windows_quoting_keeps_backslashes(monkeypatch):
     ) == ["wsl.exe", "-e", r"C:\tools\token helper.exe", "--print"]
 
 
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        pytest.param(
+            "wsl.exe -e bash -lc 'echo x'",
+            ["wsl.exe", "-e", "bash", "-lc", "echo x"],
+            id="single-quoted-wsl-script",
+        ),
+        pytest.param(
+            "wsl.exe -e bash -lc 'my-helper --name \"a b\"'",
+            ["wsl.exe", "-e", "bash", "-lc", 'my-helper --name "a b"'],
+            id="double-quotes-inside-single-quotes-are-literal",
+        ),
+        pytest.param(
+            r"'C:\tools\token helper.exe' --print",
+            [r"C:\tools\token helper.exe", "--print"],
+            id="single-quoted-path-keeps-backslashes",
+        ),
+        pytest.param(
+            'helper --opt="a b" "C:\\p q\\t.exe"',
+            ["helper", "--opt=a b", "C:\\p q\\t.exe"],
+            id="a-quote-inside-a-word-groups",
+        ),
+        pytest.param(
+            r"C:\Users\O'Brien\tok.exe --print",
+            [r"C:\Users\O'Brien\tok.exe", "--print"],
+            id="a-mid-word-apostrophe-is-literal",
+        ),
+        pytest.param("helper '' \"\"", ["helper", "", ""], id="empty-arguments"),
+    ],
+)
+def test_windows_quoting_groups_with_single_and_double_quotes(
+    monkeypatch, command, expected
+):
+    """`wsl.exe -e bash -lc 'echo x'` passed `'echo x'` -- quotes included --
+    to bash, and `--opt="a b"` was split in two (review of 2026-10-03).
+    Backslashes stay literal, which keeps Windows paths intact."""
+    monkeypatch.setattr(provider_module.os, "name", "nt")
+    assert provider_module._command_arguments(command) == expected
+
+
+@pytest.mark.parametrize("command", ["helper 'unfinished", 'helper "unfinished'])
+def test_an_unclosed_quote_in_the_key_command_is_refused(monkeypatch, command):
+    monkeypatch.setattr(provider_module.os, "name", "nt")
+    with pytest.raises(TranscriptionError, match="cannot be parsed"):
+        provider_module._command_arguments(command)
+
+
 # -- model list -------------------------------------------------------------
 
 

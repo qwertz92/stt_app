@@ -259,22 +259,53 @@ def _header_unsafe(value: str) -> bool:
     return any(not ("\x21" <= character <= "\x7e") for character in value)
 
 
-def _command_arguments(command: str) -> list[str]:
-    """Split a key command into arguments without a shell.
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line the way a Windows user writes it.
 
-    Windows paths keep their backslashes (`posix=False`), which also keeps the
-    quotes around an argument; those are removed here.
+    A backslash is never an escape, so a path keeps its backslashes (which
+    POSIX `shlex` would eat). A double quote groups anywhere in a word
+    (`--opt="a b"`); a single quote groups only where a word begins
+    (`'echo x'`), so an apostrophe inside a path (`C:\\Users\\O'Brien`) stays
+    literal. Inside one kind of quote the other is literal. `shlex` with
+    `posix=False` kept the quotes of `'echo x'` and split `--opt="a b"` in two.
     """
+    arguments: list[str] = []
+    word: list[str] = []
+    in_word = False
+    quote = ""
+    for character in command:
+        if quote:
+            if character == quote:
+                quote = ""
+            else:
+                word.append(character)
+        elif character == '"' or (character == "'" and not in_word):
+            quote = character
+            in_word = True
+        elif character.isspace():
+            if in_word:
+                arguments.append("".join(word))
+                word, in_word = [], False
+        else:
+            word.append(character)
+            in_word = True
+    if quote:
+        raise TranscriptionError(
+            "The key command cannot be parsed: a quotation mark is not closed."
+        )
+    if in_word:
+        arguments.append("".join(word))
+    return arguments
+
+
+def _command_arguments(command: str) -> list[str]:
+    """Split a key command into arguments without a shell."""
+    if os.name == "nt":
+        return _split_windows_command(command)
     try:
-        arguments = shlex.split(command, posix=os.name != "nt")
+        return shlex.split(command)
     except ValueError as exc:
         raise TranscriptionError(f"The key command cannot be parsed: {exc}") from exc
-    return [
-        argument[1:-1]
-        if len(argument) >= 2 and argument[0] == argument[-1] == '"'
-        else argument
-        for argument in arguments
-    ]
 
 
 def _last_line(text: str) -> str:
