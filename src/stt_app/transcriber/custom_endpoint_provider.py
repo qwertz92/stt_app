@@ -399,12 +399,9 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 f"The key command could not be started: {exc}"
             ) from exc
+        # The exit code is judged first: a failing helper often prints its
+        # message to stdout ("Please run 'login' first"), which is no token.
         token = _last_line(completed.stdout or "")
-        if token and _header_unsafe(token):
-            raise TranscriptionError(
-                "The key command printed a token with a space or a "
-                "character an HTTP header cannot carry."
-            )
         if completed.returncode != 0 or not token:
             reason = _error_tail(completed.stderr or "")
             detail = f": {reason}" if reason else ""
@@ -414,6 +411,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 )
             raise TranscriptionError(
                 f"The key command failed (exit code {completed.returncode}){detail}"
+            )
+        if _header_unsafe(token):
+            raise TranscriptionError(
+                "The key command printed a token with a space or a "
+                "character an HTTP header cannot carry."
             )
         logger.info(
             "custom_endpoint_key_command_ok elapsed_ms=%d",

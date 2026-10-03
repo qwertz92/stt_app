@@ -492,6 +492,24 @@ def test_a_failing_command_names_its_exit_code_and_last_stderr_line(runs, server
     assert fake.requests == []
 
 
+def test_a_failing_command_that_printed_a_message_reports_its_exit_code(runs, server):
+    """The exit code is judged before the output is: a login helper that
+    prints "Please run 'login' first" to stdout and exits 1 used to be
+    reported as "printed a token with a space" (review of 2026-10-03)."""
+    runs(
+        _completed(
+            "ERROR: Please run 'login' first\n", returncode=1, stderr="no session\n"
+        )
+    )
+    server()
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(key_command="helper").transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "exit code 1" in message
+    assert "no session" in message
+    assert "token with a space" not in message
+
+
 def test_a_command_that_prints_nothing_is_an_error(runs, server):
     runs(_completed("\n  \n"))
     server()
