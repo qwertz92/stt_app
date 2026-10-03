@@ -503,3 +503,25 @@ def test_the_committed_speech_carries_its_attribution():
     text = excerpt_attribution()
     assert "LibriSpeech" in text and "CC BY 4.0" in text
     assert "openslr.org/12" in text
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_load_thread_that_cannot_start_leaves_the_check_off_for_this_stop(
+    real_silero, monkeypatch, failure
+):
+    """`start_loading` runs on the Qt thread: a thread that cannot be created
+    -- `MemoryError` as well as `RuntimeError` -- must not escape into the
+    controller; the next stop asks again."""
+    started: list[int] = []
+
+    class _CannotStart(threading.Thread):
+        def start(self):
+            started.append(1)
+            raise failure("can't start new thread")
+
+    monkeypatch.setattr(silero_vad.threading, "Thread", _CannotStart)
+    silero_vad.start_loading()
+    silero_vad.start_loading()
+
+    assert started == [1, 1], "the second stop did not try again"
+    assert silero_vad.loaded_session() is None

@@ -701,3 +701,22 @@ def test_a_canceled_load_path_download_keeps_partials_a_waiter_resumes(monkeypat
         )
 
     assert cleaned == []
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_progress_reader_that_cannot_start_closes_the_pipe(monkeypatch, failure):
+    """An unread pipe fills and blocks the worker inside hf_xet's callback,
+    so the read end is closed whichever way the thread start fails."""
+
+    class _CannotStart(threading.Thread):
+        def start(self):
+            raise failure("can't start new thread")
+
+    monkeypatch.setattr(local_model_download.threading, "Thread", _CannotStart)
+    stream = _worker_stdout()
+    process = SimpleNamespace(stdout=stream)
+
+    local_model_download._attach_progress_reader(process, "small")
+
+    assert stream.closed
+    assert process._stt_progress_reader is None

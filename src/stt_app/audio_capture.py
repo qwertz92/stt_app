@@ -956,7 +956,7 @@ class AudioCapture:
                         name="stt_app_vad_auto_stop",
                         daemon=True,
                     ).start()
-                except RuntimeError:
+                except (RuntimeError, MemoryError):
                     # Latched *after* the thread exists: a start that fails
                     # used to leave the flag set, so auto-stop was silently
                     # off for the rest of the recording. The next block

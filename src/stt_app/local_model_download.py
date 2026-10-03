@@ -265,7 +265,7 @@ def _attach_progress_reader(process: subprocess.Popen[str], model_name: str) -> 
     )
     try:
         reader.start()
-    except RuntimeError:
+    except (RuntimeError, MemoryError):
         # The interpreter could not create another thread. Close our read end
         # rather than leave a pipe filling up behind the child: the worker's
         # own emit swallows the resulting write error, and the caller falls

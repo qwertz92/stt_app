@@ -1013,8 +1013,12 @@ def test_disabling_the_warm_stream_during_a_restart_leaves_nothing_open(monkeypa
     assert audio_devices.live_stream_count() == live_before
 
 
-def test_auto_stop_is_not_latched_off_by_a_thread_that_cannot_start(monkeypatch):
-    """The latch was set before the delivery thread existed."""
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_auto_stop_is_not_latched_off_by_a_thread_that_cannot_start(
+    monkeypatch, failure
+):
+    """The latch was set before the delivery thread existed. A `MemoryError`
+    is the same failure and was not caught, so it kept the latch set."""
     fired: list[int] = []
     capture = AudioCapture(
         sample_rate=16000,
@@ -1029,7 +1033,7 @@ def test_auto_stop_is_not_latched_off_by_a_thread_that_cannot_start(monkeypatch)
         def start(self):
             attempts.append(1)
             if len(attempts) == 1:
-                raise RuntimeError("can't start new thread")
+                raise failure("can't start new thread")
             super().start()
 
     monkeypatch.setattr("stt_app.audio_capture.threading.Thread", _FailsOnce)

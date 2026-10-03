@@ -274,7 +274,7 @@ def start_loading() -> None:
             # Started under the lock, so a second caller cannot see the new
             # thread as not yet alive and start another.
             loader.start()
-        except RuntimeError as exc:
+        except (RuntimeError, MemoryError) as exc:
             # No thread available: the check stays off for this stop and the
             # next stop asks again.
             logger.warning("silero_vad_load_thread_not_started error=%s", exc)
