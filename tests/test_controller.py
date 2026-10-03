@@ -1323,16 +1323,21 @@ def test_controller_initialize_local_uses_preload_executor_only():
 class _RefusingExecutor:
     """`Executor.submit` after `shutdown()`, or when no thread can start."""
 
+    def __init__(self, failure=RuntimeError):
+        self._failure = failure
+
     def submit(self, fn, *args, **kwargs):
-        raise RuntimeError("cannot schedule new futures after shutdown")
+        raise self._failure("cannot schedule new futures after shutdown")
 
     def shutdown(self, wait=False, cancel_futures=False):
         pass
 
 
-def test_a_preload_worker_that_cannot_be_scheduled_is_reported():
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_preload_worker_that_cannot_be_scheduled_is_reported(failure):
     """The result slot and the overlay both said "loading" before the submit;
-    with nothing to complete the generation they said so for good."""
+    with nothing to complete the generation they said so for good. A thread
+    that cannot be allocated raises `MemoryError` as well as `RuntimeError`."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
     overlay = FakeOverlay()
@@ -1345,7 +1350,7 @@ def test_a_preload_worker_that_cannot_be_scheduled_is_reported():
         logger=logging.getLogger("test.controller"),
         window_focus_helper=FakeWindowFocusHelper(),
     )
-    controller._preload_executor = _RefusingExecutor()
+    controller._preload_executor = _RefusingExecutor(failure)
 
     controller.initialize()
 

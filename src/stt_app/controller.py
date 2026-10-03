@@ -2311,8 +2311,9 @@ class DictationController(QtCore.QObject):
                 name="stt_app_audio_device_refresh",
                 daemon=True,
             ).start()
-        except RuntimeError as exc:
-            # A starved interpreter cannot start another thread. Discharged
+        except Exception as exc:
+            # A starved interpreter cannot start another thread (`RuntimeError`,
+            # or `MemoryError` when the stack cannot be allocated). Discharged
             # with no worker to run it, the refresh was simply gone -- a
             # hot-plugged or newly defaulted microphone stayed invisible
             # until the next device event -- and the exception escaped the
@@ -2767,8 +2768,9 @@ class DictationController(QtCore.QObject):
                 name="stt_app_completion_beep",
                 daemon=True,
             ).start()
-        except RuntimeError as exc:
-            # A starved interpreter cannot start another thread. The tone
+        except Exception as exc:
+            # A starved interpreter cannot start another thread (`RuntimeError`,
+            # or `MemoryError` when the stack cannot be allocated). The tone
             # is a courtesy after a paste that already landed; raised out
             # of the deferred flush's success arm, this reported the pasted
             # transcript as not inserted and armed Insert, which pasted it
@@ -4511,9 +4513,10 @@ class DictationController(QtCore.QObject):
                 generation,
                 key,
             )
-        except RuntimeError as exc:
+        except Exception as exc:
             # `Executor.submit` raises once the pool has been shut down and
-            # when the interpreter cannot start a worker thread. The result
+            # when the interpreter cannot start a worker thread (`RuntimeError`,
+            # or `MemoryError` when the stack cannot be allocated). The result
             # slot above already says "in progress" and the overlay says
             # "Loading", and no worker will ever complete this generation,
             # so letting it escape left both saying so for good. Report it

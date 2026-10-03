@@ -9319,9 +9319,13 @@ def test_the_trays_re_paste_of_the_whole_dictation_marks_the_tail_offer():
     _ = app
 
 
-def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(
+    monkeypatch, failure
+):
     """`Thread.start` raises when the interpreter cannot create another
-    thread. Raised out of the deferred flush's success arm -- the tone is
+    thread (`RuntimeError`, or `MemoryError` when the stack cannot be
+    allocated). Raised out of the deferred flush's success arm -- the tone is
     the last statement of a paste that already landed -- it reported the
     pasted transcript as not inserted and armed Insert, which pasted it a
     second time (measured through the flush and the overlay's Insert)."""
@@ -9334,7 +9338,7 @@ def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch
 
     class _RefusingThread(_ImmediateThread):
         def start(self):
-            raise RuntimeError("can't start new thread")
+            raise failure("can't start new thread")
 
     monkeypatch.setattr("stt_app.controller.threading.Thread", _RefusingThread)
 
