@@ -305,8 +305,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   on 2026-10-03 with the production reader against real windows (four
   runs; `scripts/release_check_clipboard_paste.py` part F repeats the EDIT
   and Edge cases): Win32 EDIT, read-only EDIT, RichEdit 5.0 text field
-  (0.05-0.5 ms first reading); Edge input, textarea, contenteditable and an
-  EditContext element that reports its selection bounds text field; Edge
+  (0.05-0.5 ms first reading); Edge input, textarea, contenteditable, an
+  EditContext element that reports its selection bounds, and Edge's own
+  address and find bars text field; Edge
   read-only input, button, focusable list item, body "not a text field"
   (2-4 ms warm, 15-33 ms for the first reading in the process); each stable
   over 30 readings in 1.5 s (a bare EditContext element was not: Known
