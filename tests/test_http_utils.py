@@ -11,6 +11,7 @@ from stt_app.transcriber._http_utils import (
     multipart_form_data,
     read_http_error_detail,
 )
+from stt_app.transcriber.base import TranscriptionError
 
 
 @pytest.mark.parametrize(
@@ -104,11 +105,97 @@ def test_the_error_detail_is_what_the_provider_said_not_the_status_phrase():
 
 
 def test_a_non_json_error_body_is_passed_through_and_capped():
-    """A provider must not be able to push an HTML error page into a dialog."""
-    assert read_http_error_detail(_http_error(b"<html>Gateway timeout</html>")) == (
-        "<html>Gateway timeout</html>"
+    assert read_http_error_detail(_http_error(b"upstream request timeout")) == (
+        "upstream request timeout"
     )
     assert len(read_http_error_detail(_http_error(b'"' + b"x" * 900 + b'"'))) == 300
+
+
+@pytest.mark.parametrize(
+    ("body", "title"),
+    [
+        pytest.param(
+            b"<html><head><title>Zscaler - Access Denied</title></head><body>"
+            + b"blocked by policy " * 40
+            + b"</body></html>",
+            "Zscaler - Access Denied",
+            id="proxy-403",
+        ),
+        pytest.param(
+            b"<html>\r\n<head><title>413 Request Entity Too Large</title></head>\r\n"
+            b"<body><center><h1>413 Request Entity Too Large</h1></center></body></html>",
+            "413 Request Entity Too Large",
+            id="nginx-413",
+        ),
+        pytest.param(
+            b"\xef\xbb\xbf<!DOCTYPE html><TITLE>\n  Proxy &amp; Auth\n</TITLE>",
+            "Proxy & Auth",
+            id="bom-entities-whitespace",
+        ),
+        pytest.param(
+            b"<html><title>" + b"x" * 400 + b"</title></html>",
+            "x" * 77 + "...",
+            id="long-title",
+        ),
+    ],
+)
+def test_a_markup_error_page_is_reported_by_its_title_not_pasted(body, title):
+    """A proxy's block page (403 Zscaler, 407, nginx 413) used to be pasted
+    into the message as markup (review of 2026-10-03)."""
+    detail = read_http_error_detail(_http_error(body))
+
+    assert detail == (
+        f'the reply was an HTML page titled "{title}" (a proxy or firewall block page?)'
+    )
+    assert "<" not in detail
+    assert http_error_suffix(_http_error(body)) == f": {detail}"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"<html><body><h1>502 Bad Gateway</h1></body></html>",
+        b"<html><title></title></html>",
+        b"<html><title>never closed",
+        b"\xef\xbb\xbf  <!DOCTYPE html><body>blocked</body>",
+        b"<HEAD><meta charset=utf-8></HEAD>",
+        b"<body>blocked</body>",
+    ],
+)
+def test_a_markup_error_page_without_a_title_is_named_as_a_page(body):
+    assert read_http_error_detail(_http_error(body)) == (
+        "the reply was an HTML page (a proxy or firewall block page?)"
+    )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            b'<?xml version="1.0"?><Error><Code>AccessDenied</Code>'
+            b"<Message>Denied by bucket policy</Message></Error>"
+        ),
+        b"<Error><Message>Denied by bucket policy</Message></Error>",
+        b"<error>plain text in angle brackets</error>",
+    ],
+)
+def test_an_xml_error_body_is_not_called_an_html_page(body):
+    """Only real HTML is a block page; an XML error carries the provider's
+    message, which the HTML sentence threw away (review of 2026-10-03)."""
+    detail = read_http_error_detail(_http_error(body))
+    assert "HTML page" not in detail
+    assert detail == body.decode().strip()[:300]
+
+
+def test_a_title_search_is_bounded_on_a_page_of_unclosed_titles():
+    """64 KB of `<title>` without a close was quadratic: 3.95 s."""
+    import time
+
+    body = b"<title>" * 9000
+    started = time.monotonic()
+    detail = read_http_error_detail(_http_error(body))
+    assert time.monotonic() - started < 1.0
+    assert detail == "the reply was an HTML page (a proxy or firewall block page?)"
 
 
 def test_an_unreadable_or_empty_body_falls_back_to_the_status_phrase():
@@ -205,6 +292,29 @@ def test_a_detail_object_without_a_message_still_shows_something_readable():
     # "{'status': 'quota_exceeded', 'code': 429}", which the two assertions
     # this test used to make also accepted.
     assert detail == "quota_exceeded"
+
+
+def test_an_error_string_under_detail_is_the_message():
+    """A LiteLLM/FastAPI gateway answers 403 `{"detail": {"error": "..."}}`;
+    the object was shown as JSON text (review of 2026-10-03)."""
+    body = b'{"detail": {"error": "Authentication Error, user not allowed"}}'
+
+    assert read_http_error_detail(_http_error(body)) == (
+        "Authentication Error, user not allowed"
+    )
+
+
+def test_an_error_object_in_a_successful_reply_is_named():
+    from stt_app.transcriber._http_utils import transcript_from_json
+
+    with pytest.raises(TranscriptionError, match="model not found") as raised:
+        transcript_from_json(
+            b'{"error": {"message": "model not found"}}', prefix="Custom endpoint"
+        )
+    assert "HTTP 200" in str(raised.value)
+    # Without an error member the old message stays.
+    with pytest.raises(TranscriptionError, match="has no 'text' field"):
+        transcript_from_json(b'{"result": "x"}', prefix="Custom endpoint")
 
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():

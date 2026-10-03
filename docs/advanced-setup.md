@@ -454,6 +454,7 @@ OpenAI-compatible provider. It is batch-only.
    - *Chat completions with audio input* sends `POST {base}/chat/completions`
      with the WAV as an `input_audio` part and an instruction to transcribe
      verbatim. Use it when the gateway routes audio only to a multimodal LLM.
+     It takes WAV and MP3 audio only.
      The app asks for `reasoning_effort: "low"`, which cut the latency of a
      reasoning model to a third in one measurement, and drops it for good
      when the server rejects it.
@@ -464,17 +465,57 @@ OpenAI-compatible provider. It is batch-only.
 
 **Key command.** When the endpoint needs a short-lived token, enter a command
 that prints it, for example `my-token-helper --print` or, from Windows into
-WSL, `wsl.exe -e /path/to/token-helper`. It runs without a shell and without a
-console window whenever a request needs a key; the last line it prints is
-sent as the Bearer token and reused for 5 minutes. An HTTP 401 re-runs it
-once. The command overrides a stored key. A command that fails, prints
-nothing or takes longer than 30 seconds fails the dictation with its exit
-code and the last line of its error output; the token itself is never logged
-or shown.
+WSL, `wsl.exe -e bash -lc 'my-token-helper --print'`. It runs without a shell
+and without a console window whenever a request needs a key; the last line it
+prints is sent as the Bearer token and reused for 5 minutes. An HTTP 401
+re-runs it once. The command overrides a stored key. A command that fails,
+prints nothing or takes longer than 30 seconds fails the dictation with its
+exit code and the last line of its error output; the token itself is never
+logged or shown.
+
+Quoting follows what you would type in a Windows console, with one addition:
+`"..."` groups words anywhere (`--query "a b"`, `--opt="a b"`), `'...'` groups
+a word that starts with it (`bash -lc 'echo x'`), a backslash is never an
+escape (so `C:\tools\helper.exe` and `"C:\Program Files\x\helper.exe"` work),
+and an apostrophe inside a word, as in `C:\Users\O'Brien\helper.exe`, is an
+ordinary character. A literal double quote cannot be written; put such a
+command into a script and run the script. An unclosed quote is reported.
+
+PowerShell is the one exception, because `'...'` is its own string syntax:
+after `-Command` of `powershell` or `pwsh` the single quotes are passed on
+untouched, for example `powershell -NoProfile -Command Get-Content 'C:\My
+Folder\token.txt'` or `pwsh -Command & 'C:\My Folder\get token.ps1'`. Before
+`-Command` they are removed as usual (`powershell -File 'C:\My
+Folder\get token.ps1'` runs that file).
+
+The program is looked up like a console does, so `az`, `gcloud` or `npm`
+(which are `.cmd` files on Windows) work without their extension. A `.cmd` or
+`.bat` file is run by cmd.exe, which reads `&`, `|`, `<`, `>`, `^`, `%` and
+`"` in an argument as commands or variables; such an argument is refused with
+a message (put it into the script instead) rather than run as something else.
 
 **Limits.** A recording longer than 10 minutes (transcription API) or
 5 minutes (chat style, whose request carries the audio base64-encoded) is
-sent in parts cut at pauses.
+sent in parts cut at pauses. These part sizes (at most 25 MB or 15 MB per
+request) are fixed. If a gateway or a proxy in front of it has a lower request
+size limit it answers HTTP 413 ("Request Entity Too Large"); the message then
+names the sizes, and the fix is to raise the limit there or to dictate shorter
+recordings. The chat style's requests are the smaller ones (15 MB of audio,
+about 20 MB base64-encoded, against 25 MB), so switching to it can help when
+the limit lies in between; switching from it to the transcription API style
+cannot. The chat style takes WAV and MP3 audio only: a recording in another
+format (an imported M4A or FLAC, for example) is refused with a message that
+points to the transcription API style, which sends the file unchanged. A chat
+reply that the model's output limit cut off is an error, not a shorter
+transcript.
+
+**Proxies.** Requests use the proxy from the `HTTP_PROXY`, `HTTPS_PROXY` and
+`NO_PROXY` environment variables. Where none of them is set, Windows' own
+proxy setting (Settings -> Network -> Proxy, a manual proxy address) is used.
+A proxy configuration script (PAC file) is not supported: set the variables
+instead. A TLS-inspecting proxy's CA certificate is normally taken from the
+Windows certificate store; if it is not there, see
+[SSL / proxy issues](#ssl--proxy-issues) for `SSL_CERT_FILE`.
 
 **Caveat.** A transcript written by a general LLM in the chat style is less
 deterministic than one from a speech model: it may paraphrase, drop filler
