@@ -1047,6 +1047,49 @@ def test_the_microphone_menu_asks_for_todays_devices_before_it_opens(monkeypatch
     assert listed_at_popup and _HEADSET in listed_at_popup[0]
 
 
+@pytest.mark.parametrize("which", ["microphone", "language"])
+def test_a_menu_is_not_rebuilt_while_it_is_open(which):
+    """`QMenu.clear()` deletes the actions under an open popup, and one the
+    user has already chosen but whose `triggered` has not run yet. A device
+    refresh or a settings load answers with fresh options at any moment, so
+    the rebuild waits until the popup hides."""
+    from shiboken6 import isValid
+
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    if which == "microphone":
+        menu = overlay._microphone_menu
+
+        def update(count: int) -> None:
+            overlay.set_microphone_options(_MIC_ENTRIES[:count], "", _HYPERX)
+
+        sizes = (2, 3)
+    else:
+        menu = overlay._language_menu
+
+        def update(count: int) -> None:
+            overlay.set_language_options(("auto", "en", "de")[:count], "auto")
+
+        sizes = (1, 3)
+    update(sizes[0])
+    shown = [action.text() for action in menu.actions()]
+    overlay.show()
+    menu.popup(QtCore.QPoint(0, 0))
+    QtTest.QTest.qWait(30)
+    assert menu.isVisible()
+    open_actions = list(menu.actions())
+
+    update(sizes[1])
+
+    assert all(isValid(action) for action in open_actions), "rebuilt while open"
+    assert [action.text() for action in menu.actions()] == shown
+
+    menu.hide()
+    QtTest.QTest.qWait(30)
+    assert len([a for a in menu.actions() if not a.isSeparator()]) == sizes[1]
+    overlay.hide()
+
+
 def test_the_footer_microphone_button_elides_and_moves_nothing():
     """Variant B of the UX review: the button takes what the 96 px slider
     and its value leave, so a long device name elides instead of widening
