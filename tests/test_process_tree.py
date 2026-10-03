@@ -48,6 +48,7 @@ def test_a_token_printed_after_the_wrapper_exited_is_returned():
         timeout=15,
         text=True,
         encoding="utf-8",
+        silent_exit_grace_s=3.0,
     )
 
     elapsed = time.monotonic() - started
@@ -56,16 +57,38 @@ def test_a_token_printed_after_the_wrapper_exited_is_returned():
     assert elapsed >= 1.0, "it returned before the tool had printed"
 
 
-def test_a_silent_descendant_is_waited_for_only_until_the_timeout():
-    """What holds the pipes may be a forgotten process that never prints: the
-    wait for output is the call's own timeout, not forever, and the descendant
-    is ended with the tree."""
+def test_a_silent_descendant_is_waited_for_only_the_silent_exit_grace():
+    """What holds the pipes may be a forgotten process that never prints. The
+    wait for output that has not arrived is the caller's grace, not the whole
+    timeout: the call returns what the child produced (exit 0, nothing on
+    stdout) and the descendant is ended with the tree, so the caller can say
+    "printed no token" instead of "did not finish"."""
     started = time.monotonic()
 
-    with pytest.raises(subprocess.TimeoutExpired):
-        _run("import time; time.sleep(60)", timeout=2.0, text=True)
+    completed = _run(
+        "import time; time.sleep(60)",
+        timeout=20.0,
+        text=True,
+        silent_exit_grace_s=1.0,
+    )
 
-    assert time.monotonic() - started < 12
+    assert completed.returncode == 0
+    assert completed.stdout == ""
+    assert time.monotonic() - started < 10
+
+
+def test_a_token_later_than_the_silent_exit_grace_is_not_waited_for():
+    started = time.monotonic()
+
+    completed = _run(
+        "import time; time.sleep(8); print('too-late')",
+        timeout=20.0,
+        text=True,
+        silent_exit_grace_s=1.0,
+    )
+
+    assert completed.stdout == ""
+    assert time.monotonic() - started < 6
 
 
 def test_a_finished_wrapper_with_output_does_not_wait_for_its_descendant(
@@ -169,3 +192,30 @@ def test_text_and_bytes_results_match_subprocess_run():
     assert as_text.stdout == "a\nb\né"
     assert as_bytes.stdout == b"a\r\nb\n\xc3\xa9"
     assert as_bytes.stderr == b""
+
+
+def test_a_reader_thread_that_cannot_start_still_ends_the_child(monkeypatch):
+    """The readers were started before the guarded block, so a start that
+    failed left the child running with nobody to read or kill it."""
+    ended: list[object] = []
+    real_end_tree = process_tree._end_tree
+
+    def _record(process, job):
+        ended.append(process)
+        real_end_tree(process, job)
+
+    def _cannot_start(self):
+        raise MemoryError("no thread")
+
+    monkeypatch.setattr(process_tree, "_end_tree", _record)
+    monkeypatch.setattr(process_tree._PipeReader, "start", _cannot_start)
+
+    with pytest.raises(MemoryError):
+        run_bounded(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            timeout=15,
+            stdin=subprocess.DEVNULL,
+        )
+
+    assert len(ended) == 1
+    assert ended[0].poll() is not None, "the child was left running"

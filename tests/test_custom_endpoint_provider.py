@@ -1252,6 +1252,43 @@ def test_a_key_command_that_exits_while_its_grandchild_holds_the_pipe(
         _kill_leftover(heartbeat)
 
 
+def test_a_silent_helper_with_a_lingering_descendant_reports_no_token(
+    tmp_path, monkeypatch
+):
+    """Exit 0, nothing on stdout, a tool still holding the pipes: the helper
+    did finish, so the error is "printed no token" with its stderr tail, not
+    "did not finish within 30 s" after the whole timeout (and not holding the
+    token lock that long)."""
+    import sys
+    import time
+
+    child = tmp_path / "silent_child.py"
+    child.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+        "                 stdout=sys.stdout, stderr=sys.stderr)\n"
+        "sys.stderr.write('run login first\\n')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 20.0)
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S", 1.0)
+    parts = [sys.executable, str(child)]
+    command = (
+        subprocess.list2cmdline(parts)
+        if provider_module.os.name == "nt"
+        else " ".join(parts)
+    )
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    started = time.monotonic()
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber._run_key_command()
+
+    assert "printed no token (exit code 0)" in str(raised.value)
+    assert "run login first" in str(raised.value)
+    assert time.monotonic() - started < 10
+
+
 def test_a_real_key_command_prints_its_token(monkeypatch):
     """The process runner itself, not a stand-in for it."""
     import sys

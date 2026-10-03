@@ -27,7 +27,8 @@ _DRAIN_AFTER_KILL_S = 2.0
 # the pipes is a descendant it left running, which is ended so the read can
 # finish. A child that exited with code 0 and printed nothing is different:
 # what holds the pipes may be the tool it started and did not wait for, which
-# has not printed yet, so that wait runs until the call's own timeout.
+# has not printed yet, so the caller may grant that case a longer grace
+# (`silent_exit_grace_s`).
 _PIPES_GRACE_AFTER_EXIT_S = 0.5
 # How often `run_bounded` looks whether the direct child has exited while it
 # reads the pipes.
@@ -153,6 +154,7 @@ def run_bounded(
     arguments: Sequence[str],
     *,
     timeout: float,
+    silent_exit_grace_s: float | None = None,
     **popen_kwargs,
 ) -> subprocess.CompletedProcess:
     """`subprocess.run(..., capture_output=True, timeout=...)`, bounded.
@@ -166,10 +168,11 @@ def run_bounded(
       pipes returns its own output and exit code once the pipes have stayed
       open `_PIPES_GRACE_AFTER_EXIT_S` past its exit, and that descendant is
       ended. Waiting for EOF instead failed a key command whose token had
-      arrived with exit code 0 (review of 2026-10-01). That grace applies when
-      stdout already holds output or the child failed; a child that exited 0
+      arrived with exit code 0 (review of 2026-10-01). A child that exited 0
       with nothing on stdout may have left its tool to print it, so the pipes
-      are waited for until `timeout` (review of dedcde4, 2026-10-01).
+      stay open `silent_exit_grace_s` instead (default: the same grace; review
+      of dedcde4, 2026-10-01). After the grace the tree is ended and what was
+      read is returned -- not a timeout: the child did finish.
 
     Worst case: `timeout` plus the kill (taskkill's 5 s, a 3 s wait) plus
     `_DRAIN_AFTER_KILL_S`.
@@ -217,6 +220,7 @@ def run_bounded(
             arguments,
             timeout,
             job,
+            silent_exit_grace_s=silent_exit_grace_s,
             text=text,
             encoding=encoding,
             errors=errors,
@@ -284,23 +288,32 @@ def _communicate_bounded(
     timeout: float,
     job: _WindowsJob | None,
     *,
+    silent_exit_grace_s: float | None,
     text: bool,
     encoding: str | None,
     errors: str | None,
 ) -> subprocess.CompletedProcess:
     readers = (_PipeReader(process.stdout), _PipeReader(process.stderr))
-    for reader in readers:
-        reader.start()
     stdout_reader, stderr_reader = readers
+    silent_grace = (
+        _PIPES_GRACE_AFTER_EXIT_S
+        if silent_exit_grace_s is None
+        else silent_exit_grace_s
+    )
 
     def finish_readers(wait_s: float) -> None:
         limit = time.monotonic() + wait_s
         for reader in readers:
-            reader.join(timeout=max(0.0, limit - time.monotonic()))
+            if reader.ident is not None:  # one that never started cannot be joined
+                reader.join(timeout=max(0.0, limit - time.monotonic()))
 
     deadline = time.monotonic() + timeout
     exited_at: float | None = None
     try:
+        # Inside the try: a thread that cannot be started (RuntimeError,
+        # MemoryError) must still end the child, which would otherwise run on.
+        for reader in readers:
+            reader.start()
         while True:
             now = time.monotonic()
             if now >= deadline:
@@ -310,8 +323,9 @@ def _communicate_bounded(
                 break
             if exited:
                 exited_at = exited_at or now
-                complete = process.returncode != 0 or stdout_reader.has_output()
-                if complete and now - exited_at >= _PIPES_GRACE_AFTER_EXIT_S:
+                silent = process.returncode == 0 and not stdout_reader.has_output()
+                grace = silent_grace if silent else _PIPES_GRACE_AFTER_EXIT_S
+                if now - exited_at >= grace:
                     # The child is done and its output complete; what holds
                     # the pipes is a descendant it left behind.
                     _end_tree(process, job)

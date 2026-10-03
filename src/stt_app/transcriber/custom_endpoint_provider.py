@@ -37,6 +37,7 @@ from pathlib import Path
 from ..config import (
     CUSTOM_API_MODE_CHAT,
     CUSTOM_API_MODES,
+    CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S,
     CUSTOM_KEY_COMMAND_TIMEOUT_S,
     CUSTOM_KEY_COMMAND_TTL_S,
     DEFAULT_CUSTOM_API_MODE,
@@ -530,6 +531,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 encoding="utf-8",
                 errors="replace",
                 timeout=CUSTOM_KEY_COMMAND_TIMEOUT_S,
+                silent_exit_grace_s=CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S,
                 **extra,
             )
         except FileNotFoundError as exc:

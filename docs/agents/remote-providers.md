@@ -398,12 +398,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (`NtResumeProcess`, since `Popen` closes the thread handle), and once the
     direct child has exited and the pipes stay open
     `_PIPES_GRACE_AFTER_EXIT_S` (0.5 s) longer, the job is terminated and
-    the child's own output and exit code returned. That grace applies when
-    stdout already holds output or the child failed; a child that exited 0
+    the child's own output and exit code returned. A child that exited 0
     with nothing on stdout may have left its tool to print the token (`start
-    /b`, `Start-Process` without `-Wait`), so the pipes are then waited for
-    until the call's timeout (2026-10-03: `_PipeReader` threads collect the
-    bytes, so "nothing yet" is told from "complete"; `communicate` could not).
+    /b`, `Start-Process` without `-Wait`), so it gets a longer grace,
+    `config.CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S` (3 s; a token 2 s late is
+    returned). After it the tree is ended and the empty output returned, so
+    the error is "printed no token (exit code 0)" plus the helper's stderr
+    tail, not "did not finish within 30 s" after the whole timeout with the
+    token lock held (2026-10-03: `_PipeReader` threads collect the bytes, so
+    "nothing yet" is told from "complete"; `communicate` could not). A wrapper
+    that prints a notice and then lets its tool print the token is still
+    returned as the notice.
     Without a job (a nested job forbids one) the orphan survives the
     `taskkill`, and the output collected so far is returned instead of a
     timeout. The job has no
