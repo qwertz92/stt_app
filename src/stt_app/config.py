@@ -2389,3 +2389,14 @@ PASTE_TARGET_RESPONSIVE_PROBE_MS = 200
 # target froze the whole app for the full budget. At 10 ms that is 200 probes,
 # and the busy case pays at most one extra sleep per 200 ms probe.
 PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S = 0.01
+# After a paste reports success, `paste_target_check` asks on a worker thread
+# whether the focused element shows a caret (report-only; never delays the
+# paste). A "no caret" reading is read again after each of these delays, and
+# "not a text field" stands only when every reading agrees: a reading taken
+# while the target is still settling its focus must not decide on its own.
+PASTE_TARGET_CHECK_RECHECK_DELAYS_S = (0.1, 0.25)
+# How long the controller waits for the check before it counts as "unknown",
+# which is the behaviour from before the check existed (the completion tone
+# then plays late). A reading costs 0.05-50 ms on this machine, the MSAA call
+# is a cross-process WM_GETOBJECT, and a hung target answers it late or never.
+PASTE_TARGET_CHECK_TIMEOUT_MS = 1000

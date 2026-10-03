@@ -140,7 +140,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     clipboard history and clipboard managers consume it); a UI Automation
     read-back (heavy and per application); an owner window without a pump
     (blocks every other program's `EmptyClipboard`).
-    `keep_transcript_in_clipboard` skips the restore.
+    `keep_transcript_in_clipboard` skips the restore. The target check
+    below answers a narrower question afterwards: whether the focus showed
+    a caret.
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,
@@ -252,7 +254,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (owner's field report 2026-10-01: six queued pastes, two silently
   missing). Each failed or possibly-landed queued or foreground batch paste
   becomes an `_UndeliveredInsert` row (negative id) in the overlay queue
-  panel, sent as `QUEUE_ROW_KIND_UNDELIVERED`: "Not inserted" or "Possibly
+  panel, sent as `QUEUE_ROW_KIND_UNDELIVERED`: "Not inserted", "Not in a
+  text field" (the target check below) or "Possibly
   inserted, check the window", amber, with a Dismiss button (both row
   captions share one reserved width) and a title that counts transcriptions
   and waiting inserts apart. Later results never replace a row; Dismiss
@@ -269,6 +272,55 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   The tray report appends
   `_undelivered_hint`: the count and how to insert them -- the re-paste
   hotkey only while registered, else the tray's "Insert transcript again".
+- **A paste that reports success has its target checked, report-only**
+  (2026-10-03, `paste_target_check.PasteTargetCheck`, wired in `main.py`;
+  the controller's `paste_target_check` argument defaults to None = no
+  check, which every test that does not pass one gets). After a foreground
+  batch paste, a queued paste and a re-paste (not streaming live inserts or
+  the finalize tail) `_check_paste_target` hands a `_PasteCheck` to the
+  worker thread (MTA COM, one check at a time; a second request while one
+  runs is refused, never queued) and returns; the answer comes back through
+  `paste_target_checked`, or `PASTE_TARGET_CHECK_TIMEOUT_MS` (1 s) answers
+  "unknown". Verdicts: a Win32 caret (`GetGUIThreadInfo.hwndCaret`) in any
+  window is a text field; in a Chromium window (`Chrome_WidgetWin_1`,
+  `Chrome_RenderWidgetHostHWND`) MSAA `OBJID_CARET` on the focus window
+  invisible or 0 wide is "not a text field", read again after
+  `PASTE_TARGET_CHECK_RECHECK_DELAYS_S` (0.1, 0.25 s) and standing only when
+  every reading on the same foreground agrees; everything else -- other
+  window classes, an MSAA error, a changed foreground, a refused or
+  timed-out check -- is "unknown", which behaves exactly as before. "Not a
+  text field": no completion tone; an insertable `_UndeliveredInsert` row
+  with `outside_text_field`; the tray (`background_insertion_failed`) for
+  a queued paste or when the overlay moved on; on the overlay, while it
+  still shows what the paste painted (`_PasteCheck.overlay_shown`, never
+  over a session), an Error "pasted, but the focused element does not look
+  like a text field. If nothing appeared, click into the field and press
+  Insert" with the Insert offer (`_paint_insert_offer`, shared with the
+  failed queued paste). A re-paste or Insert that then pastes it retires
+  the row by identity like any other (owner's rule 2026-10-03: a failed or
+  doubtful insert is shown briefly and stops being listed once a re-paste
+  inserted exactly it); if that paste is doubtful again, it gets a new row.
+  Why: a SendInput Ctrl+V into a focused button, list item or page body of
+  a Chromium page reported success and inserted nothing (r27 B1). Measured
+  on 2026-10-03 with the production reader against real windows (four
+  runs; `scripts/release_check_clipboard_paste.py` part F repeats the EDIT
+  and Edge cases): Win32 EDIT, read-only EDIT, RichEdit 5.0 text field
+  (0.05-0.5 ms first reading); Edge input, textarea, contenteditable and an
+  EditContext element that reports its selection bounds text field; Edge
+  read-only input, button, focusable list item, body "not a text field"
+  (2-4 ms warm, 15-33 ms for the first reading in the process); each stable
+  over 30 readings in 1.5 s (a bare EditContext element was not: Known
+  limitations). A textarea's caret answered 6-29 ms after Edge was brought
+  to the front (two runs; the foreground lock refused the others), but at
+  least one of 143 readings in the first run said "no caret" at a moment
+  the probe did not record: the rechecks keep a short-lived one from deciding.
+  Windows Terminal draws its own cursor and answers MSAA with an invisible
+  caret of width 0 while its prompt takes the paste, which is why "no
+  caret" counts only in Chromium windows; it and the Win32 BUTTON are
+  "unknown". UI Automation is not used: a fresh Edge's first answer named
+  the wrong element, it calls a contenteditable a Group and the body an
+  editable Document, and a UIA client may switch an Electron app into its
+  screen-reader mode.
 - **The overlay's Insert pastes the text that failed** (a streaming
   finalize's tail past `committed_text`, not all of `_last_transcript`).
   `_insert_action_text` is written by both paths that paint the Insert action
@@ -325,8 +377,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   start or stop (the start or stop takes the target snapshot, and a paste
   then races it), during a streaming recording (live inserts write at the
   caret) and during a streaming finalize, whose tail would land behind the
-  paste. A failed insert still shows briefly in the tray and stays as a
-  row; a re-paste that inserts that row retires it.
+  paste. A failed or doubtful insert still shows briefly in the tray and
+  stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
   inserted, never pasted again. The `_last_transcript` fallback
   (`_repaste_last_unless_possibly_inserted`) refuses, with the reason shown,

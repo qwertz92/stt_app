@@ -51,6 +51,7 @@ from .config import (
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
+    PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
     RECORDINGS_MAX_COUNT_UNLIMITED,
@@ -103,6 +104,11 @@ from .model_download_progress import (
     format_model_download_progress,
 )
 from .overlay_ui import OverlayUI
+from .paste_target_check import (
+    VERDICT_NOT_TEXT_FIELD,
+    VERDICT_UNKNOWN,
+    PasteTargetCheck,
+)
 from .settings_store import _REMOTE_MODEL_FIELDS as _ENGINE_MODEL_FIELDS
 from .settings_store import _REMOTE_REGION_FIELDS as _ENGINE_REGION_FIELDS
 from .settings_store import AppSettings, SettingsStore, preferred_onnx_device
@@ -284,6 +290,41 @@ class _UndeliveredInsert:
     may_have_pasted: bool
     created_at: datetime
     history_entry: TranscriptHistoryEntry | None = None
+    # The paste reported success, but the focused element showed no caret
+    # (`paste_target_check`): most likely nothing was inserted. Insertable
+    # like a failed paste -- the user decides after looking at the window.
+    outside_text_field: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class _PasteCheck:
+    """A paste that reported success, waiting for its target check.
+
+    `paste_target_check` answers on a worker thread; until then the
+    completion tone waits, and a "not a text field" verdict reports the paste
+    as doubtful instead (`_report_paste_outside_text_field`).
+    """
+
+    text: str
+    history_entry: TranscriptHistoryEntry | None
+    created_at: datetime
+    # "The transcript was" / "Recording 12:00:01 (local · base) was" /
+    # "3 queued transcriptions were": the subject of the report.
+    identity: str
+    # A queued paste, or one made while a session owned the overlay: the
+    # tray always carries its report.
+    background: bool
+    # The overlay's `(state, detail)` right after the paste. A doubtful
+    # report paints only over exactly this; anything newer keeps the screen
+    # and the report goes to the tray.
+    overlay_shown: tuple[str, str]
+    # Whether a report painted on the overlay moves the shown transcript and
+    # its Edit target to this paste, as a failed queued paste does. False
+    # where the overlay already shows this text with the right pair.
+    takes_shown_pair: bool
+    # The window that had the foreground for the paste; a check that finds
+    # another one in front answers "unknown".
+    foreground: int | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -488,6 +529,10 @@ class DictationController(QtCore.QObject):
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
+    # A paste target check's answer: (check id, verdict, detail). Emitted from
+    # `PasteTargetCheck`'s worker thread; the queued connection brings it to
+    # the Qt thread.
+    paste_target_checked = QtCore.Signal(int, str, str)
 
     def __init__(
         self,
@@ -503,6 +548,7 @@ class DictationController(QtCore.QObject):
         last_recording_store: LastRecordingStore | None = None,
         show_overlay_hotkey_manager: HotkeyManager | None = None,
         repaste_hotkey_manager: HotkeyManager | None = None,
+        paste_target_check: PasteTargetCheck | None = None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
@@ -628,6 +674,9 @@ class DictationController(QtCore.QObject):
         # Whether the last `_insert_text_at_target` call painted the Insert
         # offer, so the caller can attach the rows that failure is about.
         self._last_insert_offered = False
+        # The foreground window of the last paste that reported success, for
+        # its target check (`_check_paste_target`).
+        self._last_insert_foreground: int | None = None
         # `(state, detail)` the offer painter wrote last, None once a plain
         # status replaced it. The preload progress poll compares it with
         # what the overlay shows, to tell the painter's own Error from a
@@ -727,6 +776,12 @@ class DictationController(QtCore.QObject):
         # One re-paste (tray, hotkey or the overlay's Insert) asked for while
         # the restore window was open; a later request replaces it.
         self._pending_repaste: _PendingRepaste | None = None
+        # Asks after a successful paste whether the focus was a text field;
+        # None (the default, and every test that does not pass one) means no
+        # check: every paste is reported as before.
+        self._paste_target_check = paste_target_check
+        self._paste_checks: dict[int, _PasteCheck] = {}
+        self._paste_check_counter = 0
         self._preload_target_model: str | None = None
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
@@ -765,6 +820,7 @@ class DictationController(QtCore.QObject):
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
         self.audio_devices_changed.connect(self._on_audio_devices_changed)
+        self.paste_target_checked.connect(self._on_paste_target_checked)
 
     @property
     def settings(self) -> AppSettings:
@@ -801,6 +857,10 @@ class DictationController(QtCore.QObject):
         # is in history like every delivered transcript.
         self._paste_pace_timer.stop()
         self._pending_repaste = None
+        # A check still running answers into nothing; its paste stands.
+        self._paste_checks.clear()
+        if self._paste_target_check is not None:
+            self._paste_target_check.close()
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
         listener = self._audio_device_listener
@@ -3539,11 +3599,12 @@ class DictationController(QtCore.QObject):
         preview = " ".join(entry.text.split())
         if len(preview) > _UNDELIVERED_PREVIEW_CHARS:
             preview = preview[: _UNDELIVERED_PREVIEW_CHARS - 3].rstrip() + "..."
-        status = (
-            "Possibly inserted, check the window"
-            if entry.may_have_pasted
-            else "Not inserted"
-        )
+        if entry.may_have_pasted:
+            status = "Possibly inserted, check the window"
+        elif entry.outside_text_field:
+            status = "Not in a text field"
+        else:
+            status = "Not inserted"
         timestamp = entry.created_at.strftime("%H:%M:%S")
         return f'{status} · {timestamp} · "{preview}"'
 
@@ -3585,8 +3646,9 @@ class DictationController(QtCore.QObject):
         may_have_pasted: bool,
         created_at: datetime,
         history_entry: TranscriptHistoryEntry | None,
+        outside_text_field: bool = False,
     ) -> _UndeliveredInsert | None:
-        """Keep a failed paste listed until it is inserted or dismissed."""
+        """Keep a failed or doubtful paste listed until inserted or dismissed."""
         transcript = text.strip()
         if not transcript or self._shutdown_started:
             return None
@@ -3597,12 +3659,15 @@ class DictationController(QtCore.QObject):
             may_have_pasted=may_have_pasted,
             created_at=created_at,
             history_entry=history_entry,
+            outside_text_field=outside_text_field,
         )
         self._undelivered_inserts.append(entry)
         self._logger.info(
-            "undelivered_insert_recorded row=%d may_have_pasted=%s chars=%d waiting=%d",
+            "undelivered_insert_recorded row=%d may_have_pasted=%s "
+            "outside_text_field=%s chars=%d waiting=%d",
             -self._undelivered_row_counter,
             may_have_pasted,
+            outside_text_field,
             len(transcript),
             len(self._insertable_undelivered()),
         )
@@ -5750,7 +5815,20 @@ class DictationController(QtCore.QObject):
                 return
 
             self._overlay.set_state("Done", text)
-            self._play_completion_beep()
+            self._check_paste_target(
+                self._paste_check(
+                    text,
+                    history_entry,
+                    created_at=(
+                        job.created_at
+                        if job is not None
+                        else datetime.now().astimezone()
+                    ),
+                    identity="The transcript was",
+                    background=False,
+                    takes_shown_pair=False,
+                )
+            )
 
         # Bring the (possibly floating/hidden) overlay forward so the finished
         # transcript is actually visible for a quick confirmation.
@@ -6074,7 +6152,16 @@ class DictationController(QtCore.QObject):
                 text,
                 job.history_entry if job_count == 1 else None,
             )
-            self._play_completion_beep()
+            self._check_paste_target(
+                self._paste_check(
+                    text,
+                    job.history_entry if job_count == 1 else None,
+                    created_at=job.created_at,
+                    identity=self._queued_paste_identity(job, job_count),
+                    background=True,
+                    takes_shown_pair=True,
+                )
+            )
             return True, False
         claimed = self._report_background_insertion_failure(
             job,
@@ -6082,6 +6169,12 @@ class DictationController(QtCore.QObject):
             job_count=job_count,
         )
         return False, claimed
+
+    def _queued_paste_identity(self, job: _TranscriptionJob, job_count: int) -> str:
+        """The subject of a queued paste's report, with its own verb."""
+        if job_count > 1:
+            return f"{job_count} queued transcriptions were"
+        return f"{self._job_identity(job)} was"
 
     def _report_background_insertion_failure(
         self,
@@ -6108,11 +6201,7 @@ class DictationController(QtCore.QObject):
             job.model,
             job_count,
         )
-        identity = (
-            f"{job_count} queued transcriptions were"
-            if job_count > 1
-            else f"{self._job_identity(job)} was"
-        )
+        identity = self._queued_paste_identity(job, job_count)
         # The same distinction the foreground path makes: two failure paths
         # run *after* the paste keystroke, so the text is probably already
         # in the document. Claiming it "could not be inserted" and offering
@@ -6151,20 +6240,43 @@ class DictationController(QtCore.QObject):
             # Copy/Insert act on. The notification above is the report then.
             return False
         # Nothing newer is on screen, so this transcript becomes what the
-        # overlay shows — and therefore what Copy and Insert act on.
-        transcript = text.strip()
-        # The Edit target moves with the text: one queued transcript brings
-        # its own entry, a coalesced paste of several has no single entry
-        # and Edit refuses rather than writing onto an older dictation's.
-        self._set_last_transcript(
-            transcript, job.history_entry if job_count == 1 else None
+        # overlay shows — and therefore what Copy and Insert act on. The
+        # Edit target moves with the text: one queued transcript brings its
+        # own entry, a coalesced paste of several has no single entry and
+        # Edit refuses rather than writing onto an older dictation's.
+        self._paint_insert_offer(
+            message,
+            text.strip(),
+            row=entry,
+            history_entry=job.history_entry if job_count == 1 else None,
+            may_have_pasted=may_have_pasted,
+            takes_shown_pair=True,
         )
+        return True
+
+    def _paint_insert_offer(
+        self,
+        message: str,
+        transcript: str,
+        *,
+        row: _UndeliveredInsert | None,
+        history_entry: TranscriptHistoryEntry | None,
+        may_have_pasted: bool,
+        takes_shown_pair: bool,
+    ) -> None:
+        """Show a transcript whose paste failed or is doubtful, with its offer.
+
+        Insert is offered unless the keystroke may have pasted it already;
+        it pastes exactly ``transcript`` and retires ``row`` on success.
+        """
+        if takes_shown_pair:
+            self._set_last_transcript(transcript, history_entry)
         self._insert_action_text = transcript
-        self._insert_action_rows = (entry,) if entry is not None else ()
-        self._shown_transcript_row = entry
+        self._insert_action_rows = (row,) if row is not None else ()
+        self._shown_transcript_row = row
         self._insert_offer_may_have_pasted = may_have_pasted
         detail = f"{message}\n\n{transcript}" if transcript else message
-        # One value for Copy and Insert; a raw `text` here and the stripped
+        # One value for Copy and Insert; a raw text here and the stripped
         # one there would let the two act on different strings.
         self._overlay.set_state(
             "Error",
@@ -6177,7 +6289,145 @@ class DictationController(QtCore.QObject):
             ),
         )
         self._reveal_overlay_result(is_error=True)
-        return True
+
+    # -- Paste target check ---------------------------------------------------
+
+    def _paste_check(
+        self,
+        text: str,
+        history_entry: TranscriptHistoryEntry | None,
+        *,
+        created_at: datetime,
+        identity: str,
+        background: bool,
+        takes_shown_pair: bool,
+    ) -> _PasteCheck:
+        """The check of the paste that just reported success.
+
+        Built after the paste's own overlay paint, so a doubtful report
+        paints over exactly what the user saw for it and nothing newer.
+        """
+        return _PasteCheck(
+            text=text,
+            history_entry=history_entry,
+            created_at=created_at,
+            identity=identity,
+            background=background,
+            overlay_shown=(self._overlay.state, self._overlay.detail),
+            takes_shown_pair=takes_shown_pair,
+            foreground=self._last_insert_foreground,
+        )
+
+    def _check_paste_target(self, pending: _PasteCheck) -> None:
+        """A paste reported success: check its target, then play the tone.
+
+        A SendInput Ctrl+V into a focused button, list item or page body
+        reports success and inserts nothing (the r27 investigation: Edge
+        fires its paste event even there). `PasteTargetCheck` asks on its
+        worker whether the focus shows a caret; its answer arrives through
+        `paste_target_checked`. Without a check -- none configured, one
+        still running, a thread that cannot start -- the tone plays at once
+        and nothing else changes. Nothing here waits.
+        """
+        checker = self._paste_target_check
+        if checker is None or self._shutdown_started:
+            self._play_completion_beep()
+            return
+        self._paste_check_counter += 1
+        check_id = self._paste_check_counter
+        emit = self.paste_target_checked.emit
+        try:
+            started = checker.request(
+                lambda reading: emit(check_id, reading.verdict, reading.detail),
+                expected_foreground=pending.foreground,
+            )
+        except Exception:
+            self._logger.exception("paste_target_check could not start")
+            started = False
+        if not started:
+            self._logger.info(
+                "paste_target_check id=%d verdict=%s detail=not_started",
+                check_id,
+                VERDICT_UNKNOWN,
+            )
+            self._play_completion_beep()
+            return
+        self._paste_checks[check_id] = pending
+        QtCore.QTimer.singleShot(
+            PASTE_TARGET_CHECK_TIMEOUT_MS,
+            self,
+            lambda: self._on_paste_target_checked(check_id, VERDICT_UNKNOWN, "timeout"),
+        )
+
+    @QtCore.Slot(int, str, str)
+    def _on_paste_target_checked(
+        self, check_id: int, verdict: str, detail: str
+    ) -> None:
+        """The check's answer, or its timeout -- whichever comes first."""
+        pending = self._paste_checks.pop(check_id, None)
+        if pending is None:
+            return
+        self._logger.info(
+            "paste_target_check id=%d verdict=%s detail=%s background=%s chars=%d",
+            check_id,
+            verdict,
+            detail,
+            pending.background,
+            len(pending.text),
+        )
+        if self._shutdown_started:
+            return
+        if verdict != VERDICT_NOT_TEXT_FIELD:
+            self._play_completion_beep()
+            return
+        self._report_paste_outside_text_field(pending)
+
+    def _report_paste_outside_text_field(self, pending: _PasteCheck) -> None:
+        """Report a paste whose focus did not look like a text field.
+
+        No completion tone. Listed like a failed paste and insertable: the
+        check can be wrong (an editor drawing its own caret), so the user
+        decides after looking at the window, and a re-paste that inserts
+        the text retires the row. The overlay shows it, with Insert, while
+        it still shows what it showed right after the paste; otherwise --
+        and for every queued paste -- the tray carries it.
+        """
+        transcript = pending.text.strip()
+        entry = self._record_undelivered_insert(
+            transcript,
+            may_have_pasted=False,
+            created_at=pending.created_at,
+            history_entry=pending.history_entry,
+            outside_text_field=True,
+        )
+        message = (
+            f"{pending.identity} pasted, but the focused element does not "
+            "look like a text field."
+        )
+        overlay_free = (
+            not self._overlay_session_active()
+            and not self._foreground_delivery_pending
+            and (self._overlay.state, self._overlay.detail) == pending.overlay_shown
+        )
+        if pending.background or not overlay_free:
+            tray = (
+                f"{message} It may not have been inserted; the text is saved "
+                "in history."
+            )
+            hint = self._undelivered_hint()
+            if hint:
+                tray = f"{tray} {hint}"
+            self.background_insertion_failed.emit(tray)
+        if not overlay_free:
+            return
+        self._paint_insert_offer(
+            f"{message} If nothing appeared, click into the field and press Insert.",
+            transcript,
+            row=entry,
+            history_entry=pending.history_entry,
+            may_have_pasted=False,
+            takes_shown_pair=pending.takes_shown_pair,
+        )
 
     def _flush_deferred_background_results(
         self,
@@ -7119,6 +7369,8 @@ class DictationController(QtCore.QObject):
         self._last_insert_may_have_pasted = False
         self._last_insert_error_text = ""
         self._last_insert_offered = False
+        self._last_insert_foreground = None
+        paste_foreground: int | None = None
         try:
             if restore_focus and handle:
                 try:
@@ -7136,6 +7388,7 @@ class DictationController(QtCore.QObject):
                     if isinstance(signature, tuple) and signature
                     else handle
                 )
+                paste_foreground = expected_foreground
                 current_foreground = self._current_foreground_window()
                 if not restored or (
                     expected_foreground
@@ -7237,6 +7490,9 @@ class DictationController(QtCore.QObject):
                 )
             self._logger.exception("Text insertion failed")
             return False
+        self._last_insert_foreground = (
+            paste_foreground or self._current_foreground_window()
+        )
         self._logger.info(
             "text_insertion outcome=success chars=%d target_hwnd=%s "
             "restore_focus=%s paste_mode=%s",
@@ -7511,10 +7767,27 @@ class DictationController(QtCore.QObject):
         carried = self._paste_carried_the_offer(text)
         if carried:
             self._retire_insert_offer()
+        if display_entry is not self._KEEP_DISPLAY:
+            entry_of_text = display_entry
+        elif text == self._last_transcript:
+            entry_of_text = self._last_history_entry
+        else:
+            # The offer's text (a streaming tail) has no entry of its own.
+            entry_of_text = None
+        pasted_at = datetime.now().astimezone()
         if session:
             if display_entry is not self._KEEP_DISPLAY:
                 self._delivered_after_shown = (text, display_entry)
-            self._play_completion_beep()
+            self._check_paste_target(
+                self._paste_check(
+                    text,
+                    entry_of_text,
+                    created_at=pasted_at,
+                    identity="The transcript was",
+                    background=True,
+                    takes_shown_pair=False,
+                )
+            )
             return
         if display_entry is not self._KEEP_DISPLAY:
             self._set_last_transcript(text, display_entry)
@@ -7529,7 +7802,16 @@ class DictationController(QtCore.QObject):
             # pasted the unrelated text instead).
             self._paint_status_keeping_offer("Done", text)
         self._reveal_overlay_result(is_error=False)
-        self._play_completion_beep()
+        self._check_paste_target(
+            self._paste_check(
+                text,
+                entry_of_text,
+                created_at=pasted_at,
+                identity="The transcript was",
+                background=False,
+                takes_shown_pair=False,
+            )
+        )
 
     def show_overlay_notice(self, message: str) -> None:
         """Confirm a completed action on the overlay and return to Idle.

@@ -113,6 +113,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   the re-paste inserts. A tray re-paste of the whole dictation failing before
   its keystroke replaces a streaming tail's offer, whose Insert then re-pastes
   the already-streamed prefix.
+- **The paste target check sees only Chromium windows and Win32 carets**
+  (2026-10-03). A paste into a non-text element of any other application
+  -- a Win32 button, a Qt or Java window, a terminal that draws its own
+  cursor -- is "unknown" and still reported as inserted: "no caret" there
+  does not mean "no text field" (Windows Terminal answers exactly that while
+  its prompt takes the paste). Inside Chromium a page that edits through
+  EditContext without reporting selection bounds may read as "not a text
+  field" (two of four runs of a bare EditContext div did, 2026-10-03), so
+  its pastes are reported as doubtful; real editors report bounds (the
+  bounds variant read as a text field every time). VS Code and the new
+  Notepad were not measured (VS Code refused a second instance while an
+  update was pending; the new Notepad would have opened a tab in the
+  owner's own window); the new Notepad is not a Chromium window, so it
+  cannot be reported as doubtful. Streaming live inserts and the finalize
+  tail are not checked.
+- **A hung paste target holds the check's one worker**: the MSAA call is a
+  cross-process `WM_GETOBJECT`; while it waits, later pastes are not
+  checked (refused at once, "unknown") and the completion tone of the
+  timed-out one plays after `PASTE_TARGET_CHECK_TIMEOUT_MS` (1 s).
 - **The paste pace is target-agnostic**: a queued paste into another window
   also waits up to `CLIPBOARD_RESTORE_DELAY_S` after the previous keystroke
   (one clipboard). Only the last SendInput keystroke is tracked.

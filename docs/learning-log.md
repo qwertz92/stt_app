@@ -9161,3 +9161,20 @@ rows and connection tests on API Keys, and one region selector per provider
   printed its token and exited 0 failed with a timeout because a grandchild
   held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
   in a Windows job object, and the call returns once the child exited.
+
+## 2026-10-03: a paste into no text field is reported, not claimed
+
+The r27 investigation (B1) showed a SendInput Ctrl+V into a focused button,
+list item or body of a Chromium page reporting success while nothing
+landed: Chromium fires its paste event even there. After each paste that
+reports success, a worker now reads the focus's caret (Win32 caret, MSAA
+`OBJID_CARET`) and a Chromium focus with no caret is reported as doubtful:
+no tone, an insertable row, the overlay's Insert. The lead's design asked
+for "both say no caret" in every window; measuring it against a new Windows
+Terminal window showed the prompt answering exactly that (invisible caret,
+width 0) while it takes every paste, so "no caret" now counts only in
+Chromium windows, the one class where it was measured to mean "no text
+field". Lesson: a detector built from one application's measurements needs
+a run against the applications that draw their own caret before its
+verdict may reach the user. WM_PASTE is no longer sent to Chromium windows
+(B2): it was answered with success and ignored.
