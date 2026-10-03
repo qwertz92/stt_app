@@ -14,6 +14,11 @@ APP_LOGGER_NAME = "stt_app"
 # on the taskbar (e.g. for the Settings dialog). Setting an explicit, stable ID
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
+# How long a quit may take before the process is ended anyway, with every
+# thread's stack written to the log. A normal quit takes about 0.4 s with a
+# loaded WebGPU runtime (measured 2026-10-03), and the slowest bounded step,
+# killing a Node runtime that ignores its shutdown command, about 4 s.
+QUIT_WATCHDOG_TIMEOUT_S = 15.0
 
 SCHEMA_VERSION = 25
 
