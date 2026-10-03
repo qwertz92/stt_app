@@ -241,13 +241,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     first; `benchmark_environment._node_package_version` reads there first.
   - A running source-tree app holds its Node child's native DLLs; run
     `npm ci --omit=dev` only with the app closed.
-- **Python dependencies are exact pins, updated 2026-09-21 and measured
-  through their code** (locked: onnxruntime 1.30.0, huggingface-hub 1.32.0,
-  hf-xet 1.6.0, ctranslate2 4.8.2; direct pins are in `pyproject.toml`).
+- **Python dependencies are exact pins, updated 2026-10-03 and measured
+  through their code** (locked: onnxruntime 1.30.0, onnxruntime-genai 0.17.1,
+  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.0; direct
+  pins are in `pyproject.toml`).
   `uv lock --upgrade` moves only transitive packages; `uv tree --outdated
   --depth 1` shows stale direct pins; `requirements-win.txt` /
   `requirements-dev-win.txt` mirror them (a test compares). Evidence: suite,
-  `scripts/release_check_providers.py`, one real model per runtime.
+  `scripts/release_check_providers.py`, one real model per runtime. `uv audit`
+  and `pip-audit` report no known vulnerability on the lock.
+  - **`av` is a direct pin on the last 18.x, below the newest (19.0.1,
+    2026-10-03), because faster-whisper 1.2.1 breaks on 19.** It requires only
+    `av>=11` but calls `av.open(..., metadata_errors="ignore")`, which av 19
+    rejects with `TypeError`; every file-path transcription through
+    faster-whisper then fails (measured: `LocalFasterWhisperTranscriber.
+    transcribe_batch` on av 19.0.1, fine on 18.1.0;
+    `test_installed_av_decodes_a_file_the_way_faster_whisper_opens_it` fails on
+    19). Lift the pin when a faster-whisper release newer than 1.2.1 supports
+    av 19, and re-run that test.
+  - **`huggingface-hub` stays 1.x because `tokenizers` 0.23.2 requires
+    `<2.0`** (2.1.1 exists); nothing to measure until tokenizers lifts it. The
+    1.32.0 download claims below (no partial resume, process-unique temp
+    files) were re-checked on 1.33.0: its diff touches no resume or temp-file
+    path, and the download/progress suites pass.
+  - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
+    Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
+    streaming, at equal or better speed (2026-10-03, CPU).
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
@@ -313,6 +332,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Shared, not copied: `resolve_or_download_onnx_model` (module level,
     imports inside so monkeypatch targets resolve), `_read_wav_float32`
     (refuses header rate 0), `_pcm_audio.resample_linear`.
+  - `_read_wav_float32` decodes block-wise (`_WAV_BLOCK_FRAMES`) straight into
+    one preallocated mono float32 buffer sized by what the file can hold, not
+    by the header's frame count. Peak is the result plus one block: 1.01x the
+    file for a 480 MB stereo 48 kHz WAV, where decoding the whole data chunk
+    and converting it twice peaked at 5.0x (measured 2026-10-03 with
+    tracemalloc). The output is byte-identical to the whole-file decode.
+  - `resample_linear` interpolates in blocks of 65,536 target samples
+    (`_RESAMPLE_BLOCK`), bit-identical to the former whole-array version:
+    `np.interp` only reads the two samples around a position, so each block
+    gets its own slice of the integer grid. Peak is the float32 result plus
+    about 4 MB (30.9 MB for a 26.7 MB result); the whole-array version held
+    float64 position arrays, 427 MB for 416 s of 48 kHz audio (3.7 GB an
+    hour). No anti-aliasing: see known-limitations.
   - `resample_linear` refuses rates below `MIN_SOURCE_SAMPLE_RATE_HZ` (8 kHz,
     also onnx-asr's `WrongSampleRateError` limit): a 1 Hz header turned 3 KB
     into 25.6 M samples. The readers' `<= 0` guards stay; `transcribe_batch`

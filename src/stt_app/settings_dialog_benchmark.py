@@ -330,6 +330,63 @@ def _benchmark_created_label(value: str) -> str:
         return str(value or "-")
 
 
+class _RowToggleListWidget(QtWidgets.QListWidget):
+    """A checkable list whose rows toggle on a click anywhere on the row.
+
+    The item delegate toggles a row only when the click lands on its check
+    indicator, and this list has no selection to make the rest of the row
+    do anything. A click whose press and release both lie off the indicator
+    toggles the row here; one on the indicator is left to the delegate, so a
+    click is never counted twice (which would leave the row as it was).
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pressed_item: QtWidgets.QListWidgetItem | None = None
+
+    def _on_indicator(
+        self, item: QtWidgets.QListWidgetItem, point: QtCore.QPoint
+    ) -> bool:
+        option = QtWidgets.QStyleOptionViewItem()
+        self.initViewItemOption(option)
+        option.rect = self.visualRect(self.indexFromItem(item))
+        option.features |= QtWidgets.QStyleOptionViewItem.HasCheckIndicator
+        indicator = self.style().subElementRect(
+            QtWidgets.QStyle.SE_ItemViewItemCheckIndicator, option, self
+        )
+        return indicator.contains(point)
+
+    def _toggleable_item_off_indicator(
+        self, event: QtGui.QMouseEvent
+    ) -> QtWidgets.QListWidgetItem | None:
+        point = event.position().toPoint()
+        item = self.itemAt(point)
+        if (
+            item is None
+            or event.button() != QtCore.Qt.LeftButton
+            or not item.flags() & QtCore.Qt.ItemIsUserCheckable
+            or not item.flags() & QtCore.Qt.ItemIsEnabled
+            or self._on_indicator(item, point)
+        ):
+            return None
+        return item
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        self._pressed_item = self._toggleable_item_off_indicator(event)
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        pressed, self._pressed_item = self._pressed_item, None
+        released = self._toggleable_item_off_indicator(event)
+        super().mouseReleaseEvent(event)
+        if pressed is not None and pressed is released:
+            released.setCheckState(
+                QtCore.Qt.Unchecked
+                if released.checkState() == QtCore.Qt.Checked
+                else QtCore.Qt.Checked
+            )
+
+
 class _BenchmarkHistoryTable(QtWidgets.QTableWidget):
     """Column-based benchmark history with small QListWidget compatibility.
 
@@ -1220,7 +1277,7 @@ class _BenchmarkMixin:
             QtWidgets.QSizePolicy.Preferred,
         )
         models_layout = QtWidgets.QVBoxLayout(models_box)
-        self.benchmark_models_list = QtWidgets.QListWidget()
+        self.benchmark_models_list = _RowToggleListWidget()
         # Checkboxes rather than a selection: a plain click on one row of the
         # old ExtendedSelection list dropped every other choice, and nothing
         # on screen said that a highlighted row meant "will be measured". No

@@ -84,15 +84,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   with nothing. Deliberate: the error direction is a marker to delete, not
   lost speech (docs/agents/remote-providers.md). A real speech detector
   (the Silero work) would be the better judge.
-- **Splitting a long import holds ~5x its file size**:
-  `local_onnx_asr._read_wav_float32` keeps raw bytes plus two float32 copies
-  (1,325 MB for 265 MB; ~7 GB for two hours of 48 kHz stereo). A `MemoryError`
-  sends the file whole. Block-wise mono decode: P3, ~1 h (2026-09-27).
-- **An Azure part of up to an hour has a 120 s socket timeout**: the factory
-  passes no `request_timeout_s`. Not observed; no Azure resource (2026-09-27).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,
-  Nemotron and Granite CTC): no anti-aliasing, and float64 position arrays
-  cost ~3.7 GB per hour of 48 kHz import (2026-09-19). App recordings are
+  Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
+  2026-10-03: a low-pass filter changes the samples every imported file feeds
+  the models, with no word-error-rate measurement behind it. App recordings are
   16 kHz; only imports and benchmark samples reach it.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - **Clipboard restore is not lossless.** Every HGLOBAL format is restored, but
@@ -217,9 +212,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   deleting `onnx_auto_preferred_devices` from `%APPDATA%\stt_app\settings.json`
   with the app closed. A stale entry costs speed, never correctness
   (2026-09-19).
-- **A benchmark model row toggles only on its checkbox** (checkable items, no
-  selection). Whole-row toggling must test the click against the indicator
-  rectangle or it toggles twice. P4, ~20 min (2026-09-27).
 - **A key command whose wrapper does not wait for its tool can lose the
   token** (P3, 2026-10-01, review of dedcde4). `run_bounded` ends the job
   0.5 s after the direct child exits while a descendant still holds the
@@ -237,3 +229,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   the new timer act on the record. It is never restored twice (the first
   success clears it), but the retry budget runs out about a second early. A
   per-record chain generation checked under the lock would close it.
+- **Custom endpoint trade-offs accepted after the 2026-10-03 review** (all
+  P4):
+  - A gateway that masks the key itself (LiteLLM-style "sk-...1234" plus a
+    key hash in a 401 reason) is shown as sent: only the full stored key and
+    the key command's token are recognised and scrubbed.
+  - Scrubbing replaces every occurrence of a credential of 8+ characters, so
+    a placeholder key that is an ordinary word (`localhost`) would cut that
+    word out of an error message.
+  - A key command resolved through PATHEXT to a `.vbs`/`.js` script fails
+    with "not a valid Win32 application" instead of "not found"; call its
+    interpreter explicitly.
+  - Arguments to a `.cmd`/`.bat` key command containing `& | < > ^ %` are
+    refused, because cmd.exe interprets them whatever the quoting (e.g. an
+    `az --query "accessToken | [0]"`); put such a call into a script.
+  - `shutil.which` searches the current directory and PATH, while
+    CreateProcess searched the app directory and System32 first, so a
+    same-named tool earlier in PATH can now win. Not demonstrated.

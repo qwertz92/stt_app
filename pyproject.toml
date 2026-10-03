@@ -9,15 +9,20 @@ dependencies = [
     "sounddevice==0.5.6",
     "numpy==2.5.3",
     "faster-whisper==1.2.1",
-    "onnxruntime-genai==0.16.0; platform_system == 'Windows'",
+    # faster-whisper 1.2.1 only requires av>=11 but calls
+    # av.open(..., metadata_errors="ignore"), which av 19.0.x rejects with
+    # TypeError: every local faster-whisper transcription of a file failed
+    # (measured 2026-10-03). Stay on the last 18.x until faster-whisper moves.
+    "av==18.1.0",
+    "onnxruntime-genai==0.17.1; platform_system == 'Windows'",
     # Pure-Python NeMo runtime (Parakeet/Canary). Resolves the same
     # onnxruntime distribution onnxruntime-genai already requires; do NOT
     # add onnxruntime-directml, which overwrites it and breaks genai.
     "onnx-asr[cpu,hub]==0.12.0",
     "keyring==25.7.0",
     "pywin32==312; platform_system == 'Windows'",
-    "comtypes==1.4.16; platform_system == 'Windows'",
-    "assemblyai==1.5.5",
+    "comtypes==1.4.17; platform_system == 'Windows'",
+    "assemblyai==1.6.1",
     "groq==1.7.0",
     "truststore==0.10.4",
     "websocket-client==1.9.2",
@@ -102,5 +107,5 @@ dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-mock==3.16.0",
-    "ruff==0.16.9",
+    "ruff==0.16.10",
 ]

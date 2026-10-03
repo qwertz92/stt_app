@@ -15,11 +15,14 @@ gateway may route audio only to a multimodal LLM:
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
+import ntpath
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -57,6 +60,7 @@ from ._http_utils import (
     multipart_form_data,
     normalize_transcript_text,
     read_http_error_detail,
+    reply_error_text,
     transcript_from_json,
 )
 from .base import (
@@ -98,6 +102,14 @@ _SPEECH_SYNTHESIS_NAME = re.compile(
 # A base URL pasted together with one of the routes the app appends.
 _PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
 _ERROR_TAIL_MAX_CHARS = 200
+# OpenAI says `length`; Anthropic-style gateways say `max_tokens`.
+_OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens"})
+# The `input_audio.format` values of the chat completions API.
+_CHAT_AUDIO_FORMATS = frozenset({"wav", "mp3"})
+# A key shorter than this is a placeholder ("none" for a server without
+# authentication) and, as a word, would be cut out of every message.
+_MIN_SECRET_CHARS = 8
+_SCRUBBED = "[hidden]"
 _CODE_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n?(.*?)\n?```$", re.DOTALL)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("„", "“"))
 
@@ -259,22 +271,122 @@ def _header_unsafe(value: str) -> bool:
     return any(not ("\x21" <= character <= "\x7e") for character in value)
 
 
-def _command_arguments(command: str) -> list[str]:
-    """Split a key command into arguments without a shell.
+def _split_windows_command(command: str) -> list[str]:
+    """Split a command line the way a Windows user writes it.
 
-    Windows paths keep their backslashes (`posix=False`), which also keeps the
-    quotes around an argument; those are removed here.
+    A backslash is never an escape, so a path keeps its backslashes (which
+    POSIX `shlex` would eat). A double quote groups anywhere in a word
+    (`--opt="a b"`); a single quote groups only where a word begins
+    (`'echo x'`), so an apostrophe inside a path (`C:\\Users\\O'Brien`) stays
+    literal. Inside one kind of quote the other is literal. `shlex` with
+    `posix=False` kept the quotes of `'echo x'` and split `--opt="a b"` in two.
+
+    One exception: after `-Command` of `powershell`/`pwsh`, a single-quoted
+    word keeps its quotes, because they are PowerShell's own string syntax
+    (`-Command Get-Content 'C:\\a b\\t.txt'`, `-Command '$env:USERNAME'`);
+    stripped, the path falls apart into two arguments and the variable is
+    evaluated. Everything before `-Command` (`-File 'x.ps1'`) is a plain
+    argument and loses its quotes like any other.
     """
+    arguments: list[str] = []
+    word: list[str] = []
+    in_word = False
+    quote = ""
+    keep_single_quotes = False
+
+    def finish_word() -> None:
+        nonlocal word, in_word, keep_single_quotes
+        arguments.append("".join(word))
+        if len(arguments) > 1 and _is_powershell_command_switch(
+            arguments[0], arguments[-1]
+        ):
+            keep_single_quotes = True
+        word, in_word = [], False
+
+    for character in command:
+        if quote:
+            if character == quote:
+                quote = ""
+                if character == "'" and keep_single_quotes:
+                    word.append(character)
+            else:
+                word.append(character)
+        elif character == '"' or (character == "'" and not in_word):
+            quote = character
+            in_word = True
+            if character == "'" and keep_single_quotes:
+                word.append(character)
+        elif character.isspace():
+            if in_word:
+                finish_word()
+        else:
+            word.append(character)
+            in_word = True
+    if quote:
+        raise TranscriptionError(
+            "The key command cannot be parsed: a quotation mark is not closed."
+        )
+    if in_word:
+        finish_word()
+    return arguments
+
+
+def _is_powershell_command_switch(program: str, argument: str) -> bool:
+    """Whether `argument` is `-Command` (or an abbreviation of it, `-c`) of
+    `powershell`/`pwsh`."""
+    name = ntpath.basename(program).lower().removesuffix(".exe")
+    switch = argument.lower()
+    return (
+        name in ("powershell", "pwsh")
+        and len(switch) >= 2
+        and switch[0] in "-/"
+        and "-command".startswith("-" + switch[1:])
+    )
+
+
+def _command_arguments(command: str) -> list[str]:
+    """Split a key command into arguments without a shell."""
+    if os.name == "nt":
+        return _split_windows_command(command)
     try:
-        arguments = shlex.split(command, posix=os.name != "nt")
+        return shlex.split(command)
     except ValueError as exc:
         raise TranscriptionError(f"The key command cannot be parsed: {exc}") from exc
-    return [
-        argument[1:-1]
-        if len(argument) >= 2 and argument[0] == argument[-1] == '"'
-        else argument
-        for argument in arguments
-    ]
+
+
+# What cmd.exe reads in an argument of a `.cmd`/`.bat` file: separators,
+# redirections, the escape character, `%VAR%` and a quote `list2cmdline`
+# escapes the way C programs read it, not the way cmd.exe does.
+_CMD_METACHARACTERS = re.compile(r'[&|<>^%"\r\n]')
+
+
+def _resolve_program(arguments: list[str]) -> list[str]:
+    """The arguments with the program looked up like a console would.
+
+    `shutil.which` honours `PATHEXT`; CreateProcess appends only `.exe`, so
+    `az` or `npm` -- `.cmd` shims -- were "not found" (review of 2026-10-03).
+    A `.cmd`/`.bat` file is started by CreateProcess through cmd.exe, which
+    still runs inside `run_bounded`'s job object, so the tree kill reaches
+    what the script starts. cmd.exe reads some characters of an argument as
+    commands, which no quoting from here can prevent: such an argument is
+    refused, naming the character and not the argument (it may be a secret).
+    An unresolvable name is left as typed for the "not found" message.
+    """
+    program = shutil.which(arguments[0])
+    if program is None:
+        return arguments
+    if program.lower().endswith((".cmd", ".bat")):
+        for argument in arguments[1:]:
+            found = _CMD_METACHARACTERS.search(argument)
+            if found:
+                character = found.group().strip() or "a line break"
+                raise TranscriptionError(
+                    f"The key command starts {Path(program).name}, which "
+                    "cmd.exe runs, and an argument contains "
+                    f"{character!r}, which cmd.exe would interpret. Put the "
+                    "argument into the script, or run the program itself."
+                )
+    return [program, *arguments[1:]]
 
 
 def _last_line(text: str) -> str:
@@ -372,6 +484,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         arguments = _command_arguments(self._key_command)
         if not arguments:
             raise TranscriptionError("The key command is empty.")
+        arguments = _resolve_program(arguments)
         extra: dict[str, object] = {}
         if os.name == "nt":
             extra["creationflags"] = subprocess.CREATE_NO_WINDOW
@@ -399,12 +512,9 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 f"The key command could not be started: {exc}"
             ) from exc
+        # The exit code is judged first: a failing helper often prints its
+        # message to stdout ("Please run 'login' first"), which is no token.
         token = _last_line(completed.stdout or "")
-        if token and _header_unsafe(token):
-            raise TranscriptionError(
-                "The key command printed a token with a space or a "
-                "character an HTTP header cannot carry."
-            )
         if completed.returncode != 0 or not token:
             reason = _error_tail(completed.stderr or "")
             detail = f": {reason}" if reason else ""
@@ -414,6 +524,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 )
             raise TranscriptionError(
                 f"The key command failed (exit code {completed.returncode}){detail}"
+            )
+        if _header_unsafe(token):
+            raise TranscriptionError(
+                "The key command printed a token with a space or a "
+                "character an HTTP header cannot carry."
             )
         logger.info(
             "custom_endpoint_key_command_ok elapsed_ms=%d",
@@ -496,6 +611,66 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             request.add_header("Content-Type", content_type)
         return request
 
+    def _secrets(self) -> list[str]:
+        return [
+            secret
+            for secret in (self._cached_token, self._api_key)
+            if len(secret) >= _MIN_SECRET_CHARS
+        ]
+
+    def _scrub(self, text: str) -> str:
+        """`text` without the credentials, also as JSON writes them (a key
+        holding `"` or `\\` appears escaped in a JSON body)."""
+        for secret in self._secrets():
+            for form in {json.dumps(secret)[1:-1], secret}:
+                text = text.replace(form, _SCRUBBED)
+        return text
+
+    @contextlib.contextmanager
+    def _errors_scrubbed(self):
+        """Lets no error raised inside show the token or the stored key.
+
+        A gateway may echo the credential it refused ("Received API Key =
+        ...", a request dump); the detail reaches the overlay and its log.
+        """
+        try:
+            yield
+        except TranscriptionError as exc:
+            message = str(exc)
+            scrubbed = self._scrub(message)
+            if scrubbed == message:
+                raise
+            raise TranscriptionError(scrubbed) from None
+
+    def _request_too_large_hint(self) -> str:
+        """What to do about a 413, which depends on the API style.
+
+        The parts are fixed. The chat style's are the smaller requests (15 MB
+        of audio, about 20 MB once base64-encoded, against the transcription
+        style's 25 MB), so the other style is advice only for a transcription
+        request.
+        """
+        chat = remote_batch_part_limit("custom", self._model, CUSTOM_API_MODE_CHAT)
+        chat_size = (
+            f"at most {chat.seconds:.0f} s or {chat.max_bytes // 1_000_000} MB, "
+            f"about {chat.max_bytes * 4 // 3 // 1_000_000} MB base64-encoded"
+        )
+        refuses = "The gateway or a proxy in front of it refuses a request this large"
+        if self._api_mode == CUSTOM_API_MODE_CHAT:
+            return (
+                f" {refuses}; the chat style's parts are {chat_size}, and the app "
+                "cannot make them smaller. Raise the body limit there, or dictate "
+                "shorter recordings. The transcription API style sends larger "
+                "requests, so it will not help."
+            )
+        limit = remote_batch_part_limit("custom", self._model, self._api_mode)
+        return (
+            f" {refuses}; the app sends parts of at most {limit.seconds:.0f} s "
+            f"or {limit.max_bytes // 1_000_000} MB and cannot make them smaller. "
+            "Raise the body limit there, dictate shorter recordings, or try the "
+            f"chat style, whose parts are smaller ({chat_size})."
+        )
+
     def _http_error(
         self, exc: urllib.error.HTTPError, what: str, detail: str | None = None
     ) -> TranscriptionError:
@@ -505,21 +680,30 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 if self._key_command
                 else "the API key"
             )
+            reason = (
+                read_http_error_detail(exc, self._scrub) if detail is None else detail
+            )
+            # A gateway's reason ("Key expired on ...") tells what to do, but
+            # one that echoes the key it refused is dropped, not masked: a
+            # partly masked key is still part of the key. Read through the
+            # scrub, so the credential is found before the reader cuts it.
+            if _SCRUBBED in reason:
+                reason = ""
             return TranscriptionError(
                 f"{_PROVIDER_NAME}: authentication failed (HTTP 401); the "
-                f"endpoint refused {source}."
+                f"endpoint refused {source}" + (f": {reason}" if reason else ".")
             )
         if exc.code == 429:
             return TranscriptionError(
                 f"{_PROVIDER_NAME}: rate limit exceeded (HTTP 429). Wait a "
                 "moment and try again."
             )
-        suffix = f": {detail}" if detail else http_error_suffix(exc)
-        hint = (
-            f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
-            if exc.code in (404, 405)
-            else ""
-        )
+        suffix = f": {detail}" if detail else http_error_suffix(exc, self._scrub)
+        hint = ""
+        if exc.code in (404, 405):
+            hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
+        elif exc.code == 413:
+            hint = self._request_too_large_hint()
         return TranscriptionError(
             f"{_PROVIDER_NAME} {what} failed (HTTP {exc.code}){suffix}{hint}"
         )
@@ -547,18 +731,19 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         (embeddings, image generation, rerankers) are left out; an entry
         without a `mode` is kept, since most servers do not send one.
         """
-        try:
-            payload = self._send(
-                lambda token: self._request("/models", token, data=None),
-                timeout=_MODELS_TIMEOUT_S,
-                max_bytes=_MAX_MODELS_RESPONSE_BYTES,
-            )
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc, "model list") from exc
-        except TranscriptionError:
-            raise
-        except Exception as exc:
-            raise self._other_error(exc, "model list") from exc
+        with self._errors_scrubbed():
+            try:
+                payload = self._send(
+                    lambda token: self._request("/models", token, data=None),
+                    timeout=_MODELS_TIMEOUT_S,
+                    max_bytes=_MAX_MODELS_RESPONSE_BYTES,
+                )
+            except urllib.error.HTTPError as exc:
+                raise self._http_error(exc, "model list") from exc
+            except TranscriptionError:
+                raise
+            except Exception as exc:
+                raise self._other_error(exc, "model list") from exc
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
         except ValueError as exc:
@@ -599,6 +784,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             models = self.list_models()
         except TranscriptionError as exc:
             return False, str(exc)
+        if not models:
+            return False, (
+                "Connected, but the model list held no usable model ids. The "
+                "endpoint may not list its models; type the model id by hand "
+                "on the Transcription tab."
+            )
         if self._model and self._model not in {model.id for model in models}:
             return False, (
                 f"Connected, but the endpoint does not offer the model "
@@ -624,24 +815,25 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
-        try:
-            if isinstance(audio_source, (bytes, bytearray)):
-                audio_bytes = bytes(audio_source)
-                filename = "audio.wav"
-            else:
-                path = Path(audio_source)
-                audio_bytes = path.read_bytes()
-                filename = path.name or "audio.wav"
-            self._emit_progress(progress_text)
-            if self._api_mode == CUSTOM_API_MODE_CHAT:
-                return self._chat_transcribe(audio_bytes, filename)
-            return self._transcriptions_transcribe(audio_bytes, filename)
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc, "transcription") from exc
-        except TranscriptionError:
-            raise
-        except Exception as exc:
-            raise self._other_error(exc, "transcription") from exc
+        with self._errors_scrubbed():
+            try:
+                if isinstance(audio_source, (bytes, bytearray)):
+                    audio_bytes = bytes(audio_source)
+                    filename = "audio.wav"
+                else:
+                    path = Path(audio_source)
+                    audio_bytes = path.read_bytes()
+                    filename = path.name or "audio.wav"
+                self._emit_progress(progress_text)
+                if self._api_mode == CUSTOM_API_MODE_CHAT:
+                    return self._chat_transcribe(audio_bytes, filename)
+                return self._transcriptions_transcribe(audio_bytes, filename)
+            except urllib.error.HTTPError as exc:
+                raise self._http_error(exc, "transcription") from exc
+            except TranscriptionError:
+                raise
+            except Exception as exc:
+                raise self._other_error(exc, "transcription") from exc
 
     def _transcription_fields(self) -> list[tuple[str, str]]:
         fields: list[tuple[str, str]] = [("model", self._model)]
@@ -668,7 +860,10 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         # JSON -- "Internal Server Error" from a proxy -- is an error, not a
         # transcript to paste (review of 2026-10-01).
         return transcript_from_json(
-            payload, prefix=_PROVIDER_NAME, accept_bare_string=True
+            payload,
+            prefix=_PROVIDER_NAME,
+            accept_bare_string=True,
+            redact=self._scrub,
         )
 
     def _chat_instruction(self) -> str:
@@ -694,6 +889,17 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
 
     def _chat_body(self, audio_bytes: bytes, filename: str) -> bytes:
         audio_format = Path(filename).suffix.lower().lstrip(".") or "wav"
+        if audio_format not in _CHAT_AUDIO_FORMATS:
+            # `input_audio.format` is `wav` or `mp3` in the OpenAI shape. Any
+            # other name used to be sent as it was and answered with a 400
+            # that does not say why; converting needs a decoder the app does
+            # not ship (review of 2026-10-03).
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the chat API style takes WAV or MP3 audio "
+                f"only, and this recording is .{audio_format}. Use the OpenAI "
+                "transcription API style, which sends the file as it is, or "
+                "convert the file to WAV."
+            )
         body: dict[str, object] = {
             "model": self._model,
             "temperature": 0,
@@ -739,7 +945,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             if exc.code != 400 or not self._send_reasoning_effort:
                 raise
             # Read once: the body is a stream, and the error below needs it.
-            detail = read_http_error_detail(exc)
+            detail = read_http_error_detail(exc, self._scrub)
             lowered = detail.lower()
             if "reasoning" not in lowered and "thinking" not in lowered:
                 raise self._http_error(exc, "transcription", detail) from exc
@@ -751,32 +957,49 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             payload = self._post_chat(self._chat_body(audio_bytes, filename))
         return self._chat_text(payload)
 
-    @staticmethod
-    def _chat_text(payload: bytes) -> str:
+    def _chat_text(self, payload: bytes) -> str:
+        parsed = None
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
             choice = parsed["choices"][0]
             message = choice["message"]
             content = message.get("content")
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            error_text = reply_error_text(parsed, self._scrub)
+            if error_text:
+                raise TranscriptionError(
+                    f"{_PROVIDER_NAME}: the endpoint answered HTTP 200 with an "
+                    f"error: {error_text}"
+                ) from exc
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no message content."
             ) from exc
+        reason = choice.get("finish_reason")
+        reason = reason if isinstance(reason, str) else ""
+        if reason.lower() in _OUTPUT_LIMIT_FINISH_REASONS:
+            # The text a cut-off reply carries is the start of the transcript;
+            # accepted, a part of a long dictation lost its end unnoticed
+            # (review of 2026-10-03).
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the model's output limit cut the transcript "
+                f"off (finish reason '{reason[:40]}'). Use the OpenAI "
+                "transcription API style, or dictate in shorter pieces."
+            )
         if content is None:
-            # A refusal or an answer cut off at the token limit, not
-            # "nothing said": read as silence, a part of a split recording
-            # vanished from the transcript (review of 2026-10-01).
+            # A refusal or a missing text, not "nothing said": read as
+            # silence, a part of a split recording vanished from the
+            # transcript (review of 2026-10-01).
             refusal = message.get("refusal")
             if isinstance(refusal, str) and refusal.strip():
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusal)}"
+                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{body_excerpt(refusal, self._scrub)}"
                 )
-            reason = choice.get("finish_reason") if isinstance(choice, dict) else None
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no text "
                 + (
                     f"(finish reason '{reason}')."
-                    if isinstance(reason, str) and reason
+                    if reason
                     else "(no finish reason given)."
                 )
             )
@@ -792,7 +1015,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             ]
             if not texts and refusals:
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusals[0])}"
+                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{body_excerpt(refusals[0], self._scrub)}"
                 )
             content = " ".join(texts)
         if not isinstance(content, str):

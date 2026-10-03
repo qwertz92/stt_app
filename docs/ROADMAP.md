@@ -34,6 +34,14 @@ taking it out of this list; deleting one needs no ceremony.
   29.4 s clip. Gain: about 0.2 s per half-minute dictation. Why it waits: it needs a
   second download of 0.95-1.89 GB, a raw-graph Node runtime and a second feature
   extractor in JavaScript, for a gain nobody notices at dictation length.
+- **A Linux port, Hyprland first** (2026-10-03). Run the app on the owner's NixOS notebook
+  (Hyprland, a Wayland compositor with no desktop environment), later on GNOME/KDE and X11. Gain:
+  the same dictation on the machine used most. Why it waits: a Wayland app cannot grab a global key
+  or type into another window by itself, so the hotkey becomes a line in the Hyprland config that
+  runs `stt-app ctl toggle`, and typing goes through `wtype`; both are verifiable only on a real
+  Hyprland. Estimate about 63-87 agent-hours for the MVP (groundwork plus Hyprland), 135-205 for
+  everything. Inventory, per-feature options, architecture, phases and risks are in
+  [`docs/linux-port.md`](linux-port.md).
 - **A cheaper Settings dialog construction** (2026-10-01). Building one
   `SettingsDialog` takes about 0.19 s in the test suite (profile of
   `test_settings_dialog_mode.py`: 33 of 43 s inside `SettingsDialog.__init__`,

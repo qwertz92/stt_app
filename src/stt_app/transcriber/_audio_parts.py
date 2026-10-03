@@ -135,10 +135,10 @@ def _holds_sound(part: AudioInput, threshold: float) -> bool:
     return level is None or level >= threshold
 
 
-def _part_seconds(part: AudioInput) -> float:
-    """A part's duration from its header; 0 for one this cannot read (only a
-    part `_wav_parts` wrote reaches this, and those always parse)."""
-    declared = _declared_wav(part)
+def wav_seconds(audio: AudioInput) -> float:
+    """A WAV's duration from its header; 0 for audio this cannot read (an MP3,
+    a path that is not there). A part `_wav_parts` wrote always parses."""
+    declared = _declared_wav(audio)
     if declared is None:
         return 0.0
     return declared.frames / declared.sample_rate
@@ -271,7 +271,7 @@ def transcribe_in_parts(
         # Before the first part as well: splitting a large import takes a
         # second, and a cancel pressed meanwhile must not upload a part.
         raise_if_canceled()
-        end = start + _part_seconds(part)
+        end = start + wav_seconds(part)
         try:
             text = transcribe_request(
                 part, f"Transcribing part {index} of {count}. {progress_text}"

@@ -660,7 +660,12 @@ async function runServer(options) {
     }
 
     if (request.command === "shutdown") {
-      break;
+      // Leaving the loop is not enough: ONNX Runtime's WebGPU device and
+      // worker threads keep Node's event loop alive, so the process used to
+      // outlive the request by the parent's whole 2 s grace period and then
+      // be killed. Every response was written synchronously (stdout is a
+      // pipe, and pipes are synchronous on Windows), so nothing is lost.
+      process.exit(0);
     }
 
     if (request.command !== "transcribe") {

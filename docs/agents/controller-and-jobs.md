@@ -240,6 +240,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   as active until released. Terminal signals follow hook clearing and lease
   release. Shutdown marks closed first, ignores late signals, lets the final
   owner close. Resume uses the same admission lock.
+- **A quit is bounded by a native watchdog** (2026-10-03): `main` arms
+  `faulthandler.dump_traceback_later(QUIT_WATCHDOG_TIMEOUT_S, exit=True)`
+  into `dictation.log` as the first `aboutToQuit` handler, and logs
+  `app_exec_returned` with every non-daemon thread still alive. Why: a quit
+  once removed the tray icon and kept the process alive until Ctrl+C, with
+  nothing in the log; Ctrl+C cannot reach a thread blocked in native code,
+  and no Python thread runs once finalization starts. Measured: a thread
+  that never ends now exits the process after 15 s with its stack logged.
+  The hang's own cause is still unknown; the next one names it in the log.
+- **The WebGPU runner exits on `shutdown`** (`process.exit(0)` in
+  `webgpu_asr_runner.mjs`): leaving the request loop did not end Node,
+  because ONNX Runtime's WebGPU device keeps its event loop alive, so every
+  quit waited out the 2 s grace and then killed it. Quit with a loaded
+  Cohere runtime: 2.2 s before, 0.4 s after (2026-10-03).
 - **`LastRecordingStore.selectable_path()` alone picks "Use last
   recording"**: newest managed/archive WAV; a recoverable managed one wins.
 - **Selected local models are strict**: transcription waits off the Qt

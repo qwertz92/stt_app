@@ -9162,6 +9162,31 @@ rows and connection tests on API Keys, and one region selector per provider
   held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
   in a Windows job object, and the call returns once the child exited.
 
+## 2026-10-03: a test that released another model's slot
+
+- **A woken waiter and the next caller race for a free slot, in the app as in
+  a test.** `test_a_finished_local_tab_download_lets_a_waiter_join` released
+  a blocker's slot and only then started the explicit download, so the parked
+  waiter could take the free slot first and download instead of joining: 1
+  failure in 100 runs with 16 CPU-burning processes on 12 cores. Not a
+  production defect (if the preload wins, the explicit entry joins it), so the
+  test now parks the waiter behind the explicit download itself, where only
+  the completion counter can release it. Lesson: a test of a join must hold
+  the slot continuously, never hand it over.
+
+## 2026-10-03: dependency sweep
+
+`assemblyai` 1.5.5 to 1.6.1, `comtypes` 1.4.16 to 1.4.17, `onnxruntime-genai`
+0.16.0 to 0.17.1, `ruff` 0.16.10, plus transitive `huggingface-hub` 1.33.0 and
+`websockets` 17.2. Each was driven through its own code path (the real
+AssemblyAI SDK with only the network stubbed, the real `IMMNotificationClient`
+registration, one Nemotron pass in both modes), not only the suite. `av` 19.0.1
+was refused: `uv lock --upgrade` would have taken it, and faster-whisper 1.2.1
+cannot open a file with it, which no unit test of ours noticed because they stub
+the model. Lesson: a transitive package with an open lower bound (`av>=11`) is
+moved by the lock upgrade, so the code path that uses it has to run before the
+lock is committed; `av` is now a direct pin with its reason and a test.
+
 ## 2026-10-03: the Providers tab (UX review item 5)
 
 The API Keys tab became "Providers": one compact row per cloud provider

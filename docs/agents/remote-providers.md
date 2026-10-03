@@ -82,8 +82,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   idempotent** (stream body): call it once per `HTTPError`.
 - **Never build a provider error from `HTTPError.reason`** (status phrase
   only). `_http_utils.read_http_error_detail` / `http_error_suffix` is the one
-  reader for all five REST providers: capped at 300 chars, status phrase when
-  the body is empty or unreadable.
+  reader for all REST providers: capped at 300 chars, status phrase when
+  the body is empty or unreadable. **An HTML body (`is_html_page`) is
+  never pasted** (2026-10-03): a proxy's 403/407/413 block page is reported
+  as `the reply was an HTML page titled "<title>" (a proxy or firewall block
+  page?)` (title as text only, 80 characters) or, without a `<title>`, the
+  same sentence without it (`markup_page_description`). Only a body that
+  *starts* as HTML (`<!doctype html`, `<html`, `<head`, `<body`, `<title`)
+  counts: an XML error (`<Error><Message>...`) carries the provider's
+  message and is passed through like any other text. `is_markup_page` (any
+  `<`) stays the test for a 200 reply that should have been JSON. The
+  title is searched in the first 4 KB only: the lazy regex was quadratic on
+  64 KB of unclosed `<title>` (3.95 s).
 - **Every REST call passes `create_ssl_context()`**: `urllib` ignores
   `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
   proxy while the SDK worked. `format_ssl_error_message` is the shared text
@@ -101,6 +111,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `tl` -> `fil`); a test compares the *sent* codes per model both ways.
   - Schema 24: a pre-24 file without `azure_endpoint` adopts the default;
     with one it keeps its model (MAI-2 is $0.10/h vs $0.36/h).
+  - **Socket timeout = 120 s + the recording's duration** (2026-10-03). The
+    request is synchronous and Microsoft documents only "faster than
+    real-time" (fast-transcription page, read 2026-10-03; no figure, no
+    timeout guidance), so the duration is the longest an answer can take: an
+    hour-long part, the engine's bound, got 120 s before. Read from the WAV
+    header (`_audio_parts.wav_seconds`); audio it cannot read keeps 120 s.
+    Mistral instead shortens its parts to fit a fixed 300 s.
   - **Not verified live** (`docs/azure-llm-speech.md` says so). No phrase
     list is sent, so custom vocabulary stays unwired.
 - **OpenAI: `gpt-transcribe` is the default and the only model with a
@@ -315,11 +332,47 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     base64 grows the body a third); the transcription style uses OpenAI's
     600 s / 25 MB.
   - **The key command wins over the stored key**, runs without a shell
-    (`shlex.split(posix=os.name != "nt")`, quotes stripped on Windows), with
+    (POSIX: `shlex.split`; Windows: `_split_windows_command`), with
     stdin closed, `CREATE_NO_WINDOW` and a 30 s timeout; its last stdout line
     is the token, cached `CUSTOM_KEY_COMMAND_TTL_S` (300 s); a 401 re-runs it
     once and retries once. Errors name the exit code and the last stderr
     line, never the token, and nothing logs it.
+    **Windows quoting (2026-10-03)**: a backslash is never an escape (paths
+    stay intact); a `"` groups anywhere in a word (`--opt="a b"`), a `'`
+    only at the start of a word, so `wsl.exe -e bash -lc 'echo x'` reaches
+    bash as one script and an apostrophe in `C:\Users\O'Brien` stays
+    literal; inside one kind of quote the other is literal; an unclosed
+    quote is refused. A literal `"` cannot be written (put it in a script).
+    Why not reject single quotes: the owner's helper is a WSL command, where
+    `'...'` is what everyone writes, and `shlex` with `posix=False` had
+    kept the quotes (`'echo x'` reached bash literally) and split
+    `--opt="a b"` in two. The exit code is judged **before** the output: a
+    failing helper that printed "Please run 'login' first" to stdout was
+    reported as a malformed token.
+    **PowerShell keeps its single quotes after `-Command`** (2026-10-03,
+    regression of the rule above): the old splitter kept every single
+    quote, which PowerShell needs for `-Command Get-Content 'C:\a b\t.txt'`
+    and `-Command '$env:USERNAME'`; stripping them split the path in two
+    and let `$env:USERNAME` be evaluated. Rule: for `powershell`/`pwsh`
+    (any path, `.exe` optional), every word after `-Command` or an
+    abbreviation (`-c`, `-co`, ...) keeps the quotes of a single-quoted
+    word; before it (`-File 'x.ps1'`) they are stripped. Chosen over "stop
+    stripping everywhere" because the WSL case needs the strip, and over
+    "keep after any `-c`" because `-c` means something else for other
+    programs. Run for real with Windows `powershell` (path with a space,
+    `&` call, `$env:` literal, `-File`) and `wsl.exe`; `pwsh` only in the
+    splitter test.
+    **The program is resolved with `shutil.which`** (2026-10-03):
+    CreateProcess appends only `.exe`, so the `.cmd` shims `az`, `gcloud` and
+    `npm` were "not found". A resolved `.cmd`/`.bat` goes to `run_bounded`
+    as it is: CreateProcess starts cmd.exe for it, inside the job object,
+    so the grandchild kill still holds (test: a `.cmd` whose python child
+    leaves a heartbeating grandchild, ended at the timeout). Not an
+    explicit `cmd.exe /c` wrapper: no quoting from the caller can stop
+    cmd.exe reading `& | < > ^ %` in an argument (reproduced: `x.cmd "a&b"`
+    ran `b`), so `_resolve_program` refuses such an argument for a batch
+    target, naming the character, never the argument (it may be a secret).
+    An unresolvable name stays as typed for the "not found" message.
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
     then reads the pipes to the end, which a grandchild holding them
@@ -364,9 +417,36 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     the request sends `response_format=json`, so "Internal Server Error"
     was a proxy's error page, not a transcript (it used to be pasted). A
     top-level JSON string is still taken.
+  - **A credential never reaches an error message** (2026-10-03): every
+    error raised while sending a request or listing models passes
+    `_errors_scrubbed`, which replaces the active token and the stored key
+    with `[hidden]` (only credentials of 8+ characters: `none` is a
+    placeholder and would be cut out of ordinary words). **The scrub runs
+    before every cut** (2026-10-03): the readers that shorten server text
+    (`read_http_error_detail` 300 characters, `body_excerpt` 80,
+    `reply_error_text` 300, a block page's title) take a `redact` callable
+    (`self._scrub`) and apply it to the decoded text and to each extracted
+    field first; scrubbed afterwards, a key that straddled the cut left its
+    first characters (`...xxxsk-secret`). `_scrub` also replaces the key as
+    JSON writes it (`"` and `\` escaped). `_errors_scrubbed` stays as the
+    net over whatever else reaches a message. A gateway's 401
+    reason ("Key expired on ...") is shown after the standard text, except
+    when it holds the credential: then it is dropped rather than masked,
+    because a partly masked key is still part of the key (LiteLLM answers
+    "Received API Key = ..."). A key that the gateway masks on its own, so
+    that only a part reaches us, cannot be recognised and is shown as the
+    gateway sent it. `{"detail": {"error": "..."}}` (FastAPI/LiteLLM 403)
+    reads as its message (`nested_error_text` also tries `error`, which
+    Fun-ASR's `task-failed` reader shares), and a 200 reply whose body is
+    an `error` object (`reply_error_text`) shows that text, in both API
+    styles, instead of "no 'text' field" / "no message content".
   - **Chat: `content: null` is an error, not silence** (2026-10-01): it is
     a refusal (named, shortened to 80 characters) or an answer cut off
     (`finish_reason` named, e.g. `length`). `content: ""` stays silence.
+    **`finish_reason: "length"` (or `max_tokens`, any case) is an error even
+    when text came with it** (2026-10-03): the text is the start of the transcript, and pasted as a
+    whole it lost the end; the message names the model's output limit and
+    suggests the transcription style or shorter dictations.
   - **The identity reads endpoint, API style and key command**, and
     `has_api_key` is true for a stored key *or* a key command (a command
     alone makes the engine runnable); the connection test, the "all
@@ -386,6 +466,41 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     ...; not `tts`) comes first, since OpenAI's own list sends no `mode`;
     ordering only, never a filter. Reads are bounded (2 MB list, 8 MB
     reply).
-  - **Not verified against a live server by the app's own code path**; the
-    chat request shape was verified by hand against one gateway.
+  - **Verified live, in part (2026-09-30, `docs/learning-log.md`)**: the
+    owner's LiteLLM gateway, through the app's own code path -- the key
+    command with an 861-character JWT, the model list (19 entries), the
+    connection test, and a 25 s German clip transcribed in the chat style
+    in 4.3 s. Not verified: the transcription style produced a transcript
+    nowhere (on that gateway it reaches the backend's own HTTP 403), so the
+    multipart request has only been seen by fake servers; a local speech
+    server (speaches, LocalAI), a hosted OpenAI-compatible API and a
+    recording split into parts were not run live either. The 2026-10-03
+    fixes (key-command lookup and quoting, error scrubbing, HTML block
+    pages) were tested with fakes and, for the key command, with real
+    `npm`, `wsl.exe` and `.cmd` shims on Windows, not against the gateway.
+  - **Proxies** (2026-10-03, `_open` builds a standard urllib opener):
+    `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (either case) are honoured;
+    on Windows the registry's proxy (Internet Options, `ProxyServer` with
+    `ProxyEnable`) is read only when none of these variables is set; a PAC
+    script (`AutoConfigURL`) and WPAD are not supported, so a company that
+    publishes only a PAC file needs the variables set by hand. A proxy that
+    refuses `CONNECT` surfaces as `Tunnel connection failed: <status>`.
+    Reproduced against a fake proxy for the variable cases; the registry
+    path is urllib's own and was not run.
+  - **Part sizes are fixed** (`config.remote_batch_part_limit`): 10 min / 25
+    MB for the transcription style, 5 min / 15 MB for the chat style
+    (base64 grows the body by a third). A gateway or proxy with a lower
+    body limit answers 413; the error says so and names these figures
+    (`_request_too_large_hint`), because no setting can shrink the parts.
+    The advice depends on the style: the chat parts are the *smaller*
+    requests (15 MB of audio is about 20 MB base64-encoded, against 25 MB),
+    so a chat 413 says "raise the limit or dictate shorter recordings; the
+    transcription style sends larger requests", and a transcription 413
+    adds "or try the chat style" with its figures. The first version told a
+    chat user to switch to the larger style.
+  - **Chat audio is `wav` or `mp3` only** (2026-10-03): `input_audio.format`
+    takes those two values in the OpenAI shape, and the app ships no
+    decoder, so another suffix (an imported `.m4a`, `.flac`, ...) is refused
+    before sending, with the transcription style named as the way out. The
+    transcription style sends the file as it is.
 

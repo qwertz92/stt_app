@@ -211,6 +211,38 @@ def test_a_404_points_at_the_base_url_and_the_style(server):
     assert "API style" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    ("mode", "size"), [("transcriptions", "25 MB"), ("chat", "15 MB")]
+)
+def test_a_413_names_the_fixed_part_size(server, mode, size):
+    """A gateway or proxy with a lower body limit answers 413 ("Request Entity
+    Too Large"); the part size is fixed, so the message says what is sent and
+    what to change instead (review of 2026-10-03)."""
+    server(
+        _http_error(
+            413, "<html><head><title>413 Request Entity Too Large</title></head></html>"
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode=mode).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 413" in message
+    assert size in message
+    assert "body limit" in message
+    if mode == "chat":
+        # The chat parts are the smaller ones (15 MB raw, about 20 MB once
+        # base64-encoded, against 25 MB): advising the other style here sent
+        # the user to larger requests (review of 2026-10-03).
+        assert "20 MB base64" in message
+        assert "shorter recordings" in message
+        assert "will not help" in message
+        assert "try the chat style" not in message
+    else:
+        assert "try the chat style" in message
+        assert "15 MB" in message
+        assert "shorter recordings" in message
+
+
 # -- chat completions -------------------------------------------------------
 
 
@@ -242,6 +274,42 @@ def test_the_chat_request_carries_the_audio_and_the_instruction(server):
     import base64
 
     assert base64.b64decode(part["input_audio"]["data"]) == WAV
+
+
+@pytest.mark.parametrize("suffix", [".m4a", ".flac", ".ogg", ".opus", ".webm", ".aac"])
+def test_chat_audio_other_than_wav_or_mp3_is_refused_before_sending(
+    server, tmp_path, suffix
+):
+    """`input_audio.format` is `wav` or `mp3` in the OpenAI shape; any other
+    suffix was sent as its own name and answered with a 400 that does not
+    say why (review of 2026-10-03)."""
+    fake = server()
+    clip = tmp_path / f"clip{suffix}"
+    clip.write_bytes(b"not decoded")
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(str(clip))
+    message = str(raised.value)
+    assert suffix in message
+    assert "WAV or MP3" in message
+    assert "transcription API" in message
+    assert fake.requests == []
+
+
+def test_chat_audio_as_mp3_is_sent_as_mp3(server, tmp_path):
+    fake = server(_chat_reply("ok"))
+    clip = tmp_path / "clip.MP3"
+    clip.write_bytes(b"ID3 not decoded")
+    _transcriber(api_mode="chat").transcribe_batch(str(clip))
+    part = json.loads(fake.requests[0].data)["messages"][1]["content"][0]
+    assert part["input_audio"]["format"] == "mp3"
+
+
+def test_transcription_style_sends_any_suffix_unchanged(server, tmp_path):
+    fake = server({"text": "ok"})
+    clip = tmp_path / "clip.m4a"
+    clip.write_bytes(b"not decoded")
+    assert _transcriber().transcribe_batch(str(clip)) == "ok"
+    assert b'filename="clip.m4a"' in fake.requests[0].data
 
 
 @pytest.mark.parametrize(
@@ -307,6 +375,28 @@ def test_a_chat_reply_with_null_content_is_an_error_not_silence(
     with pytest.raises(TranscriptionError) as raised:
         _transcriber(api_mode="chat").transcribe_batch(WAV)
     assert expected in str(raised.value)
+
+
+@pytest.mark.parametrize("content", ["The quick brown fox jumps over the", None])
+@pytest.mark.parametrize("reason", ["length", "LENGTH", "Length", "max_tokens"])
+def test_a_chat_reply_cut_off_at_the_output_limit_is_an_error(server, content, reason):
+    """`finish_reason: "length"` (or `max_tokens`, in any case, as some
+    gateways spell it) means the model ran out of output tokens: the text it
+    carries is the start of the transcript, and pasted as a complete one it
+    silently loses the end (review of 2026-10-03)."""
+    server(
+        {
+            "choices": [
+                {"message": {"content": content}, "finish_reason": reason},
+            ]
+        }
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "output limit" in message
+    assert "transcription API" in message
+    assert "quick brown fox" not in message
 
 
 def test_a_long_refusal_is_shortened_in_the_message(server):
@@ -473,6 +563,158 @@ def test_a_second_401_fails_without_the_token_in_the_message(runs, server):
     assert SECRET_TOKEN not in str(raised.value)
 
 
+def test_a_401_shows_the_reason_the_gateway_gave(server):
+    server(_http_error(401, '{"error": {"message": "Key expired on 2026-09-01"}}'))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 401" in message
+    assert "Key expired on 2026-09-01" in message
+
+
+def test_a_401_that_echoes_the_key_shows_no_reason(server):
+    """LiteLLM answers "Invalid proxy server token passed. Received API Key =
+    <the key>"; the key must not reach the overlay or the log."""
+    key = "sk-secret-TOKEN-123"
+    server(
+        _http_error(
+            401, json.dumps({"error": {"message": f"Invalid token. Received {key}"}})
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=key).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 401" in message
+    assert key not in message
+    assert "Invalid token" not in message
+
+
+@pytest.mark.parametrize("use_command", [False, True])
+def test_a_secret_is_scrubbed_from_any_other_error_detail(runs, server, use_command):
+    secret = "sk-secret-TOKEN-123"
+    if use_command:
+        runs(_completed(f"{secret}\n"))
+        transcriber = _transcriber(api_key="", key_command="helper")
+    else:
+        transcriber = _transcriber(api_key=secret)
+    server(
+        _http_error(
+            400, f'{{"error": {{"message": "Bad header Bearer {secret} sent"}}}}'
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber.transcribe_batch(WAV)
+    message = str(raised.value)
+    assert secret not in message
+    assert "Bad header Bearer [hidden] sent" in message
+
+
+_CUT_KEY = "sk-secret-TOKEN-123abc"
+
+
+# Visible ASCII a header accepts, but JSON writes escaped.
+_ESCAPED_KEY = 'sk"-s\\ecret-123abc'
+
+
+@pytest.mark.parametrize(
+    ("build", "key"),
+    [
+        pytest.param(
+            lambda key: _http_error(
+                400, json.dumps({"error": {"message": "x" * 290 + key}})
+            ),
+            _CUT_KEY,
+            id="json-error-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: _http_error(502, "y" * 295 + key + " more"),
+            _CUT_KEY,
+            id="text-error-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: _http_error(401, json.dumps({"error": "z" * 295 + key})),
+            _CUT_KEY,
+            id="401-reason-capped-at-300",
+        ),
+        pytest.param(
+            lambda key: "w" * 70 + key,
+            _CUT_KEY,
+            id="200-not-json-excerpt-capped-at-80",
+        ),
+        pytest.param(
+            lambda key: _http_error(
+                400, json.dumps({"error": {"message": "q" * 290 + key}})
+            ),
+            _ESCAPED_KEY,
+            id="key-that-json-escapes",
+        ),
+    ],
+)
+def test_a_credential_at_a_truncation_point_leaves_no_fragment(server, build, key):
+    """The scrub ran after the 300-character cap in the HTTP reader and the
+    80-character cap of an excerpt, so a key echoed near the cut left its
+    first characters visible (review of 2026-10-03): redaction now comes
+    before any cut."""
+    server(build(key))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=key).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert key[:5] not in message, message
+    assert json.dumps(key)[1:7] not in message, message
+
+
+def test_a_refusal_with_a_credential_at_the_cut_leaves_no_fragment(server):
+    server(
+        {"choices": [{"message": {"content": None, "refusal": "r" * 70 + _CUT_KEY}}]}
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=_CUT_KEY, api_mode="chat").transcribe_batch(WAV)
+    assert "sk-" not in str(raised.value), str(raised.value)
+
+
+def test_a_secret_is_scrubbed_from_the_model_list_error_too(server):
+    secret = "sk-secret-TOKEN-123"
+    server(_http_error(500, f'{{"error": "key {secret} broke"}}'))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=secret).list_models()
+    assert secret not in str(raised.value)
+    assert "key [hidden] broke" in str(raised.value)
+
+
+def test_a_short_placeholder_key_is_not_scrubbed(server):
+    """`none` is a placeholder for a server without authentication, and as a
+    word it would be cut out of every message."""
+    server(_http_error(500, '{"error": "none of the backends answered"}'))
+    with pytest.raises(TranscriptionError, match="none of the backends answered"):
+        _transcriber(api_key="none").transcribe_batch(WAV)
+
+
+def test_a_gateway_error_object_under_detail_is_rendered_as_its_message(server):
+    server(
+        _http_error(
+            403, '{"detail": {"error": "user not allowed to access model whisper-1"}}'
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "user not allowed to access model whisper-1" in str(raised.value)
+    assert "{" not in str(raised.value)
+
+
+def test_a_chat_reply_that_is_an_error_object_shows_its_text(server):
+    server({"error": {"message": "model gpt-x not found", "type": "invalid"}})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert "model gpt-x not found" in str(raised.value)
+    assert "no message content" not in str(raised.value)
+
+
+def test_a_transcription_reply_that_is_an_error_object_shows_its_text(server):
+    server({"error": {"message": "model whisper-1 not found"}})
+    with pytest.raises(TranscriptionError, match="model whisper-1 not found"):
+        _transcriber().transcribe_batch(WAV)
+
+
 def test_a_stored_key_is_not_retried_after_a_401(server):
     fake = server(_http_error(401))
     with pytest.raises(TranscriptionError, match="HTTP 401"):
@@ -490,6 +732,24 @@ def test_a_failing_command_names_its_exit_code_and_last_stderr_line(runs, server
     assert "login expired" in message
     assert SECRET_TOKEN not in message
     assert fake.requests == []
+
+
+def test_a_failing_command_that_printed_a_message_reports_its_exit_code(runs, server):
+    """The exit code is judged before the output is: a login helper that
+    prints "Please run 'login' first" to stdout and exits 1 used to be
+    reported as "printed a token with a space" (review of 2026-10-03)."""
+    runs(
+        _completed(
+            "ERROR: Please run 'login' first\n", returncode=1, stderr="no session\n"
+        )
+    )
+    server()
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(key_command="helper").transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "exit code 1" in message
+    assert "no session" in message
+    assert "token with a space" not in message
 
 
 def test_a_command_that_prints_nothing_is_an_error(runs, server):
@@ -513,6 +773,68 @@ def test_a_missing_command_is_named(runs, server):
         _transcriber(key_command="no-such-helper --x").transcribe_batch(WAV)
 
 
+def test_the_program_is_resolved_through_path_and_pathext(runs, server, monkeypatch):
+    """`az`, `gcloud` and `npm` are `.cmd` shims on Windows, and CreateProcess
+    appends only `.exe`: the command was "not found" although it ran in a
+    console (review of 2026-10-03)."""
+    monkeypatch.setattr(
+        provider_module.shutil,
+        "which",
+        lambda name: r"C:\Tools\az.CMD" if name == "az" else None,
+    )
+    fake_runs = runs(_completed("tok\n"))
+    server({"text": "ok"})
+
+    _transcriber(key_command="az account get-access-token").transcribe_batch(WAV)
+
+    assert fake_runs.calls[0][0] == [r"C:\Tools\az.CMD", "account", "get-access-token"]
+
+
+def test_an_unresolvable_program_is_left_as_typed(runs, server, monkeypatch):
+    monkeypatch.setattr(provider_module.shutil, "which", lambda name: None)
+    fake_runs = runs(FileNotFoundError())
+    server()
+    with pytest.raises(TranscriptionError, match="not found: no-such-helper"):
+        _transcriber(key_command="no-such-helper --x").transcribe_batch(WAV)
+    assert fake_runs.calls[0][0] == ["no-such-helper", "--x"]
+
+
+@pytest.mark.parametrize("argument", ["a&b", "a|b", "a<b", "a>b", "a^b", "100%"])
+def test_a_batch_file_argument_cmd_would_interpret_is_refused(
+    runs, server, monkeypatch, argument
+):
+    """cmd.exe runs a `.cmd`/`.bat` file and reads `&` as a command separator
+    (reproduced: `tokcmd.cmd "a&b"` ran `b`) and `%VAR%` as an expansion, so
+    such an argument is refused instead of run as something else. The
+    argument itself is not echoed: it may be a secret."""
+    monkeypatch.setattr(
+        provider_module.shutil, "which", lambda name: r"C:\Tools\az.cmd"
+    )
+    fake_runs = runs()
+    server()
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(key_command=f'az --name "{argument}"').transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "cmd.exe" in message
+    assert argument not in message
+    assert fake_runs.calls == []
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="`.cmd` shims exist only on Windows"
+)
+def test_a_cmd_shim_on_path_prints_its_token(tmp_path, monkeypatch):
+    """The process runner and `PATHEXT` themselves: `shim` resolves to
+    `shim.cmd`, which cmd.exe runs."""
+    (tmp_path / "token-shim.cmd").write_text(
+        "@echo off\r\necho shim-token-%1\r\n", encoding="ascii"
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path};{provider_module.os.environ['PATH']}")
+    transcriber = _transcriber(api_key="", key_command="token-shim A")
+
+    assert transcriber._run_key_command() == "shim-token-A"
+
+
 def test_the_token_is_never_logged(runs, server, caplog):
     runs(_completed(f"{SECRET_TOKEN}\n"))
     server({"text": "ok"})
@@ -526,6 +848,91 @@ def test_windows_quoting_keeps_backslashes(monkeypatch):
     assert provider_module._command_arguments(
         r'wsl.exe -e "C:\tools\token helper.exe" --print'
     ) == ["wsl.exe", "-e", r"C:\tools\token helper.exe", "--print"]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        pytest.param(
+            "wsl.exe -e bash -lc 'echo x'",
+            ["wsl.exe", "-e", "bash", "-lc", "echo x"],
+            id="single-quoted-wsl-script",
+        ),
+        pytest.param(
+            "wsl.exe -e bash -lc 'my-helper --name \"a b\"'",
+            ["wsl.exe", "-e", "bash", "-lc", 'my-helper --name "a b"'],
+            id="double-quotes-inside-single-quotes-are-literal",
+        ),
+        pytest.param(
+            r"'C:\tools\token helper.exe' --print",
+            [r"C:\tools\token helper.exe", "--print"],
+            id="single-quoted-path-keeps-backslashes",
+        ),
+        pytest.param(
+            'helper --opt="a b" "C:\\p q\\t.exe"',
+            ["helper", "--opt=a b", "C:\\p q\\t.exe"],
+            id="a-quote-inside-a-word-groups",
+        ),
+        pytest.param(
+            r"C:\Users\O'Brien\tok.exe --print",
+            [r"C:\Users\O'Brien\tok.exe", "--print"],
+            id="a-mid-word-apostrophe-is-literal",
+        ),
+        pytest.param("helper '' \"\"", ["helper", "", ""], id="empty-arguments"),
+        # PowerShell's own string syntax: after -Command the quotes are the
+        # script's, not the splitter's (regression of ca802d9, reported
+        # 2026-10-03).
+        pytest.param(
+            r"powershell -NoProfile -Command Get-Content 'C:\a b\t.txt'",
+            ["powershell", "-NoProfile", "-Command", "Get-Content", r"'C:\a b\t.txt'"],
+            id="powershell-command-keeps-single-quotes",
+        ),
+        pytest.param(
+            r"pwsh -c & 'C:\a b\get token.ps1'",
+            ["pwsh", "-c", "&", r"'C:\a b\get token.ps1'"],
+            id="pwsh-call-operator",
+        ),
+        pytest.param(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command '$env:USERNAME'",
+            [
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "-Command",
+                "'$env:USERNAME'",
+            ],
+            id="powershell-full-path-literal-string",
+        ),
+        pytest.param(
+            "powershell -Command \"Write-Output 'a b'\"",
+            ["powershell", "-Command", "Write-Output 'a b'"],
+            id="powershell-double-quoted-script-keeps-inner-quotes",
+        ),
+        pytest.param(
+            r"powershell -NoProfile -File 'C:\a b\get token.ps1'",
+            ["powershell", "-NoProfile", "-File", r"C:\a b\get token.ps1"],
+            id="powershell-file-is-a-path-not-a-script",
+        ),
+        pytest.param(
+            "other.exe -Command 'a b'",
+            ["other.exe", "-Command", "a b"],
+            id="only-powershell-keeps-quotes",
+        ),
+    ],
+)
+def test_windows_quoting_groups_with_single_and_double_quotes(
+    monkeypatch, command, expected
+):
+    """`wsl.exe -e bash -lc 'echo x'` passed `'echo x'` -- quotes included --
+    to bash, and `--opt="a b"` was split in two (review of 2026-10-03).
+    Backslashes stay literal, which keeps Windows paths intact."""
+    monkeypatch.setattr(provider_module.os, "name", "nt")
+    assert provider_module._command_arguments(command) == expected
+
+
+@pytest.mark.parametrize("command", ["helper 'unfinished", 'helper "unfinished'])
+def test_an_unclosed_quote_in_the_key_command_is_refused(monkeypatch, command):
+    monkeypatch.setattr(provider_module.os, "name", "nt")
+    with pytest.raises(TranscriptionError, match="cannot be parsed"):
+        provider_module._command_arguments(command)
 
 
 # -- model list -------------------------------------------------------------
@@ -581,6 +988,23 @@ def test_the_connection_test_checks_the_chosen_model(server):
     ok, message = _transcriber().test_connection()
     assert not ok
     assert "does not offer the model 'whisper-1'" in message
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [{"data": []}, {"data": ["a", "b"]}, {"data": [{"name": "llama3"}]}, []],
+    ids=["empty", "bare-strings", "no-ids", "empty-top-level-list"],
+)
+def test_the_connection_test_does_not_claim_success_for_a_list_without_ids(
+    server, answer
+):
+    """A reply with nothing parsable was reported as "Connection OK ... 0
+    models" (review of 2026-10-03)."""
+    server(answer)
+    ok, message = _transcriber(model="").test_connection()
+    assert not ok
+    assert "no usable model ids" in message
+    assert "0 models" not in message
 
 
 def test_streaming_is_not_offered():
@@ -676,6 +1100,48 @@ def test_a_key_command_whose_grandchild_holds_the_pipe_is_still_bounded(
         # The grandchild was ended with its parent, not left running.
         time.sleep(0.5)
         before = _heartbeat(heartbeat)
+        time.sleep(0.6)
+        assert _heartbeat(heartbeat) == before, "the grandchild is still running"
+    finally:
+        _kill_leftover(heartbeat)
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="`.cmd` shims exist only on Windows"
+)
+def test_a_cmd_shim_whose_grandchild_holds_the_pipe_is_bounded_and_ended(
+    tmp_path, monkeypatch
+):
+    """cmd.exe sits between the key command and what it starts, so the job
+    object must still reach the grandchild through it."""
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(_GRANDCHILD_SCRIPT, encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(_CHILD_SCRIPT, encoding="utf-8")
+    heartbeat = tmp_path / "heartbeat.txt"
+    (tmp_path / "hang-shim.cmd").write_text(
+        f'@"{sys.executable}" "{child}" "{grandchild}" "{heartbeat}"\r\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path};{provider_module.os.environ['PATH']}")
+    # Long enough for cmd.exe, python and the grandchild to start on a busy
+    # machine (2 s was not: the grandchild had not started when the tree was
+    # ended, and the heartbeat check below saw nothing to compare).
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 6.0)
+    transcriber = _transcriber(api_key="", key_command="hang-shim")
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(TranscriptionError, match="did not finish within 6 s"):
+            transcriber._run_key_command()
+        elapsed = time.monotonic() - started
+        assert elapsed < 15.0, f"the timeout of 6 s took {elapsed:.1f} s"
+        time.sleep(0.5)
+        before = _heartbeat(heartbeat)
+        assert before, "the grandchild never started"
         time.sleep(0.6)
         assert _heartbeat(heartbeat) == before, "the grandchild is still running"
     finally:
@@ -1022,13 +1488,14 @@ def test_an_html_model_list_names_the_page_rather_than_json(server):
 
 
 def test_a_json_answer_without_text_is_an_error_naming_its_keys(server):
-    """`{"error": ...}` with HTTP 200, or another shape, is not "no speech"."""
-    server({"error": {"message": "model not loaded"}, "id": "x"})
+    """A JSON shape without `text` is not "no speech". (An `error` member is
+    shown by its own text instead: see the 200-with-error test.)"""
+    server({"result": "x", "id": "x"})
     with pytest.raises(TranscriptionError) as raised:
         _transcriber().transcribe_batch(WAV)
     message = str(raised.value)
     assert "'text'" in message
-    assert "error" in message and "id" in message
+    assert "result" in message and "id" in message
 
 
 def test_an_empty_text_field_is_still_an_empty_transcript(server):

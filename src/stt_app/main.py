@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import faulthandler
 import signal
 import sys
 import threading
@@ -17,6 +18,7 @@ from .config import (
     DEFAULT_CANCEL_HOTKEY_ID,
     DEFAULT_REPASTE_HOTKEY_ID,
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
+    QUIT_WATCHDOG_TIMEOUT_S,
     SESSION_START_LOG_MARKER,
     TRAY_CANCEL_ACTION_LABEL,
     TRAY_REPASTE_ACTION_LABEL,
@@ -60,6 +62,31 @@ def _set_windows_app_user_model_id() -> None:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
     except Exception:
         pass
+
+
+def _arm_quit_watchdog(log_path, logger):
+    """End a quit that never finishes, and leave the reason in the log.
+
+    A quit once removed the tray icon and then kept the process alive until
+    Ctrl+C (2026-10-03), and nothing in the log said where it hung. Neither
+    Ctrl+C nor Python code can rescue that: a thread blocked in native code
+    never sees the signal, and once interpreter finalization starts no other
+    Python thread runs. faulthandler's timer is a native thread, so it still
+    writes every Python stack into the log and exits the process.
+
+    Returns the open log stream (it must stay open until the process ends),
+    or None when the log cannot be opened.
+    """
+    logger.info("app_quit_started watchdog_s=%s", QUIT_WATCHDOG_TIMEOUT_S)
+    try:
+        stream = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 - held to exit
+    except OSError:
+        logger.warning("app_quit_watchdog_unavailable log=%s", log_path)
+        return None
+    faulthandler.dump_traceback_later(
+        QUIT_WATCHDOG_TIMEOUT_S, repeat=False, file=stream, exit=True
+    )
+    return stream
 
 
 def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
@@ -296,6 +323,13 @@ def run() -> int:
         ),
     )
 
+    # Before any shutdown work, so that a step that hangs is still bounded.
+    quit_watchdog_streams = []
+    app.aboutToQuit.connect(
+        lambda: quit_watchdog_streams.append(
+            _arm_quit_watchdog(app_logger.log_path, logger)
+        )
+    )
     # First: a hand-registered icon must be removed explicitly, or a dead icon
     # stays in the tray until the user hovers over it. Doing it before the
     # shutdown work below also makes it disappear immediately instead of after
@@ -325,9 +359,19 @@ def run() -> int:
         "history_dialog_presenter": history_dialog_presenter,
         "signal_timer": signal_timer,
         "instance_lock": instance_lock,
+        "quit_watchdog_streams": quit_watchdog_streams,
     }
 
-    return app.exec()
+    exit_code = app.exec()
+    # The interpreter joins every non-daemon thread after this, so a thread
+    # that never ends keeps a process without windows or tray icon alive.
+    lingering = [
+        thread.name
+        for thread in threading.enumerate()
+        if not thread.daemon and thread is not threading.main_thread()
+    ]
+    logger.info("app_exec_returned code=%s non_daemon_threads=%s", exit_code, lingering)
+    return exit_code
 
 
 def _create_tray_icon(
