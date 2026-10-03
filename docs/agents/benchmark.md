@@ -95,7 +95,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
 - **`planned_benchmark_cases` is the single source of the case sequence**:
   `run_benchmark_cases` iterates it, and the Run Benchmark window's "Cases"
   table asks it and marks `Running...` from the runner's `[Case i/N]` line.
-  - The table is fixed at six rows so Run/Cancel below never moves.
+  - The table is fixed at six rows so the window's content never jumps
+    as models are checked.
+  - Run/Cancel sit in a fixed footer outside the scroll area, under the
+    two-line status (2026-10-03): inside it, "Show Run Options" pushed Run
+    295 px down out of the 812 px viewport, a 13th model moved it 20 px,
+    and with twelve models it needed a scroll at the default size.
+  - The audio line is derived from the field on every edit
+    (`_update_benchmark_audio_status`: none / "File not found" / "Selected"),
+    two lines reserved, minimum width 1 px like the window status (a long
+    file name otherwise widened the content to 1464 px).
   - A run's plan comes from options snapshotted at its start; the
     refresh-from-widgets path returns early while `_active_benchmark_thread`
     is set.

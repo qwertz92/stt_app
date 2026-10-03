@@ -1235,7 +1235,7 @@ class _BenchmarkMixin:
             "Choose an audio file or use the last recording"
         )
         self.benchmark_audio_edit.textChanged.connect(
-            lambda _text: self._update_benchmark_actions()
+            lambda _text: self._update_benchmark_audio_status()
         )
         self.benchmark_audio_browse_button = QtWidgets.QPushButton("Choose file...")
         self.benchmark_audio_browse_button.clicked.connect(
@@ -1261,6 +1261,15 @@ class _BenchmarkMixin:
         make_label_selectable(self.benchmark_audio_status_label)
         self.benchmark_audio_status_label.setWordWrap(True)
         self._style_note_label(self.benchmark_audio_status_label)
+        # Two lines reserved: a long path wrapped to a second line and moved
+        # the model list, the case list and everything under them by 9 px.
+        self._reserve_dynamic_hint_height(self.benchmark_audio_status_label)
+        # And one pixel of minimum width, for the reason
+        # `_let_wrapped_labels_narrow` gives (it covers the tab pages, not this
+        # window): a wrapped label's minimum is its longest word, so a
+        # 180-character file name widened the content to 1464 px and put a
+        # horizontal scroll bar under it.
+        self.benchmark_audio_status_label.setMinimumWidth(1)
         audio_layout.addWidget(self.benchmark_audio_status_label)
         audio_help = QtWidgets.QLabel(
             "Use a representative sample. The benchmark measures model speed and runtime factor on this file. "
@@ -1504,6 +1513,23 @@ class _BenchmarkMixin:
 
         setup_layout.addWidget(self._build_benchmark_plan_box())
 
+        outer_layout.addWidget(scroll, 1)
+
+        self.benchmark_window_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.benchmark_window_status_label)
+        self.benchmark_window_status_label.setWordWrap(True)
+        # Reserve the area: every extra wrapped line of a failure message
+        # otherwise took 16 px off the scroll viewport above it. The minimum
+        # width as for the audio line: a path in an error is one long word.
+        self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
+        self.benchmark_window_status_label.setMinimumWidth(1)
+        outer_layout.addWidget(self.benchmark_window_status_label)
+
+        # A fixed footer, outside the scrolling content. Inside it the row sat
+        # under everything that changes height: "Show Run Options" pushed Run
+        # Benchmark 295 px down, out of the 812 px viewport of the default
+        # window; a 13th model moved it 20 px; and with twelve models its lower
+        # 19 px already needed a scroll at the default size.
         benchmark_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_actions)
         self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
@@ -1514,19 +1540,7 @@ class _BenchmarkMixin:
         benchmark_actions.addWidget(self.run_benchmark_button)
         benchmark_actions.addWidget(self.cancel_benchmark_button)
         benchmark_actions.addStretch(1)
-        setup_layout.addLayout(benchmark_actions)
-
-        outer_layout.addWidget(scroll, 1)
-
-        self.benchmark_window_status_label = QtWidgets.QLabel("")
-        make_label_selectable(self.benchmark_window_status_label)
-        self.benchmark_window_status_label.setWordWrap(True)
-        # Reserve the area. This label sits under the scroll area holding the
-        # Run/Cancel row, so every extra wrapped line took 16 px off that scroll
-        # viewport and lifted both buttons by the same 16 px -- while the run
-        # they belong to was reporting how it had failed.
-        self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
-        outer_layout.addWidget(self.benchmark_window_status_label)
+        outer_layout.addLayout(benchmark_actions)
 
         self._refresh_benchmark_plan_from_widgets()
 
@@ -1836,14 +1850,30 @@ class _BenchmarkMixin:
         self._refresh_benchmark_plan_from_widgets()
 
     def _set_benchmark_audio_path(self, path: str) -> None:
-        selected = str(path or "").strip()
-        self.benchmark_audio_edit.setText(selected)
-        if selected:
-            self.benchmark_audio_status_label.setText(f"Selected: {selected}")
-            self.benchmark_audio_status_label.setStyleSheet("color: #1b5e20;")
+        self.benchmark_audio_edit.setText(str(path or "").strip())
+        # `setText` emits no `textChanged` for an unchanged text.
+        self._update_benchmark_audio_status()
+
+    def _update_benchmark_audio_status(self) -> None:
+        """The single writer of the line under the audio field.
+
+        Derived from the field on every edit, so a typed path that is not a
+        file says so: the line used to change only through the two buttons,
+        and a mistyped path left "No audio sample selected." beside a
+        disabled Run button with nothing saying why.
+        """
+        selected = self.benchmark_audio_edit.text().strip()
+        if not selected:
+            text, color = "No audio sample selected.", "#555"
+        elif Path(selected).is_file():
+            text, color = f"Selected: {selected}", "#1b5e20"
         else:
-            self.benchmark_audio_status_label.setText("No audio sample selected.")
-            self.benchmark_audio_status_label.setStyleSheet("color: #555;")
+            text, color = f"File not found: {selected}", "#b71c1c"
+        label = self.benchmark_audio_status_label
+        label.setText(text)
+        # The reserved two lines can be too few for a deep path.
+        label.setToolTip(text)
+        label.setStyleSheet(f"color: {color};")
         self._update_benchmark_actions()
 
     def _choose_benchmark_audio_file(self) -> None:
