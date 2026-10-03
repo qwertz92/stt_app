@@ -101,6 +101,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `tl` -> `fil`); a test compares the *sent* codes per model both ways.
   - Schema 24: a pre-24 file without `azure_endpoint` adopts the default;
     with one it keeps its model (MAI-2 is $0.10/h vs $0.36/h).
+  - **Socket timeout = 120 s + the recording's duration** (2026-10-03). The
+    request is synchronous and Microsoft documents only "faster than
+    real-time" (fast-transcription page, read 2026-10-03; no figure, no
+    timeout guidance), so the duration is the longest an answer can take: an
+    hour-long part, the engine's bound, got 120 s before. Read from the WAV
+    header (`_audio_parts.wav_seconds`); audio it cannot read keeps 120 s.
+    Mistral instead shortens its parts to fit a fixed 300 s.
   - **Not verified live** (`docs/azure-llm-speech.md` says so). No phrase
     list is sent, so custom vocabulary stays unwired.
 - **OpenAI: `gpt-transcribe` is the default and the only model with a

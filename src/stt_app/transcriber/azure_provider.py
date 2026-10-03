@@ -38,7 +38,7 @@ from ..config import (
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._audio_parts import transcribe_in_parts
+from ._audio_parts import transcribe_in_parts, wav_seconds
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
@@ -259,9 +259,13 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             req = self._build_request(audio_bytes, filename)
             ssl_ctx = create_ssl_context()
             self._emit_progress(progress_text)
-            with urllib.request.urlopen(
-                req, timeout=self._request_timeout_s, context=ssl_ctx
-            ) as resp:
+            # The answer comes once the whole recording is transcribed, and
+            # Microsoft documents only that this runs "faster than real-time":
+            # the recording's own duration is the longest it can take, on top
+            # of the base timeout (an hour-long part is what the 120 s alone
+            # cut off). Audio whose duration cannot be read keeps the base.
+            timeout = self._request_timeout_s + wav_seconds(audio_source)
+            with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
                 payload = resp.read()
 
             body = json.loads(payload.decode("utf-8", errors="replace"))

@@ -162,7 +162,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
 - **Multi-select lists use ExtendedSelection**, never `MultiSelection`.
   Exception: the Run Benchmark model list has checkboxes and no selection;
   Space toggles; a rebuild keeps check states (first fill all checked, later
-  models unchecked).
+  models unchecked). A click anywhere on a row toggles it
+  (`_RowToggleListWidget`, 2026-10-03): the delegate toggles only on the
+  check indicator, so the list toggles when press and release both lie off
+  the indicator rectangle and leaves an on-indicator click to the delegate,
+  or it would toggle twice and change nothing.
 - **A setting without a widget is a defect waiting for a Save** (2026-10-01).
   `_construct_settings_from_widgets` builds a whole `AppSettings`, so a field
   it does not name takes the dataclass default, differs from the baseline,
