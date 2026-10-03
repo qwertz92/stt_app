@@ -353,6 +353,43 @@ def test_a_check_that_cannot_start_keeps_todays_behaviour(monkeypatch, tmp_path)
         _ = app
 
 
+def test_the_waiting_tone_is_skipped_once_a_new_recording_started(
+    monkeypatch, tmp_path
+):
+    """The tone used to play right after the paste. Waiting for the check, it
+    could land in the microphone of the recording the user started meanwhile."""
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, _inserter, beeps = _make(monkeypatch, tmp_path, check)
+    _dictate(controller, "hello world")
+    controller.start_recording()
+
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert beeps == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_paste_during_the_same_recording_keeps_its_tone(monkeypatch, tmp_path):
+    """Immediate mode pasted mid-recording and played the tone before the
+    check existed; only a recording started after the paste skips it."""
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, _inserter, beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    controller.start_recording()
+    controller.stop_recording()
+    token_a = controller._active_request_token
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert beeps == [1]
+    controller.shutdown()
+    _ = app
+
+
 def test_a_check_that_never_answers_times_out_as_unknown(monkeypatch, tmp_path):
     monkeypatch.setattr("stt_app.controller.PASTE_TARGET_CHECK_TIMEOUT_MS", 20)
     check = FakePasteTargetCheck()

@@ -332,6 +332,10 @@ class _PasteCheck:
     # `_paste_serial` right after this paste. A verdict for an older paste
     # than the newest lists no row: the newer paste has superseded it.
     paste_serial: int
+    # The capture open at the paste (an immediate-mode queued paste lands
+    # mid-recording), so a recording started while the check ran can be
+    # told apart from that one: the delayed tone would reach its microphone.
+    capture: object | None
 
 
 @dataclass(slots=True, frozen=True)
@@ -2723,9 +2727,11 @@ class DictationController(QtCore.QObject):
         """Play the completion tone after a successful transcript insertion.
 
         Runs on a short-lived worker thread because winsound.Beep is
-        synchronous and there is no capture to keep the tone away from —
-        blocking the Qt thread for 50-150 ms after every insert would be pure
-        latency.
+        synchronous: blocking the Qt thread for 50-150 ms after every insert
+        would be pure latency. Unlike the start tone it is not timed around
+        a capture; a paste with a target check plays it only when the
+        verdict arrives, and skips it if a new recording started by then
+        (`_recording_started_since`).
         """
         if not getattr(self._settings, "completion_beep_enabled", False):
             return
@@ -6369,6 +6375,7 @@ class DictationController(QtCore.QObject):
             takes_shown_pair=takes_shown_pair,
             foreground=self._last_insert_foreground,
             paste_serial=self._paste_serial,
+            capture=self._audio_capture,
         )
 
     def _check_paste_target(self, pending: _PasteCheck) -> None:
@@ -6442,9 +6449,26 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             return
         if verdict != VERDICT_NOT_TEXT_FIELD:
+            if self._recording_started_since(pending):
+                self._logger.info(
+                    "completion_tone_skipped id=%d reason=recording", check_id
+                )
+                return
             self._play_completion_beep()
             return
         self._report_paste_outside_text_field(pending)
+
+    def _recording_started_since(self, pending: _PasteCheck) -> bool:
+        """Whether a recording other than the paste's own began meanwhile.
+
+        Before the check the tone played right after the paste; waiting up
+        to `PASTE_TARGET_CHECK_TIMEOUT_MS` for the verdict, it could play
+        into the microphone of a recording the user started in between.
+        """
+        capture = self._audio_capture
+        return self._recording_start_in_progress or (
+            capture is not None and capture is not pending.capture
+        )
 
     def _report_paste_outside_text_field(self, pending: _PasteCheck) -> None:
         """Report a paste whose focus did not look like a text field.

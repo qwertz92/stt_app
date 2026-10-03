@@ -288,4 +288,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   (`_on_paste_target_checked`, at most `PASTE_TARGET_CHECK_TIMEOUT_MS`) and
   is not played when it says "not a text field"
   (`docs/agents/text-insertion.md`); a check that cannot start plays it at
-  once.
+  once. It is skipped when a recording other than the one open at the
+  paste started before the answer (`_recording_started_since`, 2026-10-03
+  review): the delayed tone would reach that recording's microphone. A
+  queued paste mid-recording keeps its tone, as before the check.
