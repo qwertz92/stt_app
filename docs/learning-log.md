@@ -9161,3 +9161,15 @@ rows and connection tests on API Keys, and one region selector per provider
   printed its token and exited 0 failed with a timeout because a grandchild
   held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
   in a Windows job object, and the call returns once the child exited.
+
+## 2026-10-03: a test that released another model's slot
+
+- **A woken waiter and the next caller race for a free slot, in the app as in
+  a test.** `test_a_finished_local_tab_download_lets_a_waiter_join` released
+  a blocker's slot and only then started the explicit download, so the parked
+  waiter could take the free slot first and download instead of joining: 1
+  failure in 100 runs with 16 CPU-burning processes on 12 cores. Not a
+  production defect (if the preload wins, the explicit entry joins it), so the
+  test now parks the waiter behind the explicit download itself, where only
+  the completion counter can release it. Lesson: a test of a join must hold
+  the slot continuously, never hand it over.

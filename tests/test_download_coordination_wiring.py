@@ -622,8 +622,33 @@ def test_a_finished_local_tab_download_lets_a_waiter_join(monkeypatch):
     assert coordinator.acquire("small", "", explicit=False) == ACQUIRE_DOWNLOAD
     coordinator.release("small", "", succeeded=False)
 
+    # A preload parks behind the Local tab's own explicit download of the same
+    # model and must come back JOINED when it finishes. The explicit download
+    # holds the slot the whole time the waiter is parked, so the waiter can
+    # only leave through the completion counter. An earlier version of this
+    # test released a different model's slot and started the explicit download
+    # afterwards, which let the woken waiter take the free slot first -- it
+    # then downloaded instead of joining (1 failure in 100 runs under CPU
+    # load). Both orders are fine in the app; only this one tests the counter.
     outcome: list[str] = []
-    coordinator.acquire("blocker", "", explicit=False)
+    worker_running = threading.Event()
+    finish_worker = threading.Event()
+
+    def _held_download(*_args):
+        worker_running.set()
+        finish_worker.wait(timeout=5)
+        return ("success", "", _CleanupOutcome())
+
+    dialog._run_download_worker = _held_download
+    dialog._local_model_download_claimed = ("small", "")
+    coordinator.register_explicit_interest("small", "")
+    download = threading.Thread(
+        target=_LocalModelsMixin._download_local_model_in_subprocess,
+        args=(dialog, "small", ""),
+        daemon=True,
+    )
+    download.start()
+    assert worker_running.wait(timeout=5), "the explicit download never started"
 
     def _park():
         outcome.append(coordinator.acquire("small", "", explicit=False))
@@ -631,10 +656,8 @@ def test_a_finished_local_tab_download_lets_a_waiter_join(monkeypatch):
     waiter = threading.Thread(target=_park, daemon=True)
     waiter.start()
     _wait_until(lambda: coordinator.has_waiting_download("small", ""))
-    dialog._local_model_download_claimed = ("small", "")
-    coordinator.register_explicit_interest("small", "")
-    coordinator.release("blocker", "", succeeded=False)
-    _LocalModelsMixin._download_local_model_in_subprocess(dialog, "small", "")
+    finish_worker.set()
+    download.join(timeout=5)
     waiter.join(timeout=5)
 
     assert outcome == [ACQUIRE_JOINED], (
