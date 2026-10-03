@@ -36,6 +36,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   Status stretched and Model was 100 px, cutting
   `granite-speech-5.0-470m-turboctc` (183 px); now 191 px at the default
   860 px, 185 at the 801 px minimum, and the cell's tooltip names it.
+- **The Details overview never shows the multi-line text summary in a
+  cell** (a cell shows its first line: "No benchmark results available."
+  for a run that had just started). A start shows the live rows (Running,
+  0 completed); a run ending with no case shows `show_without_results`
+  (status, "No case finished. Nothing was saved."), written after the
+  history refresh, whose empty-history placeholder would replace it.
+  `toPlainText()` keeps the summary. "Recorded" uses
+  `_benchmark_created_label`, as the History list does (it showed the UTC
+  ISO stamp, two hours off the list's local time).
 - **A stored run can open in a `BenchmarkResultsWindow`** (`Open in Window`,
   non-modal `Qt.Window` owned by the dialog, several at once, each sorting
   independently).

@@ -528,7 +528,8 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         options = entry.options
         rows: list[tuple[str, object]] = [
             ("Status", _benchmark_status_text(entry.status)),
-            ("Recorded", entry.created_at),
+            # The History list's format and clock, not the stored UTC stamp.
+            ("Recorded", _benchmark_created_label(entry.created_at)),
             ("Audio", options.audio_path or options.audio_name or "-"),
             ("Models", ", ".join(options.model_names) or "-"),
             ("Runs per model/device", options.runs),
@@ -555,12 +556,23 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                 ("Status", "Running"),
                 ("Completed cases", len(cases)),
                 (
-                    "Transcript capture",
-                    "Available below as soon as each model/device case finishes.",
+                    "Transcripts",
+                    "Each finished case's transcript appears on the Transcripts tab.",
                 ),
             ]
         )
         self._set_transcript_rows(cases)
+
+    def show_without_results(self, status: str, result: str, summary: str) -> None:
+        """A run that ended with no case to show: its status and why.
+
+        One row each, never the text summary itself: that is many lines, and
+        a table cell shows the first ("No benchmark results available.").
+        `toPlainText()` still returns the summary.
+        """
+        self._plain_text = str(summary or "")
+        self._set_overview_rows([("Status", status), ("Result", result)])
+        self._set_transcript_rows([])
 
     def _set_overview_rows(self, rows: list[tuple[str, object]]) -> None:
         self.overview_table.setRowCount(len(rows))
@@ -843,6 +855,11 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
     def set_status_text(self, text: str) -> None:
         """Show an interim line where a complete entry would go."""
         self._details_view.setPlainText(str(text))
+
+    def show_without_results(self, status: str, result: str, summary: str) -> None:
+        """An empty table and the run's status and outcome in the details."""
+        self.show_cases([])
+        self._details_view.show_without_results(status, result, summary)
 
     def _render(self) -> None:
         cases = self._benchmark_results_cases
@@ -2192,9 +2209,10 @@ class _BenchmarkMixin:
         )
         self._set_benchmark_plan_rows(planned)
         self._set_benchmark_progress(0, len(planned))
-        self.benchmark_results_panel.show_cases([])
-        self.benchmark_results_panel.set_status_text(
-            self._benchmark_summary([], status="running", options=options)
+        # The live view from the first moment, as after each case: "Running",
+        # nothing completed yet.
+        self.benchmark_results_panel.show_live(
+            self._benchmark_summary([], status="running", options=options), []
         )
         self._update_benchmark_actions()
 
@@ -2466,9 +2484,20 @@ class _BenchmarkMixin:
                 self._refresh_benchmark_history_list(select_entry=entry)
         else:
             self._current_benchmark_entry = None
-            self.benchmark_results_panel.show_cases(cases)
-            self.benchmark_results_panel.set_status_text(text)
+            # The list first: with no history its refresh writes the "No
+            # benchmark yet" placeholder, which would replace this outcome.
             self._refresh_benchmark_history_list()
+            if cases:
+                # Cases without the run's options: unreachable from the
+                # window, which always passes them; shown, not saved.
+                self.benchmark_results_panel.show_cases(cases)
+                self.benchmark_results_panel.set_status_text(text)
+            else:
+                self.benchmark_results_panel.show_without_results(
+                    _benchmark_status_text(status),
+                    "No case finished. Nothing was saved.",
+                    text,
+                )
 
         # After the history write, and only for a run that ran to the end: a
         # cancel stopped somewhere the user chose and a failure somewhere
