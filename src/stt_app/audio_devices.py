@@ -21,11 +21,17 @@ stream exists. This module owns both concerns:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import NamedTuple
 
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
+
+# `_distinct_name`'s numbering, to find the plain name again.
+_TWIN_SUFFIX = re.compile(r"^(?P<base>.+) \(#\d+\)$")
 
 # Persisted value meaning "follow the Windows default input device".
 SYSTEM_DEFAULT_INPUT_DEVICE = ""
@@ -316,6 +322,20 @@ def resolve_input_device(device_name: str) -> int | None:
     for info in available:
         if info.name == name:
             return info.index
+    # A stored "Name (#k)" whose number is gone -- the first twin was
+    # unplugged, or the two swapped places after a reboot (the numbers follow
+    # PortAudio's enumeration order, which Windows does not keep) -- records
+    # from the twin that is left: the same model, and the alternative is a
+    # failed recording. Only after the exact lookup, so a device really named
+    # like that always wins.
+    twin = _TWIN_SUFFIX.match(name)
+    if twin is not None:
+        for info in available:
+            if info.name == twin.group("base"):
+                logger.warning(
+                    "audio_input_twin_fallback selected=%r used=%r", name, info.name
+                )
+                return info.index
     raise InputDeviceNotFoundError(name)
 
 

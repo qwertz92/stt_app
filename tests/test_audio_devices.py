@@ -350,3 +350,48 @@ def test_system_default_input_name_is_empty_when_nothing_answers(monkeypatch):
 
     monkeypatch.setattr(fake, "query_hostapis", _silent)
     assert audio_devices.system_default_input_name() == ""
+
+
+def _fake_sd_with_one_usb_microphone():
+    return _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[{"name": "USB Microphone", "hostapi": 0, "max_input_channels": 1}],
+    )
+
+
+def test_a_stored_twin_number_falls_back_to_the_remaining_twin(monkeypatch, caplog):
+    """The first twin was unplugged (or the two swapped places after a
+    reboot): "USB Microphone (#2)" no longer exists, and recording stopped
+    with "not connected" although the same model is still there. The
+    remaining one is used and the fallback logged."""
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_one_usb_microphone())
+
+    with caplog.at_level("WARNING", logger=audio_devices.__name__):
+        index = resolve_input_device("USB Microphone (#2)")
+
+    assert index == 0
+    assert "audio_input_twin_fallback" in caplog.text
+
+
+def test_a_missing_numbered_name_without_a_base_device_is_still_not_found(
+    monkeypatch,
+):
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_one_usb_microphone())
+
+    with pytest.raises(InputDeviceNotFoundError):
+        resolve_input_device("Headset (#2)")
+
+
+def test_a_real_device_named_like_a_twin_is_not_replaced_by_the_fallback(
+    monkeypatch,
+):
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic (#2)", "hostapi": 0, "max_input_channels": 1},
+        ],
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert resolve_input_device("Mic (#2)") == 1

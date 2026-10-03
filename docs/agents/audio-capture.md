@@ -27,7 +27,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     a name are listed as `Name`, `Name (#2)`, `Name (#3)` in PortAudio's
     enumeration order (`_distinct_name`; the first keeps the plain name so
     old selections still resolve, a number never reuses a real device's name).
-    The order is stable only until the next re-enumeration; Windows usually
+    The numbers follow enumeration order, which Windows does not keep: after
+    a reboot or a replug the twins can swap. A stored `Name (#k)` that no
+    longer exists resolves to the remaining `Name` device and logs
+    `audio_input_twin_fallback` (a device really named like that wins), so
+    recording continues on the same model instead of failing. Windows usually
     makes endpoint names unique itself, so this is for the rare twin.
   - **Every `sd.InputStream` open passes
     `audio_devices.input_stream_extra_settings(device_index)`**
