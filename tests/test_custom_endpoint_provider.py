@@ -366,14 +366,16 @@ def test_a_chat_reply_with_null_content_is_an_error_not_silence(
 
 
 @pytest.mark.parametrize("content", ["The quick brown fox jumps over the", None])
-def test_a_chat_reply_cut_off_at_the_output_limit_is_an_error(server, content):
-    """`finish_reason: "length"` means the model ran out of output tokens: the
-    text it carries is the start of the transcript, and pasted as a complete
-    one it silently loses the end (review of 2026-10-03)."""
+@pytest.mark.parametrize("reason", ["length", "LENGTH", "Length", "max_tokens"])
+def test_a_chat_reply_cut_off_at_the_output_limit_is_an_error(server, content, reason):
+    """`finish_reason: "length"` (or `max_tokens`, in any case, as some
+    gateways spell it) means the model ran out of output tokens: the text it
+    carries is the start of the transcript, and pasted as a complete one it
+    silently loses the end (review of 2026-10-03)."""
     server(
         {
             "choices": [
-                {"message": {"content": content}, "finish_reason": "length"},
+                {"message": {"content": content}, "finish_reason": reason},
             ]
         }
     )

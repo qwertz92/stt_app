@@ -102,6 +102,8 @@ _SPEECH_SYNTHESIS_NAME = re.compile(
 # A base URL pasted together with one of the routes the app appends.
 _PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
 _ERROR_TAIL_MAX_CHARS = 200
+# OpenAI says `length`; Anthropic-style gateways say `max_tokens`.
+_OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens"})
 # The `input_audio.format` values of the chat completions API.
 _CHAT_AUDIO_FORMATS = frozenset({"wav", "mp3"})
 # A key shorter than this is a placeholder ("none" for a server without
@@ -951,14 +953,14 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             ) from exc
         reason = choice.get("finish_reason")
         reason = reason if isinstance(reason, str) else ""
-        if reason == "length":
+        if reason.lower() in _OUTPUT_LIMIT_FINISH_REASONS:
             # The text a cut-off reply carries is the start of the transcript;
             # accepted, a part of a long dictation lost its end unnoticed
             # (review of 2026-10-03).
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the model's output limit cut the transcript "
-                "off (finish reason 'length'). Use the OpenAI transcription API "
-                "style, or dictate in shorter pieces."
+                f"off (finish reason '{reason[:40]}'). Use the OpenAI "
+                "transcription API style, or dictate in shorter pieces."
             )
         if content is None:
             # A refusal or a missing text, not "nothing said": read as
