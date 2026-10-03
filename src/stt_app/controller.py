@@ -292,7 +292,9 @@ class _UndeliveredInsert:
     history_entry: TranscriptHistoryEntry | None = None
     # The paste reported success, but the focused element showed no caret
     # (`paste_target_check`): most likely nothing was inserted. Insertable
-    # like a failed paste -- the user decides after looking at the window.
+    # like a failed paste -- the user decides after looking at the window --
+    # but never joined to failed rows by the re-paste, and dropped by the
+    # next paste that goes out (`_drop_superseded_doubtful_rows`).
     outside_text_field: bool = False
 
 
@@ -325,6 +327,9 @@ class _PasteCheck:
     # The window that had the foreground for the paste; a check that finds
     # another one in front answers "unknown".
     foreground: int | None
+    # `_paste_serial` right after this paste. A verdict for an older paste
+    # than the newest lists no row: the newer paste has superseded it.
+    paste_serial: int
 
 
 @dataclass(slots=True, frozen=True)
@@ -677,6 +682,8 @@ class DictationController(QtCore.QObject):
         # The foreground window of the last paste that reported success, for
         # its target check (`_check_paste_target`).
         self._last_insert_foreground: int | None = None
+        # Counts the pastes that reported success, streaming inserts included.
+        self._paste_serial = 0
         # `(state, detail)` the offer painter wrote last, None once a plain
         # status replaced it. The preload progress poll compares it with
         # what the overlay shows, to tell the painter's own Error from a
@@ -3681,6 +3688,41 @@ class DictationController(QtCore.QObject):
             entry for entry in self._undelivered_inserts if not entry.may_have_pasted
         ]
 
+    def _repaste_rows(self) -> list[_UndeliveredInsert]:
+        """The rows the re-paste hotkey pastes: the failed ones, joined.
+
+        A "not in a text field" row only when no failed row waits. Its
+        verdict can be wrong -- the text may be in the document -- so joining
+        it to a failed paste pasted a text that had landed a second time (the
+        2026-10-03 review). It is the newest paste's row, if listed at all:
+        every later paste drops it (`_drop_superseded_doubtful_rows`).
+        """
+        insertable = self._insertable_undelivered()
+        failed = [entry for entry in insertable if not entry.outside_text_field]
+        return failed or insertable
+
+    def _drop_superseded_doubtful_rows(self) -> None:
+        """A paste went out: earlier "not in a text field" rows go.
+
+        Whether such a paste missed cannot be settled later, and a window
+        whose prompt always reads as no text field (a review probe got that
+        on an Electron window 20 times of 20) would otherwise collect one row
+        per dictation. The user saw the report when it was made, and the text
+        stays in history. A later "text field" verdict in the same window
+        is no proof the earlier element was one -- clicking into the field
+        after pasting onto a button is the case the report exists for -- so
+        the rule is "superseded by the next paste", not "disproved".
+        """
+        kept = [
+            entry for entry in self._undelivered_inserts if not entry.outside_text_field
+        ]
+        dropped = len(self._undelivered_inserts) - len(kept)
+        if not dropped:
+            return
+        self._undelivered_inserts = kept
+        self._logger.info("undelivered_insert_superseded rows=%d", dropped)
+        self._update_queue_overlay()
+
     def _still_insertable(
         self, rows: Sequence[_UndeliveredInsert]
     ) -> tuple[_UndeliveredInsert, ...]:
@@ -3720,7 +3762,7 @@ class DictationController(QtCore.QObject):
 
     def _undelivered_hint(self) -> str:
         """How many transcripts wait, and how to insert them; "" for none."""
-        count = len(self._insertable_undelivered())
+        count = len(self._repaste_rows())
         if not count:
             return ""
         hotkey = str(getattr(self._settings, "repaste_hotkey", "") or "").strip()
@@ -6316,6 +6358,7 @@ class DictationController(QtCore.QObject):
             overlay_shown=(self._overlay.state, self._overlay.detail),
             takes_shown_pair=takes_shown_pair,
             foreground=self._last_insert_foreground,
+            paste_serial=self._paste_serial,
         )
 
     def _check_paste_target(self, pending: _PasteCheck) -> None:
@@ -6401,22 +6444,30 @@ class DictationController(QtCore.QObject):
         decides after looking at the window, and a re-paste that inserts
         the text retires the row. The overlay shows it, with Insert, while
         it still shows what it showed right after the paste; otherwise --
-        and for every queued paste -- the tray carries it.
+        and for every queued paste -- the tray carries it. A verdict that
+        arrives after a later paste went out lists no row and paints
+        nothing: that paste superseded it (`_drop_superseded_doubtful_rows`).
         """
         transcript = pending.text.strip()
-        entry = self._record_undelivered_insert(
-            transcript,
-            may_have_pasted=False,
-            created_at=pending.created_at,
-            history_entry=pending.history_entry,
-            outside_text_field=True,
+        superseded = pending.paste_serial != self._paste_serial
+        entry = (
+            None
+            if superseded
+            else self._record_undelivered_insert(
+                transcript,
+                may_have_pasted=False,
+                created_at=pending.created_at,
+                history_entry=pending.history_entry,
+                outside_text_field=True,
+            )
         )
         message = (
             f"{pending.identity} pasted, but the focused element does not "
             "look like a text field."
         )
         overlay_free = (
-            not self._overlay_session_active()
+            not superseded
+            and not self._overlay_session_active()
             and not self._foreground_delivery_pending
             and (self._overlay.state, self._overlay.detail) == pending.overlay_shown
         )
@@ -7504,6 +7555,8 @@ class DictationController(QtCore.QObject):
         self._last_insert_foreground = (
             paste_foreground or self._current_foreground_window()
         )
+        self._paste_serial += 1
+        self._drop_superseded_doubtful_rows()
         self._logger.info(
             "text_insertion outcome=success chars=%d target_hwnd=%s "
             "restore_focus=%s paste_mode=%s",
@@ -7542,9 +7595,10 @@ class DictationController(QtCore.QObject):
 
         Transcripts whose paste failed come first: when any are listed (and
         not "possibly inserted", which is never pasted twice), this pastes
-        all of them as one paste, oldest first. Otherwise it pastes the last
-        text that reached a window -- a queued result pasted in the
-        background after the shown transcript, else the shown transcript.
+        all of them as one paste, oldest first; a "not in a text field" row
+        only when it is the one waiting (`_repaste_rows`). Otherwise it
+        pastes the last text that reached a window -- a queued result pasted
+        in the background after the shown transcript, else the shown one.
 
         Allowed while a transcription is in flight, without touching the
         overlay that transcription owns (field report, 2026-10-01: the
@@ -7556,7 +7610,7 @@ class DictationController(QtCore.QObject):
         while a streaming finalize is pending, whose own tail is still to be
         inserted.
         """
-        waiting = self._insertable_undelivered()
+        waiting = self._repaste_rows()
         if waiting:
             self._repaste(
                 _join_transcripts([entry.text for entry in waiting]),

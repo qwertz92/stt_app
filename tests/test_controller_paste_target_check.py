@@ -223,6 +223,88 @@ def test_f10_after_the_doubtful_report_pastes_it_again_and_retires_the_row(
     _ = app
 
 
+def test_f10_never_joins_a_doubtful_row_to_a_failed_one(monkeypatch, tmp_path):
+    """The review's repro: a FALSE "not a text field" verdict (the text did
+    land) left a row; the next paste failed cleanly, and F10 joined both, so
+    the stale text was pasted a second time."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    _dictate(controller, "stale words")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    inserter.should_fail = True
+    _dictate(controller, "missing words")
+    assert len(_rows(overlay)) == 2
+    inserter.should_fail = False
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "missing words"
+    check.answer(VERDICT_TEXT_FIELD)
+    # A later paste went out, so nothing can paste the doubtful row any
+    # more: it is dropped rather than left to pile up.
+    assert _rows(overlay) == []
+    controller.shutdown()
+    _ = app
+
+
+def test_f10_after_a_later_paste_never_pastes_an_older_doubtful_row(
+    monkeypatch, tmp_path
+):
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    _dictate(controller, "stale words")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    _dictate(controller, "new words")
+    check.answer(VERDICT_TEXT_FIELD)
+    assert _rows(overlay) == []
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "new words"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_window_that_always_reads_doubtful_keeps_only_the_latest_row(
+    monkeypatch, tmp_path
+):
+    """An Electron prompt that systematically reads "not a text field" must
+    not collect a row per dictation for F10 to paste all at once."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    for text in ("first words", "second words"):
+        _dictate(controller, text)
+        check.answer(VERDICT_NOT_TEXT_FIELD)
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "second words" in rows[0]
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "second words"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_verdict_that_arrives_after_a_later_paste_lists_no_row(monkeypatch, tmp_path):
+    """The next dictation was pasted before the first check answered: its
+    row could never be pasted by F10 any more, so only the tray reports it."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, _inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    _dictate(controller, "first words")
+    _dictate(controller, "second words")
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    assert len(messages) == 1 and "saved in history" in messages[0]
+    assert "waiting to be inserted" not in messages[0]
+    assert _rows(overlay) == []
+    assert overlay.states[-1] == ("Done", "second words")
+    controller.shutdown()
+    _ = app
+
+
 def test_a_repaste_into_no_text_field_again_stays_listed(monkeypatch, tmp_path):
     check = FakePasteTargetCheck()
     controller, app, overlay, _inserter, beeps = _make(monkeypatch, tmp_path, check)

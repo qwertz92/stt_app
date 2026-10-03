@@ -301,6 +301,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   the row by identity like any other (owner's rule 2026-10-03: a failed or
   doubtful insert is shown briefly and stops being listed once a re-paste
   inserted exactly it); if that paste is doubtful again, it gets a new row.
+  F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
+  only when no failed row waits, and the next paste that goes out (any
+  successful `_insert_text_at_target`, `_paste_serial`) drops it
+  (`_drop_superseded_doubtful_rows`); a verdict arriving after a later paste
+  lists no row and goes to the tray. Why: a false verdict leaves a row for
+  text that landed, and F10 joined it to the next failed paste, pasting the
+  landed text again (2026-10-03 review); a window that always reads
+  doubtful would also collect a row per dictation. A later "text field"
+  verdict in the same window was rejected as proof of a false one: clicking
+  into the field after pasting onto a button is the case the report exists
+  for, and in an always-doubtful window it never comes.
   Why: a SendInput Ctrl+V into a focused button, list item or page body of
   a Chromium page reported success and inserted nothing (r27 B1). Measured
   on 2026-10-03 with the production reader against real windows (four
