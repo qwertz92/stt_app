@@ -27,27 +27,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   lives under each user's `%APPDATA%` (`appdata_root() / "locks"`); two
   accounts sharing one Model Dir can corrupt it. Not an offered configuration;
   `_download_lock_dir`'s docstring says why the lock is not in the cache.
+  Kept (2026-10-03, owner decision needed): a machine-wide lock location
+  (`%PROGRAMDATA%`) needs a permissions design for a configuration nobody
+  uses; about 2 h plus the decision.
 - **With a custom Model Dir, a faster-whisper copy only in the default HF
   cache cannot be deleted from the Models tab**: the inventory answers
   "loadable from Model Dir" (`WhisperModel(download_root=...)` reads one
   root). `cached_model_paths` / `delete_cached_model` still reach it. Fix needs
-  per-model paths in the scan subprocess protocol.
-- **Cancel reaches a download only while it waits for the slot**, not during
-  the transfer (`run_coordinated_download` passes `cancel_check` only into
-  `acquire()`): `snapshot_download` has no cancel hook and the ModelScope loop
-  no poll. With `keep_onnx_model_loaded` off, a Cohere/Granite load-path
-  download cannot be cancelled and holds the `max_workers=1` worker. Proper
-  fix: route that download through the worker process the Local tab uses.
-- **Two input devices with the same name are one entry**:
-  `resolve_input_device` opens the first matching index. Names survive
-  re-enumeration and reboot; PortAudio indices do not.
+  per-model paths in the scan subprocess protocol. Kept (2026-10-03): the
+  scan side is about an hour, but the Models tab needs a row state "in the
+  default cache, not used" (`settings_dialog_local.py`, another owner's file),
+  about 3 h with its layout tests.
 - **The post-pause append gate is energy plus a speech check that admits
   most knocks.** With the silence gate on, Silero refuses most thumps and
   fast typing after a pause, but a knuckle knock still passes 47 times in 50
   (0.064-0.227 against the 0.08 cut) and can append one hallucinated window;
   the damage stays bounded by `protected_prefix`. With the silence gate off
   the speech check does not run and the gate is energy alone, as before. A
-  word under 80 ms voiced is still dropped by the energy run.
+  word under 80 ms voiced is still dropped by the energy run. Kept
+  (2026-10-03): needs recorded knocks and typing, which only the owner's
+  microphone can supply; half a day to measure and recalibrate the cut.
 - **The batch speech check lets much noise through, by design.** With its
   amplified second scan, the SYNTHETIC calibration skips a knock 1 time in
   50, typing at 160 wpm never, a fan rarely, a thump 32 times and room tone
@@ -64,37 +63,45 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **The batch speech check is off for a stop that comes before its model
   loaded**: the stop is transcribed as before (`silero_speech_seconds=loading`)
   rather than waiting on the Qt thread. Only the first second or so after
-  start, or after turning the gate on, is affected.
+  start, or after turning the gate on, is affected. Kept (2026-10-03, by
+  design): a stop inside that window needs a recording shorter than the
+  graph's load (0.1-0.3 s); waiting for it would freeze the Qt thread.
 - **The pause mechanism is inert in a room above the silence gate**: noise
   over `silence_gate_threshold` means `silent_seconds` never accumulates,
   `new_segment` never fires, `segment_floor` is never set. Logged once per
   session as `streaming_noise_floor_above_gate` after 20 s of above-gate audio
-  (rolling; cannot tell a loud room from 20 s of pause-free speech).
+  (rolling; cannot tell a loud room from 20 s of pause-free speech). Kept
+  (2026-10-03): a pause threshold relative to the measured noise floor needs
+  noisy-room recordings to calibrate; about a day with the owner's samples.
 - **The energy gate's numbers are synthetic; the speech check's noise side
   is too**: `samples/benchmark_sample.wav` (from
   `scripts/generate_sample_audio.py`) is sine tones, so do not move the
   energy threshold on synthetic evidence. The Silero cuts were calibrated on
   real speech (six LibriSpeech excerpts in `tests/data`, 25 clips and the
   owner's recordings, aggregates only) but on SYNTHETIC non-speech only: no
-  recorded cough, fan, room or keyboard was measured.
+  recorded cough, fan, room or keyboard was measured. Kept (2026-10-03,
+  needs the owner's recordings): nothing here can be fixed without them.
 - **Remote batch parts are independent**: a sentence across a cut is split,
   language detection runs per part, no previous-part prompt (vocabulary goes
   with every part). A cancel between parts discards finished parts (audio
   stays reachable via Import/recovery, not Retry); a request in flight runs on.
-- **A gap marker can stand for a stretch without words.** An empty part is
-  judged by its loudest 100 ms window against the user's silence-gate
-  threshold, so a part holding only noise or a click -- a last part can be
-  20 ms, e.g. a hotkey click after 180.4 s of `gpt-4o-transcribe` -- leaves
-  `[no text returned for ...]` in the transcript if the provider answers it
-  with nothing. Deliberate: the error direction is a marker to delete, not
-  lost speech (docs/agents/remote-providers.md). A real speech detector
-  (the Silero work) would be the better judge.
+  By design: a previous-part prompt differs per provider and is not offered
+  by all of them; the cut sits at the quietest point to keep splits rare.
+- **A gap marker can still stand for a stretch without words.** An empty
+  part is judged by its loudest 100 ms window against the user's silence-gate
+  threshold, then by the Silero check; noise the batch speech check lets
+  through (see above) -- room tone, a thump -- leaves
+  `[no text returned for ...]` if the provider answers the part with nothing.
+  Deliberate: the error direction is a marker to delete, not lost speech
+  (docs/agents/remote-providers.md).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,
   Nemotron and Granite CTC): no anti-aliasing (2026-09-19). Not added on
   2026-10-03: a low-pass filter changes the samples every imported file feeds
   the models, with no word-error-rate measurement behind it. App recordings are
-  16 kHz; only imports and benchmark samples reach it.
-- ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
+  16 kHz; only imports and benchmark samples reach it. Kept (2026-10-03,
+  owner decision needed): the filter is an hour of work, the word-error-rate
+  comparison on resampled imports that would justify it about half a day.
+- ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE). By design.
 - **Clipboard restore is not lossless.** Every HGLOBAL format is restored, but
   not: GDI-handle/owner-drawn formats (`CF_BITMAP` is resynthesized from
   `CF_DIB`; `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`,
@@ -109,7 +116,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   on the owner's own clipboard.
 - The NVIDIA *NeMo* runtime is intentionally unimplemented (Parakeet via
   onnx-asr, Nemotron via ORT GenAI); see
-  `docs/local-asr-model-candidates-2026.md`.
+  `docs/local-asr-model-candidates-2026.md`. By design.
 - **One insert offer at a time; a later failure replaces an earlier one.** In
   a flush, an earlier pre-keystroke failure (Insert useful) is replaced by a
   later post-keystroke one (Insert withheld); the earlier text is in history
@@ -216,21 +223,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   empties the clipboard first, so the late read by the busy target that the
   abandon protects could see an empty clipboard; ~1 h, and it raises the
   risk the abandon exists to avoid.
-- **`close_if_idle` is not bounded against its own closes**: a
-  `request_restart` after its generation bump reopens and each own close
-  re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
-  serialize on `_audio_device_refresh_lock`, off Qt.
-- **Some thread-start guards catch `RuntimeError` only**: the Run Benchmark
-  start (`settings_dialog_benchmark.py`, `_run_local_benchmark`), the VAD
-  auto-stop thread in `audio_capture.py`, the download progress reader in
-  `local_model_download.py` and the Silero load thread in `silero_vad.py`; a
-  `MemoryError` escapes there. The settings dialog's six other worker starts
-  catch `_THREAD_START_ERRORS`, and the controller's three (completion tone,
-  device refresh worker, preload submit) and the paste target check's worker
-  start catch `Exception`, all since 2026-10-03.
-- **`WarmMicrophoneStream.close()` does not wait for a helper's close in
-  flight** (drains `_retiring` and returns). Only `shutdown()` calls it;
-  `close_if_idle` is the call that waits.
+- **The Run Benchmark `Thread.start` guard catches `RuntimeError` only**
+  (`settings_dialog_benchmark.py`): a `MemoryError` escapes there. Every other
+  worker start catches `MemoryError` too since 2026-10-03 (settings dialog,
+  controller, paste target check, VAD auto-stop, download progress reader,
+  Silero load thread).
 - **Copy yields the pending offer after an edit made while one is pending**,
   and Edit stays disabled until the offer is retired. Offer semantics. Kept
   2026-10-03 (owner decision): letting Edit change a pending offer's text and
@@ -245,18 +242,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **The benchmark environment (median 2.2 s PowerShell) runs before the first
   cancel check**; a shutdown joins for 2.5 s: a worker it outlasts saves
   nothing, one it ends is saved as canceled.
-- **`_model_cache_dirs` does not fold a `\\?\`-prefixed Model Dir** with its
-  plain spelling (`realpath`), so a held partial counts twice. The app writes
-  no such path.
-- **`_unlink_partial` leaves a partial writable** when its retry is refused
-  for another reason after clearing read-only. Harmless.
-- **Three recorded properties of the `_unlink_partial` 10 ms retry**
-  (measured, not changed): `removed_bytes` credits the size read before the
-  first attempt; the 10 ms is paid serially per refused file (50 held
-  partials: 0.53 s) on the queue worker, the preload worker or the script,
-  never on Qt; two concurrent cleanups over one tree over-count
-  `removed_files` (84 of 4,000), because Windows accepts a second delete of a
-  file whose delete is in flight.
+- **Two recorded properties of the partial-removal retry** (measured, not
+  changed; the per-file pause and the writable leftover were fixed 2026-10-03):
+  `removed_bytes` credits the size read before the first attempt; two
+  concurrent cleanups over one tree over-count `removed_files` (84 of 4,000),
+  because Windows accepts a second delete of a file whose delete is in flight.
+  Both only skew a count in a message; the second needs two cleanups at once.
 - **A minimised Run Benchmark window or pop-out returns with the settings
   dialog** (Windows restores `Qt.Window` owned windows with their owner; the
   owner relation keeps them above it).
@@ -311,30 +302,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   deleting `onnx_auto_preferred_devices` from `%APPDATA%\stt_app\settings.json`
   with the app closed. A stale entry costs speed, never correctness
   (2026-09-19).
-- **A key command whose wrapper does not wait for its tool can lose the
-  token** (P3, 2026-10-01, review of dedcde4). `run_bounded` ends the job
-  0.5 s after the direct child exits while a descendant still holds the
-  pipes, so a `.cmd` that runs `start /b` (or PowerShell `Start-Process`
-  without `-Wait`) and exits before its tool prints gets "printed no token".
-  Telling a late token from a forgotten grandchild needs reader threads that
-  see partial output instead of `communicate`. Workaround: make the wrapper
-  wait (`start /wait`, `-Wait`). When the job cannot be assigned (a nested
-  job that forbids it), the taskkill fallback cannot reach an orphan whose
-  parent exited, so such a run times out even though the token arrived.
-- **Custom endpoint trade-offs accepted after the 2026-10-03 review** (all
-  P4):
+- **Custom endpoint trade-offs kept after the 2026-10-03 review** (all P4):
   - A gateway that masks the key itself (LiteLLM-style "sk-...1234" plus a
     key hash in a 401 reason) is shown as sent: only the full stored key and
-    the key command's token are recognised and scrubbed.
+    the key command's token are recognised and scrubbed. Kept: mask formats
+    differ per gateway, what shows is the key's first and last few characters,
+    not the key, and a guessed pattern would give false assurance.
   - Scrubbing replaces every occurrence of a credential of 8+ characters, so
     a placeholder key that is an ordinary word (`localhost`) would cut that
-    word out of an error message.
-  - A key command resolved through PATHEXT to a `.vbs`/`.js` script fails
-    with "not a valid Win32 application" instead of "not found"; call its
-    interpreter explicitly.
+    word out of an error message. Kept on purpose: a cut word is cosmetic, a
+    real key that happens to be alphabetic and left in a log is not; a
+    "dictionary word" test could not tell the two apart.
   - Arguments to a `.cmd`/`.bat` key command containing `& | < > ^ %` are
     refused, because cmd.exe interprets them whatever the quoting (e.g. an
-    `az --query "accessToken | [0]"`); put such a call into a script.
-  - `shutil.which` searches the current directory and PATH, while
-    CreateProcess searched the app directory and System32 first, so a
-    same-named tool earlier in PATH can now win. Not demonstrated.
+    `az --query "accessToken | [0]"`); put such a call into a script. By
+    design: no quoting from the caller is safe against cmd.exe.

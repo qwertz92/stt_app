@@ -2,8 +2,12 @@ import io
 import json
 import logging
 import subprocess
+import sys
 import threading
+import time
 from types import SimpleNamespace
+
+import pytest
 
 import stt_app.local_model_download as local_model_download
 from stt_app.model_download_progress import (
@@ -539,3 +543,180 @@ def test_reading_the_error_does_not_read_the_pipe_a_second_time():
 
     assert process.communicated is False
     assert process.stdout.closed is True
+
+
+def _stub_worker(monkeypatch, code: str) -> None:
+    """Make the download worker a one-line Python program."""
+    monkeypatch.setattr(
+        local_model_download,
+        "model_download_command",
+        lambda model_name, model_dir, env: [sys.executable, "-c", code],
+    )
+
+
+def test_a_load_path_download_stops_its_worker_when_canceled(monkeypatch):
+    """The load-path download ran `snapshot_download` in the calling thread,
+    which has no cancel hook, so a Cancel only reached it while it waited for
+    the slot. In the worker process it is a terminate."""
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    started = time.monotonic()
+    calls = []
+
+    def _cancel_after_a_moment():
+        calls.append(1)
+        return time.monotonic() - started > 0.3
+
+    processes = []
+    real_start = local_model_download.start_model_download_process
+    monkeypatch.setattr(
+        local_model_download,
+        "start_model_download_process",
+        lambda *a, **k: processes.append(real_start(*a, **k)) or processes[-1],
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=_cancel_after_a_moment
+        )
+
+    assert time.monotonic() - started < 10
+    assert processes[0].poll() is not None, "the worker was left running"
+
+
+def test_a_load_path_download_reports_the_workers_last_error_line(monkeypatch):
+    _stub_worker(
+        monkeypatch,
+        r"import sys; sys.stderr.write('first\nthe mirror is unreachable\n'); "
+        "sys.exit(1)",
+    )
+
+    with pytest.raises(RuntimeError, match="the mirror is unreachable"):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=lambda: False
+        )
+
+
+def test_a_load_path_download_returns_when_its_worker_succeeds(monkeypatch):
+    _stub_worker(monkeypatch, "pass")
+
+    local_model_download.download_model_via_worker_process(
+        "no-such-model", "", cancel_check=lambda: False
+    )
+
+
+def test_a_load_path_download_stops_for_a_shutdown(monkeypatch):
+    from stt_app import model_download_coordinator as coordinator
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    coordinator.request_download_shutdown()
+    try:
+        with pytest.raises(ModelDownloadCanceled):
+            local_model_download.download_model_via_worker_process(
+                "no-such-model", "", cancel_check=lambda: False
+            )
+    finally:
+        coordinator.reset_download_shutdown_for_tests()
+
+
+def test_a_load_path_download_is_not_canceled_while_the_user_queued_the_model(
+    monkeypatch,
+):
+    """A Local-tab request for the same model waits for this download to
+    finish and joins it; killing the transfer would restart it from zero. As
+    on the preload path, the cancel is not honored while the user wants the
+    model (the app shutdown still is)."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+
+    _stub_worker(monkeypatch, "import time; time.sleep(1.0)")
+    model_download_coordinator().register_explicit_interest("no-such-model", "")
+    processes = []
+    real_start = local_model_download.start_model_download_process
+    monkeypatch.setattr(
+        local_model_download,
+        "start_model_download_process",
+        lambda *a, **k: processes.append(real_start(*a, **k)) or processes[-1],
+    )
+
+    local_model_download.download_model_via_worker_process(
+        "no-such-model", "", cancel_check=lambda: True
+    )
+
+    assert processes[0].returncode == 0, "the worker was killed instead of finishing"
+
+
+def _cancel_after_a_moment():
+    """A cancel that arrives once the worker is running."""
+    started = time.monotonic()
+    return lambda: time.monotonic() - started > 0.3
+
+
+def test_a_canceled_load_path_download_removes_its_partials(monkeypatch):
+    """The killed child leaves a multi-GB `.incomplete` behind, as the
+    preload path's cancel would have cleaned up."""
+    from stt_app.model_download_coordinator import ModelDownloadCanceled
+    from stt_app.transcriber import local_faster_whisper
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    cleaned: list[tuple[str, str]] = []
+
+    def _cleanup(model_name, model_dir=""):
+        cleaned.append((model_name, model_dir))
+        return local_faster_whisper.IncompleteCleanup(1, 10, 0)
+
+    monkeypatch.setattr(
+        local_faster_whisper, "cleanup_incomplete_model_download", _cleanup
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "dir", cancel_check=_cancel_after_a_moment()
+        )
+
+    assert cleaned == [("no-such-model", "dir")]
+
+
+def test_a_canceled_load_path_download_keeps_partials_a_waiter_resumes(monkeypatch):
+    from stt_app.model_download_coordinator import (
+        ModelDownloadCanceled,
+        model_download_coordinator,
+    )
+    from stt_app.transcriber import local_faster_whisper
+
+    _stub_worker(monkeypatch, "import time; time.sleep(60)")
+    coordinator = model_download_coordinator()
+    coordinator._waiters[("no-such-model", "")] = 1
+    cleaned: list[str] = []
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "cleanup_incomplete_model_download",
+        lambda *a, **k: cleaned.append("called"),
+    )
+
+    with pytest.raises(ModelDownloadCanceled):
+        local_model_download.download_model_via_worker_process(
+            "no-such-model", "", cancel_check=_cancel_after_a_moment()
+        )
+
+    assert cleaned == []
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_progress_reader_that_cannot_start_closes_the_pipe(monkeypatch, failure):
+    """An unread pipe fills and blocks the worker inside hf_xet's callback,
+    so the read end is closed whichever way the thread start fails."""
+
+    class _CannotStart(threading.Thread):
+        def start(self):
+            raise failure("can't start new thread")
+
+    monkeypatch.setattr(local_model_download.threading, "Thread", _CannotStart)
+    stream = _worker_stdout()
+    process = SimpleNamespace(stdout=stream)
+
+    local_model_download._attach_progress_reader(process, "small")
+
+    assert stream.closed
+    assert process._stt_progress_reader is None

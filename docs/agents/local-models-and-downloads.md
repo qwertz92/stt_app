@@ -56,11 +56,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - `cleanup_incomplete_model_download` counts after a successful unlink and
     returns `IncompleteCleanup(removed_files, removed_bytes, left_files)`;
     `_CleanupOutcome.left_files` yields "could not be removed: still in use"
-    (`scripts/download_model.py` has its own). `_unlink_partial` retries a
-    refused unlink once after 10 ms (clearing read-only first), then asks
-    `exists()`: a file another program is deleting refuses, then vanishes.
-  - `_model_cache_dirs` dedupes roots by `realpath`, not `normpath` (8.3 short
-    names counted a held partial twice); returned paths keep user spelling.
+    (`scripts/download_model.py` has its own). `_remove_partials_under` tries
+    every partial once (`_unlink_once`), clears read-only on the refused ones,
+    pauses 10 ms once for the whole sweep, then retries them
+    (`_retry_unlink`) and asks `exists()`: a file another program is deleting
+    refuses, then vanishes. A file that stays gets its read-only attribute
+    back.
+  - `_model_cache_dirs` dedupes roots by `_same_directory_key` (`realpath`
+    with an extended-length `\\?\` prefix folded away), not `normpath` (8.3
+    short names and the prefixed spelling counted a held partial twice);
+    returned paths keep user spelling.
   - Preloads report it too: `_note_preload_cleanup` (by generation), appended
     by `_on_model_preload_done` for an explicit cancel and for a save leaving
     the local engine (no `_preload_cancel_requested`; failure arm).
@@ -108,8 +113,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `download_destination_dir` only, not following junctions or symlinks
     (`_partials_below`), never raising; it runs in
     `start_model_download_process` before the child starts and in both
-    snapshot functions (load-path downloads and `scripts/download_model.py`
-    bypass the launcher). A cancelled large file restarts from zero; stay on
+    snapshot functions (`scripts/download_model.py` bypasses the launcher).
+    A cancelled large file restarts from zero; stay on
     the newest hub anyway (Xet repos never resumed).
   - Settle hub's symlink probe before threads start (`_settle_symlink_probe`,
     keyed by the `commonpath` of blob and pointer): `are_symlinks_supported`
@@ -127,6 +132,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Every download goes through it, including load-path downloads
     (`_ensure_snapshot` / `_resolve_model_path` via `run_coordinated_download`;
     the only download Cohere/Granite have with `keep_onnx_model_loaded` off).
+    A load-path download runs in the same worker process as the Local tab's
+    (`local_model_download.download_model_via_worker_process`, polling
+    `cancel_check` and the shutdown flag every 0.1 s, terminating the child):
+    `snapshot_download` has no cancel hook, so in the calling thread a Cancel
+    reached it only while it waited for the slot (2026-10-03). The preload
+    path's rules apply: a cancel is not honored while `has_explicit_interest`
+    (the Local-tab request joins the finished download instead of restarting
+    from zero), and an honored one calls `cleanup_incomplete_model_download`
+    unless `has_waiting_download` (leftovers are logged as
+    `model_download_canceled_partials_left`; the controller's tray note is not
+    reachable from here). A shutdown keeps the partials for the orphan sweep.
+    Progress is not displayed there; the failure text is the child's last
+    stderr line.
     `WhisperModel(...)` downloads in its constructor, so `_ensure_model`
     fetches via the slot first, gated on `download_destination_dir` +
     `_has_valid_model_snapshot`; `find_cached_models` is too broad.
@@ -337,7 +355,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     by the header's frame count. Peak is the result plus one block: 1.01x the
     file for a 480 MB stereo 48 kHz WAV, where decoding the whole data chunk
     and converting it twice peaked at 5.0x (measured 2026-10-03 with
-    tracemalloc). The output is byte-identical to the whole-file decode.
+    tracemalloc). The output is byte-identical to the whole-file decode. A
+    block is also capped at `_WAV_BLOCK_MAX_BYTES` (the bytes six channels
+    take), so a header declaring thousands of channels reads fewer frames per
+    block instead of a block that many times larger.
   - `resample_linear` interpolates in blocks of 65,536 target samples
     (`_RESAMPLE_BLOCK`), bit-identical to the former whole-array version:
     `np.interp` only reads the two samples around a position, so each block

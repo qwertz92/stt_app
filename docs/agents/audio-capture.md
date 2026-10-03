@@ -23,7 +23,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
 - **Device selection and changes**:
   - `input_device_name` (empty = default) resolves to an index only at open
     (`audio_devices.resolve_input_device`); a missing selected microphone
-    fails the recording -- never record from another device.
+    fails the recording -- never record from another device. Devices sharing
+    a name are listed as `Name`, `Name (#2)`, `Name (#3)` in PortAudio's
+    enumeration order (`_distinct_name`; the first keeps the plain name so
+    old selections still resolve, a number never reuses a real device's name).
+    The numbers follow enumeration order, which Windows does not keep: after
+    a reboot or a replug the twins can swap. A stored `Name (#k)` that no
+    longer exists resolves to the remaining `Name` device and logs
+    `audio_input_twin_fallback` (a device really named like that wins), so
+    recording continues on the same model instead of failing. Windows usually
+    makes endpoint names unique itself, so this is for the rare twin.
   - **Every `sd.InputStream` open passes
     `audio_devices.input_stream_extra_settings(device_index)`**
     (`WasapiSettings(auto_convert=True)`): WASAPI shared mode rejects 16 kHz
@@ -54,9 +63,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     `_stream` after each close, and answers True only with nothing in flight
     after its own closes. `_CLOSE_WAIT_S` bounds waits on *other threads*;
     its own closes run to completion and re-arm the budget only when
-    `_close_retiring` reports it closed something. Accepted gap: a restart
-    issued after the bump is closed by this call, unbounded (Known
-    limitations).
+    `_close_retiring` reports it closed something. A restart issued after the
+    bump is closed by this call too, but at most `_MAX_OWN_CLOSES` (4) streams
+    in all: past that it answers False and logs `warm_microphone_stream_busy
+    restarts_after_close=N`, and the deferred refresh reopens (measured before
+    the cap: 25 restarts kept it closing for 3.14 s against a 0.4 s budget).
+  - **`close` also waits for a helper's close in flight**, bounded by
+    `_CLOSE_JOIN_S` (2.5 s, not `_CLOSE_WAIT_S`: `shutdown()` calls it on the Qt
+    thread), so the live-stream registry is clear when it returns; a wait that
+    runs out logs `warm_microphone_stream_close_unfinished`.
 - **A retired stream stays reachable until closed** (`_retiring`, drained by
   `_close_retiring`, first comer closes; a superseded open's stream too).
   `_spawn_or_run` closes on the calling thread when no helper can start and

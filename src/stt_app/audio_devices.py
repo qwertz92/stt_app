@@ -21,11 +21,17 @@ stream exists. This module owns both concerns:
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from dataclasses import dataclass
 from typing import NamedTuple
 
 import sounddevice as sd
+
+logger = logging.getLogger(__name__)
+
+# `_distinct_name`'s numbering, to find the plain name again.
+_TWIN_SUFFIX = re.compile(r"^(?P<base>.+) \(#\d+\)$")
 
 # Persisted value meaning "follow the Windows default input device".
 SYSTEM_DEFAULT_INPUT_DEVICE = ""
@@ -182,11 +188,30 @@ def query_input_devices() -> tuple[list[InputDeviceInfo], bool]:
         except (TypeError, ValueError):
             continue
         name = str(device.get("name", "")).strip()
-        if not name or name in seen:
+        if not name:
             continue
+        name = _distinct_name(name, seen)
         seen.add(name)
         result.append(InputDeviceInfo(name=name, index=index))
     return result, True
+
+
+def _distinct_name(name: str, taken: set[str]) -> str:
+    """`name`, or `name (#2)`, `name (#3)` ... for a later device of that name.
+
+    Two identical microphones list under one name, and the persisted
+    selection is a name, so the second one could never be chosen. The first
+    keeps the plain name -- every existing selection still resolves to it --
+    and the others are numbered in PortAudio's enumeration order, the same
+    order every query sees until the next re-enumeration. A number never
+    reuses a name another device really has.
+    """
+    if name not in taken:
+        return name
+    number = 2
+    while f"{name} (#{number})" in taken:
+        number += 1
+    return f"{name} (#{number})"
 
 
 class InputDeviceChoices(NamedTuple):
@@ -235,7 +260,9 @@ def input_device_choices(selected_name: str) -> InputDeviceChoices:
 
 
 def list_input_devices() -> list[InputDeviceInfo]:
-    """Connected input devices of the preferred host API, first-name-wins.
+    """Connected input devices of the preferred host API.
+
+    Devices sharing a name are numbered (`query_input_devices`).
 
     Reads PortAudio's current (possibly stale) device list; pair with
     ``try_refresh_input_devices`` to pick up hot-plugged hardware.
@@ -295,6 +322,20 @@ def resolve_input_device(device_name: str) -> int | None:
     for info in available:
         if info.name == name:
             return info.index
+    # A stored "Name (#k)" whose number is gone -- the first twin was
+    # unplugged, or the two swapped places after a reboot (the numbers follow
+    # PortAudio's enumeration order, which Windows does not keep) -- records
+    # from the twin that is left: the same model, and the alternative is a
+    # failed recording. Only after the exact lookup, so a device really named
+    # like that always wins.
+    twin = _TWIN_SUFFIX.match(name)
+    if twin is not None:
+        for info in available:
+            if info.name == twin.group("base"):
+                logger.warning(
+                    "audio_input_twin_fallback selected=%r used=%r", name, info.name
+                )
+                return info.index
     raise InputDeviceNotFoundError(name)
 
 

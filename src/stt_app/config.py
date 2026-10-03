@@ -1791,6 +1791,14 @@ DEFAULT_CUSTOM_KEY_COMMAND = ""
 # near its expiry. A 401 re-runs the command once regardless.
 CUSTOM_KEY_COMMAND_TTL_S = 300.0
 CUSTOM_KEY_COMMAND_TIMEOUT_S = 30.0
+# How long a key command that exited 0 with nothing on stdout is still waited
+# for while a descendant holds its pipes: a wrapper may start the real tool
+# without waiting (`start /b`, `Start-Process` without `-Wait`) and that tool
+# prints the token a moment later; az and gcloud answer within about 2 s.
+# Longer would hold the token lock and the dictation for a forgotten
+# background process; after it the call fails "printed no token" with the
+# helper's stderr, not with the whole timeout.
+CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S = 3.0
 
 # --- How much audio one remote batch request carries ----------------------
 #

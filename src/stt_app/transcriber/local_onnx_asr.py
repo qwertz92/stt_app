@@ -159,15 +159,20 @@ def resolve_or_download_onnx_model(
             f"Local model '{model_size}' is not cached locally. "
             f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
         )
+    from ..local_model_download import download_model_via_worker_process
     from ..model_download_coordinator import run_coordinated_download
-    from .local_faster_whisper import download_model_snapshot
+
+    def _canceled() -> bool:
+        return cancel_check is not None and cancel_check()
 
     # Through the single slot, like every other download in the process.
     with canceled_download_is_a_cancel():
         run_coordinated_download(
             model_size,
             model_dir,
-            lambda: download_model_snapshot(model_size, model_dir),
+            lambda: download_model_via_worker_process(
+                model_size, model_dir, cancel_check=_canceled
+            ),
             cancel_check=cancel_check,
         )
     cached = resolve_cached_webgpu_model_path(model_size, model_dir)
@@ -190,8 +195,11 @@ def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
 
 # Frames decoded per block by `_read_wav_float32`: 256 Ki frames is 0.5-3 MB of
 # PCM for one to six channels, and a block's float32 copy and channel mean add
-# at most three times that.
+# at most three times that. A header may declare thousands of channels, which
+# would make the same frame count that many times larger, so a block is also
+# capped at the bytes six channels take.
 _WAV_BLOCK_FRAMES = 1 << 18
+_WAV_BLOCK_MAX_BYTES = _WAV_BLOCK_FRAMES * 2 * 6
 
 
 def _source_size(source: str | Path | io.BytesIO) -> int:
@@ -256,9 +264,10 @@ def _decode_pcm16_blocks(
     frame_bytes = 2 * channels
     capacity = min(declared_frames, source_bytes // frame_bytes)
     waveform = np.empty(capacity, dtype=np.float32)
+    block_frames = max(1, min(_WAV_BLOCK_FRAMES, _WAV_BLOCK_MAX_BYTES // frame_bytes))
     filled = 0
     while filled < capacity:
-        raw = handle.readframes(min(_WAV_BLOCK_FRAMES, capacity - filled))
+        raw = handle.readframes(min(block_frames, capacity - filled))
         frames = len(raw) // frame_bytes
         if frames == 0:
             break

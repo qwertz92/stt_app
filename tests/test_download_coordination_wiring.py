@@ -91,8 +91,8 @@ def test_a_transcriber_cache_miss_takes_the_slot(recording, monkeypatch):
     downloads: list[str] = []
     monkeypatch.setattr(
         local_webgpu_asr,
-        "download_webgpu_model_snapshot",
-        lambda model, model_dir="": downloads.append(model),
+        "download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: downloads.append(model),
     )
 
     transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
@@ -109,14 +109,15 @@ def test_a_transcriber_cache_miss_takes_the_slot(recording, monkeypatch):
 
 
 def test_the_onnx_asr_load_path_takes_the_slot(recording, monkeypatch):
-    from stt_app.transcriber import local_faster_whisper, local_webgpu_asr
+    from stt_app import local_model_download
+    from stt_app.transcriber import local_webgpu_asr
     from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
 
     monkeypatch.setattr(
         local_webgpu_asr, "resolve_cached_webgpu_model_path", lambda *a, **k: None
     )
     monkeypatch.setattr(
-        local_faster_whisper, "download_model_snapshot", lambda *a, **k: None
+        local_model_download, "download_model_via_worker_process", lambda *a, **k: None
     )
 
     transcriber = LocalOnnxAsrTranscriber("parakeet-tdt-0.6b-v3")
@@ -139,8 +140,8 @@ def test_a_joined_download_is_not_repeated(recording, monkeypatch):
     downloads: list[str] = []
     monkeypatch.setattr(
         local_webgpu_asr,
-        "download_webgpu_model_snapshot",
-        lambda model, model_dir="": downloads.append(model),
+        "download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: downloads.append(model),
     )
 
     transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
@@ -167,8 +168,8 @@ def test_no_two_downloads_overlap_across_the_real_call_sites(monkeypatch):
     )
     monkeypatch.setattr(
         local_webgpu_asr,
-        "download_webgpu_model_snapshot",
-        lambda model, model_dir="": started.append(model),
+        "download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: started.append(model),
     )
 
     transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
@@ -224,9 +225,8 @@ def test_faster_whisper_downloads_through_the_slot(recording, monkeypatch):
     )
     downloaded: list[str] = []
     monkeypatch.setattr(
-        local_faster_whisper,
-        "download_model_snapshot",
-        lambda model, model_dir="": downloaded.append(model),
+        "stt_app.local_model_download.download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: downloaded.append(model),
     )
     constructed: list[str] = []
 
@@ -441,9 +441,8 @@ def test_a_custom_model_dir_does_not_skip_the_slot(recording, monkeypatch, tmp_p
     # ...but not in the configured Model Dir, which is where it would land.
     downloaded: list[str] = []
     monkeypatch.setattr(
-        local_faster_whisper,
-        "download_model_snapshot",
-        lambda model, model_dir="": downloaded.append(model),
+        "stt_app.local_model_download.download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: downloaded.append(model),
     )
 
     transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
@@ -474,9 +473,8 @@ def test_a_model_present_in_the_custom_dir_is_not_refetched(
 
     downloaded: list[str] = []
     monkeypatch.setattr(
-        local_faster_whisper,
-        "download_model_snapshot",
-        lambda model, model_dir="": downloaded.append(model),
+        "stt_app.local_model_download.download_model_via_worker_process",
+        lambda model, model_dir="", **_kw: downloaded.append(model),
     )
     transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
         model_size="small",

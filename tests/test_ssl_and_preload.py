@@ -873,6 +873,81 @@ class TestDeleteCachedModel:
 
         assert tuple(outcome) == (0, 0, 1)
 
+    @pytest.mark.skipif(
+        os.name != "nt", reason="an open handle blocks unlink on Windows"
+    )
+    def test_a_read_only_partial_that_stays_is_left_read_only(self, tmp_path):
+        """The retry clears the read-only attribute so the unlink can decide;
+        when it is refused anyway -- another program holds the file -- the
+        attribute goes back, so a file the cleanup could not remove is not
+        also left changed."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        held = blobs / "held.incomplete"
+        held.write_bytes(b"x" * 100)
+        os.chmod(held, stat.S_IREAD)
+
+        with (
+            held.open("rb"),
+            patch(
+                "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+                return_value=[blobs.parent],
+            ),
+        ):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (0, 0, 1)
+        assert not held.stat().st_mode & stat.S_IWRITE
+        os.chmod(held, stat.S_IWRITE | stat.S_IREAD)
+
+    def test_held_partials_share_one_retry_pause(self, tmp_path, monkeypatch):
+        """The 10 ms pause before the retry was paid per refused file (50 held
+        partials: 0.53 s). The first pass tries every file and the pause runs
+        once before the second."""
+        import stt_app.transcriber.local_faster_whisper as fw
+
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        for number in range(5):
+            (blobs / f"held-{number}.incomplete").write_bytes(b"x")
+        pauses: list[float] = []
+        monkeypatch.setattr(fw.time, "sleep", pauses.append)
+
+        def _always_refused(self, missing_ok=False):
+            raise PermissionError(32, "The process cannot access the file")
+
+        monkeypatch.setattr(Path, "unlink", _always_refused)
+        with patch.object(fw, "_model_cache_dirs", return_value=[blobs.parent]):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (0, 0, 5)
+        assert len(pauses) == 1
+
+    @pytest.mark.skipif(
+        os.name != "nt", reason="the extended-length prefix is a Windows spelling"
+    )
+    def test_a_model_dir_with_the_extended_length_prefix_counts_a_held_partial_once(
+        self, tmp_path, monkeypatch
+    ):
+        """`realpath` keeps an extended-length prefix the caller wrote, so the
+        prefixed spelling of a directory and its plain one were two search
+        roots and a held partial counted as two files still in use."""
+        hub = tmp_path / "hub"
+        blobs = hub / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        locked = blobs / "locked.incomplete"
+        locked.write_bytes(b"y" * 10)
+        monkeypatch.setattr(
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
+            lambda: str(hub),
+        )
+        prefixed = "\\\\?\\" + str(hub)
+
+        with locked.open("rb"):
+            outcome = cleanup_incomplete_model_download("small", prefixed)
+
+        assert tuple(outcome) == (0, 0, 1)
+
 
 # ---------------------------------------------------------------------------
 # Preload model

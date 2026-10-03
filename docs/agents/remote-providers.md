@@ -231,7 +231,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **An empty part never fails the recording (2026-10-01, owner's call).** A
     part that holds sound -- loudest 100 ms window >= the silence gate's
     threshold *as the user set it* (passed by the factory to OpenAI, Groq,
-    Azure and the custom endpoint, and part of their runtime identity), or
+    Azure and the custom endpoint, and part of their runtime identity) and
+    not found speech-free by the Silero check (`silero_vad.check_speech_wav`,
+    both scans, whole part, run on the worker thread; 2026-10-03) -- or
     unmeasurable -- leaves `[no text returned for m:ss-m:ss]` in its place
     (adjacent gaps share one marker; start rounded down, end up, so a
     short tail never reads `3:00-3:00`) and logs `remote_audio_part_empty`
@@ -250,10 +252,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     and the marker is the one channel that reaches the overlay, the document
     and history without a new controller path. Only a recording of which no
     part returned text while one held sound fails, the single request's
-    "Empty model text is a failure" rule. A speech-run check
-    (`vad.measure_longest_speech_run_s`) instead of the level was considered
-    and left out: with a marker instead of a failure, a false "sound" costs a
-    marker to delete, a false "silent" costs speech without a trace.
+    "Empty model text is a failure" rule. The Silero
+    check was added on 2026-10-03 as a second judge behind the level, not
+    instead of it: a false "sound" costs a marker to delete, a false
+    "silent" costs speech without a trace, so it turns "sound" into "silent"
+    only when both scans of the whole part stay below the cut (and the
+    provider already returned nothing for that part). A speech-run check
+    (`vad.measure_longest_speech_run_s`) was considered and left out.
   - Split, not compressed (new dependency; OpenAI rejects FLAC).
   - Sent whole: Deepgram (2 GB), ElevenLabs (3 GB / 10 h), AssemblyAI
     (2.2 GB / 10 h), Fun-ASR (streams).
@@ -372,7 +377,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     cmd.exe reading `& | < > ^ %` in an argument (reproduced: `x.cmd "a&b"`
     ran `b`), so `_resolve_program` refuses such an argument for a batch
     target, naming the character, never the argument (it may be a secret).
-    An unresolvable name stays as typed for the "not found" message.
+    An unresolvable name stays as typed for the "not found" message. The
+    lookup order approximates CreateProcess's (`_createprocess_search_path`:
+    the application's directory, `System32`, the Windows directory, then
+    PATH); `shutil.which` searches the current directory first, where
+    CreateProcess does so after the application's directory and not at all
+    when `NoDefaultCurrentDirectoryInExePath` is set, so a same-named tool in
+    the current directory can still win. A file `PATHEXT` finds that Windows
+    cannot start (`.vbs`, `.js`, `.py`, `.msc`) is refused by
+    name with "call its interpreter explicitly" (2026-10-03).
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
     then reads the pipes to the end, which a grandchild holding them
@@ -388,7 +401,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (`NtResumeProcess`, since `Popen` closes the thread handle), and once the
     direct child has exited and the pipes stay open
     `_PIPES_GRACE_AFTER_EXIT_S` (0.5 s) longer, the job is terminated and
-    the child's own output and exit code returned. The job has no
+    the child's own output and exit code returned. A child that exited 0
+    with nothing on stdout may have left its tool to print the token (`start
+    /b`, `Start-Process` without `-Wait`), so it gets a longer grace,
+    `config.CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S` (3 s; a token 2 s late is
+    returned). After it the tree is ended and the empty output returned, so
+    the error is "printed no token (exit code 0)" plus the helper's stderr
+    tail, not "did not finish within 30 s" after the whole timeout with the
+    token lock held (2026-10-03: `_PipeReader` threads collect the bytes, so
+    "nothing yet" is told from "complete"; `communicate` could not). A wrapper
+    that prints a notice and then lets its tool print the token is still
+    returned as the notice.
+    Without a job (a nested job forbids one) the orphan survives the
+    `taskkill`, and the output collected so far is returned instead of a
+    timeout. The job has no
     kill-on-close limit, so a helper that detached a daemon from its stdio
     leaves it running. POSIX does the same through `killpg` on the child's
     session, which reaches the group after the leader exited.

@@ -8,9 +8,15 @@ import sys
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from .model_download_coordinator import (
+    ModelDownloadCanceled,
+    download_shutdown_requested,
+    model_download_coordinator,
+)
 from .model_download_progress import (
     DOWNLOAD_EVENT_PREFIX,
     DOWNLOAD_PROGRESS_UNKNOWN,
@@ -32,6 +38,8 @@ _DRAIN_TIMEOUT_S = 5.0
 # it, and then the reader outlives this wait. `_close_progress_reader` says
 # what happens to the stream in that case.
 _READER_JOIN_TIMEOUT_S = 2.0
+# How often `download_model_via_worker_process` looks at its cancel check.
+_CANCEL_POLL_S = 0.1
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,6 +131,92 @@ def start_model_download_process(
     return process
 
 
+def download_model_via_worker_process(
+    model_name: str,
+    model_dir: str = "",
+    *,
+    cancel_check: Callable[[], bool],
+) -> None:
+    """Download one model in the worker process, cancelable at any moment.
+
+    This is the download a transcriber runs from its own load path. In the
+    calling thread `snapshot_download` has no cancel hook, so a Cancel only
+    reached it while it waited for the slot and then held the single worker
+    thread for the whole transfer. In the worker process a cancel is a
+    terminate. The caller holds the download slot, as it does for any
+    download (`run_coordinated_download`).
+
+    The cancel follows the preload path's rules. It is not honored while the
+    user queued this model on the Local tab: that request waits for this
+    download and joins it, and killing the transfer would restart it from
+    zero. After a cancel that was honored, the killed child's partials are
+    removed unless another caller waits for this model and resumes from them
+    (`cleanup_incomplete_model_download`).
+
+    Raises `ModelDownloadCanceled` when `cancel_check` or the app shutdown
+    fires (on a shutdown the partials stay: the next download's orphan sweep
+    clears `*.incomplete` and the mirror resumes `*.ms-part`), and
+    `RuntimeError` carrying the worker's last stderr line when it fails.
+    """
+    coordinator = model_download_coordinator()
+
+    def _user_canceled() -> bool:
+        return cancel_check() and not coordinator.has_explicit_interest(
+            model_name, model_dir
+        )
+
+    def _stop() -> bool:
+        return download_shutdown_requested() or _user_canceled()
+
+    if _stop():
+        raise ModelDownloadCanceled("Model download canceled.")
+    try:
+        process = start_model_download_process(model_name, model_dir)
+    except Exception as exc:
+        raise RuntimeError(f"Failed to start model download: {exc}") from exc
+    try:
+        while True:
+            if _stop():
+                raise ModelDownloadCanceled("Model download canceled.")
+            try:
+                process.wait(timeout=_CANCEL_POLL_S)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+    except ModelDownloadCanceled:
+        terminate_model_download_process(process)
+        release_model_download_process(process)
+        if not download_shutdown_requested() and not coordinator.has_waiting_download(
+            model_name, model_dir
+        ):
+            _remove_canceled_partials(model_name, model_dir)
+        raise
+    except BaseException:
+        terminate_model_download_process(process)
+        release_model_download_process(process)
+        raise
+    detail = model_download_process_error(process)
+    if process.returncode != 0:
+        raise RuntimeError(detail or f"Model download failed for '{model_name}'.")
+
+
+def _remove_canceled_partials(model_name: str, model_dir: str) -> None:
+    """Remove what a canceled download left; say so when something stays.
+
+    Imported here for the reason `_clear_orphaned_partials` is: this module is
+    loaded by the GUI at start-up and must not pull the transcriber package in.
+    """
+    from .transcriber.local_faster_whisper import cleanup_incomplete_model_download
+
+    left = cleanup_incomplete_model_download(model_name, model_dir).left_files
+    if left:
+        _logger.warning(
+            "model_download_canceled_partials_left model=%s files=%d",
+            model_name,
+            left,
+        )
+
+
 def _error_log_lock(process) -> threading.Lock:
     """The lock pairing a read of this child's spooled stderr with its release.
 
@@ -171,7 +265,7 @@ def _attach_progress_reader(process: subprocess.Popen[str], model_name: str) -> 
     )
     try:
         reader.start()
-    except RuntimeError:
+    except (RuntimeError, MemoryError):
         # The interpreter could not create another thread. Close our read end
         # rather than leave a pipe filling up behind the child: the worker's
         # own emit swallows the resulting write error, and the caller falls

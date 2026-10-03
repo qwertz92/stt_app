@@ -780,7 +780,7 @@ def test_the_program_is_resolved_through_path_and_pathext(runs, server, monkeypa
     monkeypatch.setattr(
         provider_module.shutil,
         "which",
-        lambda name: r"C:\Tools\az.CMD" if name == "az" else None,
+        lambda name, path=None: r"C:\Tools\az.CMD" if name == "az" else None,
     )
     fake_runs = runs(_completed("tok\n"))
     server({"text": "ok"})
@@ -791,12 +791,78 @@ def test_the_program_is_resolved_through_path_and_pathext(runs, server, monkeypa
 
 
 def test_an_unresolvable_program_is_left_as_typed(runs, server, monkeypatch):
-    monkeypatch.setattr(provider_module.shutil, "which", lambda name: None)
+    monkeypatch.setattr(provider_module.shutil, "which", lambda name, path=None: None)
     fake_runs = runs(FileNotFoundError())
     server()
     with pytest.raises(TranscriptionError, match="not found: no-such-helper"):
         _transcriber(key_command="no-such-helper --x").transcribe_batch(WAV)
     assert fake_runs.calls[0][0] == ["no-such-helper", "--x"]
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="CreateProcess's search order is Windows"
+)
+def test_the_program_is_searched_like_createprocess_before_path(tmp_path, monkeypatch):
+    """CreateProcess looked in the application's directory, then the system
+    directories, and only then on PATH; `shutil.which` alone searched PATH, so
+    a same-named tool earlier on PATH took the place of the one the key
+    command used to start. The three sources, each holding `tool.exe`: the
+    application directory wins, then System32, then PATH."""
+    app_dir = tmp_path / "app"
+    system_root = tmp_path / "windows"
+    path_dir = tmp_path / "onpath"
+    for folder in (app_dir, system_root / "System32", path_dir):
+        folder.mkdir(parents=True)
+        (folder / "tool.exe").write_bytes(b"")
+    monkeypatch.setattr(provider_module.sys, "executable", str(app_dir / "stt_app.exe"))
+    monkeypatch.setenv("SystemRoot", str(system_root))
+    monkeypatch.setenv("PATH", str(path_dir))
+
+    def _resolved() -> str:
+        # PATHEXT supplies the extension in its own case.
+        return provider_module._resolve_program(["tool"])[0].lower()
+
+    assert _resolved() == str(app_dir / "tool.exe").lower()
+    (app_dir / "tool.exe").unlink()
+    assert _resolved() == str(system_root / "System32" / "tool.exe").lower()
+    (system_root / "System32" / "tool.exe").unlink()
+    assert _resolved() == str(path_dir / "tool.exe").lower()
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="PATHEXT resolution is Windows"
+)
+@pytest.mark.parametrize(
+    ("script", "interpreter"),
+    [
+        ("helper.vbs", "cscript"),
+        ("helper.js", "cscript"),
+        ("helper.py", "python"),
+        ("helper.msc", ""),
+    ],
+)
+def test_a_script_pathext_resolves_to_is_refused_with_its_name(
+    tmp_path, monkeypatch, script, interpreter
+):
+    """`shutil.which` finds `helper.vbs` through PATHEXT, but CreateProcess
+    cannot start a script: the user got "not a valid Win32 application" with
+    no hint. The message names the file and says what to do."""
+    (tmp_path / script).write_text("", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("PATHEXT", ".EXE;.VBS;.JS;.PY;.MSC")
+
+    with pytest.raises(TranscriptionError) as raised:
+        provider_module._resolve_program(["helper"])
+
+    message = str(raised.value)
+    assert script in message.lower()
+    if interpreter:
+        assert "interpreter" in message
+        assert f"{interpreter} " in message
+    else:
+        # No interpreter to name: generic advice, never another type's.
+        assert "cscript" not in message
+        assert "python " not in message
 
 
 @pytest.mark.parametrize("argument", ["a&b", "a|b", "a<b", "a>b", "a^b", "100%"])
@@ -808,7 +874,7 @@ def test_a_batch_file_argument_cmd_would_interpret_is_refused(
     such an argument is refused instead of run as something else. The
     argument itself is not echoed: it may be a secret."""
     monkeypatch.setattr(
-        provider_module.shutil, "which", lambda name: r"C:\Tools\az.cmd"
+        provider_module.shutil, "which", lambda name, path=None: r"C:\Tools\az.cmd"
     )
     fake_runs = runs()
     server()
@@ -1199,6 +1265,43 @@ def test_a_key_command_that_exits_while_its_grandchild_holds_the_pipe(
         assert _heartbeat(heartbeat) == before, "the grandchild is still running"
     finally:
         _kill_leftover(heartbeat)
+
+
+def test_a_silent_helper_with_a_lingering_descendant_reports_no_token(
+    tmp_path, monkeypatch
+):
+    """Exit 0, nothing on stdout, a tool still holding the pipes: the helper
+    did finish, so the error is "printed no token" with its stderr tail, not
+    "did not finish within 30 s" after the whole timeout (and not holding the
+    token lock that long)."""
+    import sys
+    import time
+
+    child = tmp_path / "silent_child.py"
+    child.write_text(
+        "import subprocess, sys\n"
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'],\n"
+        "                 stdout=sys.stdout, stderr=sys.stderr)\n"
+        "sys.stderr.write('run login first\\n')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 20.0)
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S", 1.0)
+    parts = [sys.executable, str(child)]
+    command = (
+        subprocess.list2cmdline(parts)
+        if provider_module.os.name == "nt"
+        else " ".join(parts)
+    )
+    transcriber = _transcriber(api_key="", key_command=command)
+
+    started = time.monotonic()
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber._run_key_command()
+
+    assert "printed no token (exit code 0)" in str(raised.value)
+    assert "run login first" in str(raised.value)
+    assert time.monotonic() - started < 10
 
 
 def test_a_real_key_command_prints_its_token(monkeypatch):

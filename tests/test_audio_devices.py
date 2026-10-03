@@ -84,7 +84,7 @@ def _clean_live_stream_registry(monkeypatch):
     monkeypatch.setattr(audio_devices, "_live_stream_ids", set())
 
 
-def test_list_prefers_wasapi_filters_inputs_and_dedupes(monkeypatch):
+def test_list_prefers_wasapi_filters_inputs_and_numbers_twins(monkeypatch):
     monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
 
     devices = list_input_devices()
@@ -92,6 +92,34 @@ def test_list_prefers_wasapi_filters_inputs_and_dedupes(monkeypatch):
     assert devices == [
         InputDeviceInfo(name="Headset Microphone (Full WASAPI Name)", index=2),
         InputDeviceInfo(name="USB Microphone", index=4),
+        InputDeviceInfo(name="USB Microphone (#2)", index=5),
+    ]
+
+
+def test_the_second_of_two_identical_microphones_can_be_selected(monkeypatch):
+    """Both listed under one name, only the first was ever reachable: the
+    persisted selection is a name and the lookup took the first match."""
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
+
+    assert resolve_input_device("USB Microphone") == 4
+    assert resolve_input_device("USB Microphone (#2)") == 5
+
+
+def test_a_number_never_reuses_the_name_of_a_real_device(monkeypatch):
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic (#2)", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+        ],
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert [info.name for info in list_input_devices()] == [
+        "Mic",
+        "Mic (#2)",
+        "Mic (#3)",
     ]
 
 
@@ -322,3 +350,48 @@ def test_system_default_input_name_is_empty_when_nothing_answers(monkeypatch):
 
     monkeypatch.setattr(fake, "query_hostapis", _silent)
     assert audio_devices.system_default_input_name() == ""
+
+
+def _fake_sd_with_one_usb_microphone():
+    return _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[{"name": "USB Microphone", "hostapi": 0, "max_input_channels": 1}],
+    )
+
+
+def test_a_stored_twin_number_falls_back_to_the_remaining_twin(monkeypatch, caplog):
+    """The first twin was unplugged (or the two swapped places after a
+    reboot): "USB Microphone (#2)" no longer exists, and recording stopped
+    with "not connected" although the same model is still there. The
+    remaining one is used and the fallback logged."""
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_one_usb_microphone())
+
+    with caplog.at_level("WARNING", logger=audio_devices.__name__):
+        index = resolve_input_device("USB Microphone (#2)")
+
+    assert index == 0
+    assert "audio_input_twin_fallback" in caplog.text
+
+
+def test_a_missing_numbered_name_without_a_base_device_is_still_not_found(
+    monkeypatch,
+):
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_one_usb_microphone())
+
+    with pytest.raises(InputDeviceNotFoundError):
+        resolve_input_device("Headset (#2)")
+
+
+def test_a_real_device_named_like_a_twin_is_not_replaced_by_the_fallback(
+    monkeypatch,
+):
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic (#2)", "hostapi": 0, "max_input_channels": 1},
+        ],
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert resolve_input_device("Mic (#2)") == 1
