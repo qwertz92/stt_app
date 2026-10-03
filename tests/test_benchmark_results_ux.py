@@ -30,7 +30,7 @@ from stt_app.settings_store import AppSettings
 _RESULT_HEADERS = [
     "#",
     "Model",
-    "Resolved Device",
+    "Device",
     "Compute",
     "Load",
     "Avg",
@@ -116,7 +116,8 @@ def test_the_results_table_leads_with_the_run_order_of_every_case():
     assert _column(table, 1) == ["beta", "Alpha", "gamma", "Delta"]
     header = table.horizontalHeader()
     assert header.sectionResizeMode(0) == QtWidgets.QHeaderView.ResizeToContents
-    assert header.stretchLastSection() is True
+    # The model names take the spare width (see test_benchmark_tab_layout).
+    assert header.sectionResizeMode(1) == QtWidgets.QHeaderView.Stretch
     _ = app
 
 
@@ -292,7 +293,7 @@ def test_every_results_column_says_how_sorting_works():
     for column in range(table.columnCount()):
         tooltip = table.horizontalHeaderItem(column).toolTip()
         assert "a third click restores the run order" in tooltip, column
-    # The Resolved Device explanation is kept, not replaced.
+    # The device column's explanation is kept, not replaced.
     assert "runtime" in table.horizontalHeaderItem(2).toolTip()
     _ = app
 

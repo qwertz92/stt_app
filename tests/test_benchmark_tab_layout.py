@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
-from test_benchmark_results_ux import _dialog
+from test_benchmark_results_ux import _dialog, _measured_case, _settle_table
+
+from stt_app.settings_dialog_helpers import _DEFAULT_SETTINGS_DIALOG_SIZE
 
 # A 1366x768 screen at 100% with a 40 px taskbar leaves 728 px, and the dialog
 # keeps a 48 px screen margin (`_DIALOG_SCREEN_MARGIN`), so it opens at most
@@ -59,4 +61,63 @@ def test_the_benchmark_tab_fits_a_dialog_on_a_small_screen():
     details_bottom = _bottom_in(page, dialog.benchmark_summary_text)
     actions_top = dialog.clear_benchmark_results_button.mapTo(page, QtCore.QPoint()).y()
     assert details_bottom <= actions_top
+    dialog.hide()
+
+
+_LONG_MODEL_IDS = (
+    "granite-speech-5.0-470m-turboctc",
+    "cohere-transcribe-03-2026",
+    "parakeet-tdt-0.6b-v3",
+)
+
+
+def _model_column_need(table: QtWidgets.QTableWidget, text: str) -> int:
+    # The item's text plus the cell's own margins on both sides.
+    margin = table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+    return table.fontMetrics().horizontalAdvance(text) + 2 * margin
+
+
+def test_the_results_table_shows_long_model_names_whole_at_the_default_width():
+    """Every column was 100 px wide except the last, Status, which took all
+    the room left: "OK" sat in a 190 px cell while
+    "granite-speech-5.0-470m-turboctc" (183 px of text) was cut to 100 px in
+    the Model column. At the default 860 px the Model column now holds it
+    whole (191 px); at the 801 px minimum it gets 185 px and the cell's
+    tooltip carries the name."""
+    dialog, app = _shown_benchmark_tab()
+    if app.font().pointSizeF() != 9.0:
+        dialog.hide()
+        pytest.skip("the 860 px width was measured against 9 pt text")
+    dialog.resize(_DEFAULT_SETTINGS_DIALOG_SIZE.width(), dialog.height())
+    table = dialog.benchmark_results_table
+    dialog.benchmark_results_panel.show_cases(
+        [_measured_case(model, 0.05) for model in _LONG_MODEL_IDS]
+    )
+    _settle_table(app, table)
+
+    width = table.columnWidth(1)
+    for row, model in enumerate(_LONG_MODEL_IDS):
+        assert width >= _model_column_need(table, model), (model, width)
+        assert table.item(row, 1).toolTip() == model
+    dialog.hide()
+
+
+def test_a_live_case_with_long_numbers_moves_no_results_column():
+    """The short columns size to their header, which is wider than any value
+    they hold, so a case finishing mid-run cannot shift the columns."""
+    dialog, app = _shown_benchmark_tab()
+    table = dialog.benchmark_results_table
+    header = table.horizontalHeader()
+    panel = dialog.benchmark_results_panel
+    first = _measured_case("tiny", 0.05)
+    panel.show_cases([first])
+    _settle_table(app, table)
+    before = [header.sectionSize(column) for column in range(table.columnCount())]
+
+    slow = _measured_case("large-v3", 99.0, device="webgpu")
+    slow.compute_type = "onnx-int8"
+    panel.show_cases([first, slow])
+    _settle_table(app, table)
+
+    assert [header.sectionSize(c) for c in range(table.columnCount())] == before
     dialog.hide()

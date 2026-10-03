@@ -162,7 +162,7 @@ _BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX = 120
 _BENCHMARK_RESULT_COLUMNS = (
     "#",
     "Model",
-    "Resolved Device",
+    "Device",
     "Compute",
     "Load",
     "Avg",
@@ -170,6 +170,7 @@ _BENCHMARK_RESULT_COLUMNS = (
     "Status",
 )
 _BENCHMARK_RESULT_RUN_ORDER_COLUMN = 0
+_BENCHMARK_RESULT_MODEL_COLUMN = 1
 _BENCHMARK_RESULT_DEVICE_COLUMN = 2
 _BENCHMARK_RESULT_STATUS_COLUMN = len(_BENCHMARK_RESULT_COLUMNS) - 1
 # The three columns that show a measured number, and the value behind each of
@@ -775,11 +776,21 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
         results_header = self._results_table.horizontalHeader()
-        results_header.setStretchLastSection(True)
-        results_header.setSectionResizeMode(
-            _BENCHMARK_RESULT_RUN_ORDER_COLUMN,
-            QtWidgets.QHeaderView.ResizeToContents,
-        )
+        # Model takes the room; every other column is as wide as its header.
+        # They were 100 px each with Status stretching, which left "OK" a
+        # 190 px cell and cut "granite-speech-5.0-470m-turboctc" (183 px of
+        # text) to 100 px. The headers, sort arrow included, are wider than
+        # any value those columns hold ("Device" over "webgpu", "Load" over
+        # "99.99s"), so a case arriving mid-run cannot widen one. "Device",
+        # not "Resolved Device" (its tooltip says resolved): the long caption
+        # alone took 54 px from the model names.
+        for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
+            results_header.setSectionResizeMode(
+                column,
+                QtWidgets.QHeaderView.Stretch
+                if column == _BENCHMARK_RESULT_MODEL_COLUMN
+                else QtWidgets.QHeaderView.ResizeToContents,
+            )
         results_header.setSectionsClickable(True)
         # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
         # every ResizeToContents column by the space the arrow would need
@@ -846,6 +857,9 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
                     detail = case.error or case.runtime_details
                     if detail:
                         item.setToolTip(detail)
+                elif column == _BENCHMARK_RESULT_MODEL_COLUMN:
+                    # Whole on hover where a narrow dialog still elides it.
+                    item.setToolTip(value)
                 table.setItem(row, column, item)
 
     def _on_header_clicked(self, column: int) -> None:

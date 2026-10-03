@@ -28,6 +28,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   order uses indicator section -1 with the indicator left on:
   `setSortIndicatorShown(False)` re-measures `ResizeToContents` columns and
   moves the table.
+- **The results table's Model column stretches; every other column is
+  `ResizeToContents`** (2026-10-03). Their headers, sort arrow included, are
+  wider than any value they hold, so a case arriving mid-run widens nothing
+  (a test pins it). The device header reads "Device" (its tooltip says
+  resolved): "Resolved Device" took 54 px from the model names. Before,
+  Status stretched and Model was 100 px, cutting
+  `granite-speech-5.0-470m-turboctc` (183 px); now 191 px at the default
+  860 px, 185 at the 801 px minimum, and the cell's tooltip names it.
 - **A stored run can open in a `BenchmarkResultsWindow`** (`Open in Window`,
   non-modal `Qt.Window` owned by the dialog, several at once, each sorting
   independently).
