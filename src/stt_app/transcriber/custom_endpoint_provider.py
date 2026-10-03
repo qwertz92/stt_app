@@ -669,6 +669,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             models = self.list_models()
         except TranscriptionError as exc:
             return False, str(exc)
+        if not models:
+            return False, (
+                "Connected, but the model list held no usable model ids. The "
+                "endpoint may not list its models; type the model id by hand "
+                "on the Transcription tab."
+            )
         if self._model and self._model not in {model.id for model in models}:
             return False, (
                 f"Connected, but the endpoint does not offer the model "

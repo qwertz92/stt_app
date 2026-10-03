@@ -731,6 +731,23 @@ def test_the_connection_test_checks_the_chosen_model(server):
     assert "does not offer the model 'whisper-1'" in message
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [{"data": []}, {"data": ["a", "b"]}, {"data": [{"name": "llama3"}]}, []],
+    ids=["empty", "bare-strings", "no-ids", "empty-top-level-list"],
+)
+def test_the_connection_test_does_not_claim_success_for_a_list_without_ids(
+    server, answer
+):
+    """A reply with nothing parsable was reported as "Connection OK ... 0
+    models" (review of 2026-10-03)."""
+    server(answer)
+    ok, message = _transcriber(model="").test_connection()
+    assert not ok
+    assert "no usable model ids" in message
+    assert "0 models" not in message
+
+
 def test_streaming_is_not_offered():
     with pytest.raises(NotImplementedError):
         _transcriber().start_stream()
