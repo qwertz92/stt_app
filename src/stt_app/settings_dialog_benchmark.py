@@ -2228,6 +2228,10 @@ class _BenchmarkMixin:
             warmup=warmup,
             model_dir=model_dir,
         )
+        # The run owns Results from here, so no row may stay highlighted as
+        # if it were shown; and a row left selected through a refused thread
+        # start could not be clicked back into Results (no selection change).
+        self._deselect_benchmark_history()
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._benchmark_shown_entry_unsaved = False

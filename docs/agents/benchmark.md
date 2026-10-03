@@ -261,7 +261,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   press). A run whose history write failed is in no row, so while it is
   shown (`_benchmark_shown_entry_unsaved`) a selection or double-click asks
   before replacing it (`_may_replace_shown_benchmark_result`; No keeps it
-  and deselects with signals blocked). A rebuild re-selects `_current_benchmark_entry`;
+  and deselects with signals blocked). A run's start deselects too: the run
+  owns Results, and a row left selected through a refused thread start
+  could not be clicked back in. A rebuild re-selects `_current_benchmark_entry`;
   `_clear_benchmark_results` deselects (signals blocked) and is also what
   deleting the shown run and Clear History call (the deleted run stayed on
   screen with its actions disabled). Clear Loaded is enabled only while a

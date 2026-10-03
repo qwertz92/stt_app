@@ -98,6 +98,37 @@ def test_a_selection_during_a_run_leaves_the_live_results_alone(tmp_path):
     _ = app
 
 
+def test_a_starting_run_clears_the_history_selection(monkeypatch, tmp_path):
+    """The run owns Results from its start, so a highlighted row named a
+    different run than the one shown; and after a refused thread start a
+    click on that still-selected row changed nothing, so it never came back."""
+    dialog, app, _first, second = _two_runs(tmp_path)
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    dialog._refresh_benchmark_model_list(cached=["small"])
+    dialog._set_benchmark_audio_path(str(audio))
+    dialog.benchmark_history_list.setCurrentRow(0)
+    assert dialog._current_benchmark_entry.identity_key() == second.identity_key()
+
+    class _RefusingThread:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _RefusingThread)
+    dialog._run_local_benchmark()
+
+    assert dialog._selected_benchmark_history_entry() is None
+    assert dialog._current_benchmark_entry is None
+
+    dialog.benchmark_history_list.setCurrentRow(0)
+
+    assert dialog._current_benchmark_entry.identity_key() == second.identity_key()
+    _ = app
+
+
 def test_a_finished_run_keeps_its_status_line_when_its_row_is_selected(tmp_path):
     """The finish selects the new history row, and that selection must not
     replace "Benchmark finished and saved to history." with a load message."""
