@@ -613,14 +613,51 @@ class _GeneralTabMixin:
             self.remote_model_combo.setEditText(
                 self._remote_model_value_for_provider(provider)
             )
-        self.remote_model_combo.setEnabled(True)
+        self.remote_model_combo.setEnabled(
+            not self._assemblyai_streaming_selected(provider)
+        )
+        self._update_remote_model_note()
+        self.remote_model_combo.blockSignals(False)
 
+    def _assemblyai_streaming_selected(self, provider: str) -> bool:
+        """AssemblyAI streams with one fixed model, so its picker is moot."""
+        return provider == "assemblyai" and self.mode_combo.currentData() == "streaming"
+
+    def _update_remote_model_note(self) -> None:
+        """The two reserved lines under a remote engine's model row.
+
+        A setup gap that makes dictation with the selected engine fail -- no
+        key, a key marked for removal, Azure's missing endpoint, the custom
+        endpoint's missing base URL -- takes the whole note, in red, because
+        the model description does not matter until it is fixed. Called
+        whenever the engine, a key or one of those fields changes; it only
+        replaces text in a reserved area, so nothing moves.
+        """
+        if not hasattr(self, "remote_model_note_label"):
+            return
+        provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        if provider == DEFAULT_ENGINE:
+            return
+        issue = self._remote_engine_setup_issue(provider)
+        if issue is not None:
+            note, error = issue, True
+        else:
+            note = self._remote_model_description(provider)
+            error = provider == "custom" and self._custom_model_note_error
+        self.remote_model_note_label.setText(note)
+        self.remote_model_note_label.setToolTip(note)
+        self.remote_model_note_label.setStyleSheet(
+            "color: #b71c1c; padding: 0;" if error else "color: #555; padding: 0;"
+        )
+
+    def _remote_model_description(self, provider: str) -> str:
+        if provider == "custom":
+            return self._custom_model_note or self._custom_model_default_note()
         note = (
             f"The selected {self._provider_label(provider)} model is used for "
             "batch dictation and audio imports; its stored API key is reused."
         )
-        if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
-            self.remote_model_combo.setEnabled(False)
+        if self._assemblyai_streaming_selected(provider):
             note = (
                 f"Streaming always uses {ASSEMBLYAI_STREAMING_MODEL_LABEL} "
                 "Realtime. The selected "
@@ -646,22 +683,10 @@ class _GeneralTabMixin:
                 "Cloud, batch-only, with 31 languages focused on Chinese and "
                 "East/Southeast Asia, but no German. Use Azure or local for German."
             )
-        elif is_custom:
-            note = self._custom_model_note or self._custom_model_default_note()
-
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
         # longest of these notes plus this sentence needs 30 px of the 42.
-        if not is_custom:
-            note = f"{note} {_REMOTE_MODEL_KEY_POINTER}"
-        self.remote_model_note_label.setText(note)
-        self.remote_model_note_label.setToolTip(note)
-        self.remote_model_note_label.setStyleSheet(
-            "color: #b71c1c; padding: 0;"
-            if is_custom and self._custom_model_note_error
-            else "color: #555; padding: 0;"
-        )
-        self.remote_model_combo.blockSignals(False)
+        return f"{note} {_REMOTE_MODEL_KEY_POINTER}"
 
     def _custom_model_default_note(self) -> str:
         """The custom endpoint's note before this session refreshed its list."""
@@ -1354,13 +1379,7 @@ class _GeneralTabMixin:
         """The note under the model row reports the fetch while it is shown."""
         self._custom_model_note = text
         self._custom_model_note_error = error
-        if str(self.engine_combo.currentData() or "") != "custom":
-            return
-        self.remote_model_note_label.setText(text)
-        self.remote_model_note_label.setToolTip(text)
-        self.remote_model_note_label.setStyleSheet(
-            f"color: {'#b71c1c' if error else '#555'}; padding: 0;"
-        )
+        self._update_remote_model_note()
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)

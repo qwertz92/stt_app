@@ -46,8 +46,10 @@ class _FakeSettingsStore:
 
 
 class _FakeSecretStore:
-    def __init__(self):
-        self._values: dict[str, str] = {}
+    def __init__(self, *providers_with_keys: str):
+        # A key for a provider: without one the model note is replaced by
+        # the missing-key warning.
+        self._values: dict[str, str] = dict.fromkeys(providers_with_keys, "stored")
 
     def set_api_key(self, provider: str, key: str) -> None:
         self._values[provider] = key
@@ -779,7 +781,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
     dialog = SettingsDialog(
         settings_store=store,
-        secret_store=_FakeSecretStore(),
+        secret_store=_FakeSecretStore("assemblyai"),
         app_logger=_FakeLogger(),
     )
 
@@ -817,7 +819,7 @@ def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
     )
     dialog = SettingsDialog(
         settings_store=store,
-        secret_store=_FakeSecretStore(),
+        secret_store=_FakeSecretStore("elevenlabs"),
         app_logger=_FakeLogger(),
     )
 

@@ -33,6 +33,16 @@ class _SecretStore:
         return None
 
 
+class _KeyedSecretStore:
+    """A keyring that holds a key for every provider (the values are fake)."""
+
+    def get_api_key(self, provider: str) -> str:
+        return f"stored-{provider}"
+
+    def get_api_key_source(self, _provider: str) -> str:
+        return "keyring"
+
+
 class _Logger:
     def diagnostics_text(self) -> str:
         return ""
@@ -335,17 +345,30 @@ def test_dynamic_notes_reserve_exactly_two_text_lines(
         assert label.maximumHeight() == reserved_height
 
 
+@pytest.mark.parametrize("keys_stored", [False, True], ids=["no-keys", "keys"])
 def test_dynamic_notes_fit_their_reserved_area(
-    dialog: SettingsDialog,
+    monkeypatch, tmp_path, keys_stored: bool
 ) -> None:
     """At the default width and at the dialog's own minimum.
 
     The minimum is where the reservation is actually tight: with "The API key
     for this provider is set on the API Keys tab." appended, only the Fun-ASR
     note overflowed, and only at 581 px -- 45 px against the 42 reserved.
+    Without keys every remote engine shows its missing-key warning instead of
+    the model description, so both texts are measured (with a base URL, so
+    the custom endpoint shows its longer key warning).
     """
-    app = QtWidgets.QApplication.instance()
-    assert app is not None
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        azure_endpoint="https://example.cognitiveservices.azure.com",
+        custom_endpoint="https://llm.example.test/v1",
+    )
+    dialog = SettingsDialog(
+        settings_store=_SettingsStore(settings),
+        secret_store=_KeyedSecretStore() if keys_stored else _SecretStore(),
+        app_logger=_Logger(),
+    )
     dialog.show()
     app.processEvents()
     default_width = dialog.width()
@@ -362,6 +385,8 @@ def test_dynamic_notes_fit_their_reserved_area(
             "elevenlabs",
             "azure",
             "funasr",
+            "speechmatics",
+            "mistral",
             "custom",
         ):
             dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
@@ -394,6 +419,120 @@ def test_dynamic_notes_fit_their_reserved_area(
     dialog.resize(default_width, dialog.height())
     app.processEvents()
     assert dialog.language_note_label.text().strip()
+    dialog.close()
+    app.processEvents()
+
+
+def _engine_dialog(
+    monkeypatch, tmp_path, engine: str, *, secret_store, **settings
+) -> SettingsDialog:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings_dialog = SettingsDialog(
+        settings_store=_SettingsStore(AppSettings(engine=engine, **settings)),
+        secret_store=secret_store,
+        app_logger=_Logger(),
+    )
+    settings_dialog.show()
+    app.processEvents()
+    return settings_dialog
+
+
+def _note_is_a_warning(dialog: SettingsDialog) -> bool:
+    return "#b71c1c" in dialog.remote_model_note_label.styleSheet()
+
+
+def test_a_remote_engine_without_a_key_warns_on_the_transcription_tab(
+    monkeypatch, tmp_path
+) -> None:
+    """Dictation with a keyless engine fails; the tab that picks it says so.
+
+    The warning replaces the model note inside its two reserved lines, so the
+    rows below do not move when a key is typed and the warning goes.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch, tmp_path, "deepgram", secret_store=_SecretStore()
+    )
+    note = dialog.remote_model_note_label
+    assert "No Deepgram API key yet" in note.text()
+    assert note.toolTip() == note.text()
+    assert _note_is_a_warning(dialog)
+    note_geometry = note.geometry()
+    language_top = dialog.language_combo.mapTo(dialog, QtCore.QPoint(0, 0))
+
+    dialog.deepgram_key_edit.setText("typed-key")
+    app.processEvents()
+    assert "Deepgram uses the selected model" in note.text()
+    assert not _note_is_a_warning(dialog)
+    assert note.geometry() == note_geometry
+    assert dialog.language_combo.mapTo(dialog, QtCore.QPoint(0, 0)) == language_top
+
+    dialog.deepgram_key_edit.clear()
+    app.processEvents()
+    assert "No Deepgram API key yet" in note.text()
+    dialog.close()
+    app.processEvents()
+
+
+def test_a_stored_key_marked_for_removal_brings_the_warning_back(
+    monkeypatch, tmp_path
+) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch, tmp_path, "openai", secret_store=_KeyedSecretStore()
+    )
+    assert not _note_is_a_warning(dialog)
+
+    dialog._provider_remove_buttons["openai"].click()
+    app.processEvents()
+    assert "OpenAI key is removed on Save" in dialog.remote_model_note_label.text()
+    assert _note_is_a_warning(dialog)
+
+    dialog.openai_key_edit.setText("replacement")
+    app.processEvents()
+    assert not _note_is_a_warning(dialog)
+    dialog.close()
+    app.processEvents()
+
+
+def test_azure_without_its_endpoint_warns_even_with_a_key(
+    monkeypatch, tmp_path
+) -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch, tmp_path, "azure", secret_store=_KeyedSecretStore()
+    )
+    assert "Azure also needs its endpoint" in dialog.remote_model_note_label.text()
+
+    dialog.azure_endpoint_edit.setText("https://example.cognitiveservices.azure.com")
+    app.processEvents()
+    assert not _note_is_a_warning(dialog)
+    dialog.close()
+    app.processEvents()
+
+
+def test_the_custom_endpoint_warns_until_it_has_a_url_and_a_way_to_a_key(
+    monkeypatch, tmp_path
+) -> None:
+    """A key command stands in for the static key, as it does at runtime."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch, tmp_path, "custom", secret_store=_SecretStore()
+    )
+    note = dialog.remote_model_note_label
+    assert "No base URL for the custom endpoint" in note.text()
+
+    dialog.custom_endpoint_edit.setText("https://llm.example.test/v1")
+    app.processEvents()
+    assert "No key or key command for the custom endpoint" in note.text()
+
+    dialog.custom_key_command_edit.setText("print-token")
+    app.processEvents()
+    assert not _note_is_a_warning(dialog)
+    assert "Refresh" in note.text()
+    dialog.close()
+    app.processEvents()
 
 
 def test_every_local_model_note_fits_the_two_lines_reserved_for_it(

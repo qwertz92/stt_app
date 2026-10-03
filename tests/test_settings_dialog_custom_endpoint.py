@@ -153,6 +153,8 @@ def test_the_saved_model_list_is_offered_after_a_restart():
             custom_endpoint="http://localhost:8000/v1",
             custom_model="whisper-1",
             custom_models=("whisper-1", "gemini-2.5-flash"),
+            # A way to a key, so the note is not the missing-key warning.
+            custom_key_command="print-token",
         )
     )
     try:

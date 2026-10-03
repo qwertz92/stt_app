@@ -9179,3 +9179,7 @@ scrolls. The custom endpoint's Refresh list (`custom_models`) is now saved.
 - **Renaming a tab renames its sentences in the providers too.** Ten
   missing-key errors said "Settings -> API Keys"; the factory test that
   checks them is what makes the rename complete.
+- **A note that can turn into a warning needs both texts measured.** The
+  missing-key warning (item 6d) replaces the model note, so the fit test
+  without stored keys stopped measuring the descriptions at all; it now runs
+  once without and once with keys.

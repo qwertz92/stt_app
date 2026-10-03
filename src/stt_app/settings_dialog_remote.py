@@ -262,6 +262,9 @@ class _RemoteProvidersMixin:
                     "Azure Speech / Foundry resource (Keys and Endpoint). The "
                     "region must support LLM Speech."
                 )
+                self.azure_endpoint_edit.textChanged.connect(
+                    lambda _text: self._update_remote_model_note()
+                )
                 self._add_provider_sub_row(
                     cloud_grid,
                     row,
@@ -528,6 +531,9 @@ class _RemoteProvidersMixin:
             "appended), e.g. https://llm-gateway.example.com/v1 or "
             "http://localhost:8000/v1."
         )
+        self.custom_endpoint_edit.textChanged.connect(
+            lambda _text: self._update_remote_model_note()
+        )
         self.custom_key_command_edit = QtWidgets.QLineEdit()
         self.custom_key_command_edit.setPlaceholderText(
             "Optional, e.g. token-helper --print"
@@ -649,6 +655,9 @@ class _RemoteProvidersMixin:
         typed_value = key_field.text().strip()
         source = self._stored_key_source(provider)
         self._refresh_provider_row_controls(provider, key_field, typed_value, source)
+        # The Transcription tab warns while the selected engine has no key.
+        if provider == self.engine_combo.currentData():
+            self._update_remote_model_note()
         if typed_value:
             self._set_provider_status_badge(
                 provider,
@@ -762,6 +771,56 @@ class _RemoteProvidersMixin:
     def _refresh_provider_key_statuses(self) -> None:
         for provider in self._provider_key_edits:
             self._refresh_provider_key_status(provider)
+
+    def _remote_engine_setup_issue(self, engine: str) -> str | None:
+        """What stops dictation with this remote engine, or None.
+
+        Judged on what Save would leave: a typed key counts (Save stores it),
+        a key marked for removal does not, and a stored one counts only when
+        the store hands it out. Shown on the Transcription tab in place of the
+        model note (`_update_remote_model_note`).
+        """
+        key_field = self._provider_key_edits.get(engine)
+        if key_field is None:
+            return None
+        label = self._provider_label(engine)
+        if engine == "custom" and not self.custom_endpoint_edit.text().strip():
+            return (
+                "No base URL for the custom endpoint yet: enter it on the "
+                "Providers tab, or dictation with this engine fails."
+            )
+        # The same judgement as the row's Test button: an "insecure-disabled"
+        # key sits in the file but the store no longer hands it out.
+        has_key = bool(key_field.text().strip()) or (
+            engine not in self._provider_pending_clear
+            and self._stored_key_source(engine) in _USABLE_KEY_SOURCES
+        )
+        if engine == "custom":
+            has_key = has_key or bool(self.custom_key_command_edit.text().strip())
+        if not has_key:
+            if engine in self._provider_pending_clear:
+                return (
+                    f"The {label} key is removed on Save, and dictation with "
+                    "this engine then fails. Enter a key on the Providers tab."
+                )
+            if engine == "custom":
+                # The endpoint refuses to start without either (see
+                # CustomEndpointTranscriber), even for a server without auth.
+                return (
+                    "No key or key command for the custom endpoint yet: enter "
+                    "one on the Providers tab (any placeholder such as 'none' "
+                    "for a server without authentication)."
+                )
+            return (
+                f"No {label} API key yet: enter one on the Providers tab, or "
+                "dictation with this engine fails."
+            )
+        if engine == "azure" and not self.azure_endpoint_edit.text().strip():
+            return (
+                "Azure also needs its endpoint: enter it on the Providers tab, "
+                "or dictation with this engine fails."
+            )
+        return None
 
     def _mark_provider_key_for_clear(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
