@@ -562,6 +562,17 @@ In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
 - **Speechmatics** runs Melia 1 in the EU and US only; with Australia
   selected, pick Enhanced or Standard, or the request is refused before
   anything is uploaded.
+- **ElevenLabs** offers no region choice to the app. It was founded by
+  Poles and has a Warsaw company, Eleven Labs Poland sp. z o.o., which its
+  privacy policy names as the EU representative and the controller for
+  voice data of European users; the contracting company is Eleven Labs Inc.
+  in New York, its servers are in the US, the Netherlands and Singapore, and
+  the policy states that "all Personal Data will be transferred to the
+  United States for storage" (privacy policy updated 2026-05-20, read
+  2026-10-03). EU data residency (`api.eu.residency.elevenlabs.io`) is
+  available to Enterprise customers only
+  ([data residency](https://elevenlabs.io/docs/overview/administration/data-residency)),
+  so the app keeps the default host.
 
 Sources, read 2026-10-01: AssemblyAI's
 [region page](https://www.assemblyai.com/docs/pre-recorded-audio/select-the-region)
