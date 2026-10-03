@@ -6410,22 +6410,17 @@ class DictationController(QtCore.QObject):
         whose check still runs, and the tone would confirm nothing. Nothing
         here waits.
 
-        A check still waiting for a paste of the same text is dropped: this
+        A check still waiting for a paste of the same text into the same
+        window is dropped once this paste's own check has started: this
         paste repeated it, so the earlier verdict -- read before it -- would
-        report as missing a text the user has just pasted again.
+        report as missing a text the user has just pasted again. When this
+        check is refused, the earlier one stays and decides; dropping it
+        then left neither paste with a verdict (the second review).
         """
         checker = self._paste_target_check
         if checker is None or self._shutdown_started:
             self._play_completion_beep()
             return
-        repeated = [
-            check_id
-            for check_id, waiting in self._paste_checks.items()
-            if waiting.text.strip() == pending.text.strip()
-        ]
-        for check_id in repeated:
-            del self._paste_checks[check_id]
-            self._logger.info("paste_target_check id=%d dropped=repeated", check_id)
         self._paste_check_counter += 1
         check_id = self._paste_check_counter
         emit = self.paste_target_checked.emit
@@ -6444,6 +6439,15 @@ class DictationController(QtCore.QObject):
             if tone_if_refused:
                 self._play_completion_beep()
             return
+        repeated = [
+            waiting_id
+            for waiting_id, waiting in self._paste_checks.items()
+            if waiting.text.strip() == pending.text.strip()
+            and waiting.foreground == pending.foreground
+        ]
+        for waiting_id in repeated:
+            del self._paste_checks[waiting_id]
+            self._logger.info("paste_target_check id=%d dropped=repeated", waiting_id)
         self._paste_checks[check_id] = pending
         QtCore.QTimer.singleShot(
             PASTE_TARGET_CHECK_TIMEOUT_MS,

@@ -306,12 +306,14 @@ def test_a_verdict_that_arrives_after_a_later_paste_lists_no_row(monkeypatch, tm
     _ = app
 
 
-def test_a_repaste_inside_the_check_window_is_neither_confirmed_nor_reported(
+def test_a_refused_repaste_is_not_confirmed_and_keeps_the_earlier_verdict(
     monkeypatch, tmp_path
 ):
     """The first check still holds the worker, so the re-paste's own check
-    is refused: that played the tone as if confirmed, and the first verdict
-    then reported a paste the re-paste had already repeated."""
+    is refused. That played the tone as if confirmed; and dropping the first
+    check for the repeat as well left neither paste with a verdict. The
+    first one now decides: a row is not listed (the re-paste superseded
+    it), but the tray says the focus did not look like a text field."""
     check = FakePasteTargetCheck()
     controller, app, overlay, inserter, beeps = _make(monkeypatch, tmp_path, check)
     messages: list[str] = []
@@ -326,9 +328,31 @@ def test_a_repaste_inside_the_check_window_is_neither_confirmed_nor_reported(
     check.answer(VERDICT_NOT_TEXT_FIELD)
 
     assert beeps == []
-    assert messages == []
+    assert len(messages) == 1 and "does not look like a text field" in messages[0]
     assert _rows(overlay) == []
     assert overlay.states[-1] == ("Done", "hello world")
+    controller.shutdown()
+    _ = app
+
+
+def test_the_same_text_into_another_window_keeps_the_earlier_check(
+    monkeypatch, tmp_path
+):
+    """Two dictations of "okay." into two windows are two pastes; the second
+    must not cancel the first one's verdict."""
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, _inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    messages: list[str] = []
+    controller.background_insertion_failed.connect(messages.append)
+    _dictate(controller, "okay.")
+    focus = controller._window_focus_helper
+    focus.captured = focus.current = 111
+    _dictate(controller, "okay.")
+    assert check.expected_foregrounds == [987, 111]
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    assert len(messages) == 1 and "does not look like a text field" in messages[0]
     controller.shutdown()
     _ = app
 
