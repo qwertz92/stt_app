@@ -20,7 +20,7 @@ from conftest import (
     make_controller,
 )
 from PySide6.QtTest import QTest
-from test_controller_queue import DeferredExecutor
+from test_controller_queue import DeferredExecutor, PacedTextInserter
 
 from stt_app.config import (
     FALLBACK_HOTKEY,
@@ -76,7 +76,7 @@ class FakePasteTargetCheck:
         self.closed = True
 
 
-def _make(monkeypatch, tmp_path, check, *, immediate_insert=False):
+def _make(monkeypatch, tmp_path, check, *, immediate_insert=False, inserter=None):
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
         "stt_app.controller.create_transcriber",
@@ -92,7 +92,7 @@ def _make(monkeypatch, tmp_path, check, *, immediate_insert=False):
         repaste_hotkey="Ctrl+Alt+F10",
     )
     overlay = FakeOverlay()
-    inserter = FakeTextInserter()
+    inserter = inserter or FakeTextInserter()
     controller, app = make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -349,6 +349,62 @@ def test_a_repaste_of_the_same_text_leaves_the_verdict_to_its_own_check(
 
     assert beeps == [1]
     assert overlay.states[-1] == ("Done", "hello world")
+    controller.shutdown()
+    _ = app
+
+
+def _f10_inside_the_pace(monkeypatch, tmp_path, *, dismiss_before_pace_ends):
+    """A doubtful row A, then F10 inside the paste pace while queued C waits."""
+    check = FakePasteTargetCheck()
+    inserter = PacedTextInserter()
+    controller, app, overlay, _inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, inserter=inserter
+    )
+    messages: list[str] = []
+    controller.busy_overlay_error.connect(messages.append)
+    controller.start_recording()
+    controller.stop_recording()
+    token_c = controller._active_request_token
+    _dictate(controller, "doubtful words")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    # C finishes inside the doubtful paste's restore window: the pace holds it.
+    controller._on_transcription_ready("queued words", request_token=token_c)
+    controller.repaste_last_transcript()
+    assert [call[0] for call in inserter.calls] == ["doubtful words"]
+    if dismiss_before_pace_ends:
+        controller._dismiss_undelivered()
+    # C goes first; its own keystroke paces the re-paste once more.
+    for _round in range(2):
+        inserter.now += 5.0
+        controller._on_paste_pace_timeout()
+    return controller, app, overlay, inserter, messages
+
+
+def test_f10_held_by_the_pace_still_pastes_the_row_it_named(monkeypatch, tmp_path):
+    """C's paste dropped the doubtful row as superseded, and the paced F10
+    then found its row gone and ended without pasting or saying anything."""
+    controller, app, _overlay, inserter, _messages = _f10_inside_the_pace(
+        monkeypatch, tmp_path, dismiss_before_pace_ends=False
+    )
+
+    assert [call[0] for call in inserter.calls] == [
+        "doubtful words",
+        "queued words",
+        "doubtful words",
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_paced_f10_whose_rows_are_gone_says_so(monkeypatch, tmp_path):
+    controller, app, overlay, inserter, messages = _f10_inside_the_pace(
+        monkeypatch, tmp_path, dismiss_before_pace_ends=True
+    )
+
+    assert [call[0] for call in inserter.calls] == ["doubtful words", "queued words"]
+    shown = [detail for state, detail in overlay.states if state == "Error"]
+    notices = [*messages, *shown]
+    assert any("nothing was inserted" in notice for notice in notices), notices
     controller.shutdown()
     _ = app
 

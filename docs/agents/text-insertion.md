@@ -310,7 +310,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
   only when no failed row waits, and the next paste that goes out (any
   successful `_insert_text_at_target`, `_paste_serial`) drops it
-  (`_drop_superseded_doubtful_rows`); a verdict arriving after a later paste
+  (`_drop_superseded_doubtful_rows`) -- except a row a paced re-paste
+  (`_pending_repaste`) names, which the queued paste the pace lets go first
+  used to drop, so the F10 pasted nothing and said nothing; a paced
+  re-paste whose rows are gone now says so on the overlay or tray
+  (2026-10-03 second review); a verdict arriving after a later paste
   lists no row and goes to the tray. Why: a false verdict leaves a row for
   text that landed, and F10 joined it to the next failed paste, pasting the
   landed text again (2026-10-03 review); a window that always reads

@@ -3720,9 +3720,20 @@ class DictationController(QtCore.QObject):
         is no proof the earlier element was one -- clicking into the field
         after pasting onto a button is the case the report exists for -- so
         the rule is "superseded by the next paste", not "disproved".
+
+        A row a paced re-paste names stays: the user pressed F10 or Insert
+        for it, and the queued paste the pace let go first dropped it, so the
+        re-paste found nothing to paste (the 2026-10-03 second review).
         """
+        pending = self._pending_repaste
+        requested = (
+            (*pending.undelivered, *pending.offer_rows) if pending is not None else ()
+        )
         kept = [
-            entry for entry in self._undelivered_inserts if not entry.outside_text_field
+            entry
+            for entry in self._undelivered_inserts
+            if not entry.outside_text_field
+            or any(entry is named for named in requested)
         ]
         dropped = len(self._undelivered_inserts) - len(kept)
         if not dropped:
@@ -6002,6 +6013,11 @@ class DictationController(QtCore.QObject):
             ]
             if not still_waiting:
                 self._logger.info("repaste_dropped reason=rows_gone")
+                # Never end a user's F10 silently.
+                self.show_overlay_error(
+                    "The waiting transcripts were dismissed or inserted in the "
+                    "meantime, so nothing was inserted."
+                )
                 return
             if len(still_waiting) != len(undelivered):
                 text = _join_transcripts([entry.text for entry in still_waiting])
