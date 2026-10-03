@@ -101,6 +101,8 @@ _SPEECH_SYNTHESIS_NAME = re.compile(
 # A base URL pasted together with one of the routes the app appends.
 _PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
 _ERROR_TAIL_MAX_CHARS = 200
+# The `input_audio.format` values of the chat completions API.
+_CHAT_AUDIO_FORMATS = frozenset({"wav", "mp3"})
 # A key shorter than this is a placeholder ("none" for a server without
 # authentication) and, as a word, would be cut out of every message.
 _MIN_SECRET_CHARS = 8
@@ -625,11 +627,17 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 "moment and try again."
             )
         suffix = f": {detail}" if detail else http_error_suffix(exc)
-        hint = (
-            f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
-            if exc.code in (404, 405)
-            else ""
-        )
+        hint = ""
+        if exc.code in (404, 405):
+            hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
+        elif exc.code == 413:
+            limit = remote_batch_part_limit("custom", self._model, self._api_mode)
+            hint = (
+                " The gateway or a proxy in front of it refuses a request this "
+                f"large; the app sends parts of at most {limit.seconds:.0f} s or "
+                f"{limit.max_bytes // 1_000_000} MB and cannot make them smaller. "
+                "Raise the body limit there, or use the other API style."
+            )
         return TranscriptionError(
             f"{_PROVIDER_NAME} {what} failed (HTTP {exc.code}){suffix}{hint}"
         )
@@ -812,6 +820,17 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
 
     def _chat_body(self, audio_bytes: bytes, filename: str) -> bytes:
         audio_format = Path(filename).suffix.lower().lstrip(".") or "wav"
+        if audio_format not in _CHAT_AUDIO_FORMATS:
+            # `input_audio.format` is `wav` or `mp3` in the OpenAI shape. Any
+            # other name used to be sent as it was and answered with a 400
+            # that does not say why; converting needs a decoder the app does
+            # not ship (review of 2026-10-03).
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the chat API style takes WAV or MP3 audio "
+                f"only, and this recording is .{audio_format}. Use the OpenAI "
+                "transcription API style, which sends the file as it is, or "
+                "convert the file to WAV."
+            )
         body: dict[str, object] = {
             "model": self._model,
             "temperature": 0,

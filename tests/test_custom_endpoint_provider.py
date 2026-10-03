@@ -211,6 +211,26 @@ def test_a_404_points_at_the_base_url_and_the_style(server):
     assert "API style" in str(raised.value)
 
 
+@pytest.mark.parametrize(
+    ("mode", "size"), [("transcriptions", "25 MB"), ("chat", "15 MB")]
+)
+def test_a_413_names_the_fixed_part_size(server, mode, size):
+    """A gateway or proxy with a lower body limit answers 413 ("Request Entity
+    Too Large"); the part size is fixed, so the message says what is sent and
+    what to change instead (review of 2026-10-03)."""
+    server(
+        _http_error(
+            413, "<html><head><title>413 Request Entity Too Large</title></head></html>"
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode=mode).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 413" in message
+    assert size in message
+    assert "body limit" in message
+
+
 # -- chat completions -------------------------------------------------------
 
 
@@ -242,6 +262,42 @@ def test_the_chat_request_carries_the_audio_and_the_instruction(server):
     import base64
 
     assert base64.b64decode(part["input_audio"]["data"]) == WAV
+
+
+@pytest.mark.parametrize("suffix", [".m4a", ".flac", ".ogg", ".opus", ".webm", ".aac"])
+def test_chat_audio_other_than_wav_or_mp3_is_refused_before_sending(
+    server, tmp_path, suffix
+):
+    """`input_audio.format` is `wav` or `mp3` in the OpenAI shape; any other
+    suffix was sent as its own name and answered with a 400 that does not
+    say why (review of 2026-10-03)."""
+    fake = server()
+    clip = tmp_path / f"clip{suffix}"
+    clip.write_bytes(b"not decoded")
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(str(clip))
+    message = str(raised.value)
+    assert suffix in message
+    assert "WAV or MP3" in message
+    assert "transcription API" in message
+    assert fake.requests == []
+
+
+def test_chat_audio_as_mp3_is_sent_as_mp3(server, tmp_path):
+    fake = server(_chat_reply("ok"))
+    clip = tmp_path / "clip.MP3"
+    clip.write_bytes(b"ID3 not decoded")
+    _transcriber(api_mode="chat").transcribe_batch(str(clip))
+    part = json.loads(fake.requests[0].data)["messages"][1]["content"][0]
+    assert part["input_audio"]["format"] == "mp3"
+
+
+def test_transcription_style_sends_any_suffix_unchanged(server, tmp_path):
+    fake = server({"text": "ok"})
+    clip = tmp_path / "clip.m4a"
+    clip.write_bytes(b"not decoded")
+    assert _transcriber().transcribe_batch(str(clip)) == "ok"
+    assert b'filename="clip.m4a"' in fake.requests[0].data
 
 
 @pytest.mark.parametrize(

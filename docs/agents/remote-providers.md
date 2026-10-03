@@ -428,6 +428,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     ...; not `tts`) comes first, since OpenAI's own list sends no `mode`;
     ordering only, never a filter. Reads are bounded (2 MB list, 8 MB
     reply).
-  - **Not verified against a live server by the app's own code path**; the
-    chat request shape was verified by hand against one gateway.
+  - **Verified live, in part (2026-09-30, `docs/learning-log.md`)**: the
+    owner's LiteLLM gateway, through the app's own code path -- the key
+    command with an 861-character JWT, the model list (19 entries), the
+    connection test, and a 25 s German clip transcribed in the chat style
+    in 4.3 s. Not verified: the transcription style produced a transcript
+    nowhere (on that gateway it reaches the backend's own HTTP 403), so the
+    multipart request has only been seen by fake servers; a local speech
+    server (speaches, LocalAI), a hosted OpenAI-compatible API and a
+    recording split into parts were not run live either. The 2026-10-03
+    fixes (key-command lookup and quoting, error scrubbing, HTML block
+    pages) were tested with fakes and, for the key command, with real
+    `npm`, `wsl.exe` and `.cmd` shims on Windows, not against the gateway.
+  - **Proxies** (2026-10-03, `_open` builds a standard urllib opener):
+    `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY` (either case) are honoured;
+    on Windows the registry's proxy (Internet Options, `ProxyServer` with
+    `ProxyEnable`) is read only when none of these variables is set; a PAC
+    script (`AutoConfigURL`) and WPAD are not supported, so a company that
+    publishes only a PAC file needs the variables set by hand. A proxy that
+    refuses `CONNECT` surfaces as `Tunnel connection failed: <status>`.
+    Reproduced against a fake proxy for the variable cases; the registry
+    path is urllib's own and was not run.
+  - **Part sizes are fixed** (`config.remote_batch_part_limit`): 10 min / 25
+    MB for the transcription style, 5 min / 15 MB for the chat style
+    (base64 grows the body by a third). A gateway or proxy with a lower
+    body limit answers 413; the error says so and names these figures
+    (`_http_error`), because no setting can shrink the parts.
+  - **Chat audio is `wav` or `mp3` only** (2026-10-03): `input_audio.format`
+    takes those two values in the OpenAI shape, and the app ships no
+    decoder, so another suffix (an imported `.m4a`, `.flac`, ...) is refused
+    before sending, with the transcription style named as the way out. The
+    transcription style sends the file as it is.
 
