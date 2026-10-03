@@ -496,6 +496,55 @@ def test_a_stored_key_marked_for_removal_brings_the_warning_back(
     app.processEvents()
 
 
+class _PlainTextSecretStore:
+    """Holds one plain-text fallback key per provider; `source` is what the
+    real store reports for it: "insecure" while its fallback is enabled."""
+
+    def __init__(self, source: str) -> None:
+        self._source = source
+
+    def get_api_key(self, provider: str) -> str | None:
+        return f"stored-{provider}" if self._source == "insecure" else None
+
+    def get_api_key_source(self, _provider: str) -> str:
+        return self._source
+
+
+@pytest.mark.parametrize(
+    ("saved_allows", "source"), [(True, "insecure"), (False, "insecure-disabled")]
+)
+def test_the_key_warning_follows_the_unsaved_insecure_storage_checkbox(
+    monkeypatch, tmp_path, saved_allows: bool, source: str
+) -> None:
+    """A plain-text key is handed out only while the fallback is enabled, and
+    the checkbox applies on Save. The warning says it judges what Save leaves,
+    but read the store's current state: unchecking the box (unsaved) kept the
+    key "usable" in the warning and badge, and checking it for a disabled
+    store kept the warning although Save would make the key usable."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch,
+        tmp_path,
+        "openai",
+        secret_store=_PlainTextSecretStore(source),
+        allow_insecure_key_storage=saved_allows,
+    )
+    try:
+        checkbox = dialog.insecure_key_storage_checkbox
+        badge = dialog._provider_status_labels["openai"]
+        assert checkbox.isChecked() is saved_allows
+        for checked in (True, False, True):
+            checkbox.setChecked(checked)
+            app.processEvents()
+            assert _note_is_a_warning(dialog) is (not checked), checked
+            assert badge.text() == (
+                "Stored insecurely" if checked else "Insecure disabled"
+            ), checked
+    finally:
+        dialog.close()
+        app.processEvents()
+
+
 def test_azure_without_its_endpoint_warns_even_with_a_key(
     monkeypatch, tmp_path
 ) -> None:

@@ -227,8 +227,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
 - **A remote engine that cannot dictate says so on the Transcription tab**
   (2026-10-03, UX review item 6d). `_remote_engine_setup_issue` (remote
   mixin) names the first gap: the custom endpoint's base URL, then the key
-  (typed, or stored with a usable source and not marked for removal -- the
-  Test button's judgement; for the custom endpoint a key command counts, as
+  (typed, or stored with a usable source and not marked for removal; a
+  plain-text key is usable while the insecure-fallback checkbox is
+  **checked, saved or not** -- `_key_source_after_save`, which the
+  key-source badge shares, since the store hands the key out only once Save
+  has applied the box. The Test button differs on purpose: a test runs now,
+  against the store's present state. For the custom endpoint a key command counts, as
   `CustomEndpointTranscriber` requires one of the two), then Azure's
   endpoint, then Speechmatics Melia 1 outside eu1/us1
   (`config.speechmatics_model_available_in`, the transcriber's own check). `_update_remote_model_note` shows it in red in place of the

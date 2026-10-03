@@ -627,6 +627,25 @@ class _RemoteProvidersMixin:
         except Exception:
             return "none"
 
+    def _key_source_after_save(self, provider: str) -> str:
+        """The stored key's source as Save would leave it.
+
+        The store hands a plain-text key out only while its insecure fallback
+        is enabled, and the checkbox applies on Save, so an unsaved tick
+        changes what the store will report: a stored fallback key reads as
+        "insecure" with the box checked and "insecure-disabled" without it.
+        The key's Test button is not judged this way: a test runs now, against
+        the store's present state.
+        """
+        source = self._stored_key_source(provider)
+        if source in {"insecure", "insecure-disabled"}:
+            return (
+                "insecure"
+                if self.insecure_key_storage_checkbox.isChecked()
+                else "insecure-disabled"
+            )
+        return source
+
     def _set_provider_status_badge(
         self,
         provider: str,
@@ -657,6 +676,7 @@ class _RemoteProvidersMixin:
         typed_value = key_field.text().strip()
         source = self._stored_key_source(provider)
         self._refresh_provider_row_controls(provider, key_field, typed_value, source)
+        source = self._key_source_after_save(provider)
         # The Transcription tab warns while the selected engine has no key.
         if provider == self.engine_combo.currentData():
             self._update_remote_model_note()
@@ -791,11 +811,13 @@ class _RemoteProvidersMixin:
                 "No base URL for the custom endpoint yet: enter it on the "
                 "Providers tab, or dictation with this engine fails."
             )
-        # The same judgement as the row's Test button: an "insecure-disabled"
-        # key sits in the file but the store no longer hands it out.
+        # An "insecure-disabled" key sits in the file but the store does not
+        # hand it out; whether the fallback is enabled is the checkbox's value
+        # as Save would apply it (the row's Test button reads the store's
+        # present state instead, as a test runs now).
         has_key = bool(key_field.text().strip()) or (
             engine not in self._provider_pending_clear
-            and self._stored_key_source(engine) in _USABLE_KEY_SOURCES
+            and self._key_source_after_save(engine) in _USABLE_KEY_SOURCES
         )
         if engine == "custom":
             has_key = has_key or bool(self.custom_key_command_edit.text().strip())
