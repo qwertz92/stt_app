@@ -116,15 +116,27 @@ def test_a_header_declaring_far_more_frames_than_the_file_holds_allocates_the_fi
     assert waveform.size == 100
 
 
-@pytest.mark.parametrize("channels", [1, 2])
-def test_decoding_holds_about_one_mono_float32_copy_not_five_file_sizes(channels):
+@pytest.mark.parametrize(
+    ("channels", "cut_bytes"),
+    [(1, 0), (2, 0), (1, 3)],
+    ids=["mono", "stereo", "truncated-mono"],
+)
+def test_decoding_holds_about_one_mono_float32_copy_not_five_file_sizes(
+    channels, cut_bytes
+):
     """Measured with tracemalloc (numpy reports its buffers to it) on 40 MB of
     16-bit audio: the whole-file decode peaked at several file sizes; the
     block-wise decode peaks at the mono float32 result plus one block. The
     `BytesIO` input is built before tracing starts, so only what the reader
     allocates counts."""
     frames = _random_pcm(20_000_000)  # 40 MB of PCM, whatever the channel count
-    source = io.BytesIO(_wav(frames, channels=channels))
+    # A truncated file declares more frames than it holds, so the reader
+    # fills less than it allocated; that case once cost a second full copy.
+    payload = _wav(frames, channels=channels)
+    source = io.BytesIO(payload[: len(payload) - cut_bytes])
+    # A second reference to the bytes makes BytesIO copy them on first read,
+    # which tracemalloc would charge to the reader.
+    del payload
     file_bytes = len(source.getvalue())
 
     tracemalloc.start()

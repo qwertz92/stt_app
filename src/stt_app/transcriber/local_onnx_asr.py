@@ -270,7 +270,10 @@ def _decode_pcm16_blocks(
             block = block.reshape(-1, channels).mean(axis=1)
         waveform[filled : filled + frames] = block
         filled += frames
-    return waveform if filled == capacity else waveform[:filled].copy()
+    # A view, not a copy: a truncated file fills less than its header
+    # promised, and copying the shorter result doubled the peak. The unused
+    # tail is bounded by the file's own size.
+    return waveform[:filled]
 
 
 class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
