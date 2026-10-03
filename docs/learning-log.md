@@ -9186,3 +9186,33 @@ cannot open a file with it, which no unit test of ours noticed because they stub
 the model. Lesson: a transitive package with an open lower bound (`av>=11`) is
 moved by the lock upgrade, so the code path that uses it has to run before the
 lock is committed; `av` is now a direct pin with its reason and a test.
+
+## 2026-10-03: a paste into no text field is reported, not claimed
+
+The r27 investigation (B1) showed a SendInput Ctrl+V into a focused button,
+list item or body of a Chromium page reporting success while nothing
+landed: Chromium fires its paste event even there. After each paste that
+reports success, a worker now reads the focus's caret (Win32 caret, MSAA
+`OBJID_CARET`) and a Chromium focus with no caret is reported as doubtful:
+no tone, an insertable row, the overlay's Insert. The lead's design asked
+for "both say no caret" in every window; measuring it against a new Windows
+Terminal window showed the prompt answering exactly that (invisible caret,
+width 0) while it takes every paste, so "no caret" now counts only in
+Chromium windows, the one class where it was measured to mean "no text
+field". Lesson: a detector built from one application's measurements needs
+a run against the applications that draw their own caret before its
+verdict may reach the user. WM_PASTE is no longer sent to Chromium windows
+(B2): it was answered with success and ignored.
+
+The review round on the same day found the doubtful row's life cycle
+wrong rather than the detector: a false verdict left a row for text that
+had landed, F10 joined it to the next failed paste and pasted it again; a
+queued paste's report painted over another job's Insert offer; a re-paste
+inside the check window played the tone as confirmed and then got a stale
+row. A probe also read "not a text field" 20 times of 20 on an Electron
+window, most likely the Claude desktop app. Doubtful rows are now pasted
+by F10 only alone and are dropped by the next paste, the report paints only
+over its own paste's screen, every check logs its evidence, and
+`scripts/diagnose_paste_target.py` measures any window. Lesson: a verdict
+that can be wrong must not feed an action that repeats a paste, and real
+use has to log enough to show where it is wrong.

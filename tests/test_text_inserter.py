@@ -1046,6 +1046,57 @@ def test_auto_mode_still_falls_back_when_nothing_was_delivered(monkeypatch):
     assert wm_paste_calls == [4321]
 
 
+def _chromium_window(backend, monkeypatch):
+    """The target is a Chromium window; WM_PASTE must never reach it."""
+    sent = []
+    monkeypatch.setattr(
+        backend, "_window_class_name", lambda _hwnd: "Chrome_WidgetWin_1"
+    )
+    monkeypatch.setattr(
+        backend,
+        "_send_message_timeout_result",
+        lambda hwnd, message, timeout_ms: sent.append(hwnd) or (True, 0),
+    )
+    return sent
+
+
+def test_wm_paste_mode_refuses_a_chromium_window_before_sending(monkeypatch):
+    """Measured into an Edge textarea: WM_PASTE answered success, no paste
+    event fired and nothing was inserted, so the paste was reported done."""
+    backend = Win32ClipboardBackend()
+    sent = _chromium_window(backend, monkeypatch)
+
+    with pytest.raises(TextInsertionError) as raised:
+        backend.send_paste_with_mode("wm_paste", target_hwnd=4321)
+
+    assert sent == []
+    # Nothing went out, so the paste failed cleanly: the clipboard is put
+    # back and Insert is offered.
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError)
+    assert "Set Paste mode to Auto" in str(raised.value)
+
+
+def test_auto_mode_does_not_fall_back_to_wm_paste_for_a_chromium_window(monkeypatch):
+    backend = Win32ClipboardBackend()
+    sent = _chromium_window(backend, monkeypatch)
+
+    def _refused_ctrl_v():
+        raise TextInsertionError("SendInput failed (sent 0 events).")
+
+    monkeypatch.setattr(backend, "send_ctrl_v", _refused_ctrl_v)
+
+    with pytest.raises(TextInsertionError) as raised:
+        backend.send_paste_with_mode("auto", target_hwnd=4321)
+
+    assert sent == []
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError)
+    message = str(raised.value)
+    assert "SendInput failed" in message
+    assert "ignore WM_PASTE" in message
+    # The user is already in Auto: telling them to switch to it is wrong.
+    assert "Paste mode" not in message
+
+
 class _UnwritableClipboardBackend(GatedPasteBackend):
     """The clipboard cannot be opened, so this app never changed it."""
 

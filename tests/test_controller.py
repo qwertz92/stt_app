@@ -2890,6 +2890,66 @@ def test_a_failed_live_insert_offers_the_same_words_again():
     _ = app
 
 
+def test_a_streaming_abort_over_rejected_inserts_says_why(monkeypatch):
+    """WM_PASTE mode into a Chromium window is refused on every live insert.
+    The abort said only "kept rejecting inserted text", so the one fix --
+    Paste mode Auto -- was nowhere on screen."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+        keep_transcript_in_clipboard=False,
+    )
+    reason = (
+        "Chrome_WidgetWin_1 windows (Chromium and Electron apps) ignore WM_PASTE, "
+        "so the transcript was not pasted. Set Paste mode to Auto to paste with Ctrl+V."
+    )
+    inserter = FakeTextInserter()
+
+    def _refused(text, target_hwnd=None, paste_mode="auto", restore_clipboard=True):
+        inserter.calls.append((text, target_hwnd, paste_mode))
+        raise TextInsertionError(reason)
+
+    inserter.insert_text_with_options = _refused
+    focus_helper = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    aborts: list[str] = []
+    monkeypatch.setattr(
+        controller,
+        "_request_stream_abort",
+        lambda message, beep: aborts.append(message),
+    )
+    controller._streaming_recording = True
+    controller._audio_capture = object()
+    controller._target_window_handle = focus_helper.captured
+    controller._target_focus_signature = focus_helper.capture_target_signature()
+
+    for partial in (
+        "hello world this is",
+        "world this is working now",
+        "this is working now today",
+        "is working now today again",
+    ):
+        controller._on_transcription_partial(partial)
+        if aborts:
+            break
+
+    assert len(aborts) == 1
+    assert "kept rejecting inserted text" in aborts[0]
+    assert reason in aborts[0]
+    controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize(
     ("label", "helper_kind"),
     [

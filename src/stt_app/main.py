@@ -33,6 +33,7 @@ from .local_model_scan import scan_cached_models_out_of_process
 from .logger import AppLogger
 from .model_download_coordinator import request_download_shutdown
 from .overlay_ui import OverlayUI
+from .paste_target_check import PasteTargetCheck
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
@@ -245,6 +246,7 @@ def run() -> int:
         last_recording_store=last_recording_store,
         show_overlay_hotkey_manager=show_overlay_hotkey_manager,
         repaste_hotkey_manager=repaste_hotkey_manager,
+        paste_target_check=PasteTargetCheck(),
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)

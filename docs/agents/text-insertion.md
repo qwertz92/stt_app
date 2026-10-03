@@ -140,7 +140,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     clipboard history and clipboard managers consume it); a UI Automation
     read-back (heavy and per application); an owner window without a pump
     (blocks every other program's `EmptyClipboard`).
-    `keep_transcript_in_clipboard` skips the restore.
+    `keep_transcript_in_clipboard` skips the restore. The target check
+    below answers a narrower question afterwards: whether the focus showed
+    a caret.
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,
@@ -181,6 +183,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   clipboard alone, and a re-raise carries `allow_clipboard_fallback` across
   (inside `insert_text` a post-keystroke failure becomes a constructed
   `ClipboardContentionError`; a fresh exception defaulted to permissive).
+- **WM_PASTE is never sent to a Chromium window** (2026-10-03,
+  `window_focus.CHROMIUM_WINDOW_CLASSES`: `Chrome_WidgetWin_1`,
+  `Chrome_RenderWidgetHostHWND`). `_send_wm_paste` raises
+  `_WmPasteIgnoredError` before sending: in `wm_paste` mode that is the
+  paste's error, plus the advice to choose Auto; in `auto` mode after a
+  failed SendInput it is folded into "Auto paste failed" with the reason
+  only, since that user is in Auto already. Streaming live inserts that
+  keep failing end in "Streaming aborted: the target window kept rejecting
+  inserted text." followed by the last failure's reason, so the wm_paste
+  advice reaches the screen there too. Both are
+  pre-keystroke failures: the clipboard is put back and Insert is offered.
+  Why: into an Edge --app textarea `SendMessageTimeout(WM_PASTE)` succeeded,
+  the page saw no paste event and nothing landed, so the transaction
+  reported a paste that never happened (r27 B2, 2026-09-27; re-measured
+  2026-10-03 for the top-level window and its render-widget child alike;
+  Electron apps are the same window class). Reporting it as "may not have
+  been inserted" was rejected: that withholds Insert, while the text
+  demonstrably did not land.
 - **Deferred queue inserts are coalesced**: `_flush_deferred_background_results`
   groups token-ordered results by captured target, one paste per group
   (each paste is a clipboard race window). Only this flush joins texts,
@@ -238,7 +258,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (owner's field report 2026-10-01: six queued pastes, two silently
   missing). Each failed or possibly-landed queued or foreground batch paste
   becomes an `_UndeliveredInsert` row (negative id) in the overlay queue
-  panel, sent as `QUEUE_ROW_KIND_UNDELIVERED`: "Not inserted" or "Possibly
+  panel, sent as `QUEUE_ROW_KIND_UNDELIVERED`: "Not inserted", "Not in a
+  text field" (the target check below) or "Possibly
   inserted, check the window", amber, with a Dismiss button (both row
   captions share one reserved width) and a title that counts transcriptions
   and waiting inserts apart. Later results never replace a row; Dismiss
@@ -255,6 +276,100 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   The tray report appends
   `_undelivered_hint`: the count and how to insert them -- the re-paste
   hotkey only while registered, else the tray's "Insert transcript again".
+- **A paste that reports success has its target checked, report-only**
+  (2026-10-03, `paste_target_check.PasteTargetCheck`, wired in `main.py`;
+  the controller's `paste_target_check` argument defaults to None = no
+  check, which every test that does not pass one gets). After a foreground
+  batch paste, a queued paste and a re-paste (not streaming live inserts or
+  the finalize tail) `_check_paste_target` hands a `_PasteCheck` to the
+  worker thread (MTA COM, one check at a time; a second request while one
+  runs is refused, never queued) and returns; the answer comes back through
+  `paste_target_checked`, or `PASTE_TARGET_CHECK_TIMEOUT_MS` (1 s) answers
+  "unknown". Verdicts: a Win32 caret (`GetGUIThreadInfo.hwndCaret`) in any
+  window is a text field; in a Chromium window (`Chrome_WidgetWin_1`,
+  `Chrome_RenderWidgetHostHWND`) MSAA `OBJID_CARET` on the focus window
+  invisible or 0 wide is "not a text field", read again after
+  `PASTE_TARGET_CHECK_RECHECK_DELAYS_S` (0.1, 0.25 s) and standing only when
+  every reading on the same foreground agrees; everything else -- other
+  window classes, an MSAA error, a changed foreground, a refused or
+  timed-out check -- is "unknown", which behaves exactly as before. "Not a
+  text field": no completion tone; an insertable `_UndeliveredInsert` row
+  with `outside_text_field`; the tray (`background_insertion_failed`) for
+  a queued paste or when the overlay moved on; on the overlay, while it
+  still shows what the paste painted (`_PasteCheck.overlay_shown`: only the
+  paste's own "Done" or Idle, never a session and never another job's Done
+  or Error -- a queued paste paints nothing, and painting over a failed
+  paste's or a streaming tail's offer took that Insert away, 2026-10-03
+  review), an Error "pasted, but the focused element does not look
+  like a text field. If nothing appeared, click into the field and press
+  Insert" with the Insert offer (`_paint_insert_offer`, shared with the
+  failed queued paste). A re-paste or Insert that then pastes it retires
+  the row by identity like any other (owner's rule 2026-10-03: a failed or
+  doubtful insert is shown briefly and stops being listed once a re-paste
+  inserted exactly it); if that paste is doubtful again, it gets a new row.
+  F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
+  only when no failed row waits, and the next paste that goes out (any
+  successful `_insert_text_at_target`, `_paste_serial`) drops it
+  (`_drop_superseded_doubtful_rows`) -- except a row a paced re-paste
+  (`_pending_repaste`) names, which the queued paste the pace lets go first
+  used to drop, so the F10 pasted nothing and said nothing; a paced
+  re-paste whose rows are gone now says so on the overlay or tray
+  (2026-10-03 second review); a verdict arriving after a later paste
+  lists no row and goes to the tray. Why: a false verdict leaves a row for
+  text that landed, and F10 joined it to the next failed paste, pasting the
+  landed text again (2026-10-03 review); a window that always reads
+  doubtful would also collect a row per dictation. A later "text field"
+  verdict in the same window was rejected as proof of a false one: clicking
+  into the field after pasting onto a button is the case the report exists
+  for, and in an always-doubtful window it never comes. A new paste of the
+  same text into the same window drops a check still waiting for it once
+  its own check has started (the earlier verdict was read before the
+  repeat). A re-paste whose own check is refused -- the earlier one still
+  holds the worker -- plays no tone (`tone_if_refused`) and leaves the
+  earlier check in place, which then decides: "text field" plays one tone,
+  "not a text field" goes to the tray without a row, since the re-paste
+  superseded it. Before (2026-10-03 reviews), the refused re-paste played
+  the tone as confirmed, and dropping the earlier check as well left
+  neither paste with a verdict. Either way two pastes of the same text into
+  one window inside one check window get one verdict and at most one tone.
+  Why: a SendInput Ctrl+V into a focused button, list item or page body of
+  a Chromium page reported success and inserted nothing (r27 B1). Measured
+  on 2026-10-03 with the production reader against real windows (four
+  runs; `scripts/release_check_clipboard_paste.py` part F repeats the EDIT
+  and Edge cases): Win32 EDIT, read-only EDIT, RichEdit 5.0 text field
+  (0.05-0.5 ms first reading); Edge input, textarea, contenteditable, an
+  EditContext element that reports its selection bounds, and Edge's own
+  address and find bars text field; Edge
+  read-only input, button, focusable list item, body "not a text field"
+  (2-4 ms warm, 15-33 ms for the first reading in the process); each stable
+  over 30 readings in 1.5 s (a bare EditContext element was not: Known
+  limitations). A textarea's caret answered 6-29 ms after Edge was brought
+  to the front (two runs; the foreground lock refused the others), but at
+  least one of 143 readings in the first run said "no caret" at a moment
+  the probe did not record: the rechecks keep a short-lived one from deciding.
+  Windows Terminal draws its own cursor and answers MSAA with an invisible
+  caret of width 0 while its prompt takes the paste, which is why "no
+  caret" counts only in Chromium windows; it and the Win32 BUTTON are
+  "unknown". UI Automation is not used: a fresh Edge's first answer named
+  the wrong element, it calls a contenteditable a Group and the body an
+  editable Document, and a UIA client may switch an Electron app into its
+  screen-reader mode.
+  - **Every check logs one INFO line, and a script reads any window**
+    (2026-10-03): `paste_target_check id= verdict= window_class=
+    focus_class= gui_caret= msaa_caret= width= rechecks= [note=]
+    background= chars=` (`CaretReading.evidence()`: class names and caret
+    answers, never a title or text; `note=` names why there is no reading,
+    e.g. `not_started`, `timeout`, `foreground_changed`).
+    `scripts/diagnose_paste_target.py` counts down 5 s, then runs the
+    production `PasteTargetCheck` 10 times against whatever has the focus
+    and prints the same fields. Why: a review's read-only probe got "not a
+    text field" 20 of 20 times on a foreground `Chrome_WidgetWin_1` window,
+    most likely the Claude desktop app the owner dictates into, with the
+    focus location unknown; real use and the script now produce the data
+    to tell which Electron prompts misread. Sample: an Edge --app textarea
+    `text_field ... msaa_caret=visible width=1 rechecks=0` in 2-4 ms (18 ms
+    first), its button `not_text_field ... msaa_caret=invisible width=0
+    rechecks=2` in about 360 ms.
 - **The overlay's Insert pastes the text that failed** (a streaming
   finalize's tail past `committed_text`, not all of `_last_transcript`).
   `_insert_action_text` is written by both paths that paint the Insert action
@@ -311,8 +426,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   start or stop (the start or stop takes the target snapshot, and a paste
   then races it), during a streaming recording (live inserts write at the
   caret) and during a streaming finalize, whose tail would land behind the
-  paste. A failed insert still shows briefly in the tray and stays as a
-  row; a re-paste that inserts that row retires it.
+  paste. A failed or doubtful insert still shows briefly in the tray and
+  stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
   inserted, never pasted again. The `_last_transcript` fallback
   (`_repaste_last_unless_possibly_inserted`) refuses, with the reason shown,

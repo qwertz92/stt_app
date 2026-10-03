@@ -26,6 +26,7 @@ from .config import (
     SENDINPUT_RETRY_SLEEP_S,
     WM_PASTE_TIMEOUT_MS,
 )
+from .window_focus import CHROMIUM_WINDOW_CLASSES, window_class_name
 
 try:
     import win32clipboard  # type: ignore
@@ -104,6 +105,21 @@ class _ClipboardContentionAfterPaste(
 # works. Opening with a real owner window would close the race itself, and is
 # deliberately not done here (see `Win32ClipboardBackend._with_reopen`).
 ERROR_CLIPBOARD_NOT_OPEN = 1418
+
+
+class _WmPasteIgnoredError(TextInsertionError):
+    """The target's window class ignores WM_PASTE; nothing was sent.
+
+    The message states only the reason. The advice to switch Paste mode to
+    Auto belongs to the `wm_paste` mode alone: Auto reaches WM_PASTE only
+    after Ctrl+V failed, and a user already in Auto cannot act on it.
+    """
+
+    def __init__(self, window_class: str) -> None:
+        super().__init__(
+            f"{window_class} windows (Chromium and Electron apps) ignore "
+            "WM_PASTE, so the transcript was not pasted."
+        )
 
 
 class _ClipboardNotOpenError(TextInsertionError):
@@ -330,6 +346,16 @@ _CLIPBOARD_SYNTHESIZED_FORMATS = frozenset({1, 2, 7, 8, 13, 16, 17})
 _FIRST_REGISTERED_CLIPBOARD_FORMAT = 0xC000
 # What `SetClipboardData` requires of the block it is given.
 GMEM_MOVEABLE = 0x0002
+
+# Chromium window classes (`window_focus.CHROMIUM_WINDOW_CLASSES`) ignore
+# WM_PASTE. Measured into an Edge --app page with a focused textarea (r27 paste investigation,
+# 2026-09-27; on 2026-10-03 to the top-level window and to its
+# `Chrome_RenderWidgetHostHWND` child alike): `SendMessageTimeout(WM_PASTE)`
+# succeeded, the page saw no paste event and nothing was inserted, so the
+# transaction reported a paste that never happened. Electron apps (VS Code,
+# Slack, ...) are Chromium windows of the same class. WM_PASTE is not sent to
+# them at all: the paste fails cleanly before any keystroke, the clipboard is
+# put back and the Insert offer can paste it once SendInput works again.
 
 _UNAVAILABLE_CLIPBOARD_TEXT = object()
 # "No pending restore handed a previous clipboard state over to this
@@ -1180,8 +1206,13 @@ class Win32ClipboardBackend:
     def send_paste_with_mode(self, mode: str, target_hwnd: int | None = None) -> str:
         normalized = (mode or "auto").strip().lower()
         if normalized == "wm_paste":
-            if self._send_wm_paste(target_hwnd):
-                return "wm_paste"
+            try:
+                if self._send_wm_paste(target_hwnd):
+                    return "wm_paste"
+            except _WmPasteIgnoredError as ignored:
+                raise TextInsertionError(
+                    f"{ignored} Set Paste mode to Auto to paste with Ctrl+V."
+                ) from ignored
             raise TextInsertionError("WM_PASTE failed for target window.")
 
         if normalized == "send_input":
@@ -1201,8 +1232,13 @@ class Win32ClipboardBackend:
         except Exception as exc:
             send_input_error = exc
 
-        if self._send_wm_paste(target_hwnd):
-            return "wm_paste"
+        try:
+            if self._send_wm_paste(target_hwnd):
+                return "wm_paste"
+        except _WmPasteIgnoredError as ignored:
+            raise TextInsertionError(
+                f"Auto paste failed: SendInput error: {send_input_error}; {ignored}"
+            ) from ignored
 
         raise TextInsertionError(
             f"Auto paste failed: SendInput error: {send_input_error}; WM_PASTE failed."
@@ -1265,6 +1301,9 @@ class Win32ClipboardBackend:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
         if hwnd == 0:
             return False
+        window_class = self._window_class_name(hwnd)
+        if window_class in CHROMIUM_WINDOW_CLASSES:
+            raise _WmPasteIgnoredError(window_class)
         sent, last_error = self._send_message_timeout_result(
             hwnd, WM_PASTE, WM_PASTE_TIMEOUT_MS
         )
@@ -1291,6 +1330,9 @@ class Win32ClipboardBackend:
                 "WM_PASTE timed out; the target may still paste the transcript."
             )
         return False
+
+    def _window_class_name(self, hwnd: int) -> str:
+        return window_class_name(self._user32, hwnd)
 
     def _send_message_timeout(self, hwnd: int, message: int, timeout_ms: int) -> bool:
         sent, _last_error = self._send_message_timeout_result(hwnd, message, timeout_ms)

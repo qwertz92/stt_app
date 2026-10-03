@@ -297,4 +297,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   start beep is synchronous). Never for streaming appends, history-only or
   failed inserts. `Thread.start` is guarded: a `RuntimeError` there once
   reported a landed paste as failed and armed a duplicate Insert. One tone
-  per coalesced paste, and one for a re-paste during a session.
+  per coalesced paste, and one for a re-paste during a session. With a
+  paste target check configured the tone waits for its answer
+  (`_on_paste_target_checked`, at most `PASTE_TARGET_CHECK_TIMEOUT_MS`) and
+  is not played when it says "not a text field"
+  (`docs/agents/text-insertion.md`); a check that cannot start plays it at
+  once. It is skipped when a recording other than the one open at the
+  paste started before the answer (`_recording_started_since`, 2026-10-03
+  review): the delayed tone would reach that recording's microphone. A
+  queued paste mid-recording keeps its tone, as before the check.

@@ -1,7 +1,7 @@
 """Exercise the clipboard backend and the paste transaction on the real desktop.
 
 WHAT IT CHECKS
-Five things, in this order:
+Six things, in this order:
 
   A. capture -> set transcript -> restore on a real clipboard holding text,
      HTML, a DIB image, a file list and "Preferred DropEffect": every format
@@ -18,6 +18,11 @@ Five things, in this order:
      between the transaction opening and the keystroke, and the paste must be
      refused with the clipboard put back rather than typed into the wrong
      window.
+  F. the paste target check (`paste_target_check`) on a focused EDIT (a text
+     field) and, when Microsoft Edge is installed, on a throwaway Edge --app
+     page with a focused textarea (a text field) and a focused button (not
+     one); and that WM_PASTE is refused for that Chromium window before
+     anything is sent, with the clipboard put back.
 
 WHY A FAKE CANNOT REPLACE IT
 Every clipboard test in the repository drives `Win32ClipboardBackend` against
@@ -33,9 +38,11 @@ WHAT IT TOUCHES
   and put back in a `finally`, and the run ends with a check that it came
   back. Its CONTENT is never printed or written to the report -- only format
   ids, format names and sizes.
-* The foreground, for parts D and E only. Two small EDIT windows appear, take
-  the focus for a few seconds and close again. Because that steals the
-  keyboard, those two parts wait until the user has been idle for 12 seconds
+* The foreground, for parts D to F only. Two small EDIT windows appear, take
+  the focus for a few seconds and close again; part F also starts Edge with
+  a throwaway profile in the sandbox, a local page and a DevTools port on
+  127.0.0.1, and ends that Edge process tree. Because that steals the
+  keyboard, those parts wait until the user has been idle for 12 seconds
   (up to 10 minutes) and are skipped entirely with `--skip-focus`. Parts A to
   C never take the focus.
 * A throwaway folder under %TEMP% for the files Explorer moves and copies.
@@ -43,7 +50,7 @@ WHAT IT TOUCHES
   `%APPDATA%\\stt_app` is unreachable. No network.
 
 HOW LONG IT TAKES
-About 15 seconds with `--skip-focus`; about 25 seconds plus the idle wait
+About 15 seconds with `--skip-focus`; about 40 seconds plus the idle wait
 without it.
 
 COMMAND LINE
@@ -58,11 +65,15 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import json
 import logging
 import struct
+import subprocess
 import sys
 import threading
 import time
+import urllib.request
+import winreg
 from ctypes import wintypes
 from pathlib import Path
 
@@ -87,9 +98,15 @@ except ImportError as _exc:
     sys.stdout.write(f"PREREQUISITE pywin32 is not importable: {_exc}\n")
     raise SystemExit(common.EXIT_PREREQUISITE) from None
 
+from stt_app.paste_target_check import (  # noqa: E402
+    VERDICT_NOT_TEXT_FIELD,
+    VERDICT_TEXT_FIELD,
+    PasteTargetCheck,
+)
 from stt_app.text_inserter import (  # noqa: E402
     TextInserter,
     TextInsertionError,
+    TextMayHaveBeenPastedError,
     Win32ClipboardBackend,
 )
 
@@ -189,7 +206,23 @@ FOREGROUND_GUARD_CHECKS = (
     "foreground_guard.the_paste_is_refused",
     "foreground_guard.the_clipboard_is_restored_at_once",
 )
-FOCUS_CHECKS = (*SEND_INPUT_CHECKS, *FOREGROUND_GUARD_CHECKS)
+PASTE_TARGET_EDIT_CHECK = "paste_target.a_focused_edit_is_a_text_field"
+PASTE_TARGET_EDGE_CHECKS = (
+    "paste_target.a_focused_edge_textarea_is_a_text_field",
+    "paste_target.a_focused_edge_button_is_not_a_text_field",
+    "wm_paste.is_refused_for_a_chromium_window_and_the_clipboard_put_back",
+)
+PASTE_TARGET_CHECKS = (PASTE_TARGET_EDIT_CHECK, *PASTE_TARGET_EDGE_CHECKS)
+FOCUS_CHECKS = (*SEND_INPUT_CHECKS, *FOREGROUND_GUARD_CHECKS, *PASTE_TARGET_CHECKS)
+EDGE_DEBUG_PORT = 9347
+EDGE_PAGE_TITLE = "stt-app-paste-target-probe"
+EDGE_PAGE = (
+    "<!doctype html><html><head><meta charset='utf-8'>"
+    f"<title>{EDGE_PAGE_TITLE}</title></head><body>"
+    "<p>stt_app release check - closes by itself</p>"
+    "<textarea id='ta' rows='3'></textarea> <button id='btn'>button</button>"
+    "</body></html>"
+)
 
 LOG_LINES: list[str] = []
 
@@ -702,6 +735,217 @@ def part_e(checks: common.Checks, windows: ProbeWindows) -> dict:
     }
 
 
+def check_paste_target(timeout_s: float = 5.0):
+    """One run of the production check against the current foreground."""
+    done = threading.Event()
+    readings = []
+    checker = PasteTargetCheck()
+    try:
+        expected = int(user32.GetForegroundWindow() or 0) or None
+        if not checker.request(
+            lambda reading: (readings.append(reading), done.set()),
+            expected_foreground=expected,
+        ):
+            return None
+        done.wait(timeout_s)
+        return readings[0] if readings else None
+    finally:
+        checker.close()
+
+
+def part_f_edit(checks: common.Checks, windows: ProbeWindows) -> dict:
+    """A Win32 EDIT with the focus shows a caret: a text field."""
+    if not take_foreground(windows.first):
+        checks.skipped(PASTE_TARGET_EDIT_CHECK, "Windows refused the foreground")
+        return {"foreground_obtained": False}
+    time.sleep(0.2)
+    reading = check_paste_target()
+    verdict = reading.verdict if reading else "no answer"
+    detail = reading.evidence() if reading else ""
+    checks.verdict(
+        PASTE_TARGET_EDIT_CHECK,
+        verdict == VERDICT_TEXT_FIELD,
+        f"verdict={verdict} detail={detail}",
+    )
+    return {"verdict": verdict, "detail": detail}
+
+
+def find_edge() -> Path | None:
+    """msedge.exe from its App Paths registration, None when absent."""
+    key_path = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+    for hive in (winreg.HKEY_LOCAL_MACHINE, winreg.HKEY_CURRENT_USER):
+        try:
+            with winreg.OpenKey(hive, key_path) as key:
+                value, _kind = winreg.QueryValueEx(key, "")
+        except OSError:
+            continue
+        path = Path(str(value).strip('"'))
+        if path.is_file():
+            return path
+    return None
+
+
+class EdgePage:
+    """A throwaway Edge --app window on a local page, driven over DevTools."""
+
+    def __init__(self, edge: Path) -> None:
+        self._edge = edge
+        self.process: subprocess.Popen | None = None
+        self.hwnd = 0
+        self._socket = None
+        self._message_id = 0
+
+    def start(self, timeout_s: float = 30.0) -> None:
+        import websocket  # websocket-client, a runtime dependency
+
+        page = SANDBOX / "paste_target_probe.html"
+        page.write_text(EDGE_PAGE, encoding="utf-8")
+        self.process = subprocess.Popen(
+            [
+                str(self._edge),
+                f"--user-data-dir={SANDBOX / 'edge_profile'}",
+                f"--app={page.as_uri()}",
+                f"--remote-debugging-port={EDGE_DEBUG_PORT}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-sync",
+                "--disable-extensions",
+                "--window-size=640,360",
+                "--window-position=160,320",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        deadline = time.monotonic() + timeout_s
+        target = None
+        while time.monotonic() < deadline and target is None:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{EDGE_DEBUG_PORT}/json/list", timeout=2
+                ) as response:
+                    for entry in json.loads(response.read().decode()):
+                        if entry.get("type") == "page" and page.name in entry.get(
+                            "url", ""
+                        ):
+                            target = entry
+            except OSError:
+                pass
+            time.sleep(0.3)
+        if target is None:
+            raise RuntimeError("the Edge page did not appear on the DevTools port")
+        self._socket = websocket.create_connection(
+            target["webSocketDebuggerUrl"], timeout=15, suppress_origin=True
+        )
+        while time.monotonic() < deadline and not self.hwnd:
+            self.hwnd = find_window_titled(EDGE_PAGE_TITLE)
+            time.sleep(0.2)
+        if not self.hwnd:
+            raise RuntimeError("the Edge window did not appear")
+
+    def eval(self, expression: str):
+        self._message_id += 1
+        self._socket.send(
+            json.dumps(
+                {
+                    "id": self._message_id,
+                    "method": "Runtime.evaluate",
+                    "params": {"expression": expression, "returnByValue": True},
+                }
+            )
+        )
+        while True:
+            reply = json.loads(self._socket.recv())
+            if reply.get("id") == self._message_id:
+                return reply.get("result", {}).get("result", {}).get("value")
+
+    def stop(self) -> None:
+        try:
+            if self._socket is not None:
+                self._socket.close()
+        except Exception:
+            pass
+        if self.process is not None:
+            # The browser process this script started, with the sandbox
+            # profile; its tree is nobody else's Edge.
+            common.kill_process_tree(self.process.pid)
+            try:
+                self.process.wait(10)
+            except subprocess.TimeoutExpired:
+                pass
+
+
+def find_window_titled(title: str) -> int:
+    found: list[int] = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def callback(hwnd, _lparam):
+        if user32.IsWindowVisible(hwnd) and title in window_text(int(hwnd)):
+            found.append(int(hwnd))
+        return True
+
+    user32.EnumWindows(callback_type(callback), 0)
+    return found[0] if found else 0
+
+
+def part_f_edge(checks: common.Checks) -> dict:
+    """Chromium: a focused textarea is a text field, a focused button is not,
+    and WM_PASTE is refused for its window before anything is sent."""
+    names = PASTE_TARGET_EDGE_CHECKS
+    edge_path = find_edge()
+    if edge_path is None:
+        for name in names:
+            checks.skipped(name, "Microsoft Edge is not installed")
+        return {"edge": False}
+    page = EdgePage(edge_path)
+    results: dict[str, object] = {"edge": True}
+    try:
+        page.start()
+        time.sleep(1.0)
+        for name, element, wanted in (
+            (names[0], "ta", VERDICT_TEXT_FIELD),
+            (names[1], "btn", VERDICT_NOT_TEXT_FIELD),
+        ):
+            if not take_foreground(page.hwnd):
+                checks.skipped(name, "Windows refused the foreground")
+                continue
+            page.eval(f"document.getElementById('{element}').focus()")
+            time.sleep(0.3)
+            reading = check_paste_target()
+            verdict = reading.verdict if reading else "no answer"
+            detail = reading.evidence() if reading else ""
+            results[element] = {"verdict": verdict, "detail": detail}
+            checks.verdict(
+                name, verdict == wanted, f"verdict={verdict} detail={detail}"
+            )
+        previous_clipboard()
+        page.eval("document.getElementById('ta').value = ''")
+        try:
+            TextInserter().insert_text_with_options(
+                "must not be sent as WM_PASTE",
+                target_hwnd=page.hwnd,
+                paste_mode="wm_paste",
+                restore_clipboard=True,
+            )
+            error, clean = "", False
+        except TextMayHaveBeenPastedError as exc:
+            error, clean = f"{type(exc).__name__}: {exc}", False
+        except TextInsertionError as exc:
+            error, clean = f"{type(exc).__name__}: {exc}", True
+        time.sleep(0.5)
+        landed = bool(page.eval("document.getElementById('ta').value"))
+        restored = clipboard_is_previous()
+        results["wm_paste"] = {"error": error[:200], "landed": landed, **restored}
+        checks.verdict(
+            names[2],
+            clean and not landed and restored["text_restored"],
+            f"refused_cleanly={clean} landed={landed} "
+            f"text_restored={restored['text_restored']} error={error[:120]}",
+        )
+    finally:
+        page.stop()
+    return results
+
+
 def wait_until_idle(checks: common.Checks) -> bool:
     waited = 0.0
     while idle_seconds() < IDLE_REQUIRED_S and waited < IDLE_WAIT_LIMIT_S:
@@ -806,12 +1050,18 @@ def main() -> int:
             for label, runner in (
                 ("D_send_input", part_d),
                 ("E_foreground_guard", part_e),
+                ("F_paste_target_edit", part_f_edit),
             ):
                 try:
                     parts[label] = runner(checks, windows)
                 except Exception as exc:
                     parts[label] = {"crash": f"{type(exc).__name__}: {exc}"}
                     checks.crashed(f"clipboard.{label}", exc)
+            try:
+                parts["F_paste_target_edge"] = part_f_edge(checks)
+            except Exception as exc:
+                parts["F_paste_target_edge"] = {"crash": f"{type(exc).__name__}: {exc}"}
+                checks.crashed("paste_target.edge_part_crashed", exc)
     except Exception as exc:  # the user's clipboard still has to come back
         checks.crashed("clipboard.probe_crashed", exc)
     finally:
@@ -836,7 +1086,7 @@ def main() -> int:
         checks.details["log_lines"] = [
             common.ascii_safe(line)
             for line in LOG_LINES
-            if "paste_transaction" in line or "clipboard_" in line
+            if "paste_transaction" in line or "clipboard_" in line or "wm_paste" in line
         ]
     return checks.finish()
 
