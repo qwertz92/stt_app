@@ -219,7 +219,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   under the groups (`test_conn_result`, two lines reserved) reports the test
   just run, or -- on opening and after a clear -- the most recent stored
   result, naming the provider. The per-row "Last test" lines it replaced
-  reserved two lines each.
+  reserved two lines each. The summary of a multi-provider test names only
+  the failures, by short row titles (`0/10 provider tests passed. Failed:
+  AssemblyAI, ...`); the old `Name: Fail | ...` over the long labels needed
+  three lines against the two reserved. Ten failures need 32 / 40 / 48 of
+  42 / 50 / 58 px at 9 / 11.25 / 13.5 pt at the minimum width.
 - **A remote engine that cannot dictate says so on the Transcription tab**
   (2026-10-03, UX review item 6d). `_remote_engine_setup_issue` (remote
   mixin) names the first gap: the custom endpoint's base URL, then the key

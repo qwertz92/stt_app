@@ -1108,16 +1108,19 @@ class _RemoteProvidersMixin:
             )
 
         if len(details) > 1:
-            parts = []
-            for provider in (provider.name for provider in _REMOTE_PROVIDERS):
-                if provider not in details:
-                    continue
-                provider_ok, _provider_msg = details[provider]
-                marker = "OK" if provider_ok else "Fail"
-                parts.append(f"{self._provider_label(provider)}: {marker}")
+            # Only the failures are named, by their short row titles: every
+            # row carries its own mark, and "Name: Fail | ..." under the long
+            # labels for all ten providers needed three lines of the two the
+            # line reserves.
+            failed = [
+                provider.title
+                for provider in _REMOTE_PROVIDERS
+                if provider.name in details and not details[provider.name][0]
+            ]
             color = _TEST_OK_COLOR if ok else "#b26a00"
-            joined = " | ".join(parts)
-            self._set_test_connection_feedback(f"{msg} {joined}", color)
+            if failed:
+                msg = f"{msg} Failed: {', '.join(failed)}."
+            self._set_test_connection_feedback(msg, color)
             return
         if details:
             # One provider: its name leads, since every row reports here.

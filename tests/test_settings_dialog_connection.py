@@ -310,8 +310,7 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
 
     assert dialog.test_conn_button.isEnabled() is True
     assert "provider tests passed" in dialog.test_conn_result.text()
-    assert "OpenAI: OK" in dialog.test_conn_result.text()
-    assert "Deepgram: OK" in dialog.test_conn_result.text()
+    assert dialog.test_conn_result.text() == "2/2 provider tests passed."
     for provider in ("openai", "deepgram"):
         assert dialog._provider_test_marks[provider].text() == "\u2713"
         assert "Last test (" in dialog._provider_test_marks[provider].toolTip()

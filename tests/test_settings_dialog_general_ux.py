@@ -1513,6 +1513,59 @@ def test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge(
             app.processEvents()
 
 
+@pytest.mark.parametrize("failing", [10, 9])
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_summary_of_failed_tests_fits_its_reserved_two_lines(
+    point_size: float, failing: int, monkeypatch, tmp_path
+) -> None:
+    """Test All Configured with every provider failing listed each as
+    `Name: Fail |` under the long display labels: 3 lines wanted against the
+    2 reserved at every text size (60 of 50 px at 9 pt, 72 of 58 at 11.25),
+    so the last names were cut off. Passed rows show a mark, so the line
+    names only the failures, by their short row titles."""
+    from stt_app.settings_dialog_helpers import _REMOTE_PROVIDERS
+
+    with _AppFont(point_size) as app:
+        dialog = _dialog_at(monkeypatch, tmp_path)
+        try:
+            dialog.show()
+            for index in range(dialog.tabs.count()):
+                if dialog.tabs.tabText(index) == "Providers":
+                    dialog.tabs.setCurrentIndex(index)
+            dialog.resize(dialog.minimumWidth(), dialog.height())
+            _settle_layout(app)
+            names = [provider.name for provider in _REMOTE_PROVIDERS]
+            details = {
+                name: (index >= failing, "HTTP 401") for index, name in enumerate(names)
+            }
+            dialog._connection_test_id = 7
+            dialog._connection_test_details[7] = details
+            passed = sum(1 for ok, _msg in details.values() if ok)
+            dialog._on_connection_test_finished(
+                7, False, f"{passed}/{len(names)} provider tests passed."
+            )
+            _settle_layout(app)
+
+            label = dialog.test_conn_result
+            text = label.text()
+            for provider in _REMOTE_PROVIDERS[:failing]:
+                assert provider.title in text, provider.name
+            for provider in _REMOTE_PROVIDERS[failing:]:
+                assert provider.title not in text, provider.name
+            wanted = label.fontMetrics().boundingRect(
+                0, 0, label.width(), 10_000, QtCore.Qt.TextWordWrap, text
+            )
+            assert wanted.height() <= label.height(), (
+                wanted.height(),
+                label.height(),
+                text,
+            )
+        finally:
+            dialog.close()
+            dialog.deleteLater()
+            app.processEvents()
+
+
 def test_the_full_final_checkbox_is_enabled_only_where_it_acts(
     monkeypatch, tmp_path
 ) -> None:
