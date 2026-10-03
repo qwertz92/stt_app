@@ -1702,6 +1702,49 @@ def test_a_deferred_restore_waits_for_a_busy_target_and_gives_up_at_the_deadline
     )
 
 
+def test_a_resumed_restore_runs_one_timer_chain_not_two():
+    """The deferred timer sits in its readiness probe (outside the lock) while
+    a new paste takes the record over, fails without touching the clipboard
+    and resumes it. Both the started timer and the resumed one then acted on
+    the record, each rescheduling itself, and each retry counted against the
+    record's attempts (review of a404479)."""
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    clock = FakeClock()
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=lambda _s: None,
+        restore_delay_s=1.5,
+        restore_max_wait_s=10.0,
+        schedule_fn=scheduler,
+        clock=clock,
+    )
+    assert inserter.insert_text_with_options(
+        "first", target_hwnd=123, paste_mode="send_input"
+    )
+    started = scheduler.pending[0]
+    original_set = backend.set_clipboard_text
+
+    def _fail_without_touching(text, exclude_from_history=False):
+        backend.set_clipboard_text = original_set
+        raise TextInsertionError("could not write")
+
+    def _probe_while_a_second_paste_takes_over(target_hwnd=None):
+        backend.set_clipboard_text = _fail_without_touching
+        with pytest.raises(TextInsertionError):
+            inserter.insert_text_with_options(
+                "second", target_hwnd=123, paste_mode="send_input"
+            )
+        return False  # the target is still busy
+
+    backend.wait_for_paste_target_ready = _probe_while_a_second_paste_takes_over
+    clock.advance(1.5)
+
+    started.run()
+
+    assert len(scheduler.pending) == 1, "two timer chains act on one record"
+
+
 @pytest.mark.parametrize(
     ("label", "change_the_clipboard"),
     [

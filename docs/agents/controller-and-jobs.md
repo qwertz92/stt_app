@@ -99,6 +99,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     remains, Known limitations). The finalize registers its audio
     (`_submit_stream_finalize(wav_bytes=...)`) so its failure is promoted
     like a batch failure.
+  - **Every writer of the slot goes through `_hold_failed_audio_for_retry`**
+    (2026-10-03): a failure used to replace the slot, so a queued dictation
+    failing while another failure waited for Retry (or while its retry ran)
+    took that one's only in-memory copy. The replaced failure now waits in
+    `_older_failed_audio` (oldest first, at most `RETRY_OLDER_FAILURES_MAX`
+    = 2, then the oldest is dropped with a `retry_failure_dropped` warning);
+    the same failure promoted again (a failed retry) is the slot already and
+    is not stacked. `_retire_retry_audio_delivered_by` clears the slot and
+    brings the newest older failure forward, and drops an older entry that
+    is itself the delivered recording; the background delivery of a result
+    runs it too, so a retry delivered behind a newer recording resolves its
+    failure. Retry still takes the slot only.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints
@@ -295,8 +307,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   default off/chime): after a successful insert (foreground, queued
   background, re-paste) via `_play_tone` on a short-lived thread (only the
   start beep is synchronous). Never for streaming appends, history-only or
-  failed inserts. `Thread.start` is guarded: a `RuntimeError` there once
-  reported a landed paste as failed and armed a duplicate Insert. One tone
+  failed inserts. `Thread.start` is guarded (any `Exception`, so a `MemoryError` too): a
+  `RuntimeError` there once reported a landed paste as failed and armed a
+  duplicate Insert. One tone
   per coalesced paste, and one for a re-paste during a session. With a
   paste target check configured the tone waits for its answer
   (`_on_paste_target_checked`, at most `PASTE_TARGET_CHECK_TIMEOUT_MS`) and

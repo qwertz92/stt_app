@@ -1967,6 +1967,13 @@ STREAMING_CONNECT_JOIN_TIMEOUT_S = 15.0
 
 STREAMING_LIVE_INSERT_RETRY_LIMIT = 3
 
+# Failed recordings kept in memory for Retry besides the newest one (the
+# Retry slot). A later failure pushes the slot's holder behind it instead of
+# replacing it, and a success of the slot's own recording brings the next
+# newest forward; past this many the oldest is dropped (its audio is only
+# in memory, so the cap bounds the memory a run of failures can hold).
+RETRY_OLDER_FAILURES_MAX = 2
+
 # Bucket size for that measurement, deliberately much finer than the batch
 # gate's SILENCE_GATE_WINDOW_MS. At 100 ms two keystrokes 100-150 ms apart
 # land in ADJACENT buckets, so the run never breaks and typing is

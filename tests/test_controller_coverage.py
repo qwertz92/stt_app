@@ -2483,6 +2483,106 @@ def test_a_different_recordings_success_leaves_the_promoted_failure_retryable():
     _ = app
 
 
+def _a_failure_then_queued_failures(extra_failures=0):
+    """W fails, then `extra_failures + 1` queued dictations fail behind a
+    newer foreground session. Returns the controller, app, the submissions
+    the worker saw and the store."""
+    store = _StoreWithIds("rec-W")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    captured = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, wav, _snapshot, job=None: captured.append((token, wav))
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._active_request_token = 3
+    controller._store_request_audio(3, b"wav-W", settings)
+    controller._on_transcription_failed("W failed", request_token=3)
+    for index in range(extra_failures + 1):
+        # A newer session is the foreground, so this one fails in the background.
+        store.recording_id = f"rec-Q{index}"
+        controller._register_transcription_job(10 + index, settings, "batch")
+        controller._store_request_audio(10 + index, f"wav-Q{index}".encode(), settings)
+        controller._register_transcription_job(50 + index, settings, "batch")
+        controller._active_request_token = 50 + index
+        controller._on_transcription_failed(
+            f"Q{index} failed", request_token=10 + index
+        )
+    return controller, app, captured, store
+
+
+def test_a_second_failure_keeps_the_first_one_retryable():
+    """The slot holds the newest failure, and the one it replaces stays
+    retryable behind it: a queued dictation failing while another failure
+    waited for Retry used to leave that one's only in-memory copy gone."""
+    controller, app, captured, _store = _a_failure_then_queued_failures()
+    assert controller._last_failed_wav_bytes == b"wav-Q0"
+
+    assert controller.retry_last_transcription() is True
+    token = controller._active_request_token
+    assert captured[-1] == (token, b"wav-Q0")
+    controller._on_transcription_ready("Q retried", request_token=token)
+
+    # Q's success retired it; W is the next failure to retry.
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert controller._last_failed_recording_id == "rec-W"
+    assert controller.retry_last_transcription() is True
+    assert captured[-1][1] == b"wav-W"
+    controller._on_transcription_ready("W retried", request_token=captured[-1][0])
+    assert controller._last_failed_wav_bytes == b""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_delivered_in_the_background_resolves_its_failure():
+    """The retry's result arrives while a newer recording owns the session:
+    it is delivered to history like any queued result, and the failure it
+    retried must not stay retryable (a Retry would transcribe and paste it
+    a second time)."""
+    controller, app, _captured, _store = _a_failure_then_queued_failures()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+    controller._register_transcription_job(70, settings, "batch")
+    controller._active_request_token = 70
+
+    controller._on_transcription_ready("Q retried", request_token=retry_token)
+
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert controller._older_failed_audio == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_retry_is_the_slot_again_and_is_not_stacked():
+    controller, app, _captured, _store = _a_failure_then_queued_failures()
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+
+    controller._on_transcription_failed("still failing", request_token=retry_token)
+
+    assert controller._last_failed_wav_bytes == b"wav-Q0"
+    assert controller._older_failed_audio == [(b"wav-W", "rec-W")]
+    controller.shutdown()
+    _ = app
+
+
+def test_only_the_newest_failures_stay_retryable():
+    """Memory is bounded: three failures are held, the oldest goes first."""
+    controller, app, _captured, _store = _a_failure_then_queued_failures(
+        extra_failures=3
+    )
+    held = [
+        controller._last_failed_wav_bytes,
+        *(wav for wav, _id in reversed(controller._older_failed_audio)),
+    ]
+
+    assert held == [b"wav-Q3", b"wav-Q2", b"wav-Q1"]
+    controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize("known", [True, False], ids=["known id", "unknown id"])
 def test_a_background_success_completes_its_own_recording(known):
     """A queued transcription delivered while a newer session is active marks
@@ -6021,6 +6121,51 @@ def test_a_suspended_stream_does_not_paste_into_the_other_window(monkeypatch):
     _ = app
 
 
+def test_a_partial_after_a_switch_checks_the_focus_before_it_pastes(monkeypatch):
+    """The focus poll ticks every 25 ms; a partial that lands between the
+    switch and the next tick used to paste into the other window. The partial
+    reads the focus itself now, so only the milliseconds to the keystroke
+    (the inserter's own foreground check) remain."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _s, **kw: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
+    try:
+        controller.start_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not controller._streaming_recording:
+            app.processEvents()
+            time.sleep(0.01)
+        base = "das ist ein laengerer satz mit vielen stabilen woertern"
+        controller._on_transcription_partial(base)
+        controller._on_transcription_partial(base + " und noch mehr davon")
+        pasted_before = len(inserter.calls)
+        assert pasted_before >= 1, "live insertion was not running to begin with"
+
+        # The switch happens and no poll tick has run yet.
+        focus_helper.current = 987654
+        controller._on_transcription_partial(base + " und noch mehr davon hier")
+        controller._on_transcription_partial(base + " und noch mehr davon hier auch")
+
+        assert len(inserter.calls) == pasted_before, (
+            f"pasted into the foreign window before the poll noticed: {inserter.calls}"
+        )
+        assert controller._stream_insertion_suspended is True
+    finally:
+        controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize(
     "spelling",
     [
@@ -9319,9 +9464,13 @@ def test_the_trays_re_paste_of_the_whole_dictation_marks_the_tail_offer():
     _ = app
 
 
-def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(
+    monkeypatch, failure
+):
     """`Thread.start` raises when the interpreter cannot create another
-    thread. Raised out of the deferred flush's success arm -- the tone is
+    thread (`RuntimeError`, or `MemoryError` when the stack cannot be
+    allocated). Raised out of the deferred flush's success arm -- the tone is
     the last statement of a paste that already landed -- it reported the
     pasted transcript as not inserted and armed Insert, which pasted it a
     second time (measured through the flush and the overlay's Insert)."""
@@ -9334,7 +9483,7 @@ def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch
 
     class _RefusingThread(_ImmediateThread):
         def start(self):
-            raise RuntimeError("can't start new thread")
+            raise failure("can't start new thread")
 
     monkeypatch.setattr("stt_app.controller.threading.Thread", _RefusingThread)
 

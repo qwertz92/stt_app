@@ -669,9 +669,12 @@ def test_a_refresh_deferred_during_the_worker_stays_owed(monkeypatch):
     _ = app
 
 
-def test_a_refresh_worker_that_cannot_start_leaves_the_refresh_owed(monkeypatch):
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_refresh_worker_that_cannot_start_leaves_the_refresh_owed(
+    monkeypatch, failure
+):
     """`Thread.start` raises when the interpreter cannot create another
-    thread; the flag was already cleared, so the owed refresh was discharged
+    thread (`MemoryError` as well as `RuntimeError`); the flag was already cleared, so the owed refresh was discharged
     with no worker to run it and the next recording stop found nothing to
     resume -- a hot-plugged microphone invisible until the next device
     event. And the exception escaped the Qt slot, to a stderr a windowed
@@ -683,7 +686,7 @@ def test_a_refresh_worker_that_cannot_start_leaves_the_refresh_owed(monkeypatch)
             pass
 
         def start(self):
-            raise RuntimeError("can't start new thread")
+            raise failure("can't start new thread")
 
     monkeypatch.setattr(controller_module.threading, "Thread", _RefusingThread)
 
