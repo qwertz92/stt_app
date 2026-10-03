@@ -7,6 +7,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from .process_tree import no_window_flags
+
 LOCAL_MODEL_SCAN_WORKER_ARG = "--local-model-scan-worker"
 LOCAL_MODEL_SCAN_TIMEOUT_SECONDS = 30
 
@@ -36,7 +38,7 @@ def run_scan_cached_models_process(
             capture_output=True,
             timeout=LOCAL_MODEL_SCAN_TIMEOUT_SECONDS,
             check=False,
-            creationflags=_subprocess_no_window_flags(),
+            creationflags=no_window_flags(),
         )
     except Exception:
         return None
@@ -95,9 +97,3 @@ def _package_source_dir() -> Path:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def _subprocess_no_window_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))

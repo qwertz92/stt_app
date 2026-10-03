@@ -8,6 +8,17 @@ limitations" is `docs/agents/known-limitations.md`.
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.md` (original AGENTS.md: `df2642a`).
 
+- **Every child process is started with `process_tree.no_window_flags()`**
+  (`CREATE_NO_WINDOW`). The installed app is windowed (`console=False` in
+  `stt_app.spec`) and owns no console, so Windows opens a console window of
+  its own for every console-program child -- node.exe, powershell.exe, npm,
+  a key command. From a terminal (`uv run main.py`) the child shares that
+  terminal's console, so a missing flag never shows during development: the
+  ONNX/WebGPU runner opened a window on every Cohere/Granite transcription
+  on an installed work machine, and closing it killed the runner, which the
+  next transcription started again (fixed 2026-10-03). `run_bounded` adds
+  the flag itself; `tests/test_child_process_windows.py` fails on any
+  `subprocess` call in `src/stt_app` that passes no `creationflags`.
 - **Update checks use GitHub Releases directly** (`update_checker.py`): one
   asynchronous check after startup, a tray notification only for a newer
   release, manual checks in Settings and tray (a manual request during the

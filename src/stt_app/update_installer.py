@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .process_tree import no_window_flags
 from .update_checker import INSTALLER_ASSET_NAME, UpdateCheckResult
 
 _CHECKSUM_RESPONSE_LIMIT = 4096
@@ -180,6 +181,7 @@ def verify_windows_publisher_signature(
             text=True,
             timeout=20,
             check=False,
+            creationflags=no_window_flags(),
             env={**os.environ, _INSTALLER_PATH_ENV_VAR: str(installer_path)},
         )
     except Exception as exc:

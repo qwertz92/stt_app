@@ -9251,3 +9251,20 @@ Lang menu. Both microphone pickers now share
   ("100%" is 45 px), which shifted nothing while the slider was the stretch.
   Beside the stretching microphone button a growing label would move it, so
   the label is now fixed at the measured width of "100%".
+
+## 2026-10-03: a console window per transcription on the installed app
+
+- Reported from a work machine: every transcription opened a console window
+  that stayed in front, and closing it only made it come back next time.
+  Cause: the Node.js runner for the Cohere/Granite ONNX models, its
+  `@huggingface/transformers` import probe and the `npm install` repair were
+  started without `CREATE_NO_WINDOW`. The installed executable has no
+  console, so Windows gave node.exe one; closing it killed the runner, and
+  the next transcription started a new one. HomeBase runs `uv run main.py`
+  in a terminal, where the child shares the terminal's console, so it never
+  showed there. The installer's signature check (powershell.exe) had the
+  same gap.
+- Fix: one helper, `process_tree.no_window_flags()`, replaces three copies
+  of the same function; `run_bounded` adds the flag itself, and an AST test
+  fails on any `subprocess` call in `src/stt_app` without `creationflags`.
+

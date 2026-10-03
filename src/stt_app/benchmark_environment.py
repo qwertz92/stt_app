@@ -11,6 +11,8 @@ from importlib import metadata
 from pathlib import Path
 from typing import Any
 
+from .process_tree import no_window_flags
+
 
 @dataclass(slots=True)
 class BenchmarkEnvironment:
@@ -626,10 +628,8 @@ def _command_lines(args: list[str], *, timeout: float = 3.0) -> list[str]:
     if shutil.which(args[0]) is None:
         return []
     kwargs: dict[str, Any] = {}
-    if platform.system().lower() == "windows":
-        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        if creationflags:
-            kwargs["creationflags"] = creationflags
+    if no_window_flags():
+        kwargs["creationflags"] = no_window_flags()
     try:
         completed = subprocess.run(
             args,

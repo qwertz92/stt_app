@@ -36,6 +36,21 @@ _POLL_SLICE_S = 0.1
 _READ_CHUNK_BYTES = 65536
 
 
+def no_window_flags() -> int:
+    """`creationflags` that keep a child from opening a console window.
+
+    The installed app is a windowed executable with no console, so Windows
+    gives every console-program child (node.exe, powershell.exe, a key
+    command) a console window of its own unless this flag is passed. From a
+    terminal the child shares the terminal's console instead, which hides a
+    missing flag on a development machine. Every child the app starts passes
+    it; `tests/test_child_process_windows.py` enforces that.
+    """
+    if os.name != "nt":
+        return 0
+    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
 def kill_process_tree(process: subprocess.Popen) -> None:
     """Every road to ending the child and its descendants, failures swallowed.
 
@@ -52,7 +67,7 @@ def kill_process_tree(process: subprocess.Popen) -> None:
                 ["taskkill", "/F", "/T", "/PID", str(process.pid)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                creationflags=int(getattr(subprocess, "CREATE_NO_WINDOW", 0)),
+                creationflags=no_window_flags(),
                 timeout=5,
                 check=False,
             )
@@ -189,6 +204,9 @@ def run_bounded(
     )
     job: _WindowsJob | None = None
     if os.name == "nt":
+        popen_kwargs["creationflags"] = (
+            int(popen_kwargs.get("creationflags", 0)) | no_window_flags()
+        )
         try:
             job = _WindowsJob()
         except OSError:

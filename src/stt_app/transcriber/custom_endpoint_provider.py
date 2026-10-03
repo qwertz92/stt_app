@@ -537,9 +537,6 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         if not arguments:
             raise TranscriptionError("The key command is empty.")
         arguments = _resolve_program(arguments)
-        extra: dict[str, object] = {}
-        if os.name == "nt":
-            extra["creationflags"] = subprocess.CREATE_NO_WINDOW
         started = time.monotonic()
         try:
             completed = run_bounded(
@@ -550,7 +547,6 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 errors="replace",
                 timeout=CUSTOM_KEY_COMMAND_TIMEOUT_S,
                 silent_exit_grace_s=CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S,
-                **extra,
             )
         except FileNotFoundError as exc:
             raise TranscriptionError(

@@ -42,6 +42,7 @@ from ..model_download_progress import (
     report_unknown_download_progress,
 )
 from ..persistence import atomic_write_bytes
+from ..process_tree import no_window_flags
 from .base import (
     AudioInput,
     ITranscriber,
@@ -832,6 +833,7 @@ def _run_transformers_import_probe(
         capture_output=True,
         timeout=30,
         check=False,
+        creationflags=no_window_flags(),
     )
 
 
@@ -867,6 +869,7 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
                     capture_output=True,
                     timeout=300,
                     check=False,
+                    creationflags=no_window_flags(),
                 )
             except Exception as exc:
                 probe_error = str(exc)
@@ -1272,6 +1275,9 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 encoding="utf-8",
                 errors="replace",
                 bufsize=1,
+                # Without it the installed app opened a console window for
+                # node.exe on every transcription (no console of its own).
+                creationflags=no_window_flags(),
             )
         except Exception as exc:
             raise TranscriptionError(

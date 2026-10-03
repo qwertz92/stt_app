@@ -37,7 +37,7 @@ from typing import Any
 from .benchmark_environment import text_or_empty
 from .benchmark_worker import BENCHMARK_EVENT_PREFIX
 from .local_benchmark import BenchmarkCancelled, BenchmarkCase, _case_from_dict
-from .process_tree import kill_process_tree
+from .process_tree import kill_process_tree, no_window_flags
 
 BENCHMARK_WORKER_ARG = "--local-benchmark-worker"
 
@@ -332,7 +332,7 @@ def start_benchmark_process(options_path: Path) -> subprocess.Popen[str]:
         errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        creationflags=_subprocess_no_window_flags(),
+        creationflags=no_window_flags(),
         start_new_session=os.name != "nt",
     )
 
@@ -375,9 +375,3 @@ def _package_source_dir() -> Path:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def _subprocess_no_window_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))

@@ -21,6 +21,7 @@ from .model_download_progress import (
     DOWNLOAD_EVENT_PREFIX,
     DOWNLOAD_PROGRESS_UNKNOWN,
 )
+from .process_tree import no_window_flags
 
 LOCAL_MODEL_DOWNLOAD_WORKER_ARG = "--local-model-download-worker"
 
@@ -116,7 +117,7 @@ def start_model_download_process(
             # progress callback.
             stdout=subprocess.PIPE,
             stderr=error_log,
-            creationflags=_subprocess_no_window_flags(),
+            creationflags=no_window_flags(),
         )
     except Exception:
         error_log.close()
@@ -557,9 +558,3 @@ def _package_source_dir() -> Path:
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
-
-
-def _subprocess_no_window_flags() -> int:
-    if os.name != "nt":
-        return 0
-    return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
