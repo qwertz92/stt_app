@@ -2876,7 +2876,9 @@ class _BenchmarkMixin:
         # shows what was selected, and the previous run's or export's line no
         # longer describes it.
         self._set_benchmark_status("", "#555")
-        self._expand_benchmark_results_area()
+        # No `_expand_benchmark_results_area()` here: a load is a selection
+        # now, and resetting the splitter on every click or arrow press undid
+        # the size the user had dragged it to. Only a run's finish resets it.
         self._update_benchmark_actions()
 
     def _open_current_benchmark_results_window(self) -> None:

@@ -58,6 +58,30 @@ def test_selecting_a_history_row_shows_that_run(tmp_path):
     _ = app
 
 
+def test_a_selection_never_moves_the_history_results_splitter(tmp_path):
+    """Every load reset the splitter to [220, 420], and a selection is now a
+    load: a splitter dragged to [324, 280] snapped to [208, 396] on one
+    Down press."""
+    dialog, app, _first, _second = _two_runs(tmp_path)
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.resize(860, 900)
+    dialog.show()
+    app.processEvents()
+    splitter = dialog.benchmark_main_splitter
+    splitter.setSizes([400, 300])
+    app.processEvents()
+    dragged = splitter.sizes()
+
+    dialog.benchmark_history_list.setCurrentRow(0)
+    app.processEvents()
+    dialog.benchmark_history_list.setCurrentRow(1)
+    app.processEvents()
+
+    assert dialog._current_benchmark_entry is not None
+    assert splitter.sizes() == dragged
+    dialog.hide()
+
+
 def test_a_selection_during_a_run_leaves_the_live_results_alone(tmp_path):
     dialog, app, _first, _second = _two_runs(tmp_path)
     live = list(_stored_entry("live run").cases)

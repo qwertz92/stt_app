@@ -256,7 +256,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   Window. `_on_benchmark_history_selection_changed` loads unless a run is
   active or the row is the run already shown (a finish selects its new
   row; reloading it replaced the finish's status line). A load clears the
-  status line. A rebuild re-selects `_current_benchmark_entry`;
+  status line and never moves the History/Results splitter (only a run's
+  finish resets it: a reset per selection undid every drag on one arrow
+  press). A rebuild re-selects `_current_benchmark_entry`;
   `_clear_benchmark_results` deselects (signals blocked) and is also what
   deleting the shown run and Clear History call (the deleted run stayed on
   screen with its actions disabled). Clear Loaded is enabled only while a
