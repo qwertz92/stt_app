@@ -313,6 +313,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Shared, not copied: `resolve_or_download_onnx_model` (module level,
     imports inside so monkeypatch targets resolve), `_read_wav_float32`
     (refuses header rate 0), `_pcm_audio.resample_linear`.
+  - `_read_wav_float32` decodes block-wise (`_WAV_BLOCK_FRAMES`) straight into
+    one preallocated mono float32 buffer sized by what the file can hold, not
+    by the header's frame count. Peak is the result plus one block: 1.01x the
+    file for a 480 MB stereo 48 kHz WAV, where decoding the whole data chunk
+    and converting it twice peaked at 5.0x (measured 2026-10-03 with
+    tracemalloc). The output is byte-identical to the whole-file decode.
   - `resample_linear` refuses rates below `MIN_SOURCE_SAMPLE_RATE_HZ` (8 kHz,
     also onnx-asr's `WrongSampleRateError` limit): a 1 Hz header turned 3 KB
     into 25.6 M samples. The readers' `<= 0` guards stay; `transcribe_batch`

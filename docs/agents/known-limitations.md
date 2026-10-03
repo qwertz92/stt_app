@@ -84,10 +84,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   with nothing. Deliberate: the error direction is a marker to delete, not
   lost speech (docs/agents/remote-providers.md). A real speech detector
   (the Silero work) would be the better judge.
-- **Splitting a long import holds ~5x its file size**:
-  `local_onnx_asr._read_wav_float32` keeps raw bytes plus two float32 copies
-  (1,325 MB for 265 MB; ~7 GB for two hours of 48 kHz stereo). A `MemoryError`
-  sends the file whole. Block-wise mono decode: P3, ~1 h (2026-09-27).
 - **An Azure part of up to an hour has a 120 s socket timeout**: the factory
   passes no `request_timeout_s`. Not observed; no Azure resource (2026-09-27).
 - **Non-16 kHz WAV is resampled linearly** (`_pcm_audio.resample_linear`,

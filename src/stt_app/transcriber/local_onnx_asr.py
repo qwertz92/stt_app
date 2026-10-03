@@ -188,12 +188,32 @@ def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
     return samples / 32768.0
 
 
+# Frames decoded per block by `_read_wav_float32`: 256 Ki frames is 0.5-3 MB of
+# PCM for one to six channels, and a block's float32 copy and channel mean add
+# at most three times that.
+_WAV_BLOCK_FRAMES = 1 << 18
+
+
+def _source_size(source: str | Path | io.BytesIO) -> int:
+    if isinstance(source, io.BytesIO):
+        with source.getbuffer() as view:
+            return view.nbytes
+    return Path(source).stat().st_size
+
+
 def _read_wav_float32(source: str | Path | io.BytesIO) -> tuple[np.ndarray, int]:
-    """Decode a 16-bit PCM WAV from a path or an in-memory buffer.
+    """Decode a 16-bit PCM WAV from a path or an in-memory buffer to mono float32.
 
     Both the path and the bytes branch go through here so they cannot drift on
     validation; an earlier copy of this logic omitted the sample-width check and
     silently reinterpreted 24-bit audio as 16-bit.
+
+    The data is decoded one block at a time straight into the result, so the
+    peak is the mono float32 waveform plus one block. Reading the whole data
+    chunk and converting it twice held about five times the file's size (1,325
+    MB for a 265 MB file), and a two-hour 48 kHz stereo import is 1.4 GB.
+    The result is the same bytes either way: a block is a whole number of
+    frames, and a channel mean is taken per frame.
     """
     handle_source = source if isinstance(source, io.BytesIO) else str(source)
     try:
@@ -201,7 +221,11 @@ def _read_wav_float32(source: str | Path | io.BytesIO) -> tuple[np.ndarray, int]
             sample_width = handle.getsampwidth()
             channels = handle.getnchannels()
             sample_rate = handle.getframerate()
-            frames = handle.readframes(handle.getnframes())
+            declared_frames = handle.getnframes()
+            if sample_width == 2 and sample_rate > 0:
+                waveform = _decode_pcm16_blocks(
+                    handle, channels, declared_frames, _source_size(source)
+                )
     except TranscriptionError:
         raise
     except Exception as exc:
@@ -217,12 +241,36 @@ def _read_wav_float32(source: str | Path | io.BytesIO) -> tuple[np.ndarray, int]
             "Could not read WAV audio: the file declares a sample rate of "
             f"{sample_rate} Hz."
         )
-    waveform = _pcm_bytes_to_float32(frames)
-    if channels > 1:
-        # Average to mono; the models are single-channel.
-        usable = (waveform.size // channels) * channels
-        waveform = waveform[:usable].reshape(-1, channels).mean(axis=1)
     return waveform, sample_rate
+
+
+def _decode_pcm16_blocks(
+    handle: wave.Wave_read, channels: int, declared_frames: int, source_bytes: int
+) -> np.ndarray:
+    """Mono float32 waveform of an open 16-bit WAV, decoded block by block.
+
+    The buffer is sized by the frames the file can hold, not by the header's
+    count alone: a damaged header may declare billions. A trailing partial
+    frame (a cut file) is dropped, as it always was.
+    """
+    frame_bytes = 2 * channels
+    capacity = min(declared_frames, source_bytes // frame_bytes)
+    waveform = np.empty(capacity, dtype=np.float32)
+    filled = 0
+    while filled < capacity:
+        raw = handle.readframes(min(_WAV_BLOCK_FRAMES, capacity - filled))
+        frames = len(raw) // frame_bytes
+        if frames == 0:
+            break
+        block = np.frombuffer(raw, dtype="<i2", count=frames * channels)
+        block = block.astype(np.float32)
+        block /= 32768.0
+        if channels > 1:
+            # Average to mono; the models are single-channel.
+            block = block.reshape(-1, channels).mean(axis=1)
+        waveform[filled : filled + frames] = block
+        filled += frames
+    return waveform if filled == capacity else waveform[:filled].copy()
 
 
 class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
