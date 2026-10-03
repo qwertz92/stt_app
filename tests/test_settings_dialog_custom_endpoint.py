@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import threading
 
+import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
 from test_settings_dialog_connection import (
     _FakeLogger,
@@ -307,13 +308,14 @@ def test_a_failed_fetch_is_reported_in_the_note(monkeypatch):
         dialog.deleteLater()
 
 
-def test_a_fetch_that_cannot_start_gives_the_button_back(monkeypatch):
+@pytest.mark.parametrize("error", [RuntimeError, MemoryError])
+def test_a_fetch_that_cannot_start_gives_the_button_back(monkeypatch, error):
     class _RefusingThread:
         def __init__(self, *args, **kwargs):
             pass
 
         def start(self):
-            raise RuntimeError("can't start new thread")
+            raise error("can't start new thread")
 
     dialog, _store = _dialog()
     try:

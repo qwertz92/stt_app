@@ -25,6 +25,7 @@ from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_LABEL_EXTRA_PX,
     _REMOTE_PROVIDERS,
     _REMOTE_REGION_CHOICES,
+    _THREAD_START_ERRORS,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
@@ -982,7 +983,7 @@ class _RemoteProvidersMixin:
         # deferred forever, silently.
         try:
             worker.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._end_connection_test()
             self._set_test_connection_feedback(
                 f"Could not start the connection test: {exc}", "#b71c1c"

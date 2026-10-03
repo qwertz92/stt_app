@@ -38,6 +38,7 @@ from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
+    _THREAD_START_ERRORS,
     ElidingLabel,
     WrappedStatusLabel,
     _emit_background_signal,
@@ -989,7 +990,7 @@ class _LocalModelsMixin:
         # deferred forever, silently.
         try:
             self._active_local_model_scan_thread.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._active_local_model_scan_thread = None
             # Route through the completion slot rather than repeating half of
             # it. It owns three things this arm was leaving behind: the
@@ -1360,7 +1361,7 @@ class _LocalModelsMixin:
         # deferred forever, silently.
         try:
             thread.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._active_local_model_download_thread = None
             # The same teardown the queue's own crash arm performs, then its
             # completion slot for the label, the timer and the progress bar --

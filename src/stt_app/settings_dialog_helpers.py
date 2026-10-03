@@ -40,6 +40,12 @@ from .config import (
 from .local_benchmark import _format_seconds
 from .settings_store import _REMOTE_MODEL_FIELDS
 
+# What `Thread.start()` raises when the worker cannot be created: the OS refuses
+# the thread (`RuntimeError`) or the interpreter cannot allocate its
+# bookkeeping (`MemoryError`). Every worker start in the dialog guards both,
+# or its busy marker stays set for the life of the dialog.
+_THREAD_START_ERRORS = (RuntimeError, MemoryError)
+
 
 def _emit_background_signal(
     owner: QtCore.QObject,
