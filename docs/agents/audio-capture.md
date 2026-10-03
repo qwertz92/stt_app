@@ -95,13 +95,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   silently ends a cold stream. `_process_audio` wraps its body, logs once.
   **`_auto_stop_fired` is reset when the auto-stop `Thread(...).start()`
   raises**, so the next block retries.
-- **Picker default entry names Windows' device**
+- **Both microphone pickers offer `audio_devices.input_device_choices`**
+  (2026-10-03): the Settings Audio combo and the overlay's microphone menu.
+  The default entry names Windows' device
   (`audio_devices.system_default_input_name`), else "System default (follow
   Windows)".
-- **Picker says "(device list unavailable)" when PortAudio did not answer**,
-  "(not connected)" only when it did: `query_input_devices` takes no lock (Qt
-  thread) while the worker holds `portaudio_guard`. Item data is unchanged,
-  so a Save keeps the selection.
+- **A picker says "(device list unavailable)" when PortAudio did not
+  answer**, "(not connected)" only when it did: `query_input_devices` takes
+  no lock (Qt thread) while the worker holds `portaudio_guard`. The value is
+  unchanged, so a Save keeps the selection.
+- **The overlay's microphone menu writes the setting like the Lang menu**
+  (2026-10-03, `controller.set_input_device_name`): saved straight to the
+  store (a refusal reported through `_report_unsaved_overlay_setting`), then
+  `_sync_warm_microphone_stream` retargets a warm stream on another device
+  (deferred while attached, as for a settings save). Refused while a
+  recording starts, runs or stops (`_capture_owns_the_microphone`, shared
+  with the device-change deferral): the overlay disables the button while
+  Listening, and this covers a menu left open when the hotkey started one.
+  The controller refreshes the menu's choices on every settings load, when
+  the menu is about to open (`microphone_menu_requested`) and after a
+  successful re-enumeration (`audio_devices_refreshed`, emitted by the
+  refresh worker, queued to the Qt thread), so the caption names today's
+  default device. A Settings save does not undo an overlay pick: the
+  dialog's combo is diffed against `_populated_settings`.
 - **First audio callback watchdog**: a bounded Qt timer after capture start.
   A timeout is an abort: late bytes are kept for Retry, never submitted; only
   late bytes write the retry slot (persisted, marked failed under the id the

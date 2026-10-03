@@ -82,7 +82,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach |
-| `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
+| `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); the microphone picker choices both pickers offer; PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
@@ -105,7 +105,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
-| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
+| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, microphone menu and opacity slider in the footer, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
 | `settings_dialog_general.py` | Transcription tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |

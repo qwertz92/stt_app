@@ -251,7 +251,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   teardown (returns the coordinator's explicit interest).
 - **A save checks whether the file would change and applies only the user's
   edits onto it.** The overlay (`overlay_opacity_percent`,
-  `overlay_always_on_top`, `language_mode`) and
+  `overlay_always_on_top`, `language_mode`, `input_device_name`) and
   `history_dialog._persist_limit` (`history_max_items`) write to the store
   while Settings is open. The change check compares with
   `self._settings_store.load()`; `_dialog_edits_over_stored` applies only

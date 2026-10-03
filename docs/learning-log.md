@@ -9183,3 +9183,16 @@ scrolls. The custom endpoint's Refresh list (`custom_models`) is now saved.
   missing-key warning (item 6d) replaces the model note, so the fit test
   without stored keys stopped measuring the descriptions at all; it now runs
   once without and once with keys.
+
+## 2026-10-03: the overlay's microphone menu (UX review item 3)
+
+The overlay footer became [microphone menu][opacity slider][value]: the
+button shows which microphone records and switches it, persisted like the
+Lang menu. Both microphone pickers now share
+`audio_devices.input_device_choices`. Idle overlay 470x138 -> 470x144 at
+9 pt; width and the status text unchanged.
+- **A fixed width needs its widest text measured at every text size.**
+  The overlay's opacity value had a 40 px minimum and simply grew at 13.5 pt
+  ("100%" is 45 px), which shifted nothing while the slider was the stretch.
+  Beside the stretching microphone button a growing label would move it, so
+  the label is now fixed at the measured width of "100%".

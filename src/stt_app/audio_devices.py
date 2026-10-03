@@ -14,6 +14,8 @@ stream exists. This module owns both concerns:
   serialize stream opens against ``try_refresh_input_devices`` and track which
   streams are alive, so a re-enumeration is refused instead of tearing down a
   running capture.
+- ``input_device_choices`` is what every microphone picker offers: the
+  Settings dialog's Audio tab and the overlay's microphone menu.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ from __future__ import annotations
 import logging
 import threading
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import sounddevice as sd
 
@@ -184,6 +187,51 @@ def query_input_devices() -> tuple[list[InputDeviceInfo], bool]:
         seen.add(name)
         result.append(InputDeviceInfo(name=name, index=index))
     return result, True
+
+
+class InputDeviceChoices(NamedTuple):
+    """What a microphone picker offers, in order."""
+
+    # The device "System default" records from today, or "" when PortAudio
+    # names none.
+    default_name: str
+    # ``(label, persisted value)`` pairs: system default first, then every
+    # connected device, then a stored selection that is not connected.
+    entries: tuple[tuple[str, str], ...]
+
+
+def input_device_choices(selected_name: str) -> InputDeviceChoices:
+    """System default (naming its device), connected devices, and a stored
+    selection that is missing, marked so that offering it cannot silently
+    drop it.
+
+    "Not connected" is claimed only when PortAudio answered. While the
+    controller's refresh worker re-initializes PortAudio (holding
+    `portaudio_guard` across terminate/initialize, seconds on a locked-down
+    audio stack) a query gets no device list at all, and a picker then called
+    a plugged-in microphone "(not connected)" -- a false statement about the
+    user's hardware. The value is the same either way, so a save in that
+    window still keeps the selection.
+    """
+    default_name = system_default_input_name()
+    entries = [
+        (
+            f"System default: {default_name}"
+            if default_name
+            else "System default (follow Windows)",
+            SYSTEM_DEFAULT_INPUT_DEVICE,
+        )
+    ]
+    try:
+        devices, answered = query_input_devices()
+    except Exception:
+        devices, answered = [], False
+    names = [info.name for info in devices]
+    entries.extend((name, name) for name in names)
+    if selected_name and selected_name not in names:
+        suffix = "(not connected)" if answered else "(device list unavailable)"
+        entries.append((f"{selected_name} {suffix}", selected_name))
+    return InputDeviceChoices(default_name, tuple(entries))
 
 
 def list_input_devices() -> list[InputDeviceInfo]:

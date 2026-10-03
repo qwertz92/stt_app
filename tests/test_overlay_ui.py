@@ -907,6 +907,132 @@ def test_overlay_record_button_indicator_stays_centered_in_both_states():
     overlay.hide()
 
 
+_HYPERX = "Microphone (HyperX QuadCast S)"
+_HEADSET = "Headset Microphone (Oculus Virtual Audio Device)"
+_MIC_ENTRIES = (
+    (f"System default: {_HYPERX}", ""),
+    (_HYPERX, _HYPERX),
+    (_HEADSET, _HEADSET),
+)
+
+
+def _microphone_action(overlay: OverlayUI, label: str) -> QtGui.QAction:
+    return next(
+        action
+        for action in overlay._microphone_menu.actions()
+        if action.text() == label
+    )
+
+
+def test_the_microphone_button_names_the_device_and_switches_it():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[str] = []
+    overlay.microphone_changed.connect(emitted.append)
+
+    overlay.set_microphone_options(_MIC_ENTRIES, "", _HYPERX)
+
+    button = overlay._microphone_button
+    assert button.full_caption() == "Mic: Default · HyperX QuadCast S"
+    assert _HYPERX in button.toolTip()
+    assert _microphone_action(overlay, f"System default: {_HYPERX}").isChecked()
+    # The system default stands apart from the devices.
+    assert overlay._microphone_menu.actions()[1].isSeparator()
+
+    _microphone_action(overlay, _HEADSET).trigger()
+
+    assert emitted == [_HEADSET]
+    assert button.full_caption() == "Mic: Oculus Virtual Audio Device"
+    assert _microphone_action(overlay, _HEADSET).isChecked()
+
+
+def test_a_missing_microphone_keeps_its_mark_on_the_caption():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_microphone_options(
+        (*_MIC_ENTRIES[:1], ("USB Mic (Yeti) (not connected)", "USB Mic (Yeti)")),
+        "USB Mic (Yeti)",
+        _HYPERX,
+    )
+
+    assert overlay._microphone_button.full_caption() == "Mic: Yeti (not connected)"
+
+
+def test_the_microphone_cannot_be_switched_while_listening():
+    """The running capture keeps its device, so a pick would describe a
+    recording it does not apply to; once the capture has ended (Processing)
+    a switch is for the next recording and allowed."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[str] = []
+    overlay.microphone_changed.connect(emitted.append)
+    overlay.set_microphone_options(_MIC_ENTRIES, "", _HYPERX)
+
+    overlay.set_state("Listening", "Speak now.")
+    overlay._select_microphone(_HEADSET)
+
+    assert overlay._microphone_button.isEnabled() is False
+    assert "after this recording" in overlay._microphone_button.toolTip()
+    assert emitted == []
+
+    overlay.set_state("Processing", "Transcribing audio...")
+    assert overlay._microphone_button.isEnabled() is True
+    overlay._select_microphone(_HEADSET)
+    assert emitted == [_HEADSET]
+
+
+def test_the_microphone_menu_asks_for_todays_devices_before_it_opens(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_microphone_options(_MIC_ENTRIES[:2], "", _HYPERX)
+    listed_at_popup: list[list[str]] = []
+    monkeypatch.setattr(
+        overlay._microphone_menu,
+        "popup",
+        lambda _pos: listed_at_popup.append(
+            [action.text() for action in overlay._microphone_menu.actions()]
+        ),
+    )
+    overlay.microphone_menu_requested.connect(
+        lambda: overlay.set_microphone_options(_MIC_ENTRIES, "", _HYPERX)
+    )
+
+    overlay._microphone_button.click()
+
+    assert listed_at_popup and _HEADSET in listed_at_popup[0]
+
+
+def test_the_footer_microphone_button_elides_and_moves_nothing():
+    """Variant B of the UX review: the button takes what the 96 px slider
+    and its value leave, so a long device name elides instead of widening
+    the overlay or moving the status text, and the footer never decides the
+    overlay's width."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_microphone_options(_MIC_ENTRIES[:1], "", "")
+    overlay.show()
+    app.processEvents()
+    size = overlay.size()
+    state_rect = overlay._state_label.geometry()
+    footer = overlay._footer_widget
+
+    overlay.set_microphone_options(
+        (*_MIC_ENTRIES, ("A" * 120, "A" * 120)), "A" * 120, _HYPERX
+    )
+    app.processEvents()
+
+    button = overlay._microphone_button
+    assert overlay.size() == size
+    assert overlay._state_label.geometry() == state_rect
+    assert button.text().endswith("…")
+    assert button.full_caption() == "Mic: " + "A" * 120
+    assert button.geometry().right() < overlay._opacity_slider.geometry().left()
+    assert footer.sizeHint().width() < overlay._controls_widget.sizeHint().width()
+    assert button.height() == overlay._language_button.height()
+    overlay.hide()
+
+
 def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

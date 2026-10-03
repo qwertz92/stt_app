@@ -488,6 +488,9 @@ class DictationController(QtCore.QObject):
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
+    # Emitted from the device-refresh worker once PortAudio re-enumerated, so
+    # the overlay's microphone caption names the current default device.
+    audio_devices_refreshed = QtCore.Signal()
 
     def __init__(
         self,
@@ -765,6 +768,7 @@ class DictationController(QtCore.QObject):
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
         self.audio_devices_changed.connect(self._on_audio_devices_changed)
+        self.audio_devices_refreshed.connect(self.refresh_overlay_microphone_options)
 
     @property
     def settings(self) -> AppSettings:
@@ -995,6 +999,7 @@ class DictationController(QtCore.QObject):
             bool(getattr(self._settings, "overlay_always_on_top", True))
         )
         self._sync_overlay_language_options()
+        self.refresh_overlay_microphone_options()
         self._sync_warm_microphone_stream()
         self._warm_up_speech_check()
         # Only tear the loaded runtime down when the saved settings would build
@@ -2210,14 +2215,18 @@ class DictationController(QtCore.QObject):
         self._logger.info("audio_device_change kind=%s", kind)
         self._audio_device_change_timer.start()
 
-    def _on_audio_device_change_settled(self) -> None:
-        if self._shutdown_started:
-            return
-        if (
+    def _capture_owns_the_microphone(self) -> bool:
+        """A recording is starting, running or stopping."""
+        return (
             self._audio_capture is not None
             or self._recording_start_in_progress
             or self._recording_stop_in_progress
-        ):
+        )
+
+    def _on_audio_device_change_settled(self) -> None:
+        if self._shutdown_started:
+            return
+        if self._capture_owns_the_microphone():
             # Never touch devices mid-recording; retried once the capture
             # stops via _maybe_resume_pending_audio_device_refresh.
             self._pending_audio_device_refresh = True
@@ -2305,6 +2314,8 @@ class DictationController(QtCore.QObject):
             self._pending_audio_device_refresh = True
         if self._shutdown_started:
             return
+        if refreshed:
+            self.audio_devices_refreshed.emit()
         warm = self._warm_mic_stream
         if warm is not None:
             warm.ensure_started()
@@ -8048,6 +8059,49 @@ class DictationController(QtCore.QObject):
         # the runtime. Reloading here made a mistyped language selection block
         # the correction behind a full model load, and switching language for a
         # single recording evicted the model that the next dictation needs.
+
+    def refresh_overlay_microphone_options(self) -> None:
+        """Give the overlay's microphone menu today's devices and selection.
+
+        Run on every settings load, after a device re-enumeration, and when
+        the menu is about to open (`OverlayUI.microphone_menu_requested`),
+        so a device plugged in since the last refresh is listed.
+        `query_input_devices` takes no lock, so this never waits on a
+        re-enumeration in progress; it then offers what PortAudio answers.
+        """
+        selected = self._warm_microphone_selected_device()
+        choices = audio_devices.input_device_choices(selected)
+        self._overlay.set_microphone_options(
+            choices.entries, selected, choices.default_name
+        )
+
+    def set_input_device_name(self, name: str) -> None:
+        """The overlay's microphone menu: persist the pick, retarget warm.
+
+        Like `set_language_mode`, it writes the setting straight to the
+        store and reports a refused save on the overlay. Refused while a
+        recording owns the microphone (the overlay disables the button while
+        Listening; this covers a pick from a menu left open when a hotkey
+        started one): the running capture keeps its device either way, and
+        the menu is put back to the setting.
+        """
+        normalized = str(name or "").strip()
+        if (
+            self._capture_owns_the_microphone()
+            or normalized == self._warm_microphone_selected_device()
+        ):
+            self.refresh_overlay_microphone_options()
+            return
+        self._settings = replace(self._settings, input_device_name=normalized)
+        try:
+            self._settings_store.save(self._settings)
+        except Exception as exc:
+            self._logger.exception("Failed to persist the microphone selection")
+            self._report_unsaved_overlay_setting("The microphone selection", exc)
+        self.refresh_overlay_microphone_options()
+        # The next cold capture reads the setting (`_build_audio_capture`);
+        # a warm stream on the previous device is restarted on the new one.
+        self._sync_warm_microphone_stream()
 
     def set_history_max_items(self, value: int) -> None:
         normalized = max(0, int(value))
