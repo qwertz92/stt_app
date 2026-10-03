@@ -959,6 +959,50 @@ def test_a_missing_microphone_keeps_its_mark_on_the_caption():
     assert overlay._microphone_button.full_caption() == "Mic: Yeti (not connected)"
 
 
+def test_a_role_is_kept_on_the_caption_when_dropping_it_would_be_ambiguous():
+    """Realtek lists one device under several roles; without the role all
+    of them read "Mic: Realtek HD Audio"."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    mic = "Microphone (Realtek HD Audio)"
+    mix = "Stereo Mix (Realtek HD Audio)"
+    entries = ((f"System default: {mic}", ""), (mic, mic), (mix, mix))
+
+    overlay.set_microphone_options(entries, mix, mic)
+    assert overlay._microphone_button.full_caption() == f"Mic: {mix}"
+
+    overlay.set_microphone_options(entries, "", mic)
+    assert overlay._microphone_button.full_caption() == f"Mic: Default · {mic}"
+
+
+def test_the_device_part_is_the_group_the_name_ends_with():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    for name, caption in (
+        ("Headset (Oculus) (Rift)", "Mic: Rift"),
+        ("Microphone (Realtek(R) Audio)", "Mic: Realtek(R) Audio"),
+        ("USB Microphone", "Mic: USB Microphone"),
+        ("Broken (name", "Mic: Broken (name"),
+    ):
+        overlay.set_microphone_options(((name, name),), name, "")
+        assert overlay._microphone_button.full_caption() == caption, name
+
+
+def test_an_elided_caption_keeps_its_not_connected_mark():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    name = "Microphone (" + "Very Long Device Name " * 6 + ")"
+    overlay.set_microphone_options(((f"{name} (not connected)", name),), name, "")
+    app.processEvents()
+
+    text = overlay._microphone_button.text()
+    assert "…" in text
+    assert text.endswith(" (not connected)")
+    overlay.hide()
+
+
 def test_the_microphone_cannot_be_switched_while_listening():
     """The running capture keeps its device, so a pick would describe a
     recording it does not apply to; once the capture has ended (Processing)

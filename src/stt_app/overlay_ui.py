@@ -230,26 +230,31 @@ class _OverlayMicrophoneButton(_OverlayLanguageButton):
     `_target_window_width` (it sums the footer's hint) where it was; the
     layout hands the button the rest of the row, and the caption is elided
     to whatever that is. The whole caption is in the menu and the tooltip.
+    A suffix such as " (not connected)" is never elided: only the name in
+    front of it gives way.
     """
 
     def __init__(self) -> None:
         super().__init__("")
-        self._full_caption = ""
+        self._caption = ""
+        self._suffix = ""
         self.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
 
     def full_caption(self) -> str:
-        return self._full_caption
+        return self._caption + self._suffix
 
-    def set_caption(self, caption: str) -> None:
-        self._full_caption = caption
+    def set_caption(self, caption: str, suffix: str = "") -> None:
+        self._caption = caption
+        self._suffix = suffix
         self._elide_caption()
 
     def _elide_caption(self) -> None:
+        metrics = self.fontMetrics()
         room = max(0, self.width() - _LANGUAGE_BUTTON_CHROME_PX)
+        name_room = max(0, room - metrics.horizontalAdvance(self._suffix))
         self.setText(
-            self.fontMetrics().elidedText(
-                self._full_caption, QtCore.Qt.ElideRight, room
-            )
+            metrics.elidedText(self._caption, QtCore.Qt.ElideRight, name_room)
+            + self._suffix
         )
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
@@ -263,17 +268,51 @@ class _OverlayMicrophoneButton(_OverlayLanguageButton):
         return self.sizeHint()
 
 
-def _device_caption_name(name: str) -> str:
-    """ "Microphone (HyperX QuadCast S)" -> "HyperX QuadCast S".
+def _device_part(name: str) -> str:
+    """ "Microphone (HyperX QuadCast S)" -> "HyperX QuadCast S", or "".
 
     Windows names an input endpoint "<role> (<device>)", so on an eliding
-    button the role is what survives and the device what is cut. Only the
-    caption is shortened; the menu and the tooltip carry the full name.
+    button the role is what survives and the device what is cut. The device
+    is the bracket group the name ends with, matched by depth, so
+    "Microphone (Realtek(R) Audio)" gives "Realtek(R) Audio" and "Headset
+    (Oculus) (Rift)" gives "Rift" rather than "Oculus) (Rift". "" when the
+    name does not have that form.
     """
-    head, separator, rest = name.partition(" (")
-    if separator and head and rest.endswith(")"):
-        return rest[:-1]
-    return name
+    if not name.endswith(")"):
+        return ""
+    depth = 0
+    for index in range(len(name) - 1, -1, -1):
+        if name[index] == ")":
+            depth += 1
+        elif name[index] == "(":
+            depth -= 1
+            if depth == 0:
+                head = name[:index]
+                if head.endswith(" ") and head.strip():
+                    return name[index + 1 : -1]
+                return ""
+    return ""
+
+
+def _device_caption_names(names: tuple[str, ...]) -> dict[str, str]:
+    """The caption name of each device: its device part, unless another
+    device has the same one.
+
+    Realtek lists one device under several roles ("Microphone (Realtek HD
+    Audio)", "Stereo Mix (Realtek HD Audio)", "Line In (...)"); without the
+    role every one of them read "Realtek HD Audio". Kept whole only then,
+    because elsewhere the role is what elision keeps and the device what it
+    cuts. Only the caption is shortened; the menu and the tooltip carry the
+    full name.
+    """
+    parts = {name: _device_part(name) for name in names}
+    counts: dict[str, int] = {}
+    for part in parts.values():
+        counts[part] = counts.get(part, 0) + 1
+    return {
+        name: part if part and counts[part] == 1 else name
+        for name, part in parts.items()
+    }
 
 
 class _OverlayRecordButton(QtWidgets.QPushButton):
@@ -1343,20 +1382,30 @@ class OverlayUI(QtWidgets.QWidget):
                 return label
         return self._microphone_selected or "System default"
 
-    def _microphone_caption(self) -> str:
+    def _microphone_caption(self) -> tuple[str, str]:
+        """The caption and the suffix that must survive elision."""
+        names = tuple(
+            dict.fromkeys(
+                (
+                    *(value for _label, value in self._microphone_entries if value),
+                    *(name for name in (self._microphone_default_name,) if name),
+                )
+            )
+        )
+        caption_names = _device_caption_names(names)
         if not self._microphone_selected:
             name = self._microphone_default_name
             if not name:
-                return MICROPHONE_SYSTEM_DEFAULT_CAPTION
-            return f"Mic: Default · {_device_caption_name(name)}"
-        # The label is the name plus "(not connected)" when it is missing;
-        # the suffix stays on the caption, the name is shortened.
-        label = self._selected_microphone_label()
-        suffix = label.removeprefix(self._microphone_selected)
-        return f"Mic: {_device_caption_name(self._microphone_selected)}{suffix}"
+                return MICROPHONE_SYSTEM_DEFAULT_CAPTION, ""
+            return f"Mic: Default · {caption_names[name]}", ""
+        # The label is the name plus " (not connected)" when it is missing;
+        # that suffix stays visible, the name is shortened and elided.
+        selected = self._microphone_selected
+        suffix = self._selected_microphone_label().removeprefix(selected)
+        return f"Mic: {caption_names.get(selected, selected)}", suffix
 
     def _sync_microphone_button(self) -> None:
-        self._microphone_button.set_caption(self._microphone_caption())
+        self._microphone_button.set_caption(*self._microphone_caption())
         self._microphone_button.setEnabled(not self._microphone_change_blocked)
         self._microphone_button.setToolTip(
             _MICROPHONE_BLOCKED_TOOLTIP

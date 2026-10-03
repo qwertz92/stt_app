@@ -72,8 +72,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   while the slider is dragged. The "Opacity" caption is gone (the slider and
   value carry it as a tooltip). The button's size hint is its chrome alone and
   its caption elides ("Mic: Default · HyperX QuadCast S"; the role in
-  "Microphone (...)" is dropped on the caption only, the menu and tooltip
-  carry the full name), so a 50-character device name never widens the
+  "Microphone (...)" is dropped on the caption only -- the menu and tooltip
+  carry the full name -- and kept when another listed device has the same
+  device part, as Realtek's "Microphone"/"Stereo Mix"/"Line In" do; a
+  " (not connected)" suffix is never elided, only the name before it),
+  so a 50-character device name never widens the
   overlay: `_target_window_width` sums the footer's hint, which stays below
   the controls row's. Height is fitted to the Lang button's. Disabled only
   while Listening (Processing may switch: the capture has ended). Measured
