@@ -183,8 +183,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   serialize on `_audio_device_refresh_lock`, off Qt.
 - **The settings dialog's six `Thread.start` guards catch `RuntimeError`
   only** (`fd1b50a`/`c98f57e`); a `MemoryError` escapes. The controller's
-  three (completion tone, device refresh worker, preload submit) catch
-  `Exception` since 2026-10-03.
+  three (completion tone, device refresh worker, preload submit) and the
+  paste target check's worker start catch `Exception` since 2026-10-03.
 - **`WarmMicrophoneStream.close()` does not wait for a helper's close in
   flight** (drains `_retiring` and returns). Only `shutdown()` calls it;
   `close_if_idle` is the call that waits.

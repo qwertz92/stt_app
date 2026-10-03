@@ -381,7 +381,7 @@ class PasteTargetCheck:
                 )
                 try:
                     thread.start()
-                except RuntimeError:
+                except Exception:
                     _LOGGER.warning("paste_target_check_unavailable reason=thread")
                     return False
                 self._thread = thread

@@ -224,3 +224,25 @@ def test_a_reader_that_raises_answers_unknown():
         assert readings[0].verdict == VERDICT_UNKNOWN
     finally:
         check.close()
+
+
+@pytest.mark.parametrize("failure", [RuntimeError, MemoryError])
+def test_a_worker_thread_that_cannot_start_refuses_the_request(monkeypatch, failure):
+    """A starved interpreter raises `RuntimeError` -- or `MemoryError` when the
+    stack cannot be allocated -- from `Thread.start`; either way the check is
+    simply unavailable, and the caller then behaves as if none existed."""
+
+    class _Refusing:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise failure("can't start new thread")
+
+    monkeypatch.setattr("stt_app.paste_target_check.threading.Thread", _Refusing)
+    check = PasteTargetCheck(recheck_delays_s=(), reader_factory=_Reader)
+
+    assert check.request(lambda reading: None) is False
+    # Not left busy: a later request tries to start the worker again.
+    assert check._busy is False
+    check.close()
