@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
@@ -40,6 +41,7 @@ from .local_benchmark import (
 )
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
+    _THREAD_START_ERRORS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     ElidingLabel,
     _benchmark_status_text,
@@ -157,11 +159,12 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
 """
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
+_BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX = 120
 
 _BENCHMARK_RESULT_COLUMNS = (
     "#",
     "Model",
-    "Resolved Device",
+    "Device",
     "Compute",
     "Load",
     "Avg",
@@ -169,6 +172,7 @@ _BENCHMARK_RESULT_COLUMNS = (
     "Status",
 )
 _BENCHMARK_RESULT_RUN_ORDER_COLUMN = 0
+_BENCHMARK_RESULT_MODEL_COLUMN = 1
 _BENCHMARK_RESULT_DEVICE_COLUMN = 2
 _BENCHMARK_RESULT_STATUS_COLUMN = len(_BENCHMARK_RESULT_COLUMNS) - 1
 # The three columns that show a measured number, and the value behind each of
@@ -187,6 +191,7 @@ _BENCHMARK_PLAN_STATUS_COLUMN = len(_BENCHMARK_PLAN_COLUMNS) - 1
 _BENCHMARK_PLAN_VISIBLE_ROWS = 6
 _BENCHMARK_PLAN_STATUS_PENDING = "Pending"
 _BENCHMARK_PLAN_STATUS_RUNNING = "Running..."
+_BENCHMARK_RUNNING_TICK_MS = 1000
 _BENCHMARK_PLAN_STATUS_ERROR = "Error"
 _BENCHMARK_PLAN_STATUS_SKIPPED = "Skipped"
 _BENCHMARK_PROGRESS_BAR_WIDTH_PX = 170
@@ -207,6 +212,14 @@ _BENCHMARK_RUN_BUTTON_TEXTS = (
 # `_run_local_benchmark` starts.
 _BENCHMARK_STANDARD_DEVICE = "auto"
 _BENCHMARK_CASE_PROGRESS_PATTERN = re.compile(r"^\[Case (\d+)/(\d+)\]")
+
+
+def _benchmark_running_text(elapsed_seconds: float) -> str:
+    """The running case's Status cell: "Running... 1:05" once it has a count."""
+    seconds = int(max(0.0, elapsed_seconds))
+    if seconds <= 0:
+        return _BENCHMARK_PLAN_STATUS_RUNNING
+    return f"{_BENCHMARK_PLAN_STATUS_RUNNING} {seconds // 60}:{seconds % 60:02d}"
 
 
 def _benchmark_progress_case_index(text: str) -> int | None:
@@ -526,7 +539,8 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         options = entry.options
         rows: list[tuple[str, object]] = [
             ("Status", _benchmark_status_text(entry.status)),
-            ("Recorded", entry.created_at),
+            # The History list's format and clock, not the stored UTC stamp.
+            ("Recorded", _benchmark_created_label(entry.created_at)),
             ("Audio", options.audio_path or options.audio_name or "-"),
             ("Models", ", ".join(options.model_names) or "-"),
             ("Runs per model/device", options.runs),
@@ -553,12 +567,23 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                 ("Status", "Running"),
                 ("Completed cases", len(cases)),
                 (
-                    "Transcript capture",
-                    "Available below as soon as each model/device case finishes.",
+                    "Transcripts",
+                    "Each finished case's transcript appears on the Transcripts tab.",
                 ),
             ]
         )
         self._set_transcript_rows(cases)
+
+    def show_without_results(self, status: str, result: str, summary: str) -> None:
+        """A run that ended with no case to show: its status and why.
+
+        One row each, never the text summary itself: that is many lines, and
+        a table cell shows the first ("No benchmark results available.").
+        `toPlainText()` still returns the summary.
+        """
+        self._plain_text = str(summary or "")
+        self._set_overview_rows([("Status", status), ("Result", result)])
+        self._set_transcript_rows([])
 
     def _set_overview_rows(self, rows: list[tuple[str, object]]) -> None:
         self.overview_table.setRowCount(len(rows))
@@ -739,7 +764,6 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         self._splitter.setChildrenCollapsible(False)
 
         self._results_table = QtWidgets.QTableWidget(0, len(_BENCHMARK_RESULT_COLUMNS))
-        self._results_table.setMinimumHeight(110)
         self._results_table.setTabKeyNavigation(False)
         self._results_table.setHorizontalHeaderLabels(list(_BENCHMARK_RESULT_COLUMNS))
         for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
@@ -755,6 +779,17 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         row_height = compact_table_row_height(self._results_table)
         self._results_table.verticalHeader().setMinimumSectionSize(row_height)
         self._results_table.verticalHeader().setDefaultSectionSize(row_height)
+        # The header and two rows; more only when the tab has the height. The
+        # minimums of this panel and of the History box decide how short a
+        # dialog can show the whole tab, and 110 px here, 220 px for the
+        # details and 210/400 px for the two boxes needed an 806 px dialog:
+        # on the 680 px one a 1366x768 screen allows, the Results action row
+        # lay below the visible page.
+        self._results_table.setMinimumHeight(
+            self._results_table.horizontalHeader().sizeHint().height()
+            + 2 * row_height
+            + 2 * self._results_table.frameWidth()
+        )
         self._results_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._results_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self._results_table.setHorizontalScrollMode(
@@ -764,11 +799,21 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
         results_header = self._results_table.horizontalHeader()
-        results_header.setStretchLastSection(True)
-        results_header.setSectionResizeMode(
-            _BENCHMARK_RESULT_RUN_ORDER_COLUMN,
-            QtWidgets.QHeaderView.ResizeToContents,
-        )
+        # Model takes the room; every other column is as wide as its header.
+        # They were 100 px each with Status stretching, which left "OK" a
+        # 190 px cell and cut "granite-speech-5.0-470m-turboctc" (183 px of
+        # text) to 100 px. The headers, sort arrow included, are wider than
+        # any value those columns hold ("Device" over "webgpu", "Load" over
+        # "99.99s"), so a case arriving mid-run cannot widen one. "Device",
+        # not "Resolved Device" (its tooltip says resolved): the long caption
+        # alone took 54 px from the model names.
+        for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
+            results_header.setSectionResizeMode(
+                column,
+                QtWidgets.QHeaderView.Stretch
+                if column == _BENCHMARK_RESULT_MODEL_COLUMN
+                else QtWidgets.QHeaderView.ResizeToContents,
+            )
         results_header.setSectionsClickable(True)
         # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
         # every ResizeToContents column by the space the arrow would need
@@ -781,7 +826,8 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         self._splitter.addWidget(self._results_table)
 
         self._details_view = _BenchmarkDetailsView()
-        self._details_view.setMinimumHeight(220)
+        # The tab bar and two overview rows (see the results table).
+        self._details_view.setMinimumHeight(_BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX)
         self._splitter.addWidget(self._details_view)
         self._splitter.setSizes([130, 260])
         layout.addWidget(self._splitter)
@@ -821,6 +867,11 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         """Show an interim line where a complete entry would go."""
         self._details_view.setPlainText(str(text))
 
+    def show_without_results(self, status: str, result: str, summary: str) -> None:
+        """An empty table and the run's status and outcome in the details."""
+        self.show_cases([])
+        self._details_view.show_without_results(status, result, summary)
+
     def _render(self) -> None:
         cases = self._benchmark_results_cases
         table = self._results_table
@@ -834,6 +885,9 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
                     detail = case.error or case.runtime_details
                     if detail:
                         item.setToolTip(detail)
+                elif column == _BENCHMARK_RESULT_MODEL_COLUMN:
+                    # Whole on hover where a narrow dialog still elides it.
+                    item.setToolTip(value)
                 table.setItem(row, column, item)
 
     def _on_header_clicked(self, column: int) -> None:
@@ -1003,11 +1057,13 @@ class _BenchmarkMixin:
         layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+        # True while Results shows a finished run whose history write failed:
+        # Results then holds its only copy, and a selection asks first.
+        self._benchmark_shown_entry_unsaved = False
         self._build_benchmark_window()
 
     def _build_benchmark_history_box(self) -> QtWidgets.QGroupBox:
         history_box = QtWidgets.QGroupBox("Benchmark History")
-        history_box.setMinimumHeight(210)
         history_layout = QtWidgets.QVBoxLayout(history_box)
         history_layout.setContentsMargins(10, 10, 10, 10)
         history_layout.setSpacing(6)
@@ -1058,7 +1114,7 @@ class _BenchmarkMixin:
                 column, QtWidgets.QHeaderView.ResizeToContents
             )
         self.benchmark_history_list.itemSelectionChanged.connect(
-            self._update_benchmark_history_actions
+            self._on_benchmark_history_selection_changed
         )
         self.benchmark_history_list.itemDoubleClicked.connect(
             self._load_benchmark_history_item
@@ -1067,11 +1123,6 @@ class _BenchmarkMixin:
 
         benchmark_history_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_history_actions)
-        self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
-        self.load_benchmark_history_button.setEnabled(False)
-        self.load_benchmark_history_button.clicked.connect(
-            self._load_selected_benchmark_history
-        )
         self.export_benchmark_history_button = QtWidgets.QPushButton(
             "Export Selected..."
         )
@@ -1099,7 +1150,6 @@ class _BenchmarkMixin:
         self.clear_benchmark_history_button.clicked.connect(
             self._clear_benchmark_history
         )
-        benchmark_history_actions.addWidget(self.load_benchmark_history_button)
         benchmark_history_actions.addWidget(self.export_benchmark_history_button)
         benchmark_history_actions.addWidget(self.open_benchmark_history_window_button)
         benchmark_history_actions.addStretch(1)
@@ -1110,7 +1160,6 @@ class _BenchmarkMixin:
 
     def _build_benchmark_results_box(self) -> QtWidgets.QGroupBox:
         results_box = QtWidgets.QGroupBox("Results")
-        results_box.setMinimumHeight(400)
         results_box.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -1136,7 +1185,7 @@ class _BenchmarkMixin:
             "Clear the displayed result without deleting its saved history entry."
         )
         self.clear_benchmark_results_button.clicked.connect(
-            self._clear_benchmark_results
+            self._clear_loaded_benchmark_result
         )
         self.open_benchmark_results_window_button = QtWidgets.QPushButton(
             "Open in Window"
@@ -1235,7 +1284,7 @@ class _BenchmarkMixin:
             "Choose an audio file or use the last recording"
         )
         self.benchmark_audio_edit.textChanged.connect(
-            lambda _text: self._update_benchmark_actions()
+            lambda _text: self._update_benchmark_audio_status()
         )
         self.benchmark_audio_browse_button = QtWidgets.QPushButton("Choose file...")
         self.benchmark_audio_browse_button.clicked.connect(
@@ -1261,6 +1310,15 @@ class _BenchmarkMixin:
         make_label_selectable(self.benchmark_audio_status_label)
         self.benchmark_audio_status_label.setWordWrap(True)
         self._style_note_label(self.benchmark_audio_status_label)
+        # Two lines reserved: a long path wrapped to a second line and moved
+        # the model list, the case list and everything under them by 9 px.
+        self._reserve_dynamic_hint_height(self.benchmark_audio_status_label)
+        # And one pixel of minimum width, for the reason
+        # `_let_wrapped_labels_narrow` gives (it covers the tab pages, not this
+        # window): a wrapped label's minimum is its longest word, so a
+        # 180-character file name widened the content to 1464 px and put a
+        # horizontal scroll bar under it.
+        self.benchmark_audio_status_label.setMinimumWidth(1)
         audio_layout.addWidget(self.benchmark_audio_status_label)
         audio_help = QtWidgets.QLabel(
             "Use a representative sample. The benchmark measures model speed and runtime factor on this file. "
@@ -1504,6 +1562,23 @@ class _BenchmarkMixin:
 
         setup_layout.addWidget(self._build_benchmark_plan_box())
 
+        outer_layout.addWidget(scroll, 1)
+
+        self.benchmark_window_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.benchmark_window_status_label)
+        self.benchmark_window_status_label.setWordWrap(True)
+        # Reserve the area: every extra wrapped line of a failure message
+        # otherwise took 16 px off the scroll viewport above it. The minimum
+        # width as for the audio line: a path in an error is one long word.
+        self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
+        self.benchmark_window_status_label.setMinimumWidth(1)
+        outer_layout.addWidget(self.benchmark_window_status_label)
+
+        # A fixed footer, outside the scrolling content. Inside it the row sat
+        # under everything that changes height: "Show Run Options" pushed Run
+        # Benchmark 295 px down, out of the 812 px viewport of the default
+        # window; a 13th model moved it 20 px; and with twelve models its lower
+        # 19 px already needed a scroll at the default size.
         benchmark_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_actions)
         self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
@@ -1514,19 +1589,7 @@ class _BenchmarkMixin:
         benchmark_actions.addWidget(self.run_benchmark_button)
         benchmark_actions.addWidget(self.cancel_benchmark_button)
         benchmark_actions.addStretch(1)
-        setup_layout.addLayout(benchmark_actions)
-
-        outer_layout.addWidget(scroll, 1)
-
-        self.benchmark_window_status_label = QtWidgets.QLabel("")
-        make_label_selectable(self.benchmark_window_status_label)
-        self.benchmark_window_status_label.setWordWrap(True)
-        # Reserve the area. This label sits under the scroll area holding the
-        # Run/Cancel row, so every extra wrapped line took 16 px off that scroll
-        # viewport and lifted both buttons by the same 16 px -- while the run
-        # they belong to was reporting how it had failed.
-        self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
-        outer_layout.addWidget(self.benchmark_window_status_label)
+        outer_layout.addLayout(benchmark_actions)
 
         self._refresh_benchmark_plan_from_widgets()
 
@@ -1580,6 +1643,15 @@ class _BenchmarkMixin:
             + 2
         )
         cases_layout.addWidget(table)
+
+        # Counts the running case's time in its Status cell. A large model's
+        # case takes a minute or more, and a row reading "Running..." all
+        # that time could not tell a working run from a stuck one. The cell
+        # is in the stretching last column, so the count moves nothing.
+        self._benchmark_case_started_at: float | None = None
+        self._benchmark_case_timer = QtCore.QTimer(self)
+        self._benchmark_case_timer.setInterval(_BENCHMARK_RUNNING_TICK_MS)
+        self._benchmark_case_timer.timeout.connect(self._tick_benchmark_running_case)
 
         # The three controls the plan is computed from. The model list is also
         # connected to `_update_benchmark_actions`; these are separate
@@ -1638,7 +1710,7 @@ class _BenchmarkMixin:
     ) -> None:
         """The single writer of the case list's rows and its caption."""
         self._benchmark_plan_sequence = _benchmark_plan_sequence(planned)
-        self._benchmark_plan_running_index = None
+        self._stop_benchmark_running_case()
         table = self.benchmark_plan_table
         table.setRowCount(len(planned))
         for row, planned_case in enumerate(planned):
@@ -1687,9 +1759,9 @@ class _BenchmarkMixin:
         for row in range(table.rowCount()):
             item = table.item(row, _BENCHMARK_PLAN_STATUS_COLUMN)
             status = item.text() if item is not None else ""
-            if status in (
-                _BENCHMARK_PLAN_STATUS_PENDING,
-                _BENCHMARK_PLAN_STATUS_RUNNING,
+            # `startswith`: the running row carries its elapsed time.
+            if status == _BENCHMARK_PLAN_STATUS_PENDING or status.startswith(
+                _BENCHMARK_PLAN_STATUS_RUNNING
             ):
                 self._mark_benchmark_plan_case(row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED)
 
@@ -1836,14 +1908,39 @@ class _BenchmarkMixin:
         self._refresh_benchmark_plan_from_widgets()
 
     def _set_benchmark_audio_path(self, path: str) -> None:
-        selected = str(path or "").strip()
-        self.benchmark_audio_edit.setText(selected)
-        if selected:
-            self.benchmark_audio_status_label.setText(f"Selected: {selected}")
-            self.benchmark_audio_status_label.setStyleSheet("color: #1b5e20;")
+        self.benchmark_audio_edit.setText(str(path or "").strip())
+        # `setText` emits no `textChanged` for an unchanged text.
+        self._update_benchmark_audio_status()
+
+    def _benchmark_audio_path(self) -> str:
+        """The audio field's path as the run uses it.
+
+        Without surrounding whitespace and double quotes: Explorer's "Copy as
+        path" wraps the path in quotes, and the quoted text is no file, so a
+        pasted path read "File not found" for a file that exists.
+        """
+        return self.benchmark_audio_edit.text().strip().strip('"').strip()
+
+    def _update_benchmark_audio_status(self) -> None:
+        """The single writer of the line under the audio field.
+
+        Derived from the field on every edit, so a typed path that is not a
+        file says so: the line used to change only through the two buttons,
+        and a mistyped path left "No audio sample selected." beside a
+        disabled Run button with nothing saying why.
+        """
+        selected = self._benchmark_audio_path()
+        if not selected:
+            text, color = "No audio sample selected.", "#555"
+        elif Path(selected).is_file():
+            text, color = f"Selected: {selected}", "#1b5e20"
         else:
-            self.benchmark_audio_status_label.setText("No audio sample selected.")
-            self.benchmark_audio_status_label.setStyleSheet("color: #555;")
+            text, color = f"File not found: {selected}", "#b71c1c"
+        label = self.benchmark_audio_status_label
+        label.setText(text)
+        # The reserved two lines can be too few for a deep path.
+        label.setToolTip(text)
+        label.setStyleSheet(f"color: {color};")
         self._update_benchmark_actions()
 
     def _choose_benchmark_audio_file(self) -> None:
@@ -1917,7 +2014,7 @@ class _BenchmarkMixin:
         self.open_benchmark_window_button.setText(
             _BENCHMARK_RUN_BUTTON_BUSY_TEXT if busy else _BENCHMARK_RUN_BUTTON_IDLE_TEXT
         )
-        audio_path = self.benchmark_audio_edit.text().strip()
+        audio_path = self._benchmark_audio_path()
         has_audio = bool(audio_path) and Path(audio_path).is_file()
         has_models = bool(self._selected_benchmark_model_names())
 
@@ -1941,7 +2038,9 @@ class _BenchmarkMixin:
             and self._benchmark_cancel_event is not None
             and not self._benchmark_cancel_event.is_set()
         )
-        self.clear_benchmark_results_button.setEnabled(not busy)
+        self.clear_benchmark_results_button.setEnabled(
+            (not busy) and self._benchmark_result_is_shown()
+        )
         self.export_benchmark_results_button.setEnabled(
             (not busy) and self._current_benchmark_entry is not None
         )
@@ -1953,7 +2052,23 @@ class _BenchmarkMixin:
         )
         self._update_benchmark_history_actions()
 
+    def _benchmark_result_is_shown(self) -> bool:
+        """Whether Results shows a run: a stored entry or a run's cases."""
+        return self._current_benchmark_entry is not None or bool(
+            getattr(self, "_current_benchmark_cases", None)
+        )
+
+    def _clear_loaded_benchmark_result(self) -> None:
+        """Clear Loaded: asks first when the shown run is in no history row."""
+        if self._may_replace_shown_benchmark_result(
+            "Clear Results and discard the shown run?"
+        ):
+            self._clear_benchmark_results()
+
     def _clear_benchmark_results(self) -> None:
+        # The History selection names the run on show, so it goes too.
+        self._deselect_benchmark_history()
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
@@ -1967,18 +2082,26 @@ class _BenchmarkMixin:
         self._show_benchmark_empty_state_if_idle()
 
     def _show_benchmark_empty_state_if_idle(self) -> None:
-        """On a first visit the tab was two empty tables; say how to start.
+        """With nothing shown, Results says how to show something.
 
-        Only while there is no history, nothing is loaded and no run is
-        active: a loaded result or a running benchmark owns the view.
+        Only while nothing is loaded and no run is active: a loaded result or
+        a running benchmark owns the view. Without history it says how to
+        start (a first visit was two empty tables); with history, that a
+        row shows its run (after Clear Loaded or a delete it was two empty
+        tables again).
         """
         if not hasattr(self, "benchmark_history_list"):
             return
-        if self.benchmark_history_list.rowCount() > 0:
-            return
         if getattr(self, "_current_benchmark_cases", None):
             return
+        if getattr(self, "_current_benchmark_entry", None) is not None:
+            return
         if getattr(self, "_active_benchmark_thread", None) is not None:
+            return
+        if self.benchmark_history_list.rowCount() > 0:
+            self.benchmark_summary_text.show_empty_state(
+                "Select a run in Benchmark History to see its results here."
+            )
             return
         self.benchmark_summary_text.show_empty_state(
             "No benchmark yet. Click Run Benchmark... to measure your "
@@ -2051,7 +2174,7 @@ class _BenchmarkMixin:
         if self._active_benchmark_thread is not None:
             return
 
-        audio_path = self.benchmark_audio_edit.text().strip()
+        audio_path = self._benchmark_audio_path()
         if not audio_path or not Path(audio_path).is_file():
             self._set_benchmark_status(
                 "Choose a valid audio file before starting the benchmark.",
@@ -2122,8 +2245,13 @@ class _BenchmarkMixin:
             warmup=warmup,
             model_dir=model_dir,
         )
+        # The run owns Results from here, so no row may stay highlighted as
+        # if it were shown; and a row left selected through a refused thread
+        # start could not be clicked back into Results (no selection change).
+        self._deselect_benchmark_history()
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_options = options
         self._current_benchmark_environment = None
         cancel_event = threading.Event()
@@ -2138,9 +2266,10 @@ class _BenchmarkMixin:
         )
         self._set_benchmark_plan_rows(planned)
         self._set_benchmark_progress(0, len(planned))
-        self.benchmark_results_panel.show_cases([])
-        self.benchmark_results_panel.set_status_text(
-            self._benchmark_summary([], status="running", options=options)
+        # The live view from the first moment, as after each case: "Running",
+        # nothing completed yet.
+        self.benchmark_results_panel.show_live(
+            self._benchmark_summary([], status="running", options=options), []
         )
         self._update_benchmark_actions()
 
@@ -2297,27 +2426,25 @@ class _BenchmarkMixin:
             daemon=True,
         )
         # `Thread.start()` can raise `RuntimeError` when the interpreter
-        # cannot create another thread. The busy marker is already set at
-        # that point, and nothing clears it but the completion signal that
-        # will never arrive -- so the dialog stays busy for the rest of the
-        # session: the control stays disabled and `reload_from_store` is
-        # deferred forever, silently.
+        # cannot create another thread, and `MemoryError` when it cannot
+        # allocate one. The busy marker is already set at that point, and
+        # nothing clears it but the completion signal that will never arrive
+        # -- so the dialog stays busy for the rest of the session: the control
+        # stays disabled and `reload_from_store` is deferred forever, silently.
         try:
             self._active_benchmark_thread.start()
-        except RuntimeError as exc:
+        except _THREAD_START_ERRORS as exc:
             self._active_benchmark_thread = None
             self._benchmark_cancel_event = None
-            self._set_benchmark_status(
-                f"Could not start the benchmark: {exc}", "#b71c1c"
-            )
+            # A `MemoryError` usually carries no message.
+            message = f"Could not start the benchmark: {str(exc) or type(exc).__name__}"
+            self._set_benchmark_status(message, "#b71c1c")
             # The summary view was already primed with the running summary a
             # few lines above, and `setPlainText` puts that straight into the
             # Overview's Status row -- so Details went on reading "running"
             # for a benchmark that never began, contradicting the status line
             # right next to it.
-            self.benchmark_results_panel.set_status_text(
-                f"Could not start the benchmark: {exc}"
-            )
+            self.benchmark_results_panel.set_status_text(message)
             # Nothing will run, so nothing is counted; the plan rows stay as
             # the selection's Pending list.
             self._set_benchmark_progress(0, 0)
@@ -2328,7 +2455,26 @@ class _BenchmarkMixin:
         case_index = _benchmark_progress_case_index(text)
         if case_index is not None:
             self._benchmark_plan_running_index = case_index
+            self._benchmark_case_started_at = time.monotonic()
             self._mark_benchmark_plan_case(case_index, _BENCHMARK_PLAN_STATUS_RUNNING)
+            self._benchmark_case_timer.start()
+
+    def _tick_benchmark_running_case(self) -> None:
+        index = self._benchmark_plan_running_index
+        started = self._benchmark_case_started_at
+        if index is None or started is None:
+            return
+        self._mark_benchmark_plan_case(
+            index, _benchmark_running_text(time.monotonic() - started)
+        )
+
+    def _stop_benchmark_running_case(self) -> None:
+        """No case is running: forget it and stop counting."""
+        self._benchmark_plan_running_index = None
+        self._benchmark_case_started_at = None
+        timer = getattr(self, "_benchmark_case_timer", None)
+        if timer is not None:
+            timer.stop()
 
     def _on_benchmark_case_finished(self, payload: object) -> None:
         if not isinstance(payload, BenchmarkCase):
@@ -2346,6 +2492,7 @@ class _BenchmarkMixin:
             if payload.error
             else f"Done (RTF {_format_number(payload.avg_rtf)})",
         )
+        self._stop_benchmark_running_case()
         self._set_benchmark_progress(finished, self.benchmark_plan_table.rowCount())
         summary = self._benchmark_summary(
             self._current_benchmark_cases,
@@ -2392,6 +2539,7 @@ class _BenchmarkMixin:
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
         self._set_benchmark_progress(0, 0)
+        self._stop_benchmark_running_case()
         self._skip_unfinished_benchmark_plan_cases()
         history_error = ""
 
@@ -2409,14 +2557,26 @@ class _BenchmarkMixin:
                 self._benchmark_history_store.add_entry(entry)
             except Exception as exc:
                 history_error = str(exc)
+                self._benchmark_shown_entry_unsaved = True
                 self._refresh_benchmark_history_list()
             else:
                 self._refresh_benchmark_history_list(select_entry=entry)
         else:
             self._current_benchmark_entry = None
-            self.benchmark_results_panel.show_cases(cases)
-            self.benchmark_results_panel.set_status_text(text)
+            # The list first: with no history its refresh writes the "No
+            # benchmark yet" placeholder, which would replace this outcome.
             self._refresh_benchmark_history_list()
+            if cases:
+                # Cases without the run's options: unreachable from the
+                # window, which always passes them; shown, not saved.
+                self.benchmark_results_panel.show_cases(cases)
+                self.benchmark_results_panel.set_status_text(text)
+            else:
+                self.benchmark_results_panel.show_without_results(
+                    _benchmark_status_text(status),
+                    "No case finished. Nothing was saved.",
+                    text,
+                )
 
         # After the history write, and only for a run that ran to the end: a
         # cancel stopped somewhere the user chose and a failure somewhere
@@ -2606,6 +2766,10 @@ class _BenchmarkMixin:
         if not hasattr(self, "benchmark_history_list"):
             return
         previous_scroll = self.benchmark_history_list.verticalScrollBar().value()
+        # The shown run stays selected across a rebuild, so the list and
+        # Results keep naming the same run.
+        if select_entry is None:
+            select_entry = self._current_benchmark_entry
         self.benchmark_history_list.setRowCount(0)
         selected_row = -1
         for row, entry in enumerate(self._benchmark_history_store.recent_entries(20)):
@@ -2663,11 +2827,10 @@ class _BenchmarkMixin:
         return entry if isinstance(entry, BenchmarkHistoryEntry) else None
 
     def _update_benchmark_history_actions(self) -> None:
-        if not hasattr(self, "load_benchmark_history_button"):
+        if not hasattr(self, "export_benchmark_history_button"):
             return
         busy = self._active_benchmark_thread is not None
         has_selection = self._selected_benchmark_history_entry() is not None
-        self.load_benchmark_history_button.setEnabled((not busy) and has_selection)
         self.export_benchmark_history_button.setEnabled((not busy) and has_selection)
         # Not gated on `busy`, unlike its neighbours: opening a stored run in a
         # window of its own reads the entry and nothing else, so it cannot
@@ -2678,20 +2841,72 @@ class _BenchmarkMixin:
             (not busy) and self.benchmark_history_list.count() > 0
         )
 
-    def _load_selected_benchmark_history(self) -> None:
+    def _on_benchmark_history_selection_changed(self) -> None:
+        """The selected row is the run Results shows.
+
+        Not during a run, which owns Results (Open in Window still reads the
+        row), and not for the run already shown: a finished run selects its
+        own new row, and reloading it would replace the finish's status line.
+        """
+        self._update_benchmark_history_actions()
+        if self._active_benchmark_thread is not None:
+            return
         entry = self._selected_benchmark_history_entry()
-        if entry is None:
+        current = self._current_benchmark_entry
+        if entry is None or (
+            current is not None and current.identity_key() == entry.identity_key()
+        ):
+            return
+        if not self._may_replace_shown_benchmark_result():
+            # Keep: the shown run is no row, so the selection before this
+            # click was none, and it goes back to that without a reload.
+            self._deselect_benchmark_history()
             return
         self._load_benchmark_history_entry(entry)
+
+    def _may_replace_shown_benchmark_result(
+        self,
+        question: str = "Show the selected run instead and discard the shown one?",
+    ) -> bool:
+        """Ask before a load replaces a run that only Results still holds.
+
+        A finished run whose history write failed is in no row; a click on
+        any row replaced it silently, and only Export Loaded could still
+        have saved it.
+        """
+        if not self._benchmark_shown_entry_unsaved:
+            return True
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Replace unsaved result",
+            "The run shown in Results was not saved to Benchmark History; "
+            f"Export Loaded... is the only way to keep it.\n\n{question}",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        return answer == QtWidgets.QMessageBox.Yes
+
+    def _deselect_benchmark_history(self) -> None:
+        """Clear the History selection without loading anything."""
+        if not hasattr(self, "benchmark_history_list"):
+            return
+        table = self.benchmark_history_list
+        table.blockSignals(True)
+        try:
+            table.clearSelection()
+        finally:
+            table.blockSignals(False)
+        self._update_benchmark_history_actions()
 
     def _load_benchmark_history_item(
         self,
         item: QtWidgets.QTableWidgetItem,
     ) -> None:
-        # The same gate `Load Selected` carries. Loading replaces
-        # `_current_benchmark_cases`, and that is the list the next finished
-        # case appends to, so a double-click during a run put the stored run's
-        # cases and the live one's into one results table and one live summary.
+        # The same gate the selection carries, and the place that says why
+        # nothing happened. Loading replaces `_current_benchmark_cases`, and
+        # that is the list the next finished case appends to, so a
+        # double-click during a run put the stored run's cases and the live
+        # one's into one results table and one live summary.
         if self._active_benchmark_thread is not None:
             self._set_benchmark_status(
                 "A stored run cannot be opened while a benchmark is running.",
@@ -2703,16 +2918,25 @@ class _BenchmarkMixin:
             first = self.benchmark_history_list.item(item.row(), 0)
             entry = first.data(QtCore.Qt.UserRole) if first is not None else None
         if isinstance(entry, BenchmarkHistoryEntry):
+            if not self._may_replace_shown_benchmark_result():
+                self._deselect_benchmark_history()
+                return
             self._load_benchmark_history_entry(entry)
 
     def _load_benchmark_history_entry(self, entry: BenchmarkHistoryEntry) -> None:
+        self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_entry = entry
         self._current_benchmark_options = entry.options
         self._current_benchmark_environment = entry.environment
         self._current_benchmark_cases = list(entry.cases)
         self.benchmark_results_panel.show_entry(entry)
-        self._set_benchmark_status("Loaded benchmark history entry.", "#555")
-        self._expand_benchmark_results_area()
+        # Cleared rather than "Loaded benchmark history entry.": Results now
+        # shows what was selected, and the previous run's or export's line no
+        # longer describes it.
+        self._set_benchmark_status("", "#555")
+        # No `_expand_benchmark_results_area()` here: a load is a selection
+        # now, and resetting the splitter on every click or arrow press undid
+        # the size the user had dragged it to. Only a run's finish resets it.
         self._update_benchmark_actions()
 
     def _open_current_benchmark_results_window(self) -> None:
@@ -2874,8 +3098,9 @@ class _BenchmarkMixin:
             self._current_benchmark_entry is not None
             and self._current_benchmark_entry.identity_key() == entry.identity_key()
         ):
-            self._current_benchmark_entry = None
-            self._update_benchmark_actions()
+            # Off the Results too: it stayed there with Export and Open in
+            # Window disabled, a run that no longer existed.
+            self._clear_benchmark_results()
         self._refresh_benchmark_history_list()
 
     def _clear_benchmark_history(self) -> None:
@@ -2903,7 +3128,7 @@ class _BenchmarkMixin:
             # then reached and refused.
             self._set_benchmark_status(str(exc), "#b71c1c")
             return
-        self._current_benchmark_entry = None
         self._close_all_benchmark_results_windows()
+        self._clear_benchmark_results()
         self._refresh_benchmark_history_list()
         self._update_benchmark_actions()

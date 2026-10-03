@@ -37,12 +37,16 @@ class _RefusingThread:
     guards exist for.
     """
 
-    error: type[Exception] = RuntimeError
+    # A type is raised with the usual message; an instance as it is, so a
+    # test can raise `MemoryError()`, whose `str()` is empty.
+    error: type[Exception] | BaseException = RuntimeError
 
     def __init__(self, *args, name: str = "", **kwargs) -> None:
         self.name = name
 
     def start(self) -> None:
+        if isinstance(self.error, BaseException):
+            raise self.error
         raise self.error("can't start new thread")
 
     def is_alive(self) -> bool:  # pragma: no cover - it never ran
@@ -70,8 +74,13 @@ def refusal(request) -> type[Exception]:
     return request.param
 
 
-def _refuse_new_threads(monkeypatch, error: type[Exception] = RuntimeError) -> None:
+def _refuse_new_threads(
+    monkeypatch, error: type[Exception] | BaseException = RuntimeError
+) -> None:
     """Make every `threading.Thread.start()` raise, from here on.
+
+    `error` replaces the default `RuntimeError`: a starved interpreter can
+    also raise `MemoryError` there.
 
     The dialog mixins each import `threading` themselves, and this replaces the
     class on the one module object all of them resolve, so the site under test
@@ -194,7 +203,14 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(
     assert dialog._local_model_download_progress_timer.isActive() is False
 
 
-def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    "error",
+    [RuntimeError("can't start new thread"), MemoryError()],
+    ids=["RuntimeError", "MemoryError"],
+)
+def test_a_benchmark_that_cannot_start_gives_the_run_button_back(
+    monkeypatch, tmp_path, error
+):
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
     monkeypatch.setattr(
@@ -216,7 +232,7 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
         QtTest.QTest.qWait(25)
     dialog._set_benchmark_audio_path(str(audio_path))
     assert dialog.benchmark_models_list.count() == 1
-    _refuse_new_threads(monkeypatch)
+    _refuse_new_threads(monkeypatch, error)
 
     dialog._run_local_benchmark()
 
@@ -224,7 +240,10 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
     assert dialog._benchmark_cancel_event is None
     assert dialog._background_work_active() is False
     assert dialog.run_benchmark_button.isEnabled() is True
-    assert "Could not start the benchmark" in dialog.benchmark_status_label.text()
+    status = dialog.benchmark_status_label.text()
+    assert "Could not start the benchmark" in status
+    # `str(MemoryError())` is empty; the line must still name a reason.
+    assert status.endswith(str(error) or type(error).__name__), status
     # The Details overview was primed with the running summary before the
     # thread was started, and `setPlainText` puts that into its Status row --
     # so it went on reading "running" next to a status line saying the run

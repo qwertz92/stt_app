@@ -223,11 +223,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   empties the clipboard first, so the late read by the busy target that the
   abandon protects could see an empty clipboard; ~1 h, and it raises the
   risk the abandon exists to avoid.
-- **The Run Benchmark `Thread.start` guard catches `RuntimeError` only**
-  (`settings_dialog_benchmark.py`): a `MemoryError` escapes there. Every other
-  worker start catches `MemoryError` too since 2026-10-03 (settings dialog,
-  controller, paste target check, VAD auto-stop, download progress reader,
-  Silero load thread).
 - **Copy yields the pending offer after an edit made while one is pending**,
   and Edit stays disabled until the offer is retired. Offer semantics. Kept
   2026-10-03 (owner decision): letting Edit change a pending offer's text and
@@ -238,7 +233,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share
   `BenchmarkHistoryEntry.identity_key()`** (`created_at` has second
-  resolution) and open one pop-out.
+  resolution) and open one pop-out. Only with equal status and summary too,
+  and every Settings run spends the environment query (median 2.2 s) before
+  it can save, so two saves within a second do not come from the app.
+  Since 2026-10-03 the History selection also skips reloading an equal key.
 - **The benchmark environment (median 2.2 s PowerShell) runs before the first
   cancel check**; a shutdown joins for 2.5 s: a worker it outlasts saves
   nothing, one it ends is saved as canceled.

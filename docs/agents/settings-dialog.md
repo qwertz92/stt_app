@@ -86,7 +86,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   Benchmark page, measured on the tab widget, never on the dialog, never past
   the screen.** `_pin_content_minimum_width` runs at construction and 0 ms
   after every show and tab switch, only raising the minimum: the Benchmark
-  page reports 555 px until painted and 585 after (layout caches refresh only
+  page reported 555 px until painted and 585 after, less since its History
+  row lost "Load Selected" on 2026-10-03 (layout caches refresh only
   via a visible parent), and `QTabWidget.minimumSizeHint` covers all pages.
   - A `QScrollArea` reports a fixed 58 px minimum, so
     `_content_minimum_width` adds each page's content minimum plus scrollbar

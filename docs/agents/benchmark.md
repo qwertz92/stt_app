@@ -28,6 +28,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   order uses indicator section -1 with the indicator left on:
   `setSortIndicatorShown(False)` re-measures `ResizeToContents` columns and
   moves the table.
+- **The results table's Model column stretches; every other column is
+  `ResizeToContents`** (2026-10-03). Their headers, sort arrow included, are
+  wider than any value they hold, so a case arriving mid-run widens nothing
+  (a test pins it). The device header reads "Device" (its tooltip says
+  resolved): "Resolved Device" took 54 px from the model names. Before,
+  Status stretched and Model was 100 px, cutting
+  `granite-speech-5.0-470m-turboctc` (183 px); now 191 px at the default
+  860 px, 185 at the 801 px minimum, and the cell's tooltip names it.
+- **The Details overview never shows the multi-line text summary in a
+  cell** (a cell shows its first line: "No benchmark results available."
+  for a run that had just started). A start shows the live rows (Running,
+  0 completed); a run ending with no case shows `show_without_results`
+  (status, "No case finished. Nothing was saved."), written after the
+  history refresh, whose empty-history placeholder would replace it.
+  `toPlainText()` keeps the summary. "Recorded" uses
+  `_benchmark_created_label`, as the History list does (it showed the UTC
+  ISO stamp, two hours off the list's local time).
 - **A stored run can open in a `BenchmarkResultsWindow`** (`Open in Window`,
   non-modal `Qt.Window` owned by the dialog, several at once, each sorting
   independently).
@@ -95,10 +112,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
 - **`planned_benchmark_cases` is the single source of the case sequence**:
   `run_benchmark_cases` iterates it, and the Run Benchmark window's "Cases"
   table asks it and marks `Running...` from the runner's `[Case i/N]` line.
-  - The table is fixed at six rows so Run/Cancel below never moves.
+  - The table is fixed at six rows so the window's content never jumps
+    as models are checked.
+  - Run/Cancel sit in a fixed footer outside the scroll area, under the
+    two-line status (2026-10-03): inside it, "Show Run Options" pushed Run
+    295 px down out of the 812 px viewport, a 13th model moved it 20 px,
+    and with twelve models it needed a scroll at the default size.
+  - The audio line is derived from the field on every edit
+    (`_update_benchmark_audio_status`: none / "File not found" / "Selected"),
+    read through `_benchmark_audio_path`, which strips the double quotes of
+    Explorer's "Copy as path" for the line, the Run gate and the run,
+    two lines reserved, minimum width 1 px like the window status (a long
+    file name otherwise widened the content to 1464 px).
   - A run's plan comes from options snapshotted at its start; the
     refresh-from-widgets path returns early while `_active_benchmark_thread`
     is set.
+  - The running row counts its time ("Running... 1:05", 1 s
+    `_benchmark_case_timer`, 2026-10-03; a minute-long case otherwise read
+    the same as a stuck one). `_stop_benchmark_running_case` is the one
+    place that stops it (case delivered, run end, plan redraw); matching
+    uses `startswith(_BENCHMARK_PLAN_STATUS_RUNNING)`.
   - At run end each row without a result reads `Skipped`, including the one
     `Running...` at a cancel/failure; results go on the row the runner
     announced (`_benchmark_plan_running_index`), not the nth delivery.
@@ -213,8 +246,40 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   `docs/learning-log.md` as well as `benchmark_history.json` before calling a
   figure unsourced; "not comparable" differs from "unsourced".
 - **A stored run cannot be opened while one runs, and a finished case does
-  not move the reader.** The table double-click has Load Selected's busy
+  not move the reader.** The selection and the double-click share one busy
   gate (loading replaces `_current_benchmark_cases`, which
-  `_on_benchmark_case_finished` appends to). `set_live_results` runs per
+  `_on_benchmark_case_finished` appends to); only the double-click says
+  why on the status line. `set_live_results` runs per
   case; `_set_transcript_rows` restores the selection by
   `model / device / run` identity, falling back to row 0.
+- **Benchmark History is a master list: the selected row is the run
+  Results shows** (2026-10-03; "Load Selected" is gone). Before, selection
+  and Results could name two runs, each with its own Export and Open in
+  Window. `_on_benchmark_history_selection_changed` loads unless a run is
+  active or the row is the run already shown (a finish selects its new
+  row; reloading it replaced the finish's status line). A load clears the
+  status line and never moves the History/Results splitter (only a run's
+  finish resets it: a reset per selection undid every drag on one arrow
+  press). A run whose history write failed is in no row, so while it is
+  shown (`_benchmark_shown_entry_unsaved`) a selection, a double-click or Clear Loaded asks
+  before replacing or clearing it (`_may_replace_shown_benchmark_result`; No keeps it
+  and deselects with signals blocked). A run's start deselects too: the run
+  owns Results, and a row left selected through a refused thread start
+  could not be clicked back in. A rebuild re-selects `_current_benchmark_entry`;
+  `_clear_benchmark_results` deselects (signals blocked) and is also what
+  deleting the shown run and Clear History call (the deleted run stayed on
+  screen with its actions disabled). Clear Loaded is enabled only while a
+  run is shown. With history and nothing shown, Results says "Select a run
+  in Benchmark History...". The History row lost a button, so the page's
+  minimum width fell (dialog hint 611 -> 508 px); the tab bar still sets
+  the dialog's minimum.
+- **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
+  1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
+  height decides how short a dialog still shows the whole tab, since the
+  page is not a scroll area: explicit 210/400 px box minimums, 110 px for
+  the results table and 220 px for the details asked for 675 px of page
+  (806 px of dialog), and below that the Results action row was cut off.
+  Now no box minimum, results table = header + two rows, details 120 px:
+  542 px of page. `tests/test_benchmark_tab_layout.py` pins the budget; a
+  smaller dialog still clips (proposal: a scroll fallback, which touches
+  the dialog's sizing rules).
