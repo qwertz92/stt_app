@@ -123,9 +123,27 @@ def body_excerpt(payload: bytes | str) -> str:
     return text
 
 
+# What follows a page's first characters is never looked at beyond this: a
+# `<title>` is in the head, and an unbounded lazy search was quadratic on a
+# body of unclosed `<title>` tags (3.95 s for 64 KB, review of 2026-10-03).
+_PAGE_HEAD_BYTES = 4096
+_HTML_START = re.compile(rb"<(?:!doctype\s+html|html|head|body|title)\b", re.IGNORECASE)
 _PAGE_TITLE = re.compile(rb"<title[^>]*>(.*?)</title\s*>", re.IGNORECASE | re.DOTALL)
 _PAGE_TAG = re.compile(r"<[^>]*>")
 _MARKUP_ERROR_HINT = "(a proxy or firewall block page?)"
+
+
+def is_html_page(payload: bytes) -> bool:
+    """Whether a body starts like an HTML page, as opposed to any markup.
+
+    Narrower than `is_markup_page`: an XML error body
+    (`<Error><Code>AccessDenied</Code><Message>...`) is markup but carries
+    the provider's message, which calling it an HTML page threw away. The
+    start is `<!doctype html`, `<html`, `<head`, `<body` or `<title`, after
+    whitespace and a byte-order mark.
+    """
+    head = payload[:_PAGE_HEAD_BYTES].lstrip().removeprefix(_BYTE_ORDER_MARK)
+    return _HTML_START.match(head.lstrip()) is not None
 
 
 def markup_page_description(payload: bytes) -> str:
@@ -137,7 +155,7 @@ def markup_page_description(payload: bytes) -> str:
     never shown: it is a proxy's, not the provider's, and as markup it
     filled the message (review of 2026-10-03).
     """
-    match = _PAGE_TITLE.search(payload)
+    match = _PAGE_TITLE.search(payload[:_PAGE_HEAD_BYTES])
     if match:
         title = _PAGE_TAG.sub(
             " ", html.unescape(match.group(1).decode("utf-8", errors="replace"))
@@ -295,7 +313,7 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
         payload = exc.read(_MAX_ERROR_BODY_BYTES)
     except Exception:
         return ""
-    if is_markup_page(payload):
+    if is_html_page(payload):
         # A proxy's block page (403 Zscaler, 407, nginx 413), not the
         # provider's answer: reported by its title instead of pasted.
         return f"the reply was {markup_page_description(payload)}"

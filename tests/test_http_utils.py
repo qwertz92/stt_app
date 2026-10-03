@@ -157,13 +157,45 @@ def test_a_markup_error_page_is_reported_by_its_title_not_pasted(body, title):
         b"<html><body><h1>502 Bad Gateway</h1></body></html>",
         b"<html><title></title></html>",
         b"<html><title>never closed",
-        b'<?xml version="1.0"?><Error><Code>Denied</Code></Error>',
+        b"\xef\xbb\xbf  <!DOCTYPE html><body>blocked</body>",
+        b"<HEAD><meta charset=utf-8></HEAD>",
+        b"<body>blocked</body>",
     ],
 )
 def test_a_markup_error_page_without_a_title_is_named_as_a_page(body):
     assert read_http_error_detail(_http_error(body)) == (
         "the reply was an HTML page (a proxy or firewall block page?)"
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        (
+            b'<?xml version="1.0"?><Error><Code>AccessDenied</Code>'
+            b"<Message>Denied by bucket policy</Message></Error>"
+        ),
+        b"<Error><Message>Denied by bucket policy</Message></Error>",
+        b"<error>plain text in angle brackets</error>",
+    ],
+)
+def test_an_xml_error_body_is_not_called_an_html_page(body):
+    """Only real HTML is a block page; an XML error carries the provider's
+    message, which the HTML sentence threw away (review of 2026-10-03)."""
+    detail = read_http_error_detail(_http_error(body))
+    assert "HTML page" not in detail
+    assert detail == body.decode().strip()[:300]
+
+
+def test_a_title_search_is_bounded_on_a_page_of_unclosed_titles():
+    """64 KB of `<title>` without a close was quadratic: 3.95 s."""
+    import time
+
+    body = b"<title>" * 9000
+    started = time.monotonic()
+    detail = read_http_error_detail(_http_error(body))
+    assert time.monotonic() - started < 1.0
+    assert detail == "the reply was an HTML page (a proxy or firewall block page?)"
 
 
 def test_an_unreadable_or_empty_body_falls_back_to_the_status_phrase():
