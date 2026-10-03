@@ -4,8 +4,13 @@ Written 2026-10-03. This is a plan, not a design that binds the code: nothing he
 implemented, and `docs/agents/*.md` stay the binding rules for the Windows app. Entered in
 `docs/ROADMAP.md`.
 
-Target (the owner's): a NixOS notebook running Hyprland, a Wayland compositor with no desktop
-environment around it. Nice to have: GNOME and KDE on Wayland, and X11 sessions.
+Target (the owner's): a NixOS notebook running the newest Hyprland release with its Lua
+configuration, a Wayland compositor with no desktop environment around it. **Also required, not
+optional** (owner, 2026-10-03): GNOME and KDE on Wayland, and X11 sessions -- the port is not done
+until all of them work; Hyprland comes first because it is the owner's own machine. The owner used
+Sway (i3 for Wayland) before, so a wlroots compositor other than Hyprland is a realistic second
+target. The notebook is configured but not running yet; the port starts once it runs, and is then
+tested on that machine directly.
 
 How to read the evidence tags. **[V]** = read in a primary source on 2026-10-03 (source named).
 **[M]** = measured on 2026-10-03 on the owner's HomeBase (WSL Arch, `uv`, Nix 2.35.2). **[U]** =
@@ -439,12 +444,20 @@ phase 0+1 are needed to answer "does it feel right".
 
 ## 8. Decisions needed from the owner
 
-- Go or no-go on phase 0+1 (about 63-87 agent-hours).
+Answered on 2026-10-03:
+
+- **Timing:** later -- the port starts once the notebook runs; until then this plan only.
+- **Scope:** GNOME, KDE (Wayland) and X11 are required, not optional, so phases 3 and 5 belong
+  to "done"; Hyprland first.
+- **Hyprland:** always the newest release, Lua configuration (0.55+); the hyprlang syntax needs no
+  support. Sway was used before.
+
+Still open (ask when the notebook runs):
+
 - Which GPU the notebook has (decides whether CUDA/ROCm for CTranslate2 or ONNX is in scope).
 - Whether direct typing (`wtype`) is acceptable as the default insertion, or clipboard paste must be
   the default (it changes phase 1 content).
-- Whether the Hyprland configuration is Lua (0.55+) or the older syntax, and whether a status bar
-  with a `tray` module and a notification daemon are already in use.
+- Whether a status bar with a `tray` module and a notification daemon are in use.
 
 ## 9. Not checked
 
