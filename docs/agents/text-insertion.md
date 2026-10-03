@@ -189,7 +189,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   `_WmPasteIgnoredError` before sending: in `wm_paste` mode that is the
   paste's error, plus the advice to choose Auto; in `auto` mode after a
   failed SendInput it is folded into "Auto paste failed" with the reason
-  only, since that user is in Auto already. Both are
+  only, since that user is in Auto already. Streaming live inserts that
+  keep failing end in "Streaming aborted: the target window kept rejecting
+  inserted text." followed by the last failure's reason, so the wm_paste
+  advice reaches the screen there too. Both are
   pre-keystroke failures: the clipboard is put back and Insert is offered.
   Why: into an Edge --app textarea `SendMessageTimeout(WM_PASTE)` succeeded,
   the page saw no paste event and nothing landed, so the transaction

@@ -6935,9 +6935,15 @@ class DictationController(QtCore.QObject):
                         self._stream_insert_failures
                         >= STREAMING_LIVE_INSERT_RETRY_LIMIT
                     ):
-                        self._request_stream_abort(
+                        # With the last failure's reason: when it is the
+                        # same every time (WM_PASTE refused for a Chromium
+                        # window), it names the fix.
+                        message = (
                             "Streaming aborted: the target window kept "
-                            "rejecting inserted text.",
+                            "rejecting inserted text."
+                        )
+                        self._request_stream_abort(
+                            f"{message} {self._last_insert_error_text}".strip(),
                             beep=STREAMING_BEEP_ON_ABORT,
                         )
                         return
