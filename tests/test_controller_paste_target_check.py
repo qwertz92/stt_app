@@ -34,7 +34,7 @@ from stt_app.paste_target_check import (
     CaretReading,
 )
 from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
+from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
 from stt_app.transcript_history import TranscriptHistoryStore
 
 
@@ -286,6 +286,62 @@ def test_a_window_that_always_reads_doubtful_keeps_only_the_latest_row(
     _ = app
 
 
+class _MayHavePastedInserter(FakeTextInserter):
+    """Its paste keystroke goes out and the cleanup after it fails."""
+
+    def insert_text_with_options(self, text, target_hwnd=None, **kwargs):
+        if self.should_fail:
+            self.calls.append((text, target_hwnd, kwargs.get("paste_mode")))
+            raise TextMayHaveBeenPastedError("restore failed after the paste")
+        return super().insert_text_with_options(text, target_hwnd=target_hwnd, **kwargs)
+
+
+def test_a_paste_that_may_have_landed_supersedes_a_doubtful_row(monkeypatch, tmp_path):
+    """The next paste's keystroke went out, so the doubtful row is as stale as
+    after a clean paste: left listed, F10 pasted it once nothing else was
+    insertable -- the old text into the field the newer one just went to."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, inserter=_MayHavePastedInserter()
+    )
+    _dictate(controller, "stale words")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 1
+    inserter.should_fail = True
+
+    _dictate(controller, "newer words")
+
+    rows = _rows(overlay)
+    assert len(rows) == 1 and rows[0].startswith("Possibly inserted")
+    assert "newer words" in rows[0]
+    inserter.should_fail = False
+    controller.repaste_last_transcript()
+    assert [call[0] for call in inserter.calls] == ["stale words", "newer words"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_repaste_of_a_doubtful_row_that_may_have_landed_keeps_its_row(
+    monkeypatch, tmp_path
+):
+    """The re-paste marks its own rows "possibly inserted" after the failure;
+    the superseding drop that failure triggers must not take them first."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, inserter=_MayHavePastedInserter()
+    )
+    _dictate(controller, "doubtful words")
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    inserter.should_fail = True
+
+    controller.repaste_last_transcript()
+
+    rows = _rows(overlay)
+    assert len(rows) == 1 and rows[0].startswith("Possibly inserted")
+    controller.shutdown()
+    _ = app
+
+
 def test_a_verdict_that_arrives_after_a_later_paste_lists_no_row(monkeypatch, tmp_path):
     """The next dictation was pasted before the first check answered: its
     row could never be pasted by F10 any more, so only the tray reports it."""
@@ -331,6 +387,23 @@ def test_a_refused_repaste_is_not_confirmed_and_keeps_the_earlier_verdict(
     assert len(messages) == 1 and "does not look like a text field" in messages[0]
     assert _rows(overlay) == []
     assert overlay.states[-1] == ("Done", "hello world")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_repaste_whose_check_raises_still_plays_its_tone(monkeypatch, tmp_path):
+    """Only a refused check -- the earlier one holds the worker -- is silent
+    for a re-paste: it decides for both pastes. A check that raised has no
+    earlier verdict to wait for, so the re-paste is like any paste whose
+    check could not start and plays its tone."""
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, _inserter, beeps = _make(monkeypatch, tmp_path, check)
+    _dictate(controller, "hello world")
+    check.raises = True
+
+    controller.repaste_last_transcript()
+
+    assert beeps == [1]
     controller.shutdown()
     _ = app
 

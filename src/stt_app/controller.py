@@ -3720,7 +3720,9 @@ class DictationController(QtCore.QObject):
         failed = [entry for entry in insertable if not entry.outside_text_field]
         return failed or insertable
 
-    def _drop_superseded_doubtful_rows(self) -> None:
+    def _drop_superseded_doubtful_rows(
+        self, keep: Sequence[_UndeliveredInsert] = ()
+    ) -> None:
         """A paste went out: earlier "not in a text field" rows go.
 
         Whether such a paste missed cannot be settled later, and a window
@@ -3734,11 +3736,16 @@ class DictationController(QtCore.QObject):
 
         A row a paced re-paste names stays: the user pressed F10 or Insert
         for it, and the queued paste the pace let go first dropped it, so the
-        re-paste found nothing to paste (the 2026-10-03 second review).
+        re-paste found nothing to paste (the 2026-10-03 second review). So
+        does a row the paste in progress is built from (``keep``): when that
+        paste's keystroke went out and its cleanup failed, the re-paste marks
+        the row "possibly inserted" afterwards, and it must still be listed.
         """
         pending = self._pending_repaste
         requested = (
-            (*pending.undelivered, *pending.offer_rows) if pending is not None else ()
+            (*pending.undelivered, *pending.offer_rows, *keep)
+            if pending is not None
+            else tuple(keep)
         )
         kept = [
             entry
@@ -6418,8 +6425,9 @@ class DictationController(QtCore.QObject):
         still running, a thread that cannot start -- the tone plays at once
         and nothing else changes; a re-paste passes ``tone_if_refused``
         False, since its check is refused exactly when it repeats a paste
-        whose check still runs, and the tone would confirm nothing. Nothing
-        here waits.
+        whose check still runs, and the tone would confirm nothing (a check
+        that raised is not a refusal and always plays it). Nothing here
+        waits.
 
         A check still waiting for a paste of the same text into the same
         window is dropped once this paste's own check has started: this
@@ -6443,6 +6451,9 @@ class DictationController(QtCore.QObject):
         except Exception:
             self._logger.exception("paste_target_check could not start")
             started = False
+            # Not a refusal: no earlier check holds the worker, so there is no
+            # verdict to wait for and the tone is as due as for any other paste.
+            tone_if_refused = True
         if not started:
             self._log_paste_target_check(
                 check_id, VERDICT_UNKNOWN, "note=not_started", pending
@@ -7503,7 +7514,13 @@ class DictationController(QtCore.QObject):
         target_handle=_UNSET_TARGET,
         target_signature=_UNSET_TARGET,
         may_carry_offer: bool = False,
+        keep_rows: Sequence[_UndeliveredInsert] = (),
     ) -> bool:
+        """Paste ``text``; True when it was inserted.
+
+        ``keep_rows`` are the listed rows the text is built from, which a
+        paste whose keystroke went out must not drop as superseded.
+        """
         if not text.strip():
             return True
         handle = (
@@ -7604,6 +7621,11 @@ class DictationController(QtCore.QObject):
                         # lands on top of the text just inserted.
                         error_action=OVERLAY_ERROR_ACTION_NONE,
                     )
+                # The keystroke went out, so this is a paste like any other for
+                # the doubtful rows before it: the text in front of it is as
+                # stale as after a clean paste.
+                self._paste_serial += 1
+                self._drop_superseded_doubtful_rows(keep_rows)
                 return False
             allow_clipboard_fallback = bool(
                 getattr(exc, "allow_clipboard_fallback", True)
@@ -7646,7 +7668,7 @@ class DictationController(QtCore.QObject):
             paste_foreground or self._current_foreground_window()
         )
         self._paste_serial += 1
-        self._drop_superseded_doubtful_rows()
+        self._drop_superseded_doubtful_rows(keep_rows)
         self._logger.info(
             "text_insertion outcome=success chars=%d target_hwnd=%s "
             "restore_focus=%s paste_mode=%s",
@@ -7889,6 +7911,7 @@ class DictationController(QtCore.QObject):
         # "Processing" (the wave-13 reach lens saw "Done" with an older text
         # replace it, and a failed paste paint "Error" over it).
         session = self._overlay_session_active()
+        rows = [*undelivered, *offer_rows]
         inserted = self._insert_text_at_target(
             text,
             restore_focus=True,
@@ -7900,8 +7923,8 @@ class DictationController(QtCore.QObject):
             target_handle=target,
             target_signature=signature,
             may_carry_offer=True,
+            keep_rows=rows,
         )
-        rows = [*undelivered, *offer_rows]
         if not inserted:
             if self._last_insert_offered:
                 # The failure painted the offer for this text: it covers the

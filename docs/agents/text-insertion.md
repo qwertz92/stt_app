@@ -308,9 +308,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   doubtful insert is shown briefly and stops being listed once a re-paste
   inserted exactly it); if that paste is doubtful again, it gets a new row.
   F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
-  only when no failed row waits, and the next paste that goes out (any
-  successful `_insert_text_at_target`, `_paste_serial`) drops it
-  (`_drop_superseded_doubtful_rows`) -- except a row a paced re-paste
+  only when no failed row waits, and the next paste whose keystroke goes out
+  (any `_insert_text_at_target` that succeeded or may have landed,
+  `_paste_serial`) drops it (`_drop_superseded_doubtful_rows`; a keystroke
+  that went out and a cleanup that failed supersedes it as much as a clean
+  paste, 2026-10-03, else F10 pasted the stale text next to it; the rows
+  that paste is built from stay, `keep_rows`) -- except a row a paced re-paste
   (`_pending_repaste`) names, which the queued paste the pace lets go first
   used to drop, so the F10 pasted nothing and said nothing; a paced
   re-paste whose rows are gone now says so on the overlay or tray
@@ -325,7 +328,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   same text into the same window drops a check still waiting for it once
   its own check has started (the earlier verdict was read before the
   repeat). A re-paste whose own check is refused -- the earlier one still
-  holds the worker -- plays no tone (`tone_if_refused`) and leaves the
+  holds the worker -- plays no tone (`tone_if_refused`; a check that
+  raised is not a refusal and plays it) and leaves the
   earlier check in place, which then decides: "text field" plays one tone,
   "not a text field" goes to the tray without a row, since the re-paste
   superseded it. Before (2026-10-03 reviews), the refused re-paste played
