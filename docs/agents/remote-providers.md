@@ -336,6 +336,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `--opt="a b"` in two. The exit code is judged **before** the output: a
     failing helper that printed "Please run 'login' first" to stdout was
     reported as a malformed token.
+    **PowerShell keeps its single quotes after `-Command`** (2026-10-03,
+    regression of the rule above): the old splitter kept every single
+    quote, which PowerShell needs for `-Command Get-Content 'C:\a b\t.txt'`
+    and `-Command '$env:USERNAME'`; stripping them split the path in two
+    and let `$env:USERNAME` be evaluated. Rule: for `powershell`/`pwsh`
+    (any path, `.exe` optional), every word after `-Command` or an
+    abbreviation (`-c`, `-co`, ...) keeps the quotes of a single-quoted
+    word; before it (`-File 'x.ps1'`) they are stripped. Chosen over "stop
+    stripping everywhere" because the WSL case needs the strip, and over
+    "keep after any `-c`" because `-c` means something else for other
+    programs. Run for real with Windows `powershell` (path with a space,
+    `&` call, `$env:` literal, `-File`) and `wsl.exe`; `pwsh` only in the
+    splitter test.
     **The program is resolved with `shutil.which`** (2026-10-03):
     CreateProcess appends only `.exe`, so the `.cmd` shims `az`, `gcloud` and
     `npm` were "not found". A resolved `.cmd`/`.bat` goes to `run_bounded`

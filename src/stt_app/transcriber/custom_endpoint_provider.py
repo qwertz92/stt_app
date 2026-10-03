@@ -18,6 +18,7 @@ import base64
 import contextlib
 import json
 import logging
+import ntpath
 import os
 import re
 import shlex
@@ -277,24 +278,45 @@ def _split_windows_command(command: str) -> list[str]:
     (`'echo x'`), so an apostrophe inside a path (`C:\\Users\\O'Brien`) stays
     literal. Inside one kind of quote the other is literal. `shlex` with
     `posix=False` kept the quotes of `'echo x'` and split `--opt="a b"` in two.
+
+    One exception: after `-Command` of `powershell`/`pwsh`, a single-quoted
+    word keeps its quotes, because they are PowerShell's own string syntax
+    (`-Command Get-Content 'C:\\a b\\t.txt'`, `-Command '$env:USERNAME'`);
+    stripped, the path falls apart into two arguments and the variable is
+    evaluated. Everything before `-Command` (`-File 'x.ps1'`) is a plain
+    argument and loses its quotes like any other.
     """
     arguments: list[str] = []
     word: list[str] = []
     in_word = False
     quote = ""
+    keep_single_quotes = False
+
+    def finish_word() -> None:
+        nonlocal word, in_word, keep_single_quotes
+        arguments.append("".join(word))
+        if len(arguments) > 1 and _is_powershell_command_switch(
+            arguments[0], arguments[-1]
+        ):
+            keep_single_quotes = True
+        word, in_word = [], False
+
     for character in command:
         if quote:
             if character == quote:
                 quote = ""
+                if character == "'" and keep_single_quotes:
+                    word.append(character)
             else:
                 word.append(character)
         elif character == '"' or (character == "'" and not in_word):
             quote = character
             in_word = True
+            if character == "'" and keep_single_quotes:
+                word.append(character)
         elif character.isspace():
             if in_word:
-                arguments.append("".join(word))
-                word, in_word = [], False
+                finish_word()
         else:
             word.append(character)
             in_word = True
@@ -303,8 +325,21 @@ def _split_windows_command(command: str) -> list[str]:
             "The key command cannot be parsed: a quotation mark is not closed."
         )
     if in_word:
-        arguments.append("".join(word))
+        finish_word()
     return arguments
+
+
+def _is_powershell_command_switch(program: str, argument: str) -> bool:
+    """Whether `argument` is `-Command` (or an abbreviation of it, `-c`) of
+    `powershell`/`pwsh`."""
+    name = ntpath.basename(program).lower().removesuffix(".exe")
+    switch = argument.lower()
+    return (
+        name in ("powershell", "pwsh")
+        and len(switch) >= 2
+        and switch[0] in "-/"
+        and "-command".startswith("-" + switch[1:])
+    )
 
 
 def _command_arguments(command: str) -> list[str]:

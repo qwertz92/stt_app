@@ -802,6 +802,43 @@ def test_windows_quoting_keeps_backslashes(monkeypatch):
             id="a-mid-word-apostrophe-is-literal",
         ),
         pytest.param("helper '' \"\"", ["helper", "", ""], id="empty-arguments"),
+        # PowerShell's own string syntax: after -Command the quotes are the
+        # script's, not the splitter's (regression of ca802d9, reported
+        # 2026-10-03).
+        pytest.param(
+            r"powershell -NoProfile -Command Get-Content 'C:\a b\t.txt'",
+            ["powershell", "-NoProfile", "-Command", "Get-Content", r"'C:\a b\t.txt'"],
+            id="powershell-command-keeps-single-quotes",
+        ),
+        pytest.param(
+            r"pwsh -c & 'C:\a b\get token.ps1'",
+            ["pwsh", "-c", "&", r"'C:\a b\get token.ps1'"],
+            id="pwsh-call-operator",
+        ),
+        pytest.param(
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe -Command '$env:USERNAME'",
+            [
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                "-Command",
+                "'$env:USERNAME'",
+            ],
+            id="powershell-full-path-literal-string",
+        ),
+        pytest.param(
+            "powershell -Command \"Write-Output 'a b'\"",
+            ["powershell", "-Command", "Write-Output 'a b'"],
+            id="powershell-double-quoted-script-keeps-inner-quotes",
+        ),
+        pytest.param(
+            r"powershell -NoProfile -File 'C:\a b\get token.ps1'",
+            ["powershell", "-NoProfile", "-File", r"C:\a b\get token.ps1"],
+            id="powershell-file-is-a-path-not-a-script",
+        ),
+        pytest.param(
+            "other.exe -Command 'a b'",
+            ["other.exe", "-Command", "a b"],
+            id="only-powershell-keeps-quotes",
+        ),
     ],
 )
 def test_windows_quoting_groups_with_single_and_double_quotes(

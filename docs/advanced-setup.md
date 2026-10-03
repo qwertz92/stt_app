@@ -481,6 +481,13 @@ and an apostrophe inside a word, as in `C:\Users\O'Brien\helper.exe`, is an
 ordinary character. A literal double quote cannot be written; put such a
 command into a script and run the script. An unclosed quote is reported.
 
+PowerShell is the one exception, because `'...'` is its own string syntax:
+after `-Command` of `powershell` or `pwsh` the single quotes are passed on
+untouched, for example `powershell -NoProfile -Command Get-Content 'C:\My
+Folder\token.txt'` or `pwsh -Command & 'C:\My Folder\get token.ps1'`. Before
+`-Command` they are removed as usual (`powershell -File 'C:\My
+Folder\get token.ps1'` runs that file).
+
 The program is looked up like a console does, so `az`, `gcloud` or `npm`
 (which are `.cmd` files on Windows) work without their extension. A `.cmd` or
 `.bat` file is run by cmd.exe, which reads `&`, `|`, `<`, `>`, `^`, `%` and
