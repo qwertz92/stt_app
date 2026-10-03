@@ -33,7 +33,11 @@ from .settings_dialog_helpers import (
     local_model_short_label,
     model_choices_for_engine,
 )
-from .settings_store import AppSettings, apply_engine_model_selection
+from .settings_store import (
+    AppSettings,
+    apply_engine_model_selection,
+    listed_custom_models,
+)
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -394,6 +398,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
         custom_models = (
             self._entry_model if self._entry_engine == "custom" else "",
             str(getattr(self._base_settings, "custom_model", "") or ""),
+            # The endpoint's list from the last Refresh, as Settings offers it.
+            *listed_custom_models(self._base_settings),
         )
         for value, label in model_choices_for_engine(engine, custom_models):
             self._model_combo.addItem(label, value)

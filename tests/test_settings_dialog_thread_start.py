@@ -75,17 +75,14 @@ def _refuse_new_threads(monkeypatch) -> None:
 def test_a_connection_test_that_cannot_start_gives_the_button_back(monkeypatch):
     dialog = _make_dialog(AppSettings(engine="local"))
     _refuse_new_threads(monkeypatch)
-    dialog.test_conn_target_combo.setCurrentIndex(
-        dialog.test_conn_target_combo.findData("deepgram")
-    )
     dialog.deepgram_key_edit.setText("dg-test-key")
 
-    dialog._test_connection()
+    dialog._provider_test_buttons["deepgram"].click()
 
     assert dialog._active_connection_test_thread is None
     assert dialog._background_work_active() is False
     assert dialog.test_conn_button.isEnabled() is True
-    assert dialog.test_conn_target_combo.isEnabled() is True
+    assert dialog._provider_test_buttons["deepgram"].isEnabled() is True
     assert "Could not start the connection test" in dialog.test_conn_result.text()
 
 

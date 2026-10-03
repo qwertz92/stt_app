@@ -85,6 +85,8 @@ class FakeController:
         self.credentials_invalidated = 0
         self.credentials_providers: list[str] = []
         self.note_foreground_calls = 0
+        self.microphone_picks: list[str] = []
+        self.microphone_option_refreshes = 0
         self.settings = AppSettings()
 
     def note_foreground_window(self):
@@ -122,6 +124,12 @@ class FakeController:
 
     def set_language_mode(self, mode):
         pass
+
+    def set_input_device_name(self, name):
+        self.microphone_picks.append(name)
+
+    def refresh_overlay_microphone_options(self):
+        self.microphone_option_refreshes += 1
 
     def reload_settings(self, re_register_hotkey=True):
         pass
@@ -1077,9 +1085,26 @@ class _OverlaySignals(QtCore.QObject):
     opacity_changed = QtCore.Signal(int)
     always_on_top_changed = QtCore.Signal(bool)
     language_changed = QtCore.Signal(str)
+    microphone_changed = QtCore.Signal(str)
+    microphone_menu_requested = QtCore.Signal()
     queue_cancel_requested = QtCore.Signal(int)
     queue_clear_requested = QtCore.Signal()
     detail_cleared = QtCore.Signal(str)
+
+
+def test_the_overlay_microphone_menu_reaches_the_controller():
+    """A pick persists through the controller, and opening the menu asks it
+    for today's devices first."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = _OverlaySignals()
+    controller = FakeController()
+
+    main_module._connect_overlay_actions(overlay, controller, lambda: None)
+    overlay.microphone_menu_requested.emit()
+    overlay.microphone_changed.emit("USB Microphone")
+
+    assert controller.microphone_option_refreshes == 1
+    assert controller.microphone_picks == ["USB Microphone"]
 
 
 def test_the_overlay_clear_reaches_the_controller_with_the_cleared_offer():

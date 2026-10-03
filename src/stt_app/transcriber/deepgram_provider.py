@@ -92,7 +92,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "Deepgram API key is missing. Enter your key in Settings -> API Keys."
+                "Deepgram API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._host = DEEPGRAM_API_HOSTS[normalize_deepgram_region(region)]

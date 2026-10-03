@@ -16,18 +16,38 @@ from .config import (
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
+    SPEECHMATICS_MELIA_UNAVAILABLE_TEXT,
+    speechmatics_model_available_in,
 )
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_GRID_SPACING_PX,
+    _REMOTE_PROVIDER_LABEL_EXTRA_PX,
     _REMOTE_PROVIDERS,
     _REMOTE_REGION_CHOICES,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
     _WheelPassthroughComboBox,
-    region_row_label,
 )
+
+# The key field's minimum on the Providers tab. Every other column is sized
+# by its caption, so this decides the page's minimum width with them.
+_PROVIDER_KEY_FIELD_MIN_WIDTH_PX = 140
+# How far a row that belongs to the provider above it (a region, Azure's
+# endpoint) indents its label.
+_PROVIDER_SUB_ROW_INDENT_PX = 12
+_REGION_ROW_LABEL = "Region"
+_AZURE_ENDPOINT_ROW_LABEL = "Endpoint"
+_CUSTOM_ENDPOINT_ROW_LABELS = ("Base URL", "API Style", "Key Command")
+_CUSTOM_KEY_ROW_LABEL = "API Key"
+_TEST_OK_MARK = "✓"
+_TEST_FAILED_MARK = "✗"
+_TEST_OK_COLOR = "#1b5e20"
+# Key sources `SecretStore.get_api_key` answers with a key; "insecure-
+# disabled" holds one it does not hand out while the fallback is off.
+_USABLE_KEY_SOURCES = frozenset({"keyring", "legacy-keyring", "insecure"})
+_TEST_FAILED_COLOR = "#b71c1c"
 
 
 @dataclass(frozen=True)
@@ -186,100 +206,77 @@ def _build_connection_tester(
 
 class _RemoteProvidersMixin:
     def _build_remote_tab(self) -> None:
+        """The Providers tab: one compact row per cloud provider, the custom
+        endpoint in a group of its own, one shared connection-test line.
+
+        Each row is name, key field, Test, Remove, the last test's mark and
+        the key-source badge; a region or Azure's endpoint is an indented row
+        right under its provider. The per-provider "Last test" lines this
+        replaced reserved two lines each and made the tab scroll by 219 px at
+        the default text size; the result now lives in the mark's tooltip and
+        in the one line under the groups.
+        """
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
+        label_width = self._remote_provider_label_width()
+        badge_width = self._provider_status_badge_width()
 
-        # API keys
-        provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
-        provider_layout = QtWidgets.QVBoxLayout(provider_box)
-        provider_layout.setContentsMargins(10, 10, 10, 10)
-        provider_layout.setSpacing(6)
-        provider_rows = tuple(
-            (provider.name, provider.title) for provider in _REMOTE_PROVIDERS
+        cloud_box = QtWidgets.QGroupBox("Cloud providers")
+        cloud_layout = QtWidgets.QVBoxLayout(cloud_box)
+        cloud_layout.setContentsMargins(10, 10, 10, 10)
+        cloud_layout.setSpacing(6)
+        cloud_intro = QtWidgets.QLabel(
+            "Keys are stored in Windows Credential Manager. Type a key only to "
+            "replace the stored one; Remove deletes it on Save."
         )
-        provider_intro = QtWidgets.QLabel(
-            "Enter a key only when you want to replace the stored one. The status badge shows whether the app already has a usable key."
-        )
-        provider_intro.setWordWrap(True)
-        self._style_note_label(provider_intro)
-        provider_layout.addWidget(provider_intro)
-
-        provider_label_width = self._remote_provider_label_width(provider_rows)
-        status_badge_width = self._provider_status_badge_width()
-        provider_grid = QtWidgets.QGridLayout()
-        provider_grid.setContentsMargins(0, 0, 0, 0)
-        provider_grid.setHorizontalSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
-        provider_grid.setVerticalSpacing(3)
-        provider_grid.setColumnMinimumWidth(0, provider_label_width)
-        provider_grid.setColumnStretch(1, 1)
-        provider_grid.setColumnStretch(2, 0)
-        provider_grid.setColumnStretch(3, 0)
-
-        grid_row = 0
-        for provider, title in provider_rows:
-            key_field = QtWidgets.QLineEdit()
-            key_field.setEchoMode(QtWidgets.QLineEdit.Password)
-            key_field.setPlaceholderText(
-                "Enter new key to update; use Clear saved to remove the stored key."
+        cloud_intro.setWordWrap(True)
+        self._style_note_label(cloud_intro)
+        cloud_layout.addWidget(cloud_intro)
+        cloud_grid = self._new_provider_grid(label_width)
+        row = 0
+        for provider in _REMOTE_PROVIDERS:
+            if provider.name == "custom":
+                continue
+            self._add_provider_key_row(
+                cloud_grid, row, provider.name, provider.title, label_width, badge_width
             )
-            key_field.setMinimumWidth(180)
-            key_field.textChanged.connect(
-                lambda _text, p=provider: self._on_provider_key_changed(p)
-            )
-            clear_button = QtWidgets.QPushButton("Clear saved")
-            clear_button.setToolTip("Delete the stored key for this provider on Save.")
-            # A minimum, not a range: the 88 px cap cut the caption off once
-            # the text size grew (it needs 98 px at 11.25 pt, 112 at 13.5).
-            clear_button.setMinimumWidth(78)
-            self._match_field_button_height(key_field, clear_button)
-            clear_button.clicked.connect(
-                lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
-            )
-
-            status_badge = QtWidgets.QLabel("Not configured")
-            status_badge.setAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
-            status_badge.setFixedWidth(status_badge_width)
-            status_badge.setSizePolicy(
-                QtWidgets.QSizePolicy.Fixed,
-                QtWidgets.QSizePolicy.Fixed,
-            )
-            status_badge.setStyleSheet(
-                "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
-                " color: #555; background: #f2f2f2;"
-            )
-
-            title_label = QtWidgets.QLabel(title)
-            title_label.setFixedWidth(provider_label_width)
-            title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-
-            last_test_label = QtWidgets.QLabel("Last test: never.")
-            last_test_label.setWordWrap(True)
-            make_label_selectable(last_test_label)
-            self._style_provider_last_test_label(last_test_label)
-            provider_grid.addWidget(
-                title_label,
-                grid_row,
-                0,
-                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-            )
-            provider_grid.addWidget(key_field, grid_row, 1)
-            provider_grid.addWidget(clear_button, grid_row, 2)
-            provider_grid.addWidget(status_badge, grid_row, 3)
-            provider_grid.addWidget(last_test_label, grid_row + 1, 1, 1, 3)
-            # Reserve the whole area, not only its first line. The label word-
-            # wraps, and a provider's failure message is two lines where "Last
-            # test: never." is one, so every failing row pushed the rows under
-            # it -- and the "Run Connection Test" button at the bottom of this
-            # grid -- 15 px further down: measured at 105 px with all seven
-            # failing, with the pointer still on the button that caused it.
-            self._reserve_dynamic_hint_height(last_test_label)
-            grid_row += 2
-
-            self._provider_key_edits[provider] = key_field
-            self._provider_status_labels[provider] = status_badge
-            self._provider_last_test_labels[provider] = last_test_label
+            row += 1
+            if provider.name in _REMOTE_REGION_CHOICES:
+                combo = self._build_region_combo(provider.name)
+                self._add_provider_sub_row(
+                    cloud_grid,
+                    row,
+                    _REGION_ROW_LABEL,
+                    combo,
+                    label_width,
+                    own_width=True,
+                )
+                row += 1
+            if provider.name == "azure":
+                self.azure_endpoint_edit = QtWidgets.QLineEdit()
+                self.azure_endpoint_edit.setPlaceholderText(
+                    "https://<resource>.cognitiveservices.azure.com"
+                )
+                self.azure_endpoint_edit.setToolTip(
+                    "Required for Azure LLM Speech. Copy the endpoint from your "
+                    "Azure Speech / Foundry resource (Keys and Endpoint). The "
+                    "region must support LLM Speech."
+                )
+                self.azure_endpoint_edit.textChanged.connect(
+                    lambda _text: self._update_remote_model_note()
+                )
+                self._add_provider_sub_row(
+                    cloud_grid,
+                    row,
+                    _AZURE_ENDPOINT_ROW_LABEL,
+                    self.azure_endpoint_edit,
+                    label_width,
+                )
+                row += 1
+        cloud_layout.addLayout(cloud_grid)
+        layout.addWidget(cloud_box)
 
         self.assemblyai_key_edit = self._provider_key_edits["assemblyai"]
         self.groq_key_edit = self._provider_key_edits["groq"]
@@ -290,108 +287,270 @@ class _RemoteProvidersMixin:
         self.funasr_key_edit = self._provider_key_edits["funasr"]
         self.speechmatics_key_edit = self._provider_key_edits["speechmatics"]
         self.mistral_key_edit = self._provider_key_edits["mistral"]
-        self.custom_key_edit = self._provider_key_edits["custom"]
 
-        # Where each provider that offers a choice processes the audio. One
-        # row each, always present and enabled whatever the engine, so a pick
-        # cannot move anything; the combo spans the key, button and badge
-        # columns but is left-aligned at its own width, so it never raises
-        # the page's minimum width.
-        for provider, choices in _REMOTE_REGION_CHOICES.items():
-            combo = _WheelPassthroughComboBox()
-            for value, label, guarantee in choices:
-                combo.addItem(label, value)
-                combo.setItemData(combo.count() - 1, guarantee, QtCore.Qt.ToolTipRole)
-            combo.setToolTip(
-                f"Where {_remote_provider_label(provider)} processes the "
-                "audio. Dictation, audio imports and the connection test all "
-                "use this region.\n"
-                + "\n".join(
-                    f"{label}: {guarantee}" for _value, label, guarantee in choices
-                )
-            )
-            region_label = QtWidgets.QLabel(region_row_label(provider))
-            region_label.setFixedWidth(provider_label_width)
-            region_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            provider_grid.addWidget(
-                region_label,
-                grid_row,
-                0,
-                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-            )
-            provider_grid.addWidget(
-                combo,
-                grid_row,
-                1,
-                1,
-                3,
-                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-            )
-            grid_row += 1
-            self._provider_region_combos[provider] = combo
-        region_hint = QtWidgets.QLabel(
-            "The vendor's default endpoint unless you pick another region; "
-            "each choice's tooltip says what the vendor guarantees for it. "
-            "Speechmatics' Melia 1 model runs in the EU and US only; pick "
-            "Enhanced or Standard on the Transcription tab for Australia."
-        )
-        region_hint.setWordWrap(True)
-        self._style_note_label(region_hint)
-        provider_grid.addWidget(region_hint, grid_row, 1, 1, 3)
-        grid_row += 1
+        layout.addWidget(self._build_custom_endpoint_group(label_width, badge_width))
 
-        # Azure additionally needs a per-resource endpoint (no other provider
-        # does), so it gets a dedicated, non-secret text field here.
-        self.azure_endpoint_edit = QtWidgets.QLineEdit()
-        self.azure_endpoint_edit.setPlaceholderText(
-            "https://<resource>.cognitiveservices.azure.com"
+        # One line for every test, under both groups: the result of the test
+        # just run, or on opening the most recent stored one. Two lines are
+        # reserved, so a long failure moves nothing; the whole message is the
+        # tooltip.
+        self.test_conn_button = QtWidgets.QPushButton("Test All Configured")
+        self.test_conn_button.setToolTip(
+            "Test every provider that has a key. A typed key is tested before "
+            "the stored one; each row's Test button tests that provider alone."
         )
-        self.azure_endpoint_edit.setMinimumWidth(180)
-        azure_endpoint_hint = QtWidgets.QLabel(
-            "Required for Azure LLM Speech. Copy the endpoint from your Azure "
-            "Speech / Foundry resource (Keys and Endpoint). The region must "
-            "support LLM Speech."
+        self.test_conn_button.clicked.connect(
+            lambda _checked=False: self._test_connection("all-configured")
         )
-        azure_endpoint_hint.setWordWrap(True)
-        self._style_note_label(azure_endpoint_hint)
-        azure_endpoint_label = QtWidgets.QLabel("Azure Endpoint")
-        azure_endpoint_label.setFixedWidth(provider_label_width)
-        azure_endpoint_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        provider_grid.addWidget(
-            azure_endpoint_label,
-            grid_row,
-            0,
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-        )
-        provider_grid.addWidget(self.azure_endpoint_edit, grid_row, 1, 1, 3)
-        provider_grid.addWidget(azure_endpoint_hint, grid_row + 1, 1, 1, 3)
-        grid_row += 2
+        self.test_conn_result = WrappedStatusLabel("")
+        self.test_conn_result.setWordWrap(True)
+        make_label_selectable(self.test_conn_result)
+        self._reserve_dynamic_hint_height(self.test_conn_result)
+        test_row = QtWidgets.QHBoxLayout()
+        test_row.setContentsMargins(0, 0, 0, 0)
+        test_row.setSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
+        test_row.addWidget(self.test_conn_button, 0, QtCore.Qt.AlignTop)
+        test_row.addWidget(self.test_conn_result, 1)
+        layout.addLayout(test_row)
 
-        # The custom endpoint's non-secret settings, below its key row's
-        # neighbours like Azure's endpoint.
+        self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
+            "Allow insecure local API key fallback (plain text)"
+        )
+        self.insecure_key_storage_checkbox.setToolTip(
+            "Use only if Credential Manager/keyring is blocked. "
+            "Keys are then stored unencrypted in the app-data folder."
+        )
+        self.insecure_key_storage_checkbox.toggled.connect(
+            lambda _checked: self._refresh_secret_store_options_ui()
+        )
+        layout.addWidget(self.insecure_key_storage_checkbox)
+
+        self.key_storage_status_label = WrappedStatusLabel("")
+        make_label_selectable(self.key_storage_status_label)
+        self.key_storage_status_label.setWordWrap(True)
+        self._style_note_label(self.key_storage_status_label)
+        self.save_api_keys_button = QtWidgets.QPushButton("Save API Keys")
+        self.save_api_keys_button.setToolTip(
+            "Store the keys and this tab's endpoints and regions without "
+            "applying the other settings."
+        )
+        self.save_api_keys_button.clicked.connect(self._save_api_keys_only)
+        save_row = QtWidgets.QHBoxLayout()
+        save_row.setContentsMargins(0, 0, 0, 0)
+        save_row.setSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
+        save_row.addWidget(self.save_api_keys_button, 0, QtCore.Qt.AlignTop)
+        save_row.addWidget(self.key_storage_status_label, 1, QtCore.Qt.AlignVCenter)
+        layout.addLayout(save_row)
+
+        self._refresh_provider_key_statuses()
+
+        layout.addStretch(1)
+        # "Providers": the keys, the regions, Azure's endpoint and the custom
+        # endpoint all live here; "API Keys" named only the first of them.
+        self.tabs.addTab(tab, "Providers")
+
+    def _remote_provider_label_width(self) -> int:
+        """The Providers tab's name column: wide enough for every row label,
+        a sub-row's indent included, in both groups."""
+        metrics = self.fontMetrics()
+        widths = [
+            metrics.horizontalAdvance(text)
+            for text in (
+                *(p.title for p in _REMOTE_PROVIDERS if p.name != "custom"),
+                *_CUSTOM_ENDPOINT_ROW_LABELS,
+                _CUSTOM_KEY_ROW_LABEL,
+            )
+        ]
+        widths.extend(
+            metrics.horizontalAdvance(text) + _PROVIDER_SUB_ROW_INDENT_PX
+            for text in (_REGION_ROW_LABEL, _AZURE_ENDPOINT_ROW_LABEL)
+        )
+        return max(widths) + _REMOTE_PROVIDER_LABEL_EXTRA_PX
+
+    @staticmethod
+    def _new_provider_grid(label_width: int) -> QtWidgets.QGridLayout:
+        """A grid with the Providers tab's columns: name, key field, Test,
+        Remove, test mark, badge. Both groups use it, so their columns line
+        up: every column but the key field is sized by the same captions."""
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
+        grid.setVerticalSpacing(4)
+        grid.setColumnMinimumWidth(0, label_width)
+        grid.setColumnStretch(1, 1)
+        return grid
+
+    def _add_provider_key_row(
+        self,
+        grid: QtWidgets.QGridLayout,
+        row: int,
+        provider: str,
+        title: str,
+        label_width: int,
+        badge_width: int,
+    ) -> None:
+        key_field = QtWidgets.QLineEdit()
+        key_field.setEchoMode(QtWidgets.QLineEdit.Password)
+        key_field.setMinimumWidth(_PROVIDER_KEY_FIELD_MIN_WIDTH_PX)
+        key_field.textChanged.connect(
+            lambda _text, p=provider: self._on_provider_key_changed(p)
+        )
+        test_button = QtWidgets.QPushButton("Test")
+        test_button.setToolTip(
+            f"Test the {_remote_provider_label(provider)} key: the typed one, "
+            "else the stored one."
+        )
+        test_button.clicked.connect(
+            lambda _checked=False, p=provider: self._test_connection(p)
+        )
+        remove_button = QtWidgets.QPushButton("Remove")
+        remove_button.setToolTip("Delete the stored key for this provider on Save.")
+        remove_button.clicked.connect(
+            lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
+        )
+        self._match_field_button_height(key_field, test_button, remove_button)
+
+        # The last test's outcome as one glyph, its text on hover. Fixed
+        # width, so a mark appearing moves nothing beside it.
+        mark = QtWidgets.QLabel("")
+        mark.setAlignment(QtCore.Qt.AlignCenter)
+        mark.setFixedWidth(
+            max(
+                mark.fontMetrics().horizontalAdvance(glyph)
+                for glyph in (_TEST_OK_MARK, _TEST_FAILED_MARK)
+            )
+            + 4
+        )
+
+        status_badge = QtWidgets.QLabel("Not configured")
+        status_badge.setAlignment(QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter)
+        status_badge.setFixedWidth(badge_width)
+        status_badge.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        status_badge.setStyleSheet(
+            "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
+            " color: #555; background: #f2f2f2;"
+        )
+
+        title_label = QtWidgets.QLabel(title)
+        title_label.setFixedWidth(label_width)
+        title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        grid.addWidget(
+            title_label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        )
+        grid.addWidget(key_field, row, 1)
+        grid.addWidget(test_button, row, 2)
+        grid.addWidget(remove_button, row, 3)
+        grid.addWidget(mark, row, 4)
+        grid.addWidget(status_badge, row, 5)
+
+        self._provider_key_edits[provider] = key_field
+        self._provider_status_labels[provider] = status_badge
+        self._provider_test_marks[provider] = mark
+        self._provider_test_buttons[provider] = test_button
+        self._provider_remove_buttons[provider] = remove_button
+
+    @staticmethod
+    def _add_provider_sub_row(
+        grid: QtWidgets.QGridLayout,
+        row: int,
+        text: str,
+        field: QtWidgets.QWidget,
+        label_width: int,
+        *,
+        own_width: bool = False,
+    ) -> None:
+        """A setting that belongs to the row above it, label indented.
+
+        ``own_width`` keeps the field at its own width, left-aligned (a
+        region combo), so it never raises the page's minimum width;
+        otherwise it spans to the badge's right edge.
+        """
+        label = QtWidgets.QLabel(text)
+        label.setIndent(_PROVIDER_SUB_ROW_INDENT_PX)
+        label.setFixedWidth(label_width)
+        label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        label.setStyleSheet("color: #555;")
+        grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        if own_width:
+            grid.addWidget(
+                field, row, 1, 1, 5, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+            )
+        else:
+            grid.addWidget(field, row, 1, 1, 5)
+
+    def _build_region_combo(self, provider: str) -> QtWidgets.QComboBox:
+        """Where the provider processes the audio; always enabled whatever
+        the engine, so a pick moves nothing."""
+        choices = _REMOTE_REGION_CHOICES[provider]
+        combo = _WheelPassthroughComboBox()
+        for value, label, guarantee in choices:
+            combo.addItem(label, value)
+            combo.setItemData(combo.count() - 1, guarantee, QtCore.Qt.ToolTipRole)
+        tooltip = (
+            f"Where {_remote_provider_label(provider)} processes the audio. "
+            "Dictation, audio imports and the connection test all use this "
+            "region.\n"
+            + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
+        )
+        if provider == "speechmatics":
+            # This sentence was a visible note under the region rows; with the
+            # rows under their providers it belongs to this combo alone.
+            tooltip += (
+                "\nMelia 1 runs in the EU and US only; pick Enhanced or "
+                "Standard on the Transcription tab for Australia."
+            )
+        combo.setToolTip(tooltip)
+        # A region can make the selected model unavailable (Melia 1 in au1).
+        combo.currentIndexChanged.connect(
+            lambda _index: self._update_remote_model_note()
+        )
+        self._provider_region_combos[provider] = combo
+        return combo
+
+    def _build_custom_endpoint_group(
+        self, label_width: int, badge_width: int
+    ) -> QtWidgets.QGroupBox:
+        """Base URL, API style, key command and static key of the custom
+        endpoint. Its model is picked on the Transcription tab, where the
+        Refresh button lists what the endpoint offers."""
+        box = QtWidgets.QGroupBox("Custom endpoint (OpenAI-compatible)")
+        box_layout = QtWidgets.QVBoxLayout(box)
+        box_layout.setContentsMargins(10, 10, 10, 10)
+        box_layout.setSpacing(6)
+        intro = QtWidgets.QLabel(
+            "Any OpenAI-compatible server, such as a LiteLLM or vLLM gateway or "
+            "a local speech server. Its model is picked on the Transcription tab."
+        )
+        intro.setWordWrap(True)
+        self._style_note_label(intro)
+        box_layout.addWidget(intro)
+
         self.custom_endpoint_edit = QtWidgets.QLineEdit()
         self.custom_endpoint_edit.setPlaceholderText(
             "https://llm-gateway.example.com/v1"
         )
-        self.custom_endpoint_edit.setMinimumWidth(180)
         self.custom_endpoint_edit.setToolTip(
             "Base URL of an OpenAI-compatible API, used as given (nothing is "
             "appended), e.g. https://llm-gateway.example.com/v1 or "
             "http://localhost:8000/v1."
         )
+        self.custom_endpoint_edit.textChanged.connect(self._on_custom_endpoint_changed)
         self.custom_key_command_edit = QtWidgets.QLineEdit()
         self.custom_key_command_edit.setPlaceholderText(
             "Optional, e.g. token-helper --print"
         )
-        self.custom_key_command_edit.setMinimumWidth(180)
         self.custom_key_command_edit.setToolTip(
             "Runs when a request needs a key; its output is used as the Bearer "
             f"token for {CUSTOM_KEY_COMMAND_TTL_S / 60:.0f} minutes and "
             "overrides the stored key. Run without a shell, e.g. "
             "wsl.exe -e /path/to/token-helper."
         )
+        # A command alone makes the endpoint testable and runnable.
         self.custom_key_command_edit.textChanged.connect(
-            lambda _text: self._update_import_engine_note()
+            lambda _text: self._on_provider_key_changed("custom")
         )
         self.custom_api_mode_combo = _WheelPassthroughComboBox()
         self.custom_api_mode_combo.addItem(
@@ -414,120 +573,34 @@ class _RemoteProvidersMixin:
             "chat style, whose transcript is less deterministic and may "
             "paraphrase."
         )
-        custom_endpoint_hint = QtWidgets.QLabel(
-            "For the Custom endpoint: any OpenAI-compatible server, such as a "
-            "LiteLLM or vLLM gateway or a local speech server."
-        )
-        custom_endpoint_hint.setWordWrap(True)
-        self._style_note_label(custom_endpoint_hint)
-        for text, field in (
-            ("Custom Endpoint", self.custom_endpoint_edit),
-            ("Key Command", self.custom_key_command_edit),
-            ("API Style", self.custom_api_mode_combo),
-        ):
-            row_label = QtWidgets.QLabel(text)
-            row_label.setFixedWidth(provider_label_width)
-            row_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-            provider_grid.addWidget(
-                row_label,
-                grid_row,
-                0,
-                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        grid = self._new_provider_grid(label_width)
+        for row, (text, field) in enumerate(
+            zip(
+                _CUSTOM_ENDPOINT_ROW_LABELS,
+                (
+                    self.custom_endpoint_edit,
+                    self.custom_api_mode_combo,
+                    self.custom_key_command_edit,
+                ),
+                strict=True,
             )
-            provider_grid.addWidget(field, grid_row, 1, 1, 3)
-            grid_row += 1
-        provider_grid.addWidget(custom_endpoint_hint, grid_row, 1, 1, 3)
-        grid_row += 1
-
-        provider_note = QtWidgets.QLabel(
-            "Status badges show where each key is currently sourced from."
+        ):
+            label = QtWidgets.QLabel(text)
+            label.setFixedWidth(label_width)
+            label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+            grid.addWidget(field, row, 1, 1, 5)
+        self._add_provider_key_row(
+            grid,
+            len(_CUSTOM_ENDPOINT_ROW_LABELS),
+            "custom",
+            _CUSTOM_KEY_ROW_LABEL,
+            label_width,
+            badge_width,
         )
-        self._style_note_label(provider_note)
-        provider_grid.addWidget(provider_note, grid_row, 1, 1, 3)
-        grid_row += 1
-
-        self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
-            "Allow insecure local API key fallback (plain text)"
-        )
-        self.insecure_key_storage_checkbox.setToolTip(
-            "Use only if Credential Manager/keyring is blocked. "
-            "Keys are then stored unencrypted in the app-data folder."
-        )
-        self.insecure_key_storage_checkbox.toggled.connect(
-            lambda _checked: self._refresh_secret_store_options_ui()
-        )
-        provider_grid.addWidget(self.insecure_key_storage_checkbox, grid_row, 1, 1, 3)
-        grid_row += 1
-
-        self.key_storage_status_label = WrappedStatusLabel("")
-        make_label_selectable(self.key_storage_status_label)
-        self.key_storage_status_label.setWordWrap(True)
-        self._style_note_label(self.key_storage_status_label)
-        self.save_api_keys_button = QtWidgets.QPushButton("Save API Keys")
-        self.save_api_keys_button.setToolTip(
-            "Store entered API keys without applying all settings or refreshing the app."
-        )
-        self.save_api_keys_button.clicked.connect(self._save_api_keys_only)
-        provider_grid.addWidget(
-            self.save_api_keys_button,
-            grid_row,
-            0,
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-        )
-        provider_grid.addWidget(self.key_storage_status_label, grid_row, 1, 1, 3)
-        grid_row += 1
-
-        self.test_conn_target_combo = _WheelPassthroughComboBox()
-        self.test_conn_target_combo.addItem(
-            "All configured providers (Recommended)",
-            "all-configured",
-        )
-        for provider in _REMOTE_PROVIDERS:
-            self.test_conn_target_combo.addItem(f"{provider.title} only", provider.name)
-        self.test_conn_target_combo.setToolTip(
-            "Choose which provider to test. "
-            "This is independent from the transcription engine selection."
-        )
-        connection_target_label = QtWidgets.QLabel("Connection Target")
-        connection_target_label.setFixedWidth(provider_label_width)
-        connection_target_label.setAlignment(
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
-        )
-        provider_grid.addWidget(
-            connection_target_label,
-            grid_row,
-            0,
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-        )
-        provider_grid.addWidget(self.test_conn_target_combo, grid_row, 1, 1, 3)
-        grid_row += 1
-
-        # Test connection
-        self.test_conn_button = QtWidgets.QPushButton("Run Connection Test")
-        self.test_conn_button.setToolTip(
-            "Test one provider or all configured providers. "
-            "Typed key input is preferred over stored key."
-        )
-        self.test_conn_button.clicked.connect(self._test_connection)
-        self.test_conn_result = WrappedStatusLabel("")
-        self.test_conn_result.setWordWrap(True)
-        make_label_selectable(self.test_conn_result)
-        provider_grid.addWidget(
-            self.test_conn_button,
-            grid_row,
-            0,
-            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
-        )
-        provider_grid.addWidget(self.test_conn_result, grid_row, 1, 1, 3)
-        provider_layout.addLayout(provider_grid)
-
-        self._refresh_provider_key_statuses()
-
-        layout.addWidget(provider_box)
-        layout.addStretch(1)
-        # "API Keys": this tab holds credentials only. The remote model
-        # that runs is picked on Transcription, which "Remote" implied.
-        self.tabs.addTab(tab, "API Keys")
+        self.custom_key_edit = self._provider_key_edits["custom"]
+        box_layout.addLayout(grid)
+        return box
 
     def _on_provider_key_changed(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
@@ -584,6 +657,11 @@ class _RemoteProvidersMixin:
             return
 
         typed_value = key_field.text().strip()
+        source = self._stored_key_source(provider)
+        self._refresh_provider_row_controls(provider, key_field, typed_value, source)
+        # The Transcription tab warns while the selected engine has no key.
+        if provider == self.engine_combo.currentData():
+            self._update_remote_model_note()
         if typed_value:
             self._set_provider_status_badge(
                 provider,
@@ -606,7 +684,6 @@ class _RemoteProvidersMixin:
             )
             return
 
-        source = self._stored_key_source(provider)
         if source in {"keyring", "legacy-keyring"}:
             label = "Stored securely"
             tooltip = "Stored securely in Windows Credential Manager."
@@ -657,9 +734,105 @@ class _RemoteProvidersMixin:
             tooltip="No stored key is configured for this provider.",
         )
 
+    def _refresh_provider_row_controls(
+        self,
+        provider: str,
+        key_field: QtWidgets.QLineEdit,
+        typed_value: str,
+        source: str,
+    ) -> None:
+        """The row's placeholder, Test and Remove follow what it holds.
+
+        Test needs a key to test (typed, stored and not marked for removal,
+        or the custom endpoint's key command) and no test running; Remove
+        needs something to remove. Only enabled states and the placeholder
+        change, so nothing in the row moves.
+        """
+        pending = provider in self._provider_pending_clear
+        stored = source != "none"
+        usable_stored = source in _USABLE_KEY_SOURCES and not pending
+        if pending:
+            placeholder = "Removed on Save; type a key to keep one"
+        elif stored:
+            placeholder = "Stored; type a new key to replace it"
+        elif provider == "custom":
+            placeholder = "API key (optional with a key command)"
+        else:
+            placeholder = "API key"
+        key_field.setPlaceholderText(placeholder)
+        runnable = bool(typed_value) or usable_stored
+        if provider == "custom" and hasattr(self, "custom_key_command_edit"):
+            runnable = runnable or bool(self.custom_key_command_edit.text().strip())
+        test_button = self._provider_test_buttons.get(provider)
+        if test_button is not None:
+            test_button.setEnabled(
+                runnable and self._active_connection_test_thread is None
+            )
+        remove_button = self._provider_remove_buttons.get(provider)
+        if remove_button is not None:
+            remove_button.setEnabled(bool(typed_value) or (stored and not pending))
+
     def _refresh_provider_key_statuses(self) -> None:
         for provider in self._provider_key_edits:
             self._refresh_provider_key_status(provider)
+
+    def _remote_engine_setup_issue(self, engine: str) -> str | None:
+        """What stops dictation with this remote engine, or None.
+
+        Judged on what Save would leave: a typed key counts (Save stores it),
+        a key marked for removal does not, and a stored one counts only when
+        the store hands it out. Shown on the Transcription tab in place of the
+        model note (`_update_remote_model_note`).
+        """
+        key_field = self._provider_key_edits.get(engine)
+        if key_field is None:
+            return None
+        label = self._provider_label(engine)
+        if engine == "custom" and not self.custom_endpoint_edit.text().strip():
+            return (
+                "No base URL for the custom endpoint yet: enter it on the "
+                "Providers tab, or dictation with this engine fails."
+            )
+        # The same judgement as the row's Test button: an "insecure-disabled"
+        # key sits in the file but the store no longer hands it out.
+        has_key = bool(key_field.text().strip()) or (
+            engine not in self._provider_pending_clear
+            and self._stored_key_source(engine) in _USABLE_KEY_SOURCES
+        )
+        if engine == "custom":
+            has_key = has_key or bool(self.custom_key_command_edit.text().strip())
+        if not has_key:
+            if engine in self._provider_pending_clear:
+                return (
+                    f"The {label} key is removed on Save, and dictation with "
+                    "this engine then fails. Enter a key on the Providers tab."
+                )
+            if engine == "custom":
+                # The endpoint refuses to start without either (see
+                # CustomEndpointTranscriber), even for a server without auth.
+                return (
+                    "No key or key command for the custom endpoint yet: enter "
+                    "one on the Providers tab (any placeholder such as 'none' "
+                    "for a server without authentication)."
+                )
+            return (
+                f"No {label} API key yet: enter one on the Providers tab, or "
+                "dictation with this engine fails."
+            )
+        if engine == "azure" and not self.azure_endpoint_edit.text().strip():
+            return (
+                "Azure also needs its endpoint: enter it on the Providers tab, "
+                "or dictation with this engine fails."
+            )
+        if engine == "speechmatics" and not speechmatics_model_available_in(
+            self._remote_model_value_for_provider(engine), self._region_shown(engine)
+        ):
+            # The transcriber refuses the pair before any upload.
+            return (
+                f"{SPEECHMATICS_MELIA_UNAVAILABLE_TEXT} Pick eu1 or us1 on the "
+                "Providers tab, or the Enhanced or Standard model."
+            )
+        return None
 
     def _mark_provider_key_for_clear(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
@@ -728,9 +901,8 @@ class _RemoteProvidersMixin:
         self.import_engine_note.setStyleSheet("color: #b71c1c;")
         self.import_engine_note.setText(credential_issue)
 
-    def _test_connection(self) -> None:
-        """Test connectivity for one provider or all configured providers."""
-        target = str(self.test_conn_target_combo.currentData() or "all-configured")
+    def _test_connection(self, target: str = "all-configured") -> None:
+        """Test one provider (a row's Test) or every configured one."""
         providers = self._providers_for_connection_target(target)
         if not providers:
             self._set_test_connection_feedback(
@@ -762,7 +934,8 @@ class _RemoteProvidersMixin:
         self._connection_test_id += 1
         test_id = self._connection_test_id
         self.test_conn_button.setEnabled(False)
-        self.test_conn_target_combo.setEnabled(False)
+        for button in self._provider_test_buttons.values():
+            button.setEnabled(False)
         if len(providers) == 1:
             provider_label = self._provider_label(providers[0])
             self._set_test_connection_feedback(
@@ -790,9 +963,7 @@ class _RemoteProvidersMixin:
         try:
             worker.start()
         except RuntimeError as exc:
-            self._active_connection_test_thread = None
-            self.test_conn_button.setEnabled(True)
-            self.test_conn_target_combo.setEnabled(True)
+            self._end_connection_test()
             self._set_test_connection_feedback(
                 f"Could not start the connection test: {exc}", "#b71c1c"
             )
@@ -917,14 +1088,18 @@ class _RemoteProvidersMixin:
             summary,
         )
 
+    def _end_connection_test(self) -> None:
+        """No test runs any more: the Test buttons follow their rows again."""
+        self._active_connection_test_thread = None
+        self.test_conn_button.setEnabled(True)
+        self._refresh_provider_key_statuses()
+
     @QtCore.Slot(int, bool, str)
     def _on_connection_test_finished(self, test_id: int, ok: bool, msg: str) -> None:
         details = self._connection_test_details.pop(test_id, {})
         if test_id != self._connection_test_id:
             return
-        self.test_conn_button.setEnabled(True)
-        self.test_conn_target_combo.setEnabled(True)
-        self._active_connection_test_thread = None
+        self._end_connection_test()
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005 (shown to the user in their own time zone)
         for provider, (provider_ok, provider_msg) in details.items():
             self._remember_provider_connection_test(
@@ -942,15 +1117,20 @@ class _RemoteProvidersMixin:
                 provider_ok, _provider_msg = details[provider]
                 marker = "OK" if provider_ok else "Fail"
                 parts.append(f"{self._provider_label(provider)}: {marker}")
-            color = "#1b5e20" if ok else "#b26a00"
+            color = _TEST_OK_COLOR if ok else "#b26a00"
             joined = " | ".join(parts)
             self._set_test_connection_feedback(f"{msg} {joined}", color)
             return
-
+        if details:
+            # One provider: its name leads, since every row reports here.
+            provider = next(iter(details))
+            msg = f"{self._provider_label(provider)}: {msg}"
         if ok:
-            self._set_test_connection_feedback(f"\u2713 {msg}", "#1b5e20")
+            self._set_test_connection_feedback(f"{_TEST_OK_MARK} {msg}", _TEST_OK_COLOR)
         else:
-            self._set_test_connection_feedback(f"\u2717 {msg}", "#b71c1c")
+            self._set_test_connection_feedback(
+                f"{_TEST_FAILED_MARK} {msg}", _TEST_FAILED_COLOR
+            )
 
     def _set_test_connection_feedback(self, text: str, color: str) -> None:
         self.test_conn_result.setText(text)
@@ -976,7 +1156,7 @@ class _RemoteProvidersMixin:
             self._settings_perf_logger.exception(
                 "Failed to persist %s connection test result", provider
             )
-        self._apply_provider_connection_test_label(provider)
+        self._apply_provider_connection_test_mark(provider)
 
     def _clear_provider_connection_test(self, provider: str) -> None:
         self._provider_test_history.pop(provider, None)
@@ -986,7 +1166,9 @@ class _RemoteProvidersMixin:
             self._settings_perf_logger.exception(
                 "Failed to clear %s connection test result", provider
             )
-        self._apply_provider_connection_test_label(provider)
+        self._apply_provider_connection_test_mark(provider)
+        # The shared line may describe the key just replaced or removed.
+        self._show_latest_connection_test()
 
     def _restore_provider_connection_test_labels(self) -> None:
         try:
@@ -1002,25 +1184,52 @@ class _RemoteProvidersMixin:
                 result.message,
                 result.checked_at,
             )
-        for provider in self._provider_last_test_labels:
-            self._apply_provider_connection_test_label(provider)
+        for provider in self._provider_test_marks:
+            self._apply_provider_connection_test_mark(provider)
+        self._show_latest_connection_test()
 
-    def _apply_provider_connection_test_label(self, provider: str) -> None:
-        last_label = self._provider_last_test_labels.get(provider)
-        if last_label is None:
+    @staticmethod
+    def _connection_test_text(
+        provider_label: str, result: tuple[bool, str, str]
+    ) -> str:
+        ok, message, timestamp = result
+        marker = _TEST_OK_MARK if ok else _TEST_FAILED_MARK
+        return f"Last test ({timestamp}): {provider_label} {marker} {message}"
+
+    def _apply_provider_connection_test_mark(self, provider: str) -> None:
+        mark = self._provider_test_marks.get(provider)
+        if mark is None:
             return
         result = self._provider_test_history.get(provider)
         if result is None:
-            self._style_provider_last_test_label(last_label)
-            last_label.setText("Last test: never.")
-            last_label.setToolTip("")
+            mark.setText("")
+            mark.setToolTip("Not tested since the key was last saved.")
             return
-        ok, message, timestamp = result
-        marker = "\u2713" if ok else "\u2717"
-        color = "#1b5e20" if ok else "#b71c1c"
-        self._style_provider_last_test_label(last_label, color=color)
-        text = f"Last test ({timestamp}): {marker} {message}"
-        last_label.setText(text)
-        # The reserved area holds two lines and a provider can return more than
-        # that, so the whole message stays readable on hover.
-        last_label.setToolTip(text)
+        ok = result[0]
+        mark.setText(_TEST_OK_MARK if ok else _TEST_FAILED_MARK)
+        mark.setStyleSheet(
+            f"color: {_TEST_OK_COLOR if ok else _TEST_FAILED_COLOR}; font-weight: bold;"
+        )
+        mark.setToolTip(
+            self._connection_test_text(self._provider_label(provider), result)
+        )
+
+    def _show_latest_connection_test(self) -> None:
+        """Put the most recent stored test result on the shared line.
+
+        Used when the dialog opens and when a key's result is cleared;
+        a test just run reports itself instead. A running test owns the line.
+        """
+        if self._active_connection_test_thread is not None:
+            return
+        if not self._provider_test_history:
+            self._set_test_connection_feedback("", "#555")
+            return
+        # The timestamps are "%Y-%m-%d %H:%M:%S", so they sort as text.
+        provider, result = max(
+            self._provider_test_history.items(), key=lambda item: item[1][2]
+        )
+        self._set_test_connection_feedback(
+            self._connection_test_text(self._provider_label(provider), result),
+            _TEST_OK_COLOR if result[0] else _TEST_FAILED_COLOR,
+        )

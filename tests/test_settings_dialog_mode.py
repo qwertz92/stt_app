@@ -46,8 +46,10 @@ class _FakeSettingsStore:
 
 
 class _FakeSecretStore:
-    def __init__(self):
-        self._values: dict[str, str] = {}
+    def __init__(self, *providers_with_keys: str):
+        # A key for a provider: without one the model note is replaced by
+        # the missing-key warning.
+        self._values: dict[str, str] = dict.fromkeys(providers_with_keys, "stored")
 
     def set_api_key(self, provider: str, key: str) -> None:
         self._values[provider] = key
@@ -779,7 +781,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
     dialog = SettingsDialog(
         settings_store=store,
-        secret_store=_FakeSecretStore(),
+        secret_store=_FakeSecretStore("assemblyai"),
         app_logger=_FakeLogger(),
     )
 
@@ -817,7 +819,7 @@ def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
     )
     dialog = SettingsDialog(
         settings_store=store,
-        secret_store=_FakeSecretStore(),
+        secret_store=_FakeSecretStore("elevenlabs"),
         app_logger=_FakeLogger(),
     )
 
@@ -1644,7 +1646,7 @@ def test_remote_provider_key_fields_align_with_azure_endpoint():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "API Keys"
+        if dialog.tabs.tabText(index) == "Providers"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     dialog.show()
@@ -1653,6 +1655,22 @@ def test_remote_provider_key_fields_align_with_azure_endpoint():
     key_x = dialog.assemblyai_key_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
     endpoint_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
     assert abs(key_x - endpoint_x) <= 2
+    # The custom endpoint's group uses the same columns, so its key field and
+    # its row buttons line up with the cloud providers' above it.
+    for cloud, custom in (
+        (dialog.assemblyai_key_edit, dialog.custom_key_edit),
+        (
+            dialog._provider_test_buttons["assemblyai"],
+            dialog._provider_test_buttons["custom"],
+        ),
+        (
+            dialog._provider_status_labels["assemblyai"],
+            dialog._provider_status_labels["custom"],
+        ),
+    ):
+        left = cloud.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+        assert left == custom.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+        assert cloud.width() == custom.width()
     _ = app
 
 
@@ -1666,7 +1684,7 @@ def test_remote_provider_labels_align_with_key_field_center():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "API Keys"
+        if dialog.tabs.tabText(index) == "Providers"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     dialog.show()
@@ -3759,7 +3777,7 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     remote_index = next(
         index
         for index in range(dialog.tabs.count())
-        if dialog.tabs.tabText(index) == "API Keys"
+        if dialog.tabs.tabText(index) == "Providers"
     )
     dialog.tabs.setCurrentIndex(remote_index)
     app.processEvents()

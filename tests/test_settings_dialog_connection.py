@@ -109,10 +109,11 @@ def test_engine_combo_lists_implemented_providers():
 
 def test_test_connection_missing_key_shows_error():
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="assemblyai"))
-    target_index = dialog.test_conn_target_combo.findData("assemblyai")
-    dialog.test_conn_target_combo.setCurrentIndex(target_index)
+    # A row without a key offers no Test at all ...
+    assert dialog._provider_test_buttons["assemblyai"].isEnabled() is False
 
-    dialog._test_connection()
+    # ... and a test asked for anyway says why it cannot run.
+    dialog._test_connection("assemblyai")
 
     assert "No API key entered" in dialog.test_conn_result.text()
     assert dialog.test_conn_button.isEnabled() is True
@@ -149,11 +150,9 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
     )
 
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
-    target_index = dialog.test_conn_target_combo.findData("deepgram")
-    dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.deepgram_key_edit.setText("dg-test-key")
 
-    dialog._test_connection()
+    dialog._provider_test_buttons["deepgram"].click()
 
     assert dialog.test_conn_button.isEnabled() is True
     assert dialog.test_conn_result.text().startswith("\u2713")
@@ -190,15 +189,13 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
     )
 
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
-    target_index = dialog.test_conn_target_combo.findData("openai")
-    dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.openai_key_edit.setText("oa-key")
     engine_index = dialog.engine_combo.findData("openai")
     dialog.engine_combo.setCurrentIndex(engine_index)
     model_index = dialog.remote_model_combo.findData("gpt-4o-transcribe")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
-    dialog._test_connection()
+    dialog._provider_test_buttons["openai"].click()
 
     assert dialog.test_conn_button.isEnabled() is True
     assert dialog.test_conn_result.text().startswith("\u2713")
@@ -235,15 +232,13 @@ def test_elevenlabs_connection_runs_in_background_worker(monkeypatch):
     )
 
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
-    target_index = dialog.test_conn_target_combo.findData("elevenlabs")
-    dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.elevenlabs_key_edit.setText("el-key")
     engine_index = dialog.engine_combo.findData("elevenlabs")
     dialog.engine_combo.setCurrentIndex(engine_index)
     model_index = dialog.remote_model_combo.findData("scribe_v2")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
-    dialog._test_connection()
+    dialog._provider_test_buttons["elevenlabs"].click()
 
     assert dialog.test_conn_button.isEnabled() is True
     assert dialog.test_conn_result.text().startswith("\u2713")
@@ -310,20 +305,18 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
     dialog.openai_key_edit.setText("oa-key")
     dialog.deepgram_key_edit.setText("dg-key")
-    all_index = dialog.test_conn_target_combo.findData("all-configured")
-    dialog.test_conn_target_combo.setCurrentIndex(all_index)
 
-    dialog._test_connection()
+    dialog.test_conn_button.click()
 
     assert dialog.test_conn_button.isEnabled() is True
     assert "provider tests passed" in dialog.test_conn_result.text()
     assert "OpenAI: OK" in dialog.test_conn_result.text()
     assert "Deepgram: OK" in dialog.test_conn_result.text()
-    assert "Last test (" in dialog._provider_last_test_labels["openai"].text()
-    assert "Last test (" in dialog._provider_last_test_labels["deepgram"].text()
-    assert "padding: 0 0 6px 0" in (
-        dialog._provider_last_test_labels["openai"].styleSheet()
-    )
+    for provider in ("openai", "deepgram"):
+        assert dialog._provider_test_marks[provider].text() == "\u2713"
+        assert "Last test (" in dialog._provider_test_marks[provider].toolTip()
+    # Untested rows carry no mark.
+    assert dialog._provider_test_marks["groq"].text() == ""
     _ = app
 
 
@@ -349,12 +342,13 @@ def test_provider_connection_test_result_persists_between_dialogs(tmp_path):
         provider_connection_test_store=ProviderConnectionTestStore(store_path),
     )
 
-    assert (
-        reopened._provider_last_test_labels["openai"].text()
-    ) == "Last test (2026-06-19 17:30:00): \u2713 OpenAI OK"
-    assert (
-        "color: #1b5e20" in reopened._provider_last_test_labels["openai"].styleSheet()
-    )
+    mark = reopened._provider_test_marks["openai"]
+    assert mark.text() == "\u2713"
+    assert "color: #1b5e20" in mark.styleSheet()
+    expected = "Last test (2026-06-19 17:30:00): OpenAI \u2713 OpenAI OK"
+    assert mark.toolTip() == expected
+    # The shared line opens on the most recent stored result.
+    assert reopened.test_conn_result.text() == expected
     _ = app
 
 
@@ -386,7 +380,7 @@ def test_save_can_clear_stored_provider_key(tmp_path):
         checked_at="2026-06-19 17:30:00",
     )
     dialog._restore_provider_connection_test_labels()
-    assert "OpenAI OK" in dialog._provider_last_test_labels["openai"].text()
+    assert "OpenAI OK" in dialog._provider_test_marks["openai"].toolTip()
 
     dialog._mark_provider_key_for_clear("openai")
     assert dialog._provider_status_labels["openai"].text() == "Will clear on Save"
@@ -396,7 +390,9 @@ def test_save_can_clear_stored_provider_key(tmp_path):
     assert secret_store.delete_calls == ["openai"]
     assert secret_store.get_api_key("openai") is None
     assert dialog._provider_status_labels["openai"].text() == "Not configured"
-    assert dialog._provider_last_test_labels["openai"].text() == "Last test: never."
+    assert dialog._provider_test_marks["openai"].text() == ""
+    # The shared line no longer describes the removed key.
+    assert "OpenAI OK" not in dialog.test_conn_result.text()
     assert connection_store.load_all() == {}
     _ = app
 
@@ -422,7 +418,7 @@ def test_save_new_provider_key_clears_previous_connection_test(tmp_path):
     dialog._save()
 
     assert secret_store.set_calls == [("openai", "new-key")]
-    assert dialog._provider_last_test_labels["openai"].text() == "Last test: never."
+    assert dialog._provider_test_marks["openai"].text() == ""
     assert connection_store.load_all() == {}
     _ = app
 
@@ -670,23 +666,20 @@ def test_an_empty_recordings_folder_stays_empty_when_saved(label, typed, expecte
     _ = app
 
 
-def test_a_failed_connection_test_moves_nothing_on_the_remote_tab():
-    """Every provider row carries a word-wrapped "Last test" label, and a
-    failure message is two lines where "Last test: never." is one. Only the
-    first line was reserved, so each failing provider pushed everything under
-    it -- including the Run Connection Test button at the bottom of the same
-    grid -- 15 px down: measured at 105 px with all seven failing, with the
-    pointer still on the button that had just caused it.
+def test_a_failed_connection_test_moves_nothing_on_the_providers_tab():
+    """A failure is a mark in its row and a long message on the shared line.
+
+    The per-row "Last test" lines this replaced once reserved only their first
+    line, so each failing provider pushed everything under it 15 px down
+    (105 px with seven failing, the pointer still on the button that caused
+    it). Now the mark has a fixed width and the shared line reserves two
+    lines, so neither a mark appearing nor the message may move anything --
+    across or down.
     """
     dialog, app, _secret_store = _make_dialog(AppSettings())
     dialog.resize(900, 880)
     dialog.show()
-    for index in range(dialog.tabs.count()):
-        if dialog.tabs.tabText(index) == "API Keys":
-            dialog.tabs.setCurrentIndex(index)
-            break
-    else:  # pragma: no cover - the tab is always built
-        raise AssertionError("Remote tab not found")
+    dialog.tabs.setCurrentIndex(_providers_tab_index(dialog))
 
     tab = dialog.tabs.currentWidget()
     watched = [
@@ -695,14 +688,15 @@ def test_a_failed_connection_test_moves_nothing_on_the_remote_tab():
         if widget.isVisible() and widget.width() > 4 and widget.height() > 4
     ]
     assert dialog.test_conn_button in watched
+    assert dialog.save_api_keys_button in watched
 
     def geometry():
         for _ in range(10):
             app.processEvents()
         return {
             id(widget): (
-                widget.mapTo(dialog, widget.rect().topLeft()).y(),
-                widget.height(),
+                widget.mapTo(dialog, widget.rect().topLeft()),
+                widget.size(),
             )
             for widget in watched
         }
@@ -712,24 +706,31 @@ def test_a_failed_connection_test_moves_nothing_on_the_remote_tab():
 
     message = (
         "Failed: HTTP 401: the API key was rejected by the provider. Check that "
-        "the key belongs to an active account with transcription enabled."
+        "the key belongs to an active account with transcription enabled, then "
+        "try again; the provider's console lists the keys of each project."
     )
-    for provider in dialog._provider_last_test_labels:
-        dialog._provider_test_history[provider] = (
-            False,
-            message,
-            "2026-08-30 12:00:00",
+    for provider in dialog._provider_test_marks:
+        dialog._remember_provider_connection_test(
+            provider, ok=False, message=message, timestamp="2026-08-30 12:00:00"
         )
-        dialog._apply_provider_connection_test_label(provider)
+    dialog._show_latest_connection_test()
 
-    assert geometry() == before, "a failed connection test moved the Remote tab"
-
-    label = dialog._provider_last_test_labels["assemblyai"]
-    assert message in label.toolTip(), (
+    assert geometry() == before, "a failed connection test moved the Providers tab"
+    assert dialog._provider_test_marks["assemblyai"].text() == "\u2717"
+    assert message in dialog._provider_test_marks["assemblyai"].toolTip()
+    assert message in dialog.test_conn_result.text()
+    assert message in dialog.test_conn_result.toolTip(), (
         "the reserved area holds two lines, so the full message has to stay "
         "readable on hover"
     )
     dialog.hide()
+
+
+def _providers_tab_index(dialog: SettingsDialog) -> int:
+    for index in range(dialog.tabs.count()):
+        if dialog.tabs.tabText(index) == "Providers":
+            return index
+    raise AssertionError("no Providers tab")
 
 
 _LONG_BENCHMARK_FAILURE = (

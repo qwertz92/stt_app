@@ -65,6 +65,7 @@ from .settings_store import (
     _REMOTE_MODEL_FIELDS,
     AppSettings,
     apply_engine_model_selection,
+    custom_endpoint_identity,
 )
 
 # How each engine that reads the custom vocabulary passes it on, named after
@@ -110,7 +111,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
 }
 
 # Where the two things the Model row does not do are done. The tabs are named
-# Models and API Keys, so both sentences name a tab the user can see; they are
+# Models and Providers, so both sentences name a tab the user can see; they are
 # appended to the notes already reserved under the Model combo rather than
 # given lines of their own, because the Transcription tab has 4 px of its
 # height budget left (measured).
@@ -118,7 +119,7 @@ _LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models t
 # Shorter than "The API key for this provider is set ...": with that wording
 # the Fun-ASR note needed 45 px of the 42 reserved at the dialog's minimum
 # width, and "this provider" repeats what the row already shows.
-_REMOTE_MODEL_KEY_POINTER = "The API key is set on the API Keys tab."
+_REMOTE_MODEL_KEY_POINTER = "The API key is set on the Providers tab."
 
 
 class _GeneralTabMixin:
@@ -225,14 +226,16 @@ class _GeneralTabMixin:
         # other signal (a typed custom model would otherwise outlive the pick).
         self.remote_model_combo.activated.connect(self._on_remote_model_activated)
         # Only the custom endpoint has a button here: its models are whatever
-        # the endpoint offers, fetched on request with the API Keys tab's
+        # the endpoint offers, fetched on request with the Providers tab's
         # typed (unsaved) URL and credentials. It sits beside the combo it
-        # fills rather than on the API Keys tab, because the result is read
-        # and picked here.
-        self.custom_fetch_models_button = QtWidgets.QPushButton("Fetch models")
+        # fills rather than on the Providers tab, because the result is read
+        # and picked here. The list it returns is saved with the settings
+        # (`custom_models`), so the combo offers it again after a restart.
+        self.custom_fetch_models_button = QtWidgets.QPushButton("Refresh")
         self.custom_fetch_models_button.setToolTip(
             "Ask the custom endpoint which models it offers (GET /models), "
-            "using the URL and key entered on the API Keys tab."
+            "using the URL and key entered on the Providers tab. Save keeps "
+            "the list for the next start."
         )
         self.custom_fetch_models_button.clicked.connect(self._fetch_custom_models)
         self._match_field_button_height(
@@ -415,7 +418,7 @@ class _GeneralTabMixin:
         # "Transcription", not "General": this is where the engine, the
         # model, the language and the mode are chosen, and a tab called
         # General says nothing about that while "Local" and "Remote" --
-        # now Models and API Keys -- read as if they did.
+        # now Models and Providers -- read as if they did.
         self.tabs.addTab(tab, "Transcription")
 
     # Shared with the overlay retranscribe dialog; the table itself lives in
@@ -611,14 +614,51 @@ class _GeneralTabMixin:
             self.remote_model_combo.setEditText(
                 self._remote_model_value_for_provider(provider)
             )
-        self.remote_model_combo.setEnabled(True)
+        self.remote_model_combo.setEnabled(
+            not self._assemblyai_streaming_selected(provider)
+        )
+        self._update_remote_model_note()
+        self.remote_model_combo.blockSignals(False)
 
+    def _assemblyai_streaming_selected(self, provider: str) -> bool:
+        """AssemblyAI streams with one fixed model, so its picker is moot."""
+        return provider == "assemblyai" and self.mode_combo.currentData() == "streaming"
+
+    def _update_remote_model_note(self) -> None:
+        """The two reserved lines under a remote engine's model row.
+
+        A setup gap that makes dictation with the selected engine fail -- no
+        key, a key marked for removal, Azure's missing endpoint, the custom
+        endpoint's missing base URL -- takes the whole note, in red, because
+        the model description does not matter until it is fixed. Called
+        whenever the engine, a key or one of those fields changes; it only
+        replaces text in a reserved area, so nothing moves.
+        """
+        if not hasattr(self, "remote_model_note_label"):
+            return
+        provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        if provider == DEFAULT_ENGINE:
+            return
+        issue = self._remote_engine_setup_issue(provider)
+        if issue is not None:
+            note, error = issue, True
+        else:
+            note = self._remote_model_description(provider)
+            error = provider == "custom" and self._custom_model_note_error
+        self.remote_model_note_label.setText(note)
+        self.remote_model_note_label.setToolTip(note)
+        self.remote_model_note_label.setStyleSheet(
+            "color: #b71c1c; padding: 0;" if error else "color: #555; padding: 0;"
+        )
+
+    def _remote_model_description(self, provider: str) -> str:
+        if provider == "custom":
+            return self._custom_model_note or self._custom_model_default_note()
         note = (
             f"The selected {self._provider_label(provider)} model is used for "
             "batch dictation and audio imports; its stored API key is reused."
         )
-        if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
-            self.remote_model_combo.setEnabled(False)
+        if self._assemblyai_streaming_selected(provider):
             note = (
                 f"Streaming always uses {ASSEMBLYAI_STREAMING_MODEL_LABEL} "
                 "Realtime. The selected "
@@ -644,25 +684,23 @@ class _GeneralTabMixin:
                 "Cloud, batch-only, with 31 languages focused on Chinese and "
                 "East/Southeast Asia, but no German. Use Azure or local for German."
             )
-        elif is_custom:
-            note = self._custom_model_note or (
-                "Batch-only. Type the model id, or fetch the list the "
-                "endpoint offers; its URL is set on the API Keys tab."
-            )
-
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
         # longest of these notes plus this sentence needs 30 px of the 42.
-        if not is_custom:
-            note = f"{note} {_REMOTE_MODEL_KEY_POINTER}"
-        self.remote_model_note_label.setText(note)
-        self.remote_model_note_label.setToolTip(note)
-        self.remote_model_note_label.setStyleSheet(
-            "color: #b71c1c; padding: 0;"
-            if is_custom and self._custom_model_note_error
-            else "color: #555; padding: 0;"
+        return f"{note} {_REMOTE_MODEL_KEY_POINTER}"
+
+    def _custom_model_default_note(self) -> str:
+        """The custom endpoint's note before this session refreshed its list."""
+        count = len(self._custom_fetched_models)
+        if count:
+            return (
+                f"Batch-only. {count} model{'s' if count != 1 else ''} listed "
+                "at the last Refresh; a model id the list lacks can be typed."
+            )
+        return (
+            "Batch-only. Type the model id, or press Refresh to list the "
+            "endpoint's models; its URL is set on the Providers tab."
         )
-        self.remote_model_combo.blockSignals(False)
 
     def _language_modes_for_current_selection(self) -> tuple[str, ...]:
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
@@ -1272,6 +1310,7 @@ class _GeneralTabMixin:
         if self._active_custom_models_fetch_thread is not None:
             return
         snapshot = self._custom_models_fetch_snapshot()
+        self._custom_models_fetch_endpoint = snapshot["endpoint"]
         self._custom_models_fetch_id += 1
         fetch_id = self._custom_models_fetch_id
         self.custom_fetch_models_button.setEnabled(False)
@@ -1319,36 +1358,67 @@ class _GeneralTabMixin:
             self._set_custom_model_note(f"Could not fetch models: {result}", error=True)
             return
         models = tuple(result) if isinstance(result, tuple) else ()
-        self._custom_fetched_models = models
-        chosen = self._remote_model_value_for_provider("custom")
         if not models:
-            text = "The endpoint offers no models this key can use."
-        elif chosen and chosen not in models:
+            # An outage or a key without rights answers like this too; the
+            # list from the last good answer stays rather than going with
+            # the next Save unannounced.
+            kept = len(self._custom_fetched_models)
+            text = "The endpoint listed no models this key can use." + (
+                f" The {kept} model{'s' if kept != 1 else ''} listed before are kept."
+                if kept
+                else ""
+            )
+            self._set_custom_model_note(text, error=True)
+            return
+        self._custom_models_by_endpoint[
+            custom_endpoint_identity(self._custom_models_fetch_endpoint)
+        ] = models
+        self._custom_fetched_models = self._custom_models_for_shown_endpoint()
+        chosen = self._remote_model_value_for_provider("custom")
+        if chosen and chosen not in models:
             text = (
                 f"The endpoint offers {len(models)} models, but not "
                 f"'{chosen}'. Pick one from the list."
             )
         else:
             text = f"The endpoint offers {len(models)} models. Pick one from the list."
-        self._set_custom_model_note(text, error=not models)
-        if not chosen and models:
+        self._set_custom_model_note(text)
+        if not chosen:
             self._remote_model_values["custom"] = models[0]
         self._update_remote_model_selector()
         self._update_import_model_selector()
         self._update_engine_indicator()
         self._schedule_unsaved_changes_refresh()
 
+    def _custom_models_for_shown_endpoint(self) -> tuple[str, ...]:
+        return self._custom_models_by_endpoint.get(
+            custom_endpoint_identity(self.custom_endpoint_edit.text()), ()
+        )
+
+    def _on_custom_endpoint_changed(self, _text: str = "") -> None:
+        """Offer the list the Base URL field's endpoint gave, and only that.
+
+        Changed from A to B and saved, the reopened dialog offered A's
+        models as B's ("2 models listed at the last Refresh"). Lists are
+        kept per URL for the session, so correcting a typo back to A brings
+        A's list back without a new Refresh.
+        """
+        models = self._custom_models_for_shown_endpoint()
+        if models != self._custom_fetched_models:
+            self._custom_fetched_models = models
+            # A Refresh note described the previous endpoint.
+            self._custom_model_note = ""
+            self._custom_model_note_error = False
+            self._update_remote_model_selector()
+            self._update_import_model_selector()
+        else:
+            self._update_remote_model_note()
+
     def _set_custom_model_note(self, text: str, *, error: bool = False) -> None:
         """The note under the model row reports the fetch while it is shown."""
         self._custom_model_note = text
         self._custom_model_note_error = error
-        if str(self.engine_combo.currentData() or "") != "custom":
-            return
-        self.remote_model_note_label.setText(text)
-        self.remote_model_note_label.setToolTip(text)
-        self.remote_model_note_label.setStyleSheet(
-            f"color: {'#b71c1c' if error else '#555'}; padding: 0;"
-        )
+        self._update_remote_model_note()
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
@@ -1361,6 +1431,8 @@ class _GeneralTabMixin:
         self._update_language_availability()
         self._update_engine_indicator()
         self._update_custom_vocabulary_note()
+        # A model can be unavailable in the chosen region (Melia 1 in au1).
+        self._update_remote_model_note()
 
     def _on_remote_model_activated(self, _index: int = 0) -> None:
         self._on_remote_model_changed()

@@ -114,6 +114,10 @@ def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
     overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
     overlay.language_changed.connect(controller.set_language_mode)
+    overlay.microphone_changed.connect(controller.set_input_device_name)
+    overlay.microphone_menu_requested.connect(
+        controller.refresh_overlay_microphone_options
+    )
 
 
 def _connect_tray_notifications(tray_icon, controller) -> None:

@@ -694,3 +694,105 @@ def test_a_refresh_worker_that_cannot_start_leaves_the_refresh_owed(monkeypatch)
     assert controller._audio_device_change_timer.isActive()
     controller.shutdown()
     _ = app
+
+
+_MIC_CHOICES = controller_module.audio_devices.InputDeviceChoices(
+    "Old Mic",
+    (("System default: Old Mic", ""), ("Old Mic", "Old Mic"), ("New Mic", "New Mic")),
+)
+
+
+def test_an_overlay_microphone_pick_is_saved_and_retargets_the_warm_stream(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "input_device_choices",
+        lambda _selected: _MIC_CHOICES,
+    )
+    controller, app = make_controller()
+    controller._settings = replace(
+        controller._settings, keep_microphone_warm=True, input_device_name="Old Mic"
+    )
+    stub = _StubWarmStream(opened_device_key="Old Mic")
+    controller._warm_mic_stream = stub
+
+    controller.set_input_device_name("New Mic")
+
+    assert controller.settings.input_device_name == "New Mic"
+    assert controller._settings_store.saved.input_device_name == "New Mic"
+    assert stub.request_restart_calls == 1
+    assert controller._overlay.microphone_options[-1] == (
+        _MIC_CHOICES.entries,
+        "New Mic",
+        "Old Mic",
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_an_overlay_microphone_pick_while_recording_changes_nothing(monkeypatch):
+    """A menu left open when the hotkey started a recording: the pick is
+    refused and the menu is put back to the setting."""
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "input_device_choices",
+        lambda _selected: _MIC_CHOICES,
+    )
+    controller, app = make_controller()
+    controller._settings = replace(controller._settings, input_device_name="Old Mic")
+    controller._audio_capture = FakeCapture()
+
+    controller.set_input_device_name("New Mic")
+
+    assert controller.settings.input_device_name == "Old Mic"
+    assert controller._settings_store.saved is None
+    assert controller._overlay.microphone_options[-1][1] == "Old Mic"
+    controller._audio_capture = None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refused_microphone_save_is_reported_on_the_overlay(monkeypatch):
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "input_device_choices",
+        lambda _selected: _MIC_CHOICES,
+    )
+    controller, app = make_controller()
+
+    def _refuse(_settings):
+        raise OSError("settings.json is locked")
+
+    monkeypatch.setattr(controller._settings_store, "save", _refuse)
+
+    controller.set_input_device_name("New Mic")
+
+    assert controller.settings.input_device_name == "New Mic"
+    assert controller._overlay.states[-1][0] == "Error"
+    assert "The microphone selection was not saved" in controller._overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_device_refresh_renews_the_overlay_microphone_menu(monkeypatch):
+    """The caption names the device "System default" records from, and a
+    re-enumeration is when that name can change."""
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "input_device_choices",
+        lambda _selected: _MIC_CHOICES,
+    )
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "try_refresh_input_devices",
+        lambda logger=None: True,
+    )
+    controller, app = make_controller()
+    before = len(controller._overlay.microphone_options)
+
+    controller._refresh_audio_devices_worker()
+
+    assert len(controller._overlay.microphone_options) == before + 1
+    controller.shutdown()
+    _ = app

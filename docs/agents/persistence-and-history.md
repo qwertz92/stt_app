@@ -42,7 +42,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
     orphaned-audio state (`keep_after_success=False` deleted kept audio).
   - **Thirteen Qt call sites report the refusal with `str(exc)` in their own
     presentation**: `_paint_status_keeping_offer` (Edit; via
-    `show_overlay_error` for the opacity slider, pin button and Lang menu),
+    `show_overlay_error` for the opacity slider, pin button, Lang menu and
+    microphone menu),
     the History dialog box, the Settings History and Benchmark status lines,
     and `history_ui_actions`' import/clear/export boxes. PySide6 prints slot
     exceptions to a stderr a windowed build lacks, so unguarded means a dead

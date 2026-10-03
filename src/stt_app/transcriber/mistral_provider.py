@@ -61,7 +61,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "Mistral API key is missing. Enter your key in Settings -> API Keys."
+                "Mistral API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._model = model if model in MISTRAL_MODELS else DEFAULT_MISTRAL_MODEL

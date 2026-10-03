@@ -47,8 +47,17 @@ COPY_BUTTON_CAPTIONS = (COPY_BUTTON_TEXT, COPY_BUTTON_COPIED_TEXT)
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
 # the left and 26 px on the right for the chevron, plus a 1 px border per side
-# and 2 px of rounding headroom.
+# and 2 px of rounding headroom. The microphone button has the same chrome.
 _LANGUAGE_BUTTON_CHROME_PX = 38
+
+# Footer geometry: [microphone menu, the only stretch][opacity slider][value].
+# The slider was the stretch before the microphone button; at 96 px it keeps a
+# usable 2-3 px per percent step over its 30-100 % range, and the value label
+# stays wide enough for "100%" at the larger text sizes.
+_OPACITY_SLIDER_WIDTH = 96
+_OPACITY_VALUE_LABEL_WIDTH = 40
+MICROPHONE_SYSTEM_DEFAULT_CAPTION = "Mic: System default"
+_MICROPHONE_BLOCKED_TOOLTIP = "The microphone can be changed after this recording."
 
 # Header geometry. The header row is [Record][Pinned] <state label>
 # [Clear][Copy], and the label is its only stretching item: Qt hands the label
@@ -150,10 +159,14 @@ def _queue_entry(item) -> tuple[int, str, str]:
 
 
 def _queue_title(entries) -> str:
-    """Count running transcriptions and waiting inserts apart."""
+    """Count running transcriptions and waiting inserts apart.
+
+    A queued job is a dictation recording, which the tray's messages call
+    "Recording HH:MM:SS"; "file" named something the user never handled.
+    """
     waiting = sum(1 for _t, _l, kind in entries if kind == QUEUE_ROW_KIND_UNDELIVERED)
     running = len(entries) - waiting
-    transcribing = f"Transcribing {running} file" + ("" if running == 1 else "s")
+    transcribing = f"Transcribing {running} recording" + ("" if running == 1 else "s")
     if not waiting:
         return transcribing
     if not running:
@@ -205,6 +218,101 @@ class _OverlayLanguageButton(QtWidgets.QPushButton):
             center.y() - self._ARROW_HALF_HEIGHT,
         )
         painter.drawPath(path)
+
+
+class _OverlayMicrophoneButton(_OverlayLanguageButton):
+    """The footer's microphone menu: takes the width the opacity slider
+    leaves and elides its caption rather than widening the overlay.
+
+    Device names run to 50 characters ("Headset Microphone (Oculus Virtual
+    Audio Device)"), so a caption-sized button would push the overlay wider
+    for one long name. The size hint is the chrome alone, which keeps
+    `_target_window_width` (it sums the footer's hint) where it was; the
+    layout hands the button the rest of the row, and the caption is elided
+    to whatever that is. The whole caption is in the menu and the tooltip.
+    A suffix such as " (not connected)" is never elided: only the name in
+    front of it gives way.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("")
+        self._caption = ""
+        self._suffix = ""
+        self.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
+
+    def full_caption(self) -> str:
+        return self._caption + self._suffix
+
+    def set_caption(self, caption: str, suffix: str = "") -> None:
+        self._caption = caption
+        self._suffix = suffix
+        self._elide_caption()
+
+    def _elide_caption(self) -> None:
+        metrics = self.fontMetrics()
+        room = max(0, self.width() - _LANGUAGE_BUTTON_CHROME_PX)
+        name_room = max(0, room - metrics.horizontalAdvance(self._suffix))
+        self.setText(
+            metrics.elidedText(self._caption, QtCore.Qt.ElideRight, name_room)
+            + self._suffix
+        )
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._elide_caption()
+
+    def sizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(_LANGUAGE_BUTTON_CHROME_PX, super().sizeHint().height())
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return self.sizeHint()
+
+
+def _device_part(name: str) -> str:
+    """ "Microphone (HyperX QuadCast S)" -> "HyperX QuadCast S", or "".
+
+    Windows names an input endpoint "<role> (<device>)", so on an eliding
+    button the role is what survives and the device what is cut. The device
+    is the bracket group the name ends with, matched by depth, so
+    "Microphone (Realtek(R) Audio)" gives "Realtek(R) Audio" and "Headset
+    (Oculus) (Rift)" gives "Rift" rather than "Oculus) (Rift". "" when the
+    name does not have that form.
+    """
+    if not name.endswith(")"):
+        return ""
+    depth = 0
+    for index in range(len(name) - 1, -1, -1):
+        if name[index] == ")":
+            depth += 1
+        elif name[index] == "(":
+            depth -= 1
+            if depth == 0:
+                head = name[:index]
+                if head.endswith(" ") and head.strip():
+                    return name[index + 1 : -1]
+                return ""
+    return ""
+
+
+def _device_caption_names(names: tuple[str, ...]) -> dict[str, str]:
+    """The caption name of each device: its device part, unless another
+    device has the same one.
+
+    Realtek lists one device under several roles ("Microphone (Realtek HD
+    Audio)", "Stereo Mix (Realtek HD Audio)", "Line In (...)"); without the
+    role every one of them read "Realtek HD Audio". Kept whole only then,
+    because elsewhere the role is what elision keeps and the device what it
+    cuts. Only the caption is shortened; the menu and the tooltip carry the
+    full name.
+    """
+    parts = {name: _device_part(name) for name in names}
+    counts: dict[str, int] = {}
+    for part in parts.values():
+        counts[part] = counts.get(part, 0) + 1
+    return {
+        name: part if part and counts[part] == 1 else name
+        for name, part in parts.items()
+    }
 
 
 class _OverlayRecordButton(QtWidgets.QPushButton):
@@ -276,6 +384,11 @@ class OverlayUI(QtWidgets.QWidget):
     opacity_changed = QtCore.Signal(int)
     always_on_top_changed = QtCore.Signal(bool)
     language_changed = QtCore.Signal(str)
+    # The persisted microphone name the user picked; "" is the system default.
+    microphone_changed = QtCore.Signal(str)
+    # The microphone menu is about to open: the controller answers with a
+    # fresh `set_microphone_options`, so the menu lists today's devices.
+    microphone_menu_requested = QtCore.Signal()
     queue_cancel_requested = QtCore.Signal(int)
     queue_clear_requested = QtCore.Signal()
     # The Clear button was pressed; carries the text the cleared state
@@ -315,6 +428,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_modes = ("auto",)
         self._language_mode = "auto"
         self._language_change_blocked = False
+        self._microphone_entries: tuple[tuple[str, str], ...] = ()
+        self._microphone_selected = ""
+        self._microphone_default_name = ""
+        self._microphone_change_blocked = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
         # Where the user put the overlay, as opposed to where it currently
@@ -475,17 +592,22 @@ class OverlayUI(QtWidgets.QWidget):
         footer = QtWidgets.QHBoxLayout(self._footer_widget)
         footer.setContentsMargins(0, 0, 0, 0)
         footer.setSpacing(8)
-        self._opacity_caption = QtWidgets.QLabel("Opacity")
-        self._opacity_caption.setSizePolicy(
-            QtWidgets.QSizePolicy.Fixed,
-            QtWidgets.QSizePolicy.Fixed,
-        )
+        self._microphone_button = _OverlayMicrophoneButton()
+        self._microphone_button.setObjectName("overlayMicrophoneButton")
+        self._microphone_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._microphone_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._microphone_button.setFixedHeight(22)
+        self._microphone_menu = QtWidgets.QMenu(self._microphone_button)
+        self._microphone_button.clicked.connect(self._show_microphone_menu)
         self._opacity_value_label = QtWidgets.QLabel("")
-        self._opacity_value_label.setMinimumWidth(40)
+        self._opacity_value_label.setFixedWidth(_OPACITY_VALUE_LABEL_WIDTH)
         self._opacity_value_label.setAlignment(
             QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
         )
+        self._opacity_value_label.setToolTip("Overlay opacity")
         self._opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._opacity_slider.setFixedWidth(_OPACITY_SLIDER_WIDTH)
+        self._opacity_slider.setToolTip("Overlay opacity")
         self._opacity_slider.setRange(
             OVERLAY_OPACITY_MIN_PERCENT,
             OVERLAY_OPACITY_MAX_PERCENT,
@@ -496,9 +618,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._opacity_slider.setTickInterval(5)
         self._opacity_slider.setTickPosition(QtWidgets.QSlider.NoTicks)
         self._opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
-        footer.addWidget(self._opacity_caption)
-        footer.addWidget(self._opacity_slider, 1)
+        footer.addWidget(self._microphone_button, 1)
+        footer.addWidget(self._opacity_slider)
         footer.addWidget(self._opacity_value_label)
+        self._rebuild_microphone_menu()
 
         container = QtWidgets.QFrame()
         container.setObjectName("overlayContainer")
@@ -617,9 +740,23 @@ class OverlayUI(QtWidgets.QWidget):
             _fit_button(button, width, height, *captions)
         # The width is already measured from the captions; only the height was
         # a constant, and it clips from 13.5 pt onward.
+        menu_button_height = max(22, self._language_button.sizeHint().height())
         self._language_button.setFixedSize(
-            self._widest_language_caption_width(),
-            max(22, self._language_button.sizeHint().height()),
+            self._widest_language_caption_width(), menu_button_height
+        )
+        # Its width is whatever the footer leaves (the caption elides), so
+        # only the height is fitted, to the language button's: the two menus
+        # look alike, and at 13.5 pt a 22 px button clips its caption.
+        self._microphone_button.setFixedHeight(menu_button_height)
+        # Fixed at its widest text, so the microphone button beside it never
+        # shifts while the slider crosses 100 %. Measured: "100%" is 28 px at
+        # 9 pt, 36 at 11.25 and 45 at 13.5, so the 40 px floor gives way there.
+        value_label = self._opacity_value_label
+        value_label.setFixedWidth(
+            max(
+                _OPACITY_VALUE_LABEL_WIDTH,
+                value_label.fontMetrics().horizontalAdvance("100%") + 2,
+            )
         )
         # The queue panel exists from the constructor, so its header button is
         # reachable here. Its width is deliberately not pinned -- it sizes to
@@ -863,6 +1000,12 @@ class OverlayUI(QtWidgets.QWidget):
         self._reset_pos_button.setEnabled(True)
         self._language_change_blocked = state in {"Listening", "Processing"}
         self._sync_language_button()
+        # Only while recording: the running capture keeps its microphone (a
+        # warm-stream retarget waits for it), so a pick made now would
+        # describe a recording it does not apply to. Processing is fine --
+        # the capture has ended and a switch affects the next recording.
+        self._microphone_change_blocked = state == "Listening"
+        self._sync_microphone_button()
         self._reset_copy_button_feedback()
         # Style before measuring: the container's stylesheet border becomes
         # part of its contents margins, so measuring first would size the
@@ -1069,6 +1212,10 @@ class OverlayUI(QtWidgets.QWidget):
             QPushButton#overlayLanguageButton {{
                 padding: 0 26px 0 8px;
             }}
+            QPushButton#overlayMicrophoneButton {{
+                padding: 0 26px 0 8px;
+                text-align: left;
+            }}
             /* Primary action: same fill as its neighbours (a lighter fill
                reads as a permanent hover state) and a brighter border to mark
                it. Recording tints it red without changing the box. */
@@ -1179,6 +1326,93 @@ class OverlayUI(QtWidgets.QWidget):
         else:
             tooltip = f"Current language: {label}. Click to change it."
         self._language_button.setToolTip(tooltip)
+
+    def set_microphone_options(
+        self,
+        entries: tuple[tuple[str, str], ...],
+        selected: str,
+        default_name: str = "",
+    ) -> None:
+        """The microphone menu: `audio_devices.input_device_choices` entries
+        (``(label, persisted name)``), the persisted selection and the device
+        the system default resolves to (for the caption)."""
+        self._microphone_entries = tuple(
+            (str(label), str(value)) for label, value in entries
+        )
+        self._microphone_selected = str(selected or "")
+        self._microphone_default_name = str(default_name or "")
+        self._rebuild_microphone_menu()
+
+    def _rebuild_microphone_menu(self) -> None:
+        self._microphone_menu.clear()
+        for index, (label, value) in enumerate(self._microphone_entries):
+            if index == 1:
+                self._microphone_menu.addSeparator()
+            action = self._microphone_menu.addAction(label)
+            action.setCheckable(True)
+            action.setChecked(value == self._microphone_selected)
+            action.triggered.connect(
+                lambda _checked=False, name=value: self._select_microphone(name)
+            )
+        self._sync_microphone_button()
+
+    def _select_microphone(self, name: str) -> None:
+        if self._microphone_change_blocked:
+            return
+        if name == self._microphone_selected:
+            self._rebuild_microphone_menu()
+            return
+        self._microphone_selected = name
+        self._rebuild_microphone_menu()
+        self.microphone_changed.emit(name)
+
+    def _show_microphone_menu(self) -> None:
+        if not self._microphone_button.isEnabled():
+            return
+        self.microphone_menu_requested.emit()
+        self._microphone_menu.popup(
+            self._microphone_button.mapToGlobal(
+                QtCore.QPoint(0, self._microphone_button.height())
+            )
+        )
+
+    def _selected_microphone_label(self) -> str:
+        for label, value in self._microphone_entries:
+            if value == self._microphone_selected:
+                return label
+        return self._microphone_selected or "System default"
+
+    def _microphone_caption(self) -> tuple[str, str]:
+        """The caption and the suffix that must survive elision."""
+        names = tuple(
+            dict.fromkeys(
+                (
+                    *(value for _label, value in self._microphone_entries if value),
+                    *(name for name in (self._microphone_default_name,) if name),
+                )
+            )
+        )
+        caption_names = _device_caption_names(names)
+        if not self._microphone_selected:
+            name = self._microphone_default_name
+            if not name:
+                return MICROPHONE_SYSTEM_DEFAULT_CAPTION, ""
+            return f"Mic: Default · {caption_names[name]}", ""
+        # The label is the name plus " (not connected)" when it is missing;
+        # that suffix stays visible, the name is shortened and elided.
+        selected = self._microphone_selected
+        suffix = self._selected_microphone_label().removeprefix(selected)
+        return f"Mic: {caption_names.get(selected, selected)}", suffix
+
+    def _sync_microphone_button(self) -> None:
+        self._microphone_button.set_caption(*self._microphone_caption())
+        self._microphone_button.setEnabled(not self._microphone_change_blocked)
+        self._microphone_button.setToolTip(
+            _MICROPHONE_BLOCKED_TOOLTIP
+            if self._microphone_change_blocked
+            else f"Microphone: {self._selected_microphone_label()}. "
+            "Click to choose another."
+        )
 
     def move_to_corner(
         self,

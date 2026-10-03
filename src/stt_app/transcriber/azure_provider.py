@@ -76,7 +76,7 @@ def normalize_azure_endpoint(endpoint: str) -> str:
         raise TranscriptionError(
             "Azure endpoint is missing. Enter your Speech resource endpoint "
             "(for example https://<resource>.cognitiveservices.azure.com) in "
-            "Settings -> API Keys."
+            "Settings -> Providers."
         )
     if "://" not in value:
         # Bare host ("res.cognitiveservices.azure.com") or resource name ("res").
@@ -180,7 +180,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "Azure Speech key is missing. Enter your key in Settings -> API Keys."
+                "Azure Speech key is missing. Enter your key in Settings -> Providers."
             )
         # Validate eagerly so a misconfigured endpoint fails fast and clearly.
         self._transcribe_url = build_transcribe_url(endpoint)

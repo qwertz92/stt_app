@@ -1719,6 +1719,49 @@ def test_the_custom_endpoint_settings_round_trip_and_default(tmp_path):
     assert picked.custom_model == "my/model"
 
 
+def test_the_custom_endpoint_model_list_round_trips_in_order(tmp_path, monkeypatch):
+    """The list the last Refresh returned, kept in the endpoint's order; a
+    hand-edited file can hold anything, and only model ids survive."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(custom_models=("whisper-1", "gemini-2.5-flash"))
+    store.save(saved)
+    rewrites: list[AppSettings] = []
+    monkeypatch.setattr(
+        store, "save", lambda settings, **_kw: rewrites.append(settings)
+    )
+    assert store.load() == saved
+    # `load` rewrites a file that differs from what a save would write; the
+    # tuple against JSON's list made that every single load.
+    assert rewrites == []
+    stored = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert stored["custom_models"] == ["whisper-1", "gemini-2.5-flash"]
+
+    assert AppSettings.from_dict({}).custom_models == ()
+    damaged = AppSettings.from_dict(
+        {"custom_models": [" a ", "", None, 3, "a", ["b"], "b"]}
+    )
+    assert damaged.custom_models == ("a", "b")
+    assert AppSettings.from_dict({"custom_models": "a,b"}).custom_models == ()
+
+
+def test_a_model_list_is_offered_only_for_the_base_url_that_listed_it():
+    """Save API Keys writes a new base URL without the list; the list of the
+    previous endpoint must not then pass for the new one's."""
+    from dataclasses import replace
+
+    from stt_app.settings_store import listed_custom_models
+
+    listed = AppSettings(
+        custom_endpoint="http://a.example/v1/",
+        custom_models=("m",),
+        custom_models_endpoint=" http://a.example/v1",
+    )
+    assert listed_custom_models(listed) == ("m",)
+    assert listed_custom_models(replace(listed, custom_endpoint="http://b/v1")) == ()
+    # A list saved before the endpoint was recorded belongs to no URL.
+    assert listed_custom_models(replace(listed, custom_models_endpoint="")) == ()
+
+
 def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     tmp_path,
 ):

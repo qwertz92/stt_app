@@ -329,13 +329,14 @@ def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
 @pytest.mark.parametrize(
     "engine", [engine for engine in VALID_ENGINES if engine != DEFAULT_ENGINE]
 )
-def test_a_missing_key_points_at_the_api_keys_tab(engine):
-    """The tab was renamed from Remote to API Keys on 2026-09-20.
+def test_a_missing_key_points_at_the_providers_tab(engine):
+    """The tab was renamed from Remote to API Keys on 2026-09-20 and to
+    Providers on 2026-10-03.
 
-    Four of the seven messages followed; AssemblyAI, Deepgram and Groq wrote
-    the arrow as a character rather than as "->", so the search that renamed
-    the others never matched them and they kept naming a place the tab bar no
-    longer shows.
+    At the first rename four of the seven messages followed; AssemblyAI,
+    Deepgram and Groq wrote the arrow as a character rather than as "->", so
+    the search that renamed the others never matched them and they kept
+    naming a place the tab bar no longer shows.
     """
     settings = AppSettings(
         engine=engine,
@@ -346,7 +347,7 @@ def test_a_missing_key_points_at_the_api_keys_tab(engine):
         create_transcriber(settings, secret_store=None)
     message = str(raised.value)
     assert "key is missing" in message
-    assert message.endswith("Enter your key in Settings -> API Keys.")
+    assert message.endswith("Enter your key in Settings -> Providers.")
 
 
 @pytest.mark.parametrize(

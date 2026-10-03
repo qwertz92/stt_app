@@ -148,7 +148,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "AssemblyAI API key is missing. Enter your key in Settings -> API Keys."
+                "AssemblyAI API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._region = normalize_assemblyai_region(region)

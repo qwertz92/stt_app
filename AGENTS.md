@@ -82,7 +82,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach |
-| `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
+| `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); the microphone picker choices both pickers offer; PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
@@ -105,7 +105,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
-| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
+| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, microphone menu and opacity slider in the footer, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
 | `settings_dialog_general.py` | Transcription tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
@@ -113,7 +113,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_audio.py` | Audio tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the Transcription tab) |
 | `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete; model selection lives on the Transcription tab) plus the "Local runtime" group (ONNX Device, Keep ONNX model loaded) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
-| `settings_dialog_remote.py` | API Keys tab: provider API keys, data-residency region selectors (AssemblyAI, Deepgram, Speechmatics) and connection-test mixin |
+| `settings_dialog_remote.py` | Providers tab: one compact row per cloud provider (key, Test, Remove, last-test mark, key-source badge) with region and Azure endpoint sub-rows, the custom endpoint group, the shared connection-test line, key storage |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
@@ -242,7 +242,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
   `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
-  picked on the API Keys tab; a label claims only what the vendor
+  picked on the Providers tab; a label claims only what the vendor
   guarantees (`docs/agents/remote-providers.md`); the field map is
   `settings_store._REMOTE_REGION_FIELDS`.
 - **Custom endpoint** (`custom`): base URL, free-text model, API style

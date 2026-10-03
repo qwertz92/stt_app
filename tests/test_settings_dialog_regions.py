@@ -108,7 +108,7 @@ def test_the_new_engines_have_a_label_models_and_a_key_row(tmp_path):
             assert index >= 0, engine
             assert dialog.engine_combo.itemText(index) == label
             assert engine in dialog._provider_key_edits
-            assert dialog.test_conn_target_combo.findData(engine) >= 0
+            assert engine in dialog._provider_test_buttons
 
         dialog.engine_combo.setCurrentIndex(
             dialog.engine_combo.findData("speechmatics")
@@ -180,7 +180,7 @@ def test_each_region_choice_says_what_it_guarantees(tmp_path):
 
 
 def test_a_region_picked_and_saved_through_save_api_keys_is_kept(tmp_path):
-    """The region sits on the API Keys tab, so its own Save button must
+    """The region sits on the Providers tab, so its own Save button must
     write it too, not only the dialog's Save."""
     dialog, store, app = _dialog(tmp_path, AppSettings())
     try:
@@ -249,13 +249,13 @@ def test_mistral_connection_test_builds_the_mistral_transcriber(tmp_path):
     _ = app
 
 
-def test_picking_a_region_moves_nothing_on_the_api_keys_tab(tmp_path):
+def test_picking_a_region_moves_nothing_on_the_providers_tab(tmp_path):
     """Each region selector is always present and enabled, whatever the engine
     or the pick, so a pick cannot move the rows below it."""
     dialog, _store, app = _dialog(tmp_path, AppSettings())
     try:
         dialog.show()
-        dialog.tabs.setCurrentIndex(_api_keys_tab_index(dialog))
+        dialog.tabs.setCurrentIndex(_providers_tab_index(dialog))
         app.processEvents()
 
         def _below() -> tuple[int, int]:
@@ -280,11 +280,11 @@ def test_picking_a_region_moves_nothing_on_the_api_keys_tab(tmp_path):
     _ = app
 
 
-def _api_keys_tab_index(dialog: SettingsDialog) -> int:
+def _providers_tab_index(dialog: SettingsDialog) -> int:
     for index in range(dialog.tabs.count()):
-        if dialog.tabs.tabText(index) == "API Keys":
+        if dialog.tabs.tabText(index) == "Providers":
             return index
-    raise AssertionError("no API Keys tab")
+    raise AssertionError("no Providers tab")
 
 
 def test_the_vocabulary_note_follows_the_speechmatics_model(tmp_path):

@@ -64,6 +64,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   popup and a centred chevron; never `QPushButton.setMenu()` (misaligned
   indicator; a pixel test checks the chevron). The Transcription-tab model
   runtime note reserves three lines (gray note for faster-whisper).
+- **The footer is [microphone menu][opacity slider][value]** (2026-10-03,
+  UX review item 3, variant B). The microphone button
+  (`_OverlayMicrophoneButton`, the Lang button's chevron and chrome, text
+  left-aligned) is the footer's only stretch; the slider is fixed at 96 px
+  and the value label at the width of "100%" (40 px floor), so neither moves
+  while the slider is dragged. The "Opacity" caption is gone (the slider and
+  value carry it as a tooltip). The button's size hint is its chrome alone and
+  its caption elides ("Mic: Default · HyperX QuadCast S"; the role in
+  "Microphone (...)" is dropped on the caption only -- the menu and tooltip
+  carry the full name -- and kept when another listed device has the same
+  device part, as Realtek's "Microphone"/"Stereo Mix"/"Line In" do; a
+  " (not connected)" suffix is never elided, only the name before it),
+  so a 50-character device name never widens the
+  overlay: `_target_window_width` sums the footer's hint, which stays below
+  the controls row's. Height is fitted to the Lang button's. Disabled only
+  while Listening (Processing may switch: the capture has ended). Measured
+  with real widgets, idle: 470x138 -> 470x144 at 9 pt (the 22 px button
+  replaces the 16 px slider row), 503x142 -> 503x144 at 11.25, 560x164 ->
+  560x166 at 13.5; width and the status label rectangle unchanged in every
+  state; the button gets 288 / 321 / 371 px.
 - **Button sizes are measured (`OverlayUI._fit_buttons_to_font`)**: Windows
   "Text size" raises the font without the DPI (18 pt Record needs 108x34 vs
   78x24). It runs after the first `set_state` (stylesheet padding counts only
@@ -83,8 +103,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
   differs by colour only
   (`QLabel[queueRowKind="undelivered"]`). The title counts the two apart
-  (`_queue_title`: "Transcribing N files", "N transcripts not inserted", or
-  both joined by " · "). Both buttons emit `queue_cancel_requested`.
+  (`_queue_title`: "Transcribing N recordings" -- it said "files" until
+  2026-10-03 (UX review item 6g), though the user handled no file --, "N
+  transcripts not inserted", or both joined by " · "). Both buttons emit `queue_cancel_requested`.
 - **A dragged overlay is clamped from where the user put it**, not from
   `self.pos()` (a tall result pushed it up for good). The remembered position
   and `_manual_positioned` have one writer, `_claim_manual_position`. A

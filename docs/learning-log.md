@@ -9216,3 +9216,38 @@ over its own paste's screen, every check logs its evidence, and
 `scripts/diagnose_paste_target.py` measures any window. Lesson: a verdict
 that can be wrong must not feed an action that repeats a paste, and real
 use has to log enough to show where it is wrong.
+
+## 2026-10-03: the Providers tab (UX review item 5)
+
+The API Keys tab became "Providers": one compact row per cloud provider
+(key, Test, Remove, last-test mark, badge), its region or Azure's endpoint as
+an indented sub-row, the custom endpoint in a group of its own, and one
+shared connection-test line instead of ten two-line "Last test" labels. The
+content height fell from 1338 to 818 px at 9 pt, so the tab no longer
+scrolls. The custom endpoint's Refresh list (`custom_models`) is now saved.
+- **A tuple field must be written to JSON as a list.** `load` rewrites the
+  file whenever it differs from what a save would write, and `asdict` keeps
+  the tuple while JSON gives back a list, so every load rewrote
+  `settings.json` and its `.bak`. Found by the unsaved-changes test whose
+  failing store refused that rewrite; `to_dict` now writes a list and a
+  store test pins "load does not rewrite".
+- **Renaming a tab renames its sentences in the providers too.** Ten
+  missing-key errors said "Settings -> API Keys"; the factory test that
+  checks them is what makes the rename complete.
+- **A note that can turn into a warning needs both texts measured.** The
+  missing-key warning (item 6d) replaces the model note, so the fit test
+  without stored keys stopped measuring the descriptions at all; it now runs
+  once without and once with keys.
+
+## 2026-10-03: the overlay's microphone menu (UX review item 3)
+
+The overlay footer became [microphone menu][opacity slider][value]: the
+button shows which microphone records and switches it, persisted like the
+Lang menu. Both microphone pickers now share
+`audio_devices.input_device_choices`. Idle overlay 470x138 -> 470x144 at
+9 pt; width and the status text unchanged.
+- **A fixed width needs its widest text measured at every text size.**
+  The overlay's opacity value had a 40 px minimum and simply grew at 13.5 pt
+  ("100%" is 45 px), which shifted nothing while the slider was the stretch.
+  Beside the stretching microphone button a growing label would move it, so
+  the label is now fixed at the measured width of "100%".

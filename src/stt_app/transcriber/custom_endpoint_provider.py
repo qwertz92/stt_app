@@ -137,7 +137,7 @@ def normalize_custom_endpoint(endpoint: str) -> str:
         raise TranscriptionError(
             "Custom endpoint URL is missing. Enter the base URL of an "
             f"OpenAI-compatible API ({_ENDPOINT_EXAMPLE}) in Settings -> "
-            "API Keys."
+            "Providers."
         )
     try:
         parsed = urllib.parse.urlsplit(value)
@@ -227,13 +227,13 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
             refusal = (
                 f"{_PROVIDER_NAME}: the endpoint redirected the upload (HTTP "
                 f"{code}) to {target}. Enter the base URL the server redirects "
-                "to in Settings -> API Keys."
+                "to in Settings -> Providers."
             )
         elif not _redirect_keeps_origin(req.full_url, newurl):
             refusal = (
                 f"{_PROVIDER_NAME}: the endpoint redirected (HTTP {code}) to "
                 f"another origin, {target}; the key is not sent there. Enter "
-                "that base URL in Settings -> API Keys if it is the right "
+                "that base URL in Settings -> Providers if it is the right "
                 "server."
             )
         else:
@@ -436,7 +436,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 "Custom endpoint API key is missing. A server without "
                 "authentication accepts any placeholder such as 'none', or "
-                "set a key command. Enter your key in Settings -> API Keys."
+                "set a key command. Enter your key in Settings -> Providers."
             )
         if self._api_key and _header_unsafe(self._api_key):
             # Never echoed: the key is the one thing this message must
@@ -444,7 +444,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 "Custom endpoint API key contains a line break, a space or "
                 "another character an HTTP header cannot carry. Enter it "
-                "again in Settings -> API Keys."
+                "again in Settings -> Providers."
             )
         self._base_url = normalize_custom_endpoint(endpoint)
         self._model = str(model or "").strip()

@@ -173,7 +173,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
         ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
-                "ElevenLabs API key is missing. Enter your key in Settings -> API Keys."
+                "ElevenLabs API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._model = model if model in ELEVENLABS_MODELS else DEFAULT_ELEVENLABS_MODEL

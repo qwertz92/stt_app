@@ -82,7 +82,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "Groq API key is missing. Enter your key in Settings -> API Keys."
+                "Groq API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._model = model or DEFAULT_GROQ_MODEL

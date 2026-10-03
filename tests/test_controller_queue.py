@@ -3299,7 +3299,7 @@ def test_a_result_the_pace_holds_survives_clear_and_cancel(
 
 def test_a_result_the_pace_holds_is_not_listed_in_the_queue(monkeypatch, tmp_path):
     """Held for at most the restore delay, it flashed the panel open and shut
-    as a "Pending insert" row under a "Transcribing 1 file" title."""
+    as a "Pending insert" row under a "Transcribing 1 recording" title."""
     controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", inserter=PacedTextInserter()
     )

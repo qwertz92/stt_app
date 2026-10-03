@@ -1056,3 +1056,27 @@ def test_the_reservation_never_drops_below_the_three_line_floor():
         )
     finally:
         dialog.deleteLater()
+
+
+def test_retranscribe_offers_the_custom_endpoints_saved_model_list(tmp_path):
+    """Settings offers the list from the last Refresh; retranscription with
+    the custom endpoint offered only the entry's and the configured model."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="custom", model="whisper-1"),
+        audio_path=audio,
+        base_settings=AppSettings(
+            engine="custom",
+            custom_endpoint="http://gateway.example/v1",
+            custom_model="whisper-1",
+            custom_models=("whisper-1", "gemini-2.5-flash"),
+            custom_models_endpoint="http://gateway.example/v1",
+        ),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    assert dialog._model_combo.findData("gemini-2.5-flash") >= 0
+    assert dialog._model_combo.findData("whisper-1") >= 0

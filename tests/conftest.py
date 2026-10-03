@@ -194,6 +194,8 @@ class FakeOverlay:
         self.compact_calls = 0
         self.always_on_top_values = []
         self.language_options = []
+        # ``(entries, selected, default_name)`` per `set_microphone_options`.
+        self.microphone_options = []
         self.reveal_calls = 0
         self.reveal_durations = []
         self.queue_updates = []
@@ -236,6 +238,11 @@ class FakeOverlay:
 
     def set_language_options(self, modes, selected_mode):
         self.language_options.append((tuple(modes), str(selected_mode)))
+
+    def set_microphone_options(self, entries, selected, default_name=""):
+        self.microphone_options.append(
+            (tuple(entries), str(selected), str(default_name))
+        )
 
     def reveal_temporarily(self, duration_ms=1800):
         self.reveal_calls += 1
