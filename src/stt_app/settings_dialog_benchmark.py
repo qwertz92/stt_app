@@ -6,6 +6,7 @@ import logging
 import math
 import re
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime
@@ -189,6 +190,7 @@ _BENCHMARK_PLAN_STATUS_COLUMN = len(_BENCHMARK_PLAN_COLUMNS) - 1
 _BENCHMARK_PLAN_VISIBLE_ROWS = 6
 _BENCHMARK_PLAN_STATUS_PENDING = "Pending"
 _BENCHMARK_PLAN_STATUS_RUNNING = "Running..."
+_BENCHMARK_RUNNING_TICK_MS = 1000
 _BENCHMARK_PLAN_STATUS_ERROR = "Error"
 _BENCHMARK_PLAN_STATUS_SKIPPED = "Skipped"
 _BENCHMARK_PROGRESS_BAR_WIDTH_PX = 170
@@ -209,6 +211,14 @@ _BENCHMARK_RUN_BUTTON_TEXTS = (
 # `_run_local_benchmark` starts.
 _BENCHMARK_STANDARD_DEVICE = "auto"
 _BENCHMARK_CASE_PROGRESS_PATTERN = re.compile(r"^\[Case (\d+)/(\d+)\]")
+
+
+def _benchmark_running_text(elapsed_seconds: float) -> str:
+    """The running case's Status cell: "Running... 1:05" once it has a count."""
+    seconds = int(max(0.0, elapsed_seconds))
+    if seconds <= 0:
+        return _BENCHMARK_PLAN_STATUS_RUNNING
+    return f"{_BENCHMARK_PLAN_STATUS_RUNNING} {seconds // 60}:{seconds % 60:02d}"
 
 
 def _benchmark_progress_case_index(text: str) -> int | None:
@@ -1630,6 +1640,15 @@ class _BenchmarkMixin:
         )
         cases_layout.addWidget(table)
 
+        # Counts the running case's time in its Status cell. A large model's
+        # case takes a minute or more, and a row reading "Running..." all
+        # that time could not tell a working run from a stuck one. The cell
+        # is in the stretching last column, so the count moves nothing.
+        self._benchmark_case_started_at: float | None = None
+        self._benchmark_case_timer = QtCore.QTimer(self)
+        self._benchmark_case_timer.setInterval(_BENCHMARK_RUNNING_TICK_MS)
+        self._benchmark_case_timer.timeout.connect(self._tick_benchmark_running_case)
+
         # The three controls the plan is computed from. The model list is also
         # connected to `_update_benchmark_actions`; these are separate
         # connections so the plan has exactly one writer of its own.
@@ -1687,7 +1706,7 @@ class _BenchmarkMixin:
     ) -> None:
         """The single writer of the case list's rows and its caption."""
         self._benchmark_plan_sequence = _benchmark_plan_sequence(planned)
-        self._benchmark_plan_running_index = None
+        self._stop_benchmark_running_case()
         table = self.benchmark_plan_table
         table.setRowCount(len(planned))
         for row, planned_case in enumerate(planned):
@@ -1736,9 +1755,9 @@ class _BenchmarkMixin:
         for row in range(table.rowCount()):
             item = table.item(row, _BENCHMARK_PLAN_STATUS_COLUMN)
             status = item.text() if item is not None else ""
-            if status in (
-                _BENCHMARK_PLAN_STATUS_PENDING,
-                _BENCHMARK_PLAN_STATUS_RUNNING,
+            # `startswith`: the running row carries its elapsed time.
+            if status == _BENCHMARK_PLAN_STATUS_PENDING or status.startswith(
+                _BENCHMARK_PLAN_STATUS_RUNNING
             ):
                 self._mark_benchmark_plan_case(row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED)
 
@@ -2410,7 +2429,26 @@ class _BenchmarkMixin:
         case_index = _benchmark_progress_case_index(text)
         if case_index is not None:
             self._benchmark_plan_running_index = case_index
+            self._benchmark_case_started_at = time.monotonic()
             self._mark_benchmark_plan_case(case_index, _BENCHMARK_PLAN_STATUS_RUNNING)
+            self._benchmark_case_timer.start()
+
+    def _tick_benchmark_running_case(self) -> None:
+        index = self._benchmark_plan_running_index
+        started = self._benchmark_case_started_at
+        if index is None or started is None:
+            return
+        self._mark_benchmark_plan_case(
+            index, _benchmark_running_text(time.monotonic() - started)
+        )
+
+    def _stop_benchmark_running_case(self) -> None:
+        """No case is running: forget it and stop counting."""
+        self._benchmark_plan_running_index = None
+        self._benchmark_case_started_at = None
+        timer = getattr(self, "_benchmark_case_timer", None)
+        if timer is not None:
+            timer.stop()
 
     def _on_benchmark_case_finished(self, payload: object) -> None:
         if not isinstance(payload, BenchmarkCase):
@@ -2428,6 +2466,7 @@ class _BenchmarkMixin:
             if payload.error
             else f"Done (RTF {_format_number(payload.avg_rtf)})",
         )
+        self._stop_benchmark_running_case()
         self._set_benchmark_progress(finished, self.benchmark_plan_table.rowCount())
         summary = self._benchmark_summary(
             self._current_benchmark_cases,
@@ -2474,6 +2513,7 @@ class _BenchmarkMixin:
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
         self._set_benchmark_progress(0, 0)
+        self._stop_benchmark_running_case()
         self._skip_unfinished_benchmark_plan_cases()
         history_error = ""
 

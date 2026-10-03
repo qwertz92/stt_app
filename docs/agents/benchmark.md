@@ -125,6 +125,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   - A run's plan comes from options snapshotted at its start; the
     refresh-from-widgets path returns early while `_active_benchmark_thread`
     is set.
+  - The running row counts its time ("Running... 1:05", 1 s
+    `_benchmark_case_timer`, 2026-10-03; a minute-long case otherwise read
+    the same as a stuck one). `_stop_benchmark_running_case` is the one
+    place that stops it (case delivered, run end, plan redraw); matching
+    uses `startswith(_BENCHMARK_PLAN_STATUS_RUNNING)`.
   - At run end each row without a result reads `Skipped`, including the one
     `Running...` at a cancel/failure; results go on the row the runner
     announced (`_benchmark_plan_running_index`), not the nth delivery.

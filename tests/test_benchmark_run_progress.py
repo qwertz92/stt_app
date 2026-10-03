@@ -693,3 +693,49 @@ def test_an_empty_benchmark_history_says_how_to_start(tmp_path):
     # It is a placeholder, not a loaded summary.
     assert dialog.benchmark_summary_text.toPlainText() == ""
     _ = app
+
+
+def test_the_running_case_shows_how_long_it_has_been_running(monkeypatch, tmp_path):
+    """A large model's case takes a minute or more, and its row read
+    "Running..." throughout: nothing told a working run from a stuck one."""
+    clock = [1000.0]
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_benchmark.time.monotonic", lambda: clock[0]
+    )
+    dialog, app = _dialog(tmp_path, ["small", "tiny"])
+    dialog._current_benchmark_options = _options(["small", "tiny"])
+    dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
+    dialog._current_benchmark_cases = []
+
+    dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
+
+    assert _statuses(dialog) == ["Running...", "Pending"]
+    assert dialog._benchmark_case_timer.isActive() is True
+
+    clock[0] += 65.4
+    dialog._tick_benchmark_running_case()
+
+    assert _statuses(dialog) == ["Running... 1:05", "Pending"]
+
+    dialog._on_benchmark_case_finished(_case("small", "cpu"))
+
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
+    assert dialog._benchmark_case_timer.isActive() is False
+
+    dialog._on_benchmark_progress("[Case 2/2] tiny (auto/int8)")
+    clock[0] += 3
+    dialog._tick_benchmark_running_case()
+    dialog._on_benchmark_finished(
+        True,
+        "Benchmark summary:\ncanceled",
+        {
+            "cases": [_case("small", "cpu")],
+            "options": _options(["small", "tiny"]),
+            "status": "canceled",
+        },
+    )
+
+    # The counting row did not finish either, whatever its text had become.
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
+    assert dialog._benchmark_case_timer.isActive() is False
+    _ = app
