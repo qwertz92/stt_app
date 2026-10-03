@@ -11,11 +11,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `incremented = True` in `_acquire_transcriber_runtime`, `acquired = True` in
   `_download_local_model_in_subprocess`, and the `try:` after
   `coordinator.acquire(...)` in `_download_model_for_preload` /
-  `run_coordinated_download`. Only a `KeyboardInterrupt` in a console run hits
-  it; every fix reshapes locking and moves the window. Only the cross-process
+  `run_coordinated_download`. Only a `KeyboardInterrupt` hits it, and the app
+  cannot raise one: `main._install_signal_handlers` replaces Python's SIGINT
+  handler with one that only calls `app.quit()`, and nothing else raises
+  asynchronously (checked 2026-10-03). Kept as depth: every fix reshapes
+  locking and moves the window (~3 h, no gain). Only the cross-process
   download lock was closed (its loser is every other process).
 - **`_teardown_pending_stream_connect` swallows a `KeyboardInterrupt`**
-  (`except BaseException` by design, best-effort cleanup). Console runs only.
+  (`except BaseException` by design, best-effort cleanup). Unreachable for the
+  reason above. Kept 2026-10-03: the swallow is what keeps the arms'
+  `_reset_streaming_state` reachable; re-raising after each arm finishes is
+  ~2 h over three call sites for no user-visible gain.
 - **The download slot is not enforced across Windows user accounts**: the lock
   lives under each user's `%APPDATA%` (`appdata_root() / "locks"`); two
   accounts sharing one Model Dir can corrupt it. Not an offered configuration;
@@ -96,6 +102,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `DataObject` / `Ole Private Data`; unrendered delayed formats; clipboards
   over the size caps (text only); unreadable blocks; the owner window.
   `CF_DSPTEXT` comes back without its `CF_OWNERDISPLAY` (harmless).
+  Kept 2026-10-03 (by design, cost vs effect): a GDI handle is not bytes;
+  duplicating the metafile and palette handles (`CopyEnhMetaFile` and kin)
+  would help vector copies from Office or Visio only, ~4 h, measurable only
+  on the owner's own clipboard.
 - The NVIDIA *NeMo* runtime is intentionally unimplemented (Parakeet via
   onnx-asr, Nemotron via ORT GenAI); see
   `docs/local-asr-model-candidates-2026.md`.
@@ -106,6 +116,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   the re-paste inserts. A tray re-paste of the whole dictation failing before
   its keystroke replaces a streaming tail's offer, whose Insert then re-pastes
   the already-streamed prefix.
+  Kept 2026-10-03 (by design): the rows keep the earlier text listed and the
+  re-paste inserts it; and the failed whole-dictation re-paste is the paste
+  the user asked for, so its Insert retries exactly that. Keeping the tail's
+  Insert instead is ~1 h if the owner prefers it.
 - **The paste target check sees only Chromium windows and Win32 carets**
   (2026-10-03). A paste into a non-text element of any other application
   -- a Win32 button, a Qt or Java window, a terminal that draws its own
@@ -125,7 +139,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   foreground `Chrome_WidgetWin_1` window, most likely the Claude desktop
   app, focus location unknown; its pastes would then be reported as
   doubtful. Unmeasured until the owner runs `scripts/diagnose_paste_target.py`
-  in the apps he dictates into.
+  in the apps he dictates into. Kept 2026-10-03 (owner measurement needed):
+  widening the check beyond Chromium needs per-application evidence (UI
+  Automation was rejected, Windows Terminal answers wrongly); ~2-3 h per
+  application family once the data exists.
 - **A true-miss "not in a text field" row ends with the next paste**
   (2026-10-03, deliberate). Any later successful paste -- into any window
   -- drops it (`_drop_superseded_doubtful_rows`), so a paste that really
@@ -136,18 +153,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   window. An always-doubtful window (an Electron prompt may be one) would
   still collect a row per dictation whenever the user also works in a
   second window, and F10 would be left choosing among stale rows whose
-  verdicts may all be false.
+  verdicts may all be false. Kept 2026-10-03 (the owner's rule).
 - **A hung paste target holds the check's one worker**: the MSAA call is a
   cross-process `WM_GETOBJECT`; while it waits, later pastes are not
   checked (refused at once, "unknown") and the completion tone of the
-  timed-out one plays after `PASTE_TARGET_CHECK_TIMEOUT_MS` (1 s).
+  timed-out one plays after `PASTE_TARGET_CHECK_TIMEOUT_MS` (1 s). Kept
+  2026-10-03 (cost vs effect): a second worker would block on the same hung
+  target, and the refusal ("unknown", behaves as before the check existed) is
+  the designed fallback; ~2 h for a capped second worker, effect nil.
 - **The paste pace is target-agnostic**: a queued paste into another window
   also waits up to `CLIPBOARD_RESTORE_DELAY_S` after the previous keystroke
-  (one clipboard). Only the last SendInput keystroke is tracked.
+  (one clipboard). Only the last SendInput keystroke is tracked. Kept
+  2026-10-03 (by design): a late reader of the previous paste reads whatever
+  the one clipboard holds then, whichever window the next paste is aimed at.
 - **Paced pastes and waiting-insert rows end with the app**: shutdown drops
   them (the texts stay in history), and a streaming finalize tail whose
-  insert fails gets an Insert offer but no row. A foreground result without
-  a job is not paced.
+  insert fails gets an Insert offer but no row. Kept 2026-10-03 (owner
+  decision): whether quitting should deliver held pastes or persist rows is a
+  product choice (a row store is ~4 h). The tail row is not just a missing
+  call: rows keep stripped text and a tail's leading space is what separates
+  it from the streamed words, and F10 would have to order a tail row against
+  failed batch rows (~4 h once decided).
 - **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
   a NULL owner, so a clipboard manager can still close it under us; three
   reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
@@ -172,11 +198,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   outside it, it pastes and the tail follows inside its restore window.
   Holding the tail would route the append-only finalize through the paste
   queue, a larger change; the inverted order keeps the streamed dictation in
-  one piece.
+  one piece. Kept 2026-10-03 (owner decision on the order, ~4-6 h): the
+  deferred batch result lands inside a streaming dictation whichever goes
+  first.
 - **A transcript left on the clipboard after an abandoned restore**
   (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
   restoring the user's own content may add their copy to Win+V again, as
-  before.
+  before. Kept 2026-10-03: writing it again without the exclusion formats
+  empties the clipboard first, so the late read by the busy target that the
+  abandon protects could see an empty clipboard; ~1 h, and it raises the
+  risk the abandon exists to avoid.
 - **`close_if_idle` is not bounded against its own closes**: a
   `request_restart` after its generation bump reopens and each own close
   re-arms the budget (25 restarts: 3.14 s on a 0.4 s budget). Producers
@@ -189,7 +220,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   flight** (drains `_retiring` and returns). Only `shutdown()` calls it;
   `close_if_idle` is the call that waits.
 - **Copy yields the pending offer after an edit made while one is pending**,
-  and Edit stays disabled until the offer is retired. Offer semantics.
+  and Edit stays disabled until the offer is retired. Offer semantics. Kept
+  2026-10-03 (owner decision): letting Edit change a pending offer's text and
+  rows is a behaviour choice that also enables Edit in the offer state in the
+  overlay; ~2 h. The case needs a result delivered while the Edit dialog is
+  open.
 - **The benchmark's 6 s environment query can be outlived by a grandchild**
   holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share
@@ -231,6 +266,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;
   `keep_transcript_in_clipboard` closes it. Not measured on a live browser.
+  Kept 2026-10-03: no API says a renderer read the clipboard (rejected
+  alternatives in `docs/agents/text-insertion.md`).
 - **Retry reaches the newest failed recording first, and only three are held**
   (2026-10-03): a failure pushes the slot's holder behind it
   (`_older_failed_audio`, `RETRY_OLDER_FAILURES_MAX`), the oldest of more than
@@ -242,9 +279,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Two Retry presses can write two history entries**: a remote provider runs
   the stopped first retry to completion and it is kept (a finished
   transcription is never discarded). Local engines cancel cooperatively.
+  Kept 2026-10-03 (by design): the restart is how a hung request is re-run
+  with changed settings; ignoring a second press with unchanged settings is
+  an owner decision (~1 h).
 - **Two recordings the store never received are told apart by bytes alone**:
   with `source_recording_id` "" on both, identical audio cross-retires the
-  retry slot. Needs two refused writes and byte-identical audio.
+  retry slot. Needs two refused writes and byte-identical audio. Kept
+  2026-10-03 (cost vs effect): closing it needs a per-failure identity on the
+  jobs (~3 h, 78 references to the slot in the tests); the trigger does not
+  occur with microphone audio.
 - **A benchmark's device decision is per run, with no "forget" button**:
   `measured_fastest_devices` reads one run; fewer than two measured devices
   keeps the old entry. Remove an entry by re-running, pinning a device, or
