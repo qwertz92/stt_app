@@ -336,6 +336,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `--opt="a b"` in two. The exit code is judged **before** the output: a
     failing helper that printed "Please run 'login' first" to stdout was
     reported as a malformed token.
+    **The program is resolved with `shutil.which`** (2026-10-03):
+    CreateProcess appends only `.exe`, so the `.cmd` shims `az`, `gcloud` and
+    `npm` were "not found". A resolved `.cmd`/`.bat` goes to `run_bounded`
+    as it is: CreateProcess starts cmd.exe for it, inside the job object,
+    so the grandchild kill still holds (test: a `.cmd` whose python child
+    leaves a heartbeating grandchild, ended at the timeout). Not an
+    explicit `cmd.exe /c` wrapper: no quoting from the caller can stop
+    cmd.exe reading `& | < > ^ %` in an argument (reproduced: `x.cmd "a&b"`
+    ran `b`), so `_resolve_program` refuses such an argument for a batch
+    target, naming the character, never the argument (it may be a secret).
+    An unresolvable name stays as typed for the "not found" message.
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
     then reads the pipes to the end, which a grandchild holding them

@@ -20,6 +20,7 @@ import logging
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import threading
 import time
@@ -308,6 +309,41 @@ def _command_arguments(command: str) -> list[str]:
         raise TranscriptionError(f"The key command cannot be parsed: {exc}") from exc
 
 
+# What cmd.exe reads in an argument of a `.cmd`/`.bat` file: separators,
+# redirections, the escape character, `%VAR%` and a quote `list2cmdline`
+# escapes the way C programs read it, not the way cmd.exe does.
+_CMD_METACHARACTERS = re.compile(r'[&|<>^%"\r\n]')
+
+
+def _resolve_program(arguments: list[str]) -> list[str]:
+    """The arguments with the program looked up like a console would.
+
+    `shutil.which` honours `PATHEXT`; CreateProcess appends only `.exe`, so
+    `az` or `npm` -- `.cmd` shims -- were "not found" (review of 2026-10-03).
+    A `.cmd`/`.bat` file is started by CreateProcess through cmd.exe, which
+    still runs inside `run_bounded`'s job object, so the tree kill reaches
+    what the script starts. cmd.exe reads some characters of an argument as
+    commands, which no quoting from here can prevent: such an argument is
+    refused, naming the character and not the argument (it may be a secret).
+    An unresolvable name is left as typed for the "not found" message.
+    """
+    program = shutil.which(arguments[0])
+    if program is None:
+        return arguments
+    if program.lower().endswith((".cmd", ".bat")):
+        for argument in arguments[1:]:
+            found = _CMD_METACHARACTERS.search(argument)
+            if found:
+                character = found.group().strip() or "a line break"
+                raise TranscriptionError(
+                    f"The key command starts {Path(program).name}, which "
+                    "cmd.exe runs, and an argument contains "
+                    f"{character!r}, which cmd.exe would interpret. Put the "
+                    "argument into the script, or run the program itself."
+                )
+    return [program, *arguments[1:]]
+
+
 def _last_line(text: str) -> str:
     """The last non-empty line, whole. A token is often a JWT of 800+ chars."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
@@ -403,6 +439,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         arguments = _command_arguments(self._key_command)
         if not arguments:
             raise TranscriptionError("The key command is empty.")
+        arguments = _resolve_program(arguments)
         extra: dict[str, object] = {}
         if os.name == "nt":
             extra["creationflags"] = subprocess.CREATE_NO_WINDOW

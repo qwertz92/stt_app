@@ -480,6 +480,12 @@ and an apostrophe inside a word, as in `C:\Users\O'Brien\helper.exe`, is an
 ordinary character. A literal double quote cannot be written; put such a
 command into a script and run the script. An unclosed quote is reported.
 
+The program is looked up like a console does, so `az`, `gcloud` or `npm`
+(which are `.cmd` files on Windows) work without their extension. A `.cmd` or
+`.bat` file is run by cmd.exe, which reads `&`, `|`, `<`, `>`, `^`, `%` and
+`"` in an argument as commands or variables; such an argument is refused with
+a message (put it into the script instead) rather than run as something else.
+
 **Limits.** A recording longer than 10 minutes (transcription API) or
 5 minutes (chat style, whose request carries the audio base64-encoded) is
 sent in parts cut at pauses.

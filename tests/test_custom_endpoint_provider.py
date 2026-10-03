@@ -551,6 +551,68 @@ def test_a_missing_command_is_named(runs, server):
         _transcriber(key_command="no-such-helper --x").transcribe_batch(WAV)
 
 
+def test_the_program_is_resolved_through_path_and_pathext(runs, server, monkeypatch):
+    """`az`, `gcloud` and `npm` are `.cmd` shims on Windows, and CreateProcess
+    appends only `.exe`: the command was "not found" although it ran in a
+    console (review of 2026-10-03)."""
+    monkeypatch.setattr(
+        provider_module.shutil,
+        "which",
+        lambda name: r"C:\Tools\az.CMD" if name == "az" else None,
+    )
+    fake_runs = runs(_completed("tok\n"))
+    server({"text": "ok"})
+
+    _transcriber(key_command="az account get-access-token").transcribe_batch(WAV)
+
+    assert fake_runs.calls[0][0] == [r"C:\Tools\az.CMD", "account", "get-access-token"]
+
+
+def test_an_unresolvable_program_is_left_as_typed(runs, server, monkeypatch):
+    monkeypatch.setattr(provider_module.shutil, "which", lambda name: None)
+    fake_runs = runs(FileNotFoundError())
+    server()
+    with pytest.raises(TranscriptionError, match="not found: no-such-helper"):
+        _transcriber(key_command="no-such-helper --x").transcribe_batch(WAV)
+    assert fake_runs.calls[0][0] == ["no-such-helper", "--x"]
+
+
+@pytest.mark.parametrize("argument", ["a&b", "a|b", "a<b", "a>b", "a^b", "100%"])
+def test_a_batch_file_argument_cmd_would_interpret_is_refused(
+    runs, server, monkeypatch, argument
+):
+    """cmd.exe runs a `.cmd`/`.bat` file and reads `&` as a command separator
+    (reproduced: `tokcmd.cmd "a&b"` ran `b`) and `%VAR%` as an expansion, so
+    such an argument is refused instead of run as something else. The
+    argument itself is not echoed: it may be a secret."""
+    monkeypatch.setattr(
+        provider_module.shutil, "which", lambda name: r"C:\Tools\az.cmd"
+    )
+    fake_runs = runs()
+    server()
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(key_command=f'az --name "{argument}"').transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "cmd.exe" in message
+    assert argument not in message
+    assert fake_runs.calls == []
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="`.cmd` shims exist only on Windows"
+)
+def test_a_cmd_shim_on_path_prints_its_token(tmp_path, monkeypatch):
+    """The process runner and `PATHEXT` themselves: `shim` resolves to
+    `shim.cmd`, which cmd.exe runs."""
+    (tmp_path / "token-shim.cmd").write_text(
+        "@echo off\r\necho shim-token-%1\r\n", encoding="ascii"
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path};{provider_module.os.environ['PATH']}")
+    transcriber = _transcriber(api_key="", key_command="token-shim A")
+
+    assert transcriber._run_key_command() == "shim-token-A"
+
+
 def test_the_token_is_never_logged(runs, server, caplog):
     runs(_completed(f"{SECRET_TOKEN}\n"))
     server({"text": "ok"})
@@ -762,6 +824,45 @@ def test_a_key_command_whose_grandchild_holds_the_pipe_is_still_bounded(
         # The grandchild was ended with its parent, not left running.
         time.sleep(0.5)
         before = _heartbeat(heartbeat)
+        time.sleep(0.6)
+        assert _heartbeat(heartbeat) == before, "the grandchild is still running"
+    finally:
+        _kill_leftover(heartbeat)
+
+
+@pytest.mark.skipif(
+    provider_module.os.name != "nt", reason="`.cmd` shims exist only on Windows"
+)
+def test_a_cmd_shim_whose_grandchild_holds_the_pipe_is_bounded_and_ended(
+    tmp_path, monkeypatch
+):
+    """cmd.exe sits between the key command and what it starts, so the job
+    object must still reach the grandchild through it."""
+    import sys
+    import time
+
+    grandchild = tmp_path / "grandchild.py"
+    grandchild.write_text(_GRANDCHILD_SCRIPT, encoding="utf-8")
+    child = tmp_path / "child.py"
+    child.write_text(_CHILD_SCRIPT, encoding="utf-8")
+    heartbeat = tmp_path / "heartbeat.txt"
+    (tmp_path / "hang-shim.cmd").write_text(
+        f'@"{sys.executable}" "{child}" "{grandchild}" "{heartbeat}"\r\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PATH", f"{tmp_path};{provider_module.os.environ['PATH']}")
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 2.0)
+    transcriber = _transcriber(api_key="", key_command="hang-shim")
+
+    started = time.monotonic()
+    try:
+        with pytest.raises(TranscriptionError, match="did not finish within 2 s"):
+            transcriber._run_key_command()
+        elapsed = time.monotonic() - started
+        assert elapsed < 10.0, f"the timeout of 2 s took {elapsed:.1f} s"
+        time.sleep(0.5)
+        before = _heartbeat(heartbeat)
+        assert before, "the grandchild never started"
         time.sleep(0.6)
         assert _heartbeat(heartbeat) == before, "the grandchild is still running"
     finally:
