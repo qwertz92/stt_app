@@ -133,6 +133,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   app, focus location unknown; its pastes would then be reported as
   doubtful. Unmeasured until the owner runs `scripts/diagnose_paste_target.py`
   in the apps he dictates into.
+- **A true-miss "not in a text field" row ends with the next paste**
+  (2026-10-03, deliberate). Any later successful paste -- into any window
+  -- drops it (`_drop_superseded_doubtful_rows`), so a paste that really
+  missed is no longer listed or reachable by F10 once the user dictated
+  elsewhere. Accepted because the report was shown when it was made
+  (overlay with Insert, or the tray) and the text stays in history.
+  Rejected alternative: dropping only on a later paste into the same
+  window. An always-doubtful window (an Electron prompt may be one) would
+  still collect a row per dictation whenever the user also works in a
+  second window, and F10 would be left choosing among stale rows whose
+  verdicts may all be false.
 - **A hung paste target holds the check's one worker**: the MSAA call is a
   cross-process `WM_GETOBJECT`; while it waits, later pastes are not
   checked (refused at once, "unknown") and the completion tone of the
