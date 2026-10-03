@@ -157,6 +157,7 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
 """
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
+_BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX = 120
 
 _BENCHMARK_RESULT_COLUMNS = (
     "#",
@@ -739,7 +740,6 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         self._splitter.setChildrenCollapsible(False)
 
         self._results_table = QtWidgets.QTableWidget(0, len(_BENCHMARK_RESULT_COLUMNS))
-        self._results_table.setMinimumHeight(110)
         self._results_table.setTabKeyNavigation(False)
         self._results_table.setHorizontalHeaderLabels(list(_BENCHMARK_RESULT_COLUMNS))
         for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
@@ -755,6 +755,17 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         row_height = compact_table_row_height(self._results_table)
         self._results_table.verticalHeader().setMinimumSectionSize(row_height)
         self._results_table.verticalHeader().setDefaultSectionSize(row_height)
+        # The header and two rows; more only when the tab has the height. The
+        # minimums of this panel and of the History box decide how short a
+        # dialog can show the whole tab, and 110 px here, 220 px for the
+        # details and 210/400 px for the two boxes needed an 806 px dialog:
+        # on the 680 px one a 1366x768 screen allows, the Results action row
+        # lay below the visible page.
+        self._results_table.setMinimumHeight(
+            self._results_table.horizontalHeader().sizeHint().height()
+            + 2 * row_height
+            + 2 * self._results_table.frameWidth()
+        )
         self._results_table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._results_table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         self._results_table.setHorizontalScrollMode(
@@ -781,7 +792,8 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         self._splitter.addWidget(self._results_table)
 
         self._details_view = _BenchmarkDetailsView()
-        self._details_view.setMinimumHeight(220)
+        # The tab bar and two overview rows (see the results table).
+        self._details_view.setMinimumHeight(_BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX)
         self._splitter.addWidget(self._details_view)
         self._splitter.setSizes([130, 260])
         layout.addWidget(self._splitter)
@@ -1007,7 +1019,6 @@ class _BenchmarkMixin:
 
     def _build_benchmark_history_box(self) -> QtWidgets.QGroupBox:
         history_box = QtWidgets.QGroupBox("Benchmark History")
-        history_box.setMinimumHeight(210)
         history_layout = QtWidgets.QVBoxLayout(history_box)
         history_layout.setContentsMargins(10, 10, 10, 10)
         history_layout.setSpacing(6)
@@ -1110,7 +1121,6 @@ class _BenchmarkMixin:
 
     def _build_benchmark_results_box(self) -> QtWidgets.QGroupBox:
         results_box = QtWidgets.QGroupBox("Results")
-        results_box.setMinimumHeight(400)
         results_box.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,

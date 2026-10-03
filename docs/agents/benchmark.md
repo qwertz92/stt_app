@@ -227,3 +227,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   `_on_benchmark_case_finished` appends to). `set_live_results` runs per
   case; `_set_transcript_rows` restores the selection by
   `model / device / run` identity, falling back to row 0.
+- **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
+  1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
+  height decides how short a dialog still shows the whole tab, since the
+  page is not a scroll area: explicit 210/400 px box minimums, 110 px for
+  the results table and 220 px for the details asked for 675 px of page
+  (806 px of dialog), and below that the Results action row was cut off.
+  Now no box minimum, results table = header + two rows, details 120 px:
+  542 px of page. `tests/test_benchmark_tab_layout.py` pins the budget; a
+  smaller dialog still clips (proposal: a scroll fallback, which touches
+  the dialog's sizing rules).
