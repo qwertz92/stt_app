@@ -275,6 +275,13 @@ class _PendingRestore:
     # Runs on the retry timer (`_schedule_restore_retry`) rather than the
     # deferred one, which first waits for the paste target.
     retry: bool = False
+    # Which timer may act on the record: bumped on every schedule and every
+    # cancel, and carried by the callback it schedules. A timer that had
+    # already started when a take-over cancelled it (a started `threading.Timer`
+    # cannot be stopped) finds a newer number under the lock and does nothing,
+    # so a resumed record never has two chains rescheduling and counting
+    # attempts for it.
+    chain: int = 0
 
 
 def _schedule_on_a_daemon_timer(delay_s: float, callback):
@@ -1962,10 +1969,12 @@ class TextInserter:
         self._schedule_restore(record)
 
     def _schedule_restore(self, record: _PendingRestore) -> None:
+        record.chain += 1
+        chain = record.chain
         try:
             record.handle = self._schedule_fn(
                 self._restore_delay_s,
-                lambda: self._run_deferred_restore(record),
+                lambda: self._run_deferred_restore(record, chain),
             )
         except Exception:
             # A starved interpreter cannot start another thread. Raising here
@@ -1977,7 +1986,7 @@ class TextInserter:
             record.handle = None
             self._log_restore_outcome(record, "failed")
 
-    def _run_deferred_restore(self, record: _PendingRestore) -> None:
+    def _run_deferred_restore(self, record: _PendingRestore, chain: int) -> None:
         """Put the previous clipboard back once the target has had its chance.
 
         Runs on the scheduler's thread. The readiness probe deliberately runs
@@ -1986,7 +1995,7 @@ class TextInserter:
         long would block the next live streaming insert on the Qt main thread,
         which is the thread this whole arrangement exists to keep free.
         """
-        if self._pending_restore is not record:
+        if self._pending_restore is not record or record.chain != chain:
             # A newer paste already took this record over and its timer fired
             # anyway, because a timer that has started cannot be cancelled.
             # Cheap early-out so a superseded record does not spend the probe
@@ -1994,7 +2003,9 @@ class TextInserter:
             return
         ready = self._wait_for_paste_target_ready(record.target_hwnd)
         with self._insert_lock:
-            if self._pending_restore is not record:
+            if self._pending_restore is not record or record.chain != chain:
+                # Also a record taken over and resumed during the probe: it
+                # is pending again, under a newer timer that now owns it.
                 return
             if not ready:
                 if self._clock() < record.deadline:
@@ -2100,10 +2111,12 @@ class TextInserter:
         self._schedule_restore_retry(record)
 
     def _schedule_restore_retry(self, record: _PendingRestore) -> None:
+        record.chain += 1
+        chain = record.chain
         try:
             record.handle = self._schedule_fn(
                 self._restore_retry_delay_s,
-                lambda: self._run_restore_retry(record),
+                lambda: self._run_restore_retry(record, chain),
             )
         except Exception:
             # Left pending, as `_schedule_restore` does: the next paste takes
@@ -2111,9 +2124,9 @@ class TextInserter:
             record.handle = None
             self._log_restore_outcome(record, "failed")
 
-    def _run_restore_retry(self, record: _PendingRestore) -> None:
+    def _run_restore_retry(self, record: _PendingRestore, chain: int) -> None:
         with self._insert_lock:
-            if self._pending_restore is not record:
+            if self._pending_restore is not record or record.chain != chain:
                 return
             self._finish_restore(record)
 
@@ -2165,6 +2178,8 @@ class TextInserter:
 
     @staticmethod
     def _cancel_scheduled_restore(record: _PendingRestore) -> None:
+        # Invalidates a timer that is already running as well: see `chain`.
+        record.chain += 1
         handle = record.handle
         record.handle = None
         cancel = getattr(handle, "cancel", None)
@@ -2175,8 +2190,9 @@ class TextInserter:
         except Exception:
             # A timer that has already started cannot be cancelled, and a
             # scheduler handle is not this module's to reason about. The
-            # identity check in `_run_deferred_restore` is what actually stops
-            # a superseded record, so a refused cancel costs nothing.
+            # identity and `chain` checks in `_run_deferred_restore` are what
+            # actually stop a superseded timer, so a refused cancel costs
+            # nothing.
             _LOGGER.debug(
                 "Could not cancel the pending clipboard restore", exc_info=True
             )

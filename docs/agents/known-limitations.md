@@ -257,13 +257,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   wait (`start /wait`, `-Wait`). When the job cannot be assigned (a nested
   job that forbids it), the taskkill fallback cannot reach an orphan whose
   parent exited, so such a run times out even though the token arrived.
-- **A resumed restore can run two timer chains for one record** (P4,
-  2026-10-01, review of a404479). When the deferred timer sits in its
-  readiness probe (outside the lock) while a new paste takes the record over,
-  fails without touching the clipboard and resumes it, both the old run and
-  the new timer act on the record. It is never restored twice (the first
-  success clears it), but the retry budget runs out about a second early. A
-  per-record chain generation checked under the lock would close it.
 - **Custom endpoint trade-offs accepted after the 2026-10-03 review** (all
   P4):
   - A gateway that masks the key itself (LiteLLM-style "sk-...1234" plus a

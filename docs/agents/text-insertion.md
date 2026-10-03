@@ -38,6 +38,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     (review of a404479). A paste that then never touches the clipboard hands
     the record back
     (`_resume_pending_restore`), so the user's content is not lost with it.
+    Each schedule and each cancel bumps `_PendingRestore.chain`, and a timer
+    acts only while the number it was scheduled with is current: a timer
+    already inside its readiness probe when the record was taken over and
+    resumed finds a newer number under the lock and stops, so one record
+    never has two chains rescheduling and spending its retry attempts
+    (2026-10-03).
     `flush_pending_restore`
     restores at once (content check kept); `DictationController.shutdown`
     calls it first. A scheduler that cannot start a thread leaves the record
