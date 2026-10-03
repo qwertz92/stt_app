@@ -764,21 +764,31 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no message content."
             ) from exc
+        reason = choice.get("finish_reason")
+        reason = reason if isinstance(reason, str) else ""
+        if reason == "length":
+            # The text a cut-off reply carries is the start of the transcript;
+            # accepted, a part of a long dictation lost its end unnoticed
+            # (review of 2026-10-03).
+            raise TranscriptionError(
+                f"{_PROVIDER_NAME}: the model's output limit cut the transcript "
+                "off (finish reason 'length'). Use the OpenAI transcription API "
+                "style, or dictate in shorter pieces."
+            )
         if content is None:
-            # A refusal or an answer cut off at the token limit, not
-            # "nothing said": read as silence, a part of a split recording
-            # vanished from the transcript (review of 2026-10-01).
+            # A refusal or a missing text, not "nothing said": read as
+            # silence, a part of a split recording vanished from the
+            # transcript (review of 2026-10-01).
             refusal = message.get("refusal")
             if isinstance(refusal, str) and refusal.strip():
                 raise TranscriptionError(
                     f"{_PROVIDER_NAME}: the model refused: {body_excerpt(refusal)}"
                 )
-            reason = choice.get("finish_reason") if isinstance(choice, dict) else None
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no text "
                 + (
                     f"(finish reason '{reason}')."
-                    if isinstance(reason, str) and reason
+                    if reason
                     else "(no finish reason given)."
                 )
             )

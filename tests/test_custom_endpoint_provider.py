@@ -309,6 +309,26 @@ def test_a_chat_reply_with_null_content_is_an_error_not_silence(
     assert expected in str(raised.value)
 
 
+@pytest.mark.parametrize("content", ["The quick brown fox jumps over the", None])
+def test_a_chat_reply_cut_off_at_the_output_limit_is_an_error(server, content):
+    """`finish_reason: "length"` means the model ran out of output tokens: the
+    text it carries is the start of the transcript, and pasted as a complete
+    one it silently loses the end (review of 2026-10-03)."""
+    server(
+        {
+            "choices": [
+                {"message": {"content": content}, "finish_reason": "length"},
+            ]
+        }
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "output limit" in message
+    assert "transcription API" in message
+    assert "quick brown fox" not in message
+
+
 def test_a_long_refusal_is_shortened_in_the_message(server):
     server({"choices": [{"message": {"content": None, "refusal": "x" * 500}}]})
     with pytest.raises(TranscriptionError) as raised:

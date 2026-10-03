@@ -367,6 +367,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Chat: `content: null` is an error, not silence** (2026-10-01): it is
     a refusal (named, shortened to 80 characters) or an answer cut off
     (`finish_reason` named, e.g. `length`). `content: ""` stays silence.
+    **`finish_reason: "length"` is an error even when text came with it**
+    (2026-10-03): the text is the start of the transcript, and pasted as a
+    whole it lost the end; the message names the model's output limit and
+    suggests the transcription style or shorter dictations.
   - **The identity reads endpoint, API style and key command**, and
     `has_api_key` is true for a stored key *or* a key command (a command
     alone makes the engine runnable); the connection test, the "all
