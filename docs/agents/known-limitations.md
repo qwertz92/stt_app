@@ -196,7 +196,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share
   `BenchmarkHistoryEntry.identity_key()`** (`created_at` has second
-  resolution) and open one pop-out.
+  resolution) and open one pop-out. Only with equal status and summary too,
+  and every Settings run spends the environment query (median 2.2 s) before
+  it can save, so two saves within a second do not come from the app.
+  Since 2026-10-03 the History selection also skips reloading an equal key.
 - **The benchmark environment (median 2.2 s PowerShell) runs before the first
   cancel check**; a shutdown joins for 2.5 s: a worker it outlasts saves
   nothing, one it ends is saved as canceled.
