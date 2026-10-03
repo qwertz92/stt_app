@@ -52,6 +52,7 @@ from .settings_dialog_helpers import (
     LOCAL_MODEL_LABELS,
     _emit_background_signal,
     _WheelPassthroughComboBox,
+    exception_reason,
     fill_engine_combo,
     hint_font,
     local_model_label,
@@ -1329,7 +1330,9 @@ class _GeneralTabMixin:
             worker.start()
         except _THREAD_START_ERRORS as exc:
             self._on_custom_models_fetched(
-                fetch_id, False, f"Could not start the model fetch: {exc}"
+                fetch_id,
+                False,
+                f"Could not start the model fetch: {exception_reason(exc)}",
             )
 
     def _run_custom_models_fetch(self, fetch_id: int, snapshot: dict[str, str]) -> None:

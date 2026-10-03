@@ -30,6 +30,7 @@ from .settings_dialog_helpers import (
     _emit_background_signal,
     _remote_provider_label,
     _WheelPassthroughComboBox,
+    exception_reason,
 )
 
 # The key field's minimum on the Providers tab. Every other column is sized
@@ -986,7 +987,8 @@ class _RemoteProvidersMixin:
         except _THREAD_START_ERRORS as exc:
             self._end_connection_test()
             self._set_test_connection_feedback(
-                f"Could not start the connection test: {exc}", "#b71c1c"
+                f"Could not start the connection test: {exception_reason(exc)}",
+                "#b71c1c",
             )
 
     def _providers_for_connection_target(self, target: str) -> list[str]:

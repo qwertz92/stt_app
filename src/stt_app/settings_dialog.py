@@ -69,6 +69,7 @@ from .settings_dialog_helpers import (
     _qt_hotkey_sequence_to_app_hotkey,
     _qt_hotkey_text_to_app_hotkey,
     configure_button_row,
+    exception_reason,
     hint_font,
     remote_model_values,
 )
@@ -1242,7 +1243,7 @@ class SettingsDialog(
             self._active_update_check_thread = None
             self.check_updates_button.setEnabled(True)
             self._set_bottom_status(
-                f"Could not start the update check: {exc}", "#b71c1c"
+                f"Could not start the update check: {exception_reason(exc)}", "#b71c1c"
             )
 
     @QtCore.Slot(object)

@@ -265,8 +265,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   must remove the previous one first, or it reads it back.
 - **A dialog worker thread that will not start rolls back its busy marker**
   (seven `Thread.start()` sites, each catching `_THREAD_START_ERRORS` --
-  `RuntimeError` and `MemoryError` -- except the benchmark's, which still
-  catches only the first: Known limitations; otherwise
+  `RuntimeError` and `MemoryError`, reported through `exception_reason`
+  because `str(MemoryError())` is empty; otherwise
   `_background_work_active()` stayed
   true and `reload_from_store()` was deferred forever). Each arm undoes its
   own site and reports the user's own action: connection test and update

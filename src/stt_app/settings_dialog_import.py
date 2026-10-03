@@ -21,6 +21,7 @@ from .settings_dialog_helpers import (
     _emit_background_signal,
     _set_transcriber_progress_callback,
     _WheelPassthroughComboBox,
+    exception_reason,
     fill_engine_combo,
 )
 from .settings_store import AppSettings
@@ -455,7 +456,7 @@ class _ImportTabMixin:
             worker.start()
         except _THREAD_START_ERRORS as exc:
             self._finish_import_transcription(
-                False, f"Could not start the transcription: {exc}"
+                False, f"Could not start the transcription: {exception_reason(exc)}"
             )
 
     def _set_import_progress(self, text: str) -> None:

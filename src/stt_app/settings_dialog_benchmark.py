@@ -50,6 +50,7 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
     compact_table_row_height,
     configure_button_row,
+    exception_reason,
     local_model_short_label,
     onnx_device_label,
     unlabelled_row_label,
@@ -2223,6 +2224,10 @@ class _BenchmarkMixin:
             )
             return
 
+        if not self._may_replace_shown_benchmark_result(
+            "Start the benchmark and discard the shown run?"
+        ):
+            return
         self._set_benchmark_status("Running benchmark...", "#555")
         compute_type = str(self.benchmark_compute_type_combo.currentData() or "int8")
         webgpu_devices = normalize_webgpu_benchmark_devices(
@@ -2437,7 +2442,7 @@ class _BenchmarkMixin:
             self._active_benchmark_thread = None
             self._benchmark_cancel_event = None
             # A `MemoryError` usually carries no message.
-            message = f"Could not start the benchmark: {str(exc) or type(exc).__name__}"
+            message = f"Could not start the benchmark: {exception_reason(exc)}"
             self._set_benchmark_status(message, "#b71c1c")
             # The summary view was already primed with the running summary a
             # few lines above, and `setPlainText` puts that straight into the
@@ -2556,7 +2561,7 @@ class _BenchmarkMixin:
             try:
                 self._benchmark_history_store.add_entry(entry)
             except Exception as exc:
-                history_error = str(exc)
+                history_error = exception_reason(exc)
                 self._benchmark_shown_entry_unsaved = True
                 self._refresh_benchmark_history_list()
             else:
@@ -3113,7 +3118,14 @@ class _BenchmarkMixin:
         answer = QtWidgets.QMessageBox.question(
             self,
             "Clear benchmark history",
-            "Delete all stored benchmark results?",
+            "Delete all stored benchmark results?"
+            + (
+                # It is in no row, so the clear takes it off Results too.
+                "\n\nThe run shown in Results was not saved to history and "
+                "is discarded as well."
+                if self._benchmark_shown_entry_unsaved
+                else ""
+            ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )

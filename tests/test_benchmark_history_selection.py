@@ -250,6 +250,40 @@ def test_clear_loaded_asks_before_discarding_a_result_that_was_not_saved(
     _ = app
 
 
+def test_a_run_start_asks_before_discarding_a_result_that_was_not_saved(
+    monkeypatch, tmp_path
+):
+    """Starting a run takes Results over; for a run in no history row that
+    dropped the only copy without a word."""
+    dialog, app, _first, _second = _two_runs(tmp_path)
+    unsaved = _finish_with_a_failed_save(monkeypatch, dialog)
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    dialog._set_benchmark_audio_path(str(audio))
+    monkeypatch.setattr(dialog, "_selected_benchmark_model_names", lambda: ["small"])
+    asked = _answer(monkeypatch, QtWidgets.QMessageBox.No)
+
+    dialog._run_local_benchmark()
+
+    assert len(asked) == 1
+    assert "not saved" in asked[0]
+    assert dialog._active_benchmark_thread is None
+    assert dialog._current_benchmark_entry is unsaved
+    _ = app
+
+
+def test_clear_history_names_the_unsaved_shown_run_it_discards(monkeypatch, tmp_path):
+    dialog, app, _first, _second = _two_runs(tmp_path)
+    _finish_with_a_failed_save(monkeypatch, dialog)
+    asked = _answer(monkeypatch, QtWidgets.QMessageBox.No)
+
+    dialog._clear_benchmark_history()
+
+    assert len(asked) == 1
+    assert "not saved" in asked[0]
+    _ = app
+
+
 def test_with_history_and_nothing_shown_the_results_say_how_to_show_a_run(
     tmp_path,
 ):

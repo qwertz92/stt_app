@@ -261,9 +261,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   status line and never moves the History/Results splitter (only a run's
   finish resets it: a reset per selection undid every drag on one arrow
   press). A run whose history write failed is in no row, so while it is
-  shown (`_benchmark_shown_entry_unsaved`) a selection, a double-click or Clear Loaded asks
-  before replacing or clearing it (`_may_replace_shown_benchmark_result`; No keeps it
-  and deselects with signals blocked). A run's start deselects too: the run
+  shown (`_benchmark_shown_entry_unsaved`) a selection, a double-click,
+  Clear Loaded or a run's start asks before discarding it
+  (`_may_replace_shown_benchmark_result`; No keeps it and deselects with
+  signals blocked), and Clear History's question says it goes too. A run's start deselects too: the run
   owns Results, and a row left selected through a refused thread start
   could not be clicked back in. A rebuild re-selects `_current_benchmark_entry`;
   `_clear_benchmark_results` deselects (signals blocked) and is also what

@@ -47,6 +47,15 @@ from .settings_store import _REMOTE_MODEL_FIELDS
 _THREAD_START_ERRORS = (RuntimeError, MemoryError)
 
 
+def exception_reason(exc: BaseException) -> str:
+    """An exception's text, or its type name when it has none.
+
+    `str(MemoryError())` is empty, so "Could not start ...: {exc}" ended in a
+    bare colon exactly in the case the guards above exist for.
+    """
+    return str(exc) or type(exc).__name__
+
+
 def _emit_background_signal(
     owner: QtCore.QObject,
     signal_name: str,
