@@ -497,7 +497,7 @@ def test_a_stored_run_can_be_opened_in_a_window_while_a_benchmark_runs(tmp_path)
     dialog._update_benchmark_actions()
 
     assert dialog.export_benchmark_history_button.isEnabled() is False
-    assert dialog.load_benchmark_history_button.isEnabled() is False
+    assert dialog.delete_benchmark_history_button.isEnabled() is False
     assert dialog.open_benchmark_history_window_button.isEnabled() is True
     assert dialog.open_benchmark_results_window_button.isEnabled() is True
 
@@ -542,9 +542,8 @@ def test_open_in_window_sits_in_both_action_rows():
         dialog.open_benchmark_results_window_button,
         dialog.export_benchmark_results_button,
     ]
-    history_row = _button_row_of(dialog.load_benchmark_history_button)
-    assert history_row[:3] == [
-        dialog.load_benchmark_history_button,
+    history_row = _button_row_of(dialog.export_benchmark_history_button)
+    assert history_row[:2] == [
         dialog.export_benchmark_history_button,
         dialog.open_benchmark_history_window_button,
     ]
@@ -712,7 +711,9 @@ def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
             f"the 640 px budget was measured at 9 pt; this session runs at "
             f"{point_size} pt and the dialog needs {needed} px"
         )
-    assert 520 < needed <= 640, needed
+    # 611 px with four History buttons; 508 since selecting a row shows it
+    # and Load Selected went (2026-10-03). The tab bar's need is above both.
+    assert needed <= 640, needed
     assert dialog.minimumWidth() >= needed
 
     dialog.tabs.setCurrentIndex(0)
@@ -836,7 +837,8 @@ def test_the_pin_stops_at_the_screen(monkeypatch):
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     _let_the_pin_fire(app)
 
-    assert dialog.minimumSizeHint().width() > 580
+    # What the pin asks for (the tab bar's need), not the dialog's own hint.
+    assert dialog._content_minimum_width() > 580
     assert dialog.minimumWidth() == 580
     dialog.hide()
     _ = app

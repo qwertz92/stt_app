@@ -1100,7 +1100,7 @@ class _BenchmarkMixin:
                 column, QtWidgets.QHeaderView.ResizeToContents
             )
         self.benchmark_history_list.itemSelectionChanged.connect(
-            self._update_benchmark_history_actions
+            self._on_benchmark_history_selection_changed
         )
         self.benchmark_history_list.itemDoubleClicked.connect(
             self._load_benchmark_history_item
@@ -1109,11 +1109,6 @@ class _BenchmarkMixin:
 
         benchmark_history_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_history_actions)
-        self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
-        self.load_benchmark_history_button.setEnabled(False)
-        self.load_benchmark_history_button.clicked.connect(
-            self._load_selected_benchmark_history
-        )
         self.export_benchmark_history_button = QtWidgets.QPushButton(
             "Export Selected..."
         )
@@ -1141,7 +1136,6 @@ class _BenchmarkMixin:
         self.clear_benchmark_history_button.clicked.connect(
             self._clear_benchmark_history
         )
-        benchmark_history_actions.addWidget(self.load_benchmark_history_button)
         benchmark_history_actions.addWidget(self.export_benchmark_history_button)
         benchmark_history_actions.addWidget(self.open_benchmark_history_window_button)
         benchmark_history_actions.addStretch(1)
@@ -2012,7 +2006,9 @@ class _BenchmarkMixin:
             and self._benchmark_cancel_event is not None
             and not self._benchmark_cancel_event.is_set()
         )
-        self.clear_benchmark_results_button.setEnabled(not busy)
+        self.clear_benchmark_results_button.setEnabled(
+            (not busy) and self._benchmark_result_is_shown()
+        )
         self.export_benchmark_results_button.setEnabled(
             (not busy) and self._current_benchmark_entry is not None
         )
@@ -2024,7 +2020,15 @@ class _BenchmarkMixin:
         )
         self._update_benchmark_history_actions()
 
+    def _benchmark_result_is_shown(self) -> bool:
+        """Whether Results shows a run: a stored entry or a run's cases."""
+        return self._current_benchmark_entry is not None or bool(
+            getattr(self, "_current_benchmark_cases", None)
+        )
+
     def _clear_benchmark_results(self) -> None:
+        # The History selection names the run on show, so it goes too.
+        self._deselect_benchmark_history()
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
@@ -2038,18 +2042,26 @@ class _BenchmarkMixin:
         self._show_benchmark_empty_state_if_idle()
 
     def _show_benchmark_empty_state_if_idle(self) -> None:
-        """On a first visit the tab was two empty tables; say how to start.
+        """With nothing shown, Results says how to show something.
 
-        Only while there is no history, nothing is loaded and no run is
-        active: a loaded result or a running benchmark owns the view.
+        Only while nothing is loaded and no run is active: a loaded result or
+        a running benchmark owns the view. Without history it says how to
+        start (a first visit was two empty tables); with history, that a
+        row shows its run (after Clear Loaded or a delete it was two empty
+        tables again).
         """
         if not hasattr(self, "benchmark_history_list"):
             return
-        if self.benchmark_history_list.rowCount() > 0:
-            return
         if getattr(self, "_current_benchmark_cases", None):
             return
+        if getattr(self, "_current_benchmark_entry", None) is not None:
+            return
         if getattr(self, "_active_benchmark_thread", None) is not None:
+            return
+        if self.benchmark_history_list.rowCount() > 0:
+            self.benchmark_summary_text.show_empty_state(
+                "Select a run in Benchmark History to see its results here."
+            )
             return
         self.benchmark_summary_text.show_empty_state(
             "No benchmark yet. Click Run Benchmark... to measure your "
@@ -2687,6 +2699,10 @@ class _BenchmarkMixin:
         if not hasattr(self, "benchmark_history_list"):
             return
         previous_scroll = self.benchmark_history_list.verticalScrollBar().value()
+        # The shown run stays selected across a rebuild, so the list and
+        # Results keep naming the same run.
+        if select_entry is None:
+            select_entry = self._current_benchmark_entry
         self.benchmark_history_list.setRowCount(0)
         selected_row = -1
         for row, entry in enumerate(self._benchmark_history_store.recent_entries(20)):
@@ -2744,11 +2760,10 @@ class _BenchmarkMixin:
         return entry if isinstance(entry, BenchmarkHistoryEntry) else None
 
     def _update_benchmark_history_actions(self) -> None:
-        if not hasattr(self, "load_benchmark_history_button"):
+        if not hasattr(self, "export_benchmark_history_button"):
             return
         busy = self._active_benchmark_thread is not None
         has_selection = self._selected_benchmark_history_entry() is not None
-        self.load_benchmark_history_button.setEnabled((not busy) and has_selection)
         self.export_benchmark_history_button.setEnabled((not busy) and has_selection)
         # Not gated on `busy`, unlike its neighbours: opening a stored run in a
         # window of its own reads the entry and nothing else, so it cannot
@@ -2759,20 +2774,45 @@ class _BenchmarkMixin:
             (not busy) and self.benchmark_history_list.count() > 0
         )
 
-    def _load_selected_benchmark_history(self) -> None:
+    def _on_benchmark_history_selection_changed(self) -> None:
+        """The selected row is the run Results shows.
+
+        Not during a run, which owns Results (Open in Window still reads the
+        row), and not for the run already shown: a finished run selects its
+        own new row, and reloading it would replace the finish's status line.
+        """
+        self._update_benchmark_history_actions()
+        if self._active_benchmark_thread is not None:
+            return
         entry = self._selected_benchmark_history_entry()
-        if entry is None:
+        current = self._current_benchmark_entry
+        if entry is None or (
+            current is not None and current.identity_key() == entry.identity_key()
+        ):
             return
         self._load_benchmark_history_entry(entry)
+
+    def _deselect_benchmark_history(self) -> None:
+        """Clear the History selection without loading anything."""
+        if not hasattr(self, "benchmark_history_list"):
+            return
+        table = self.benchmark_history_list
+        table.blockSignals(True)
+        try:
+            table.clearSelection()
+        finally:
+            table.blockSignals(False)
+        self._update_benchmark_history_actions()
 
     def _load_benchmark_history_item(
         self,
         item: QtWidgets.QTableWidgetItem,
     ) -> None:
-        # The same gate `Load Selected` carries. Loading replaces
-        # `_current_benchmark_cases`, and that is the list the next finished
-        # case appends to, so a double-click during a run put the stored run's
-        # cases and the live one's into one results table and one live summary.
+        # The same gate the selection carries, and the place that says why
+        # nothing happened. Loading replaces `_current_benchmark_cases`, and
+        # that is the list the next finished case appends to, so a
+        # double-click during a run put the stored run's cases and the live
+        # one's into one results table and one live summary.
         if self._active_benchmark_thread is not None:
             self._set_benchmark_status(
                 "A stored run cannot be opened while a benchmark is running.",
@@ -2792,7 +2832,10 @@ class _BenchmarkMixin:
         self._current_benchmark_environment = entry.environment
         self._current_benchmark_cases = list(entry.cases)
         self.benchmark_results_panel.show_entry(entry)
-        self._set_benchmark_status("Loaded benchmark history entry.", "#555")
+        # Cleared rather than "Loaded benchmark history entry.": Results now
+        # shows what was selected, and the previous run's or export's line no
+        # longer describes it.
+        self._set_benchmark_status("", "#555")
         self._expand_benchmark_results_area()
         self._update_benchmark_actions()
 
@@ -2955,8 +2998,9 @@ class _BenchmarkMixin:
             self._current_benchmark_entry is not None
             and self._current_benchmark_entry.identity_key() == entry.identity_key()
         ):
-            self._current_benchmark_entry = None
-            self._update_benchmark_actions()
+            # Off the Results too: it stayed there with Export and Open in
+            # Window disabled, a run that no longer existed.
+            self._clear_benchmark_results()
         self._refresh_benchmark_history_list()
 
     def _clear_benchmark_history(self) -> None:
@@ -2984,7 +3028,7 @@ class _BenchmarkMixin:
             # then reached and refused.
             self._set_benchmark_status(str(exc), "#b71c1c")
             return
-        self._current_benchmark_entry = None
         self._close_all_benchmark_results_windows()
+        self._clear_benchmark_results()
         self._refresh_benchmark_history_list()
         self._update_benchmark_actions()

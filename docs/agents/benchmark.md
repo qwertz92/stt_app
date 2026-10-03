@@ -239,11 +239,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   `docs/learning-log.md` as well as `benchmark_history.json` before calling a
   figure unsourced; "not comparable" differs from "unsourced".
 - **A stored run cannot be opened while one runs, and a finished case does
-  not move the reader.** The table double-click has Load Selected's busy
+  not move the reader.** The selection and the double-click share one busy
   gate (loading replaces `_current_benchmark_cases`, which
-  `_on_benchmark_case_finished` appends to). `set_live_results` runs per
+  `_on_benchmark_case_finished` appends to); only the double-click says
+  why on the status line. `set_live_results` runs per
   case; `_set_transcript_rows` restores the selection by
   `model / device / run` identity, falling back to row 0.
+- **Benchmark History is a master list: the selected row is the run
+  Results shows** (2026-10-03; "Load Selected" is gone). Before, selection
+  and Results could name two runs, each with its own Export and Open in
+  Window. `_on_benchmark_history_selection_changed` loads unless a run is
+  active or the row is the run already shown (a finish selects its new
+  row; reloading it replaced the finish's status line). A load clears the
+  status line. A rebuild re-selects `_current_benchmark_entry`;
+  `_clear_benchmark_results` deselects (signals blocked) and is also what
+  deleting the shown run and Clear History call (the deleted run stayed on
+  screen with its actions disabled). Clear Loaded is enabled only while a
+  run is shown. With history and nothing shown, Results says "Select a run
+  in Benchmark History...". The History row lost a button, so the page's
+  minimum width fell (dialog hint 611 -> 508 px); the tab bar still sets
+  the dialog's minimum.
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
   height decides how short a dialog still shows the whole tab, since the
