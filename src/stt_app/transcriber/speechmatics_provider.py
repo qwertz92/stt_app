@@ -24,13 +24,14 @@ from ..config import (
     SPEECHMATICS_BATCH_MAX_WAIT_S,
     SPEECHMATICS_LANGUAGE_CODES,
     SPEECHMATICS_MELIA_MODEL,
-    SPEECHMATICS_MELIA_REGIONS,
+    SPEECHMATICS_MELIA_UNAVAILABLE_TEXT,
     SPEECHMATICS_MODELS,
     SPEECHMATICS_POLL_INTERVAL_S,
     language_modes_for_selection,
     normalize_speechmatics_region,
     parse_custom_vocabulary,
     remote_batch_part_limit,
+    speechmatics_model_available_in,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
@@ -95,15 +96,12 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
         )
         self._region = normalize_speechmatics_region(region)
-        if (
-            self._model == SPEECHMATICS_MELIA_MODEL
-            and self._region not in SPEECHMATICS_MELIA_REGIONS
-        ):
+        if not speechmatics_model_available_in(self._model, self._region):
             # "Melia 1 is available for Batch transcription in the EU and US
             # regions only": the job could only be rejected after the upload.
             raise TranscriptionError(
-                "Speechmatics Melia 1 runs in the EU and US regions only. "
-                "Choose the eu1 or us1 region, or the Enhanced or Standard model."
+                f"{SPEECHMATICS_MELIA_UNAVAILABLE_TEXT} Choose the eu1 or us1 "
+                "region, or the Enhanced or Standard model."
             )
         self._base_url = f"https://{SPEECHMATICS_API_HOSTS[self._region]}/v2"
         # Needs self._model, so this must run after it is assigned above.

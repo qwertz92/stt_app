@@ -1431,6 +1431,8 @@ class _GeneralTabMixin:
         self._update_language_availability()
         self._update_engine_indicator()
         self._update_custom_vocabulary_note()
+        # A model can be unavailable in the chosen region (Melia 1 in au1).
+        self._update_remote_model_note()
 
     def _on_remote_model_activated(self, _index: int = 0) -> None:
         self._on_remote_model_changed()

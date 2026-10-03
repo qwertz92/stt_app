@@ -16,6 +16,8 @@ from .config import (
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
+    SPEECHMATICS_MELIA_UNAVAILABLE_TEXT,
+    speechmatics_model_available_in,
 )
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
@@ -501,6 +503,10 @@ class _RemoteProvidersMixin:
                 "Standard on the Transcription tab for Australia."
             )
         combo.setToolTip(tooltip)
+        # A region can make the selected model unavailable (Melia 1 in au1).
+        combo.currentIndexChanged.connect(
+            lambda _index: self._update_remote_model_note()
+        )
         self._provider_region_combos[provider] = combo
         return combo
 
@@ -817,6 +823,14 @@ class _RemoteProvidersMixin:
             return (
                 "Azure also needs its endpoint: enter it on the Providers tab, "
                 "or dictation with this engine fails."
+            )
+        if engine == "speechmatics" and not speechmatics_model_available_in(
+            self._remote_model_value_for_provider(engine), self._region_shown(engine)
+        ):
+            # The transcriber refuses the pair before any upload.
+            return (
+                f"{SPEECHMATICS_MELIA_UNAVAILABLE_TEXT} Pick eu1 or us1 on the "
+                "Providers tab, or the Enhanced or Standard model."
             )
         return None
 

@@ -1743,6 +1743,16 @@ SPEECHMATICS_API_HOSTS = {
 SPEECHMATICS_REGIONS = tuple(SPEECHMATICS_API_HOSTS)
 DEFAULT_SPEECHMATICS_REGION = "eu1"
 SPEECHMATICS_MELIA_REGIONS = ("eu1", "us1")
+
+
+def speechmatics_model_available_in(model: str, region: str) -> bool:
+    """Whether Speechmatics runs `model` in `region` (Melia 1: eu1 and us1)."""
+    return model != SPEECHMATICS_MELIA_MODEL or region in SPEECHMATICS_MELIA_REGIONS
+
+
+SPEECHMATICS_MELIA_UNAVAILABLE_TEXT = (
+    "Speechmatics Melia 1 runs in the EU and US regions only."
+)
 # A job's total wait, as for AssemblyAI (`ASSEMBLYAI_BATCH_MAX_WAIT_S`),
 # and the pause between status requests: the GET limit is 50 per second,
 # so one per second is far inside it.

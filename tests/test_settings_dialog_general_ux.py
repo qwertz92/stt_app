@@ -1867,3 +1867,37 @@ def test_the_full_final_checkbox_opens_enabled_only_where_it_acts(
     finally:
         dialog.close()
         app.processEvents()
+
+
+def test_melia_in_a_region_without_it_warns_on_the_transcription_tab(
+    monkeypatch, tmp_path
+) -> None:
+    """The transcriber refuses Melia 1 outside eu1/us1, so the note must not
+    read as if dictation would work."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _engine_dialog(
+        monkeypatch,
+        tmp_path,
+        "speechmatics",
+        secret_store=_KeyedSecretStore(),
+        speechmatics_model="melia-1",
+        speechmatics_region="au1",
+    )
+    assert "Melia 1 runs in the EU and US regions only" in (
+        dialog.remote_model_note_label.text()
+    )
+    assert _note_is_a_warning(dialog)
+
+    region = dialog._provider_region_combos["speechmatics"]
+    region.setCurrentIndex(region.findData("eu1"))
+    app.processEvents()
+    assert not _note_is_a_warning(dialog)
+
+    region.setCurrentIndex(region.findData("au1"))
+    dialog.remote_model_combo.setCurrentIndex(
+        dialog.remote_model_combo.findData("enhanced")
+    )
+    app.processEvents()
+    assert not _note_is_a_warning(dialog)
+    dialog.close()
+    app.processEvents()

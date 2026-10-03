@@ -216,10 +216,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   (typed, or stored with a usable source and not marked for removal -- the
   Test button's judgement; for the custom endpoint a key command counts, as
   `CustomEndpointTranscriber` requires one of the two), then Azure's
-  endpoint. `_update_remote_model_note` shows it in red in place of the
+  endpoint, then Speechmatics Melia 1 outside eu1/us1
+  (`config.speechmatics_model_available_in`, the transcriber's own check). `_update_remote_model_note` shows it in red in place of the
   model note, inside the same two reserved lines, so nothing moves; it is
-  re-run on an engine/mode change, every key-row refresh of the selected
-  engine, and edits of the Azure endpoint, base URL and key command.
+  re-run on an engine/mode/model change, every key-row refresh of the
+  selected engine, a region change, and edits of the Azure endpoint, base
+  URL and key command.
   Measured at the dialog minimum: the longest warning needs 30 of 40 px at
   9 pt and 45 of 56 px at 13.5 pt.
 - **Saves are explicit and failure-safe**: the insecure-storage checkbox is
