@@ -642,6 +642,35 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 raise
             raise TranscriptionError(scrubbed) from None
 
+    def _request_too_large_hint(self) -> str:
+        """What to do about a 413, which depends on the API style.
+
+        The parts are fixed. The chat style's are the smaller requests (15 MB
+        of audio, about 20 MB once base64-encoded, against the transcription
+        style's 25 MB), so the other style is advice only for a transcription
+        request.
+        """
+        chat = remote_batch_part_limit("custom", self._model, CUSTOM_API_MODE_CHAT)
+        chat_size = (
+            f"at most {chat.seconds:.0f} s or {chat.max_bytes // 1_000_000} MB, "
+            f"about {chat.max_bytes * 4 // 3 // 1_000_000} MB base64-encoded"
+        )
+        refuses = "The gateway or a proxy in front of it refuses a request this large"
+        if self._api_mode == CUSTOM_API_MODE_CHAT:
+            return (
+                f" {refuses}; the chat style's parts are {chat_size}, and the app "
+                "cannot make them smaller. Raise the body limit there, or dictate "
+                "shorter recordings. The transcription API style sends larger "
+                "requests, so it will not help."
+            )
+        limit = remote_batch_part_limit("custom", self._model, self._api_mode)
+        return (
+            f" {refuses}; the app sends parts of at most {limit.seconds:.0f} s "
+            f"or {limit.max_bytes // 1_000_000} MB and cannot make them smaller. "
+            "Raise the body limit there, dictate shorter recordings, or try the "
+            f"chat style, whose parts are smaller ({chat_size})."
+        )
+
     def _http_error(
         self, exc: urllib.error.HTTPError, what: str, detail: str | None = None
     ) -> TranscriptionError:
@@ -674,13 +703,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         if exc.code in (404, 405):
             hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
         elif exc.code == 413:
-            limit = remote_batch_part_limit("custom", self._model, self._api_mode)
-            hint = (
-                " The gateway or a proxy in front of it refuses a request this "
-                f"large; the app sends parts of at most {limit.seconds:.0f} s or "
-                f"{limit.max_bytes // 1_000_000} MB and cannot make them smaller. "
-                "Raise the body limit there, or use the other API style."
-            )
+            hint = self._request_too_large_hint()
         return TranscriptionError(
             f"{_PROVIDER_NAME} {what} failed (HTTP {exc.code}){suffix}{hint}"
         )

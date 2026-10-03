@@ -480,7 +480,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     MB for the transcription style, 5 min / 15 MB for the chat style
     (base64 grows the body by a third). A gateway or proxy with a lower
     body limit answers 413; the error says so and names these figures
-    (`_http_error`), because no setting can shrink the parts.
+    (`_request_too_large_hint`), because no setting can shrink the parts.
+    The advice depends on the style: the chat parts are the *smaller*
+    requests (15 MB of audio is about 20 MB base64-encoded, against 25 MB),
+    so a chat 413 says "raise the limit or dictate shorter recordings; the
+    transcription style sends larger requests", and a transcription 413
+    adds "or try the chat style" with its figures. The first version told a
+    chat user to switch to the larger style.
   - **Chat audio is `wav` or `mp3` only** (2026-10-03): `input_audio.format`
     takes those two values in the OpenAI shape, and the app ships no
     decoder, so another suffix (an imported `.m4a`, `.flac`, ...) is refused

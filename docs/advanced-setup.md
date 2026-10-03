@@ -499,8 +499,11 @@ a message (put it into the script instead) rather than run as something else.
 sent in parts cut at pauses. These part sizes (at most 25 MB or 15 MB per
 request) are fixed. If a gateway or a proxy in front of it has a lower request
 size limit it answers HTTP 413 ("Request Entity Too Large"); the message then
-names the sizes, and the fix is to raise the limit there or to use the other
-API style. The chat style takes WAV and MP3 audio only: a recording in another
+names the sizes, and the fix is to raise the limit there or to dictate shorter
+recordings. The chat style's requests are the smaller ones (15 MB of audio,
+about 20 MB base64-encoded, against 25 MB), so switching to it can help when
+the limit lies in between; switching from it to the transcription API style
+cannot. The chat style takes WAV and MP3 audio only: a recording in another
 format (an imported M4A or FLAC, for example) is refused with a message that
 points to the transcription API style, which sends the file unchanged. A chat
 reply that the model's output limit cut off is an error, not a shorter

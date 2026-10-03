@@ -229,6 +229,18 @@ def test_a_413_names_the_fixed_part_size(server, mode, size):
     assert "HTTP 413" in message
     assert size in message
     assert "body limit" in message
+    if mode == "chat":
+        # The chat parts are the smaller ones (15 MB raw, about 20 MB once
+        # base64-encoded, against 25 MB): advising the other style here sent
+        # the user to larger requests (review of 2026-10-03).
+        assert "20 MB base64" in message
+        assert "shorter recordings" in message
+        assert "will not help" in message
+        assert "try the chat style" not in message
+    else:
+        assert "try the chat style" in message
+        assert "15 MB" in message
+        assert "shorter recordings" in message
 
 
 # -- chat completions -------------------------------------------------------
