@@ -99,6 +99,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     remains, Known limitations). The finalize registers its audio
     (`_submit_stream_finalize(wav_bytes=...)`) so its failure is promoted
     like a batch failure.
+  - **Every writer of the slot goes through `_hold_failed_audio_for_retry`**
+    (2026-10-03): a failure used to replace the slot, so a queued dictation
+    failing while another failure waited for Retry (or while its retry ran)
+    took that one's only in-memory copy. The replaced failure now waits in
+    `_older_failed_audio` (oldest first, at most `RETRY_OLDER_FAILURES_MAX`
+    = 2, then the oldest is dropped with a `retry_failure_dropped` warning);
+    the same failure promoted again (a failed retry) is the slot already and
+    is not stacked. `_retire_retry_audio_delivered_by` clears the slot and
+    brings the newest older failure forward, and drops an older entry that
+    is itself the delivered recording. Retry still takes the slot only.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints

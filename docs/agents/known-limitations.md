@@ -231,10 +231,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;
   `keep_transcript_in_clipboard` closes it. Not measured on a live browser.
-- **The retry slot holds one failure**: a queued job Q failing during a retry
-  of W replaces `_last_failed_wav_bytes`; a second Retry stops W's retry (W
-  stays in the store, canceled) and transcribes Q. Holding both needs a
-  failure queue.
+- **Retry reaches the newest failed recording first, and only three are held**
+  (2026-10-03): a failure pushes the slot's holder behind it
+  (`_older_failed_audio`, `RETRY_OLDER_FAILURES_MAX`), the oldest of more than
+  three is dropped (`retry_failure_dropped` in the log; their audio is only in
+  memory), and the overlay and tray offer no way to pick an older one: it
+  comes forward once the newer is resolved. A second Retry while W's retry
+  runs still stops it (W's late result is kept in history), so W stays
+  behind the slot until a Retry resolves it.
 - **Two Retry presses can write two history entries**: a remote provider runs
   the stopped first retry to completion and it is kept (a finished
   transcription is never discarded). Local engines cancel cooperatively.

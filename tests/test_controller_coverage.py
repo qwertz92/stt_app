@@ -2483,6 +2483,73 @@ def test_a_different_recordings_success_leaves_the_promoted_failure_retryable():
     _ = app
 
 
+def _a_failure_then_queued_failures(extra_failures=0):
+    """W fails, then `extra_failures + 1` queued dictations fail behind a
+    newer foreground session. Returns the controller, app, the submissions
+    the worker saw and the store."""
+    store = _StoreWithIds("rec-W")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    captured = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, wav, _snapshot, job=None: captured.append((token, wav))
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._active_request_token = 3
+    controller._store_request_audio(3, b"wav-W", settings)
+    controller._on_transcription_failed("W failed", request_token=3)
+    for index in range(extra_failures + 1):
+        # A newer session is the foreground, so this one fails in the background.
+        store.recording_id = f"rec-Q{index}"
+        controller._register_transcription_job(10 + index, settings, "batch")
+        controller._store_request_audio(10 + index, f"wav-Q{index}".encode(), settings)
+        controller._register_transcription_job(50 + index, settings, "batch")
+        controller._active_request_token = 50 + index
+        controller._on_transcription_failed(
+            f"Q{index} failed", request_token=10 + index
+        )
+    return controller, app, captured, store
+
+
+def test_a_second_failure_keeps_the_first_one_retryable():
+    """The slot holds the newest failure, and the one it replaces stays
+    retryable behind it: a queued dictation failing while another failure
+    waited for Retry used to leave that one's only in-memory copy gone."""
+    controller, app, captured, _store = _a_failure_then_queued_failures()
+    assert controller._last_failed_wav_bytes == b"wav-Q0"
+
+    assert controller.retry_last_transcription() is True
+    token = controller._active_request_token
+    assert captured[-1] == (token, b"wav-Q0")
+    controller._on_transcription_ready("Q retried", request_token=token)
+
+    # Q's success retired it; W is the next failure to retry.
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert controller._last_failed_recording_id == "rec-W"
+    assert controller.retry_last_transcription() is True
+    assert captured[-1][1] == b"wav-W"
+    controller._on_transcription_ready("W retried", request_token=captured[-1][0])
+    assert controller._last_failed_wav_bytes == b""
+    controller.shutdown()
+    _ = app
+
+
+def test_only_the_newest_failures_stay_retryable():
+    """Memory is bounded: three failures are held, the oldest goes first."""
+    controller, app, _captured, _store = _a_failure_then_queued_failures(
+        extra_failures=3
+    )
+    held = [
+        controller._last_failed_wav_bytes,
+        *(wav for wav, _id in reversed(controller._older_failed_audio)),
+    ]
+
+    assert held == [b"wav-Q3", b"wav-Q2", b"wav-Q1"]
+    controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize("known", [True, False], ids=["known id", "unknown id"])
 def test_a_background_success_completes_its_own_recording(known):
     """A queued transcription delivered while a newer session is active marks

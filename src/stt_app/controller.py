@@ -56,6 +56,7 @@ from .config import (
     QUEUE_ROW_KIND_UNDELIVERED,
     RECORDINGS_MAX_COUNT_UNLIMITED,
     REMOTE_BATCH_MAX_PART_SECONDS,
+    RETRY_OLDER_FAILURES_MAX,
     SILERO_BATCH_MAX_SCAN_S,
     SILERO_BATCH_MIN_PROBABILITY,
     SILERO_BATCH_QUIET_SPEECH_GAIN,
@@ -706,6 +707,10 @@ class DictationController(QtCore.QObject):
         # store's slot holds someone else's recording. A retry hands it to
         # its job, so its marks never touch the slot's current holder.
         self._last_failed_recording_id: str = ""
+        # Failures the slot replaced, oldest first, as (bytes, recording id):
+        # retryable once the slot's own failure is resolved
+        # (`_hold_failed_audio_for_retry`, `_retire_retry_audio_delivered_by`).
+        self._older_failed_audio: list[tuple[bytes, str]] = []
         # The id the store handed back on the last `_persist_last_recording_audio`
         # call, "" when nothing was written. Read by the two abort roads that
         # retain the bytes they just persisted for Retry.
@@ -2099,10 +2104,11 @@ class DictationController(QtCore.QObject):
             # holds retryable, as the dying stream's road does. Written
             # unconditionally, a timeout with no late bytes emptied that
             # failure's only copy.
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_recording_id = ""
-            if self._persist_last_recording_audio(wav_bytes):
-                self._last_failed_recording_id = self._last_persisted_recording_id
+            persisted = self._persist_last_recording_audio(wav_bytes)
+            self._hold_failed_audio_for_retry(
+                wav_bytes, self._last_persisted_recording_id if persisted else ""
+            )
+            if persisted:
                 try:
                     self._last_recording_store.mark_failed(
                         detail,
@@ -3411,14 +3417,41 @@ class DictationController(QtCore.QObject):
         if payload is None:
             return False
         wav_bytes, _settings = payload
-        self._last_failed_wav_bytes = wav_bytes
         # The identity a retry of these bytes carries: the failed job's own
         # recording, recorded when it was registered -- never the store's
         # slot at retry time, which a newer recording may hold by then.
-        self._last_failed_recording_id = (
-            job.source_recording_id if job is not None else ""
+        self._hold_failed_audio_for_retry(
+            wav_bytes, job.source_recording_id if job is not None else ""
         )
         return True
+
+    def _hold_failed_audio_for_retry(self, wav_bytes: bytes, recording_id: str) -> None:
+        """Make these bytes the Retry slot and keep the failure it replaces.
+
+        Every writer of the slot comes through here. A failure used to
+        replace the slot outright, so a queued dictation failing while another
+        failure waited for Retry (or while its retry ran) took that one's only
+        copy from memory. The replaced failure now waits behind the slot, up
+        to `RETRY_OLDER_FAILURES_MAX`, and comes forward when the slot's own
+        recording is resolved. The same failure promoted again (a failed
+        retry) is the slot already and is not stacked.
+        """
+        held = (bytes(wav_bytes), recording_id)
+        replaced = (self._last_failed_wav_bytes, self._last_failed_recording_id)
+        older = [entry for entry in self._older_failed_audio if entry != held]
+        if replaced[0] and replaced != held:
+            older.append(replaced)
+        while len(older) > RETRY_OLDER_FAILURES_MAX:
+            dropped = older.pop(0)
+            self._logger.warning(
+                "retry_failure_dropped bytes=%d recording_id=%s: more than %d "
+                "failed recordings are waiting for Retry",
+                len(dropped[0]),
+                dropped[1] or "n/a",
+                RETRY_OLDER_FAILURES_MAX + 1,
+            )
+        self._older_failed_audio = older
+        self._last_failed_wav_bytes, self._last_failed_recording_id = held
 
     def _drop_request_audio(self, request_token: int) -> None:
         self._request_audio_by_token.pop(request_token, None)
@@ -3454,13 +3487,21 @@ class DictationController(QtCore.QObject):
         if payload is None:
             return
         wav_bytes, _settings = payload
-        if not self._last_failed_wav_bytes or wav_bytes != self._last_failed_wav_bytes:
-            return
         delivered_id = job.source_recording_id if job is not None else ""
-        if delivered_id != self._last_failed_recording_id:
+        delivered = (wav_bytes, delivered_id)
+        # A failure waiting behind the slot is resolved the same way: this
+        # delivery is its retry.
+        self._older_failed_audio = [
+            entry for entry in self._older_failed_audio if entry != delivered
+        ]
+        if delivered != (self._last_failed_wav_bytes, self._last_failed_recording_id):
             return
-        self._last_failed_wav_bytes = b""
-        self._last_failed_recording_id = ""
+        if not self._last_failed_wav_bytes:
+            return
+        # The newest of the failures behind it comes forward.
+        (self._last_failed_wav_bytes, self._last_failed_recording_id) = (
+            self._older_failed_audio.pop() if self._older_failed_audio else (b"", "")
+        )
 
     # -- Transcription queue --------------------------------------------------
 
@@ -6906,12 +6947,13 @@ class DictationController(QtCore.QObject):
                 self._teardown_active_stream_runtime()
             )
             if wav_bytes:
-                self._last_failed_wav_bytes = bytes(wav_bytes)
                 # "" when this write failed, and a retry of these bytes then
                 # marks nothing; the store then holds the previous recording,
                 # which this session does not own.
                 owns_last_recording = self._persist_last_recording_audio(wav_bytes)
-                self._last_failed_recording_id = self._last_persisted_recording_id
+                self._hold_failed_audio_for_retry(
+                    wav_bytes, self._last_persisted_recording_id
+                )
                 session_recording_id = self._last_persisted_recording_id
                 preserved_audio = True
         self._streaming_recording = False
