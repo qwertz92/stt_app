@@ -24,6 +24,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -360,6 +361,23 @@ def _command_arguments(command: str) -> list[str]:
 _CMD_METACHARACTERS = re.compile(r'[&|<>^%"\r\n]')
 
 
+# What CreateProcess starts: programs, and batch files through cmd.exe.
+_STARTABLE_SUFFIXES = (".exe", ".com", ".cmd", ".bat")
+
+
+def _createprocess_search_path() -> str | None:
+    """The directories CreateProcess searched, in its order; None off Windows
+    (`shutil.which` then uses PATH alone)."""
+    if os.name != "nt":
+        return None
+    directories = [os.path.dirname(sys.executable)]
+    system_root = os.environ.get("SYSTEMROOT")
+    if system_root:
+        directories += [os.path.join(system_root, "System32"), system_root]
+    directories.append(os.environ.get("PATH", ""))
+    return os.pathsep.join(directories)
+
+
 def _resolve_program(arguments: list[str]) -> list[str]:
     """The arguments with the program looked up like a console would.
 
@@ -371,10 +389,25 @@ def _resolve_program(arguments: list[str]) -> list[str]:
     commands, which no quoting from here can prevent: such an argument is
     refused, naming the character and not the argument (it may be a secret).
     An unresolvable name is left as typed for the "not found" message.
+
+    The lookup order is CreateProcess's -- the application's directory, the
+    system directories, then PATH (the current directory comes first in
+    `shutil.which` itself, as it did for CreateProcess) -- so a same-named
+    tool earlier on PATH does not take the place of the one a key command
+    used to start. A file `PATHEXT` finds that Windows cannot start (a
+    `.vbs`, a `.js`) is refused by name, not left to fail with "not a valid
+    Win32 application".
     """
-    program = shutil.which(arguments[0])
+    program = shutil.which(arguments[0], path=_createprocess_search_path())
     if program is None:
         return arguments
+    if os.name == "nt" and not program.lower().endswith(_STARTABLE_SUFFIXES):
+        name = Path(program).name
+        raise TranscriptionError(
+            f"The key command resolves to {name}, which Windows cannot start "
+            f"directly. Call its interpreter explicitly (for example "
+            f"cscript {name}) or point the key command at a program."
+        )
     if program.lower().endswith((".cmd", ".bat")):
         for argument in arguments[1:]:
             found = _CMD_METACHARACTERS.search(argument)

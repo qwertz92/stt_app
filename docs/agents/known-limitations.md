@@ -227,16 +227,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   deleting `onnx_auto_preferred_devices` from `%APPDATA%\stt_app\settings.json`
   with the app closed. A stale entry costs speed, never correctness
   (2026-09-19).
-- **A key command whose wrapper does not wait for its tool can lose the
-  token** (P3, 2026-10-01, review of dedcde4). `run_bounded` ends the job
-  0.5 s after the direct child exits while a descendant still holds the
-  pipes, so a `.cmd` that runs `start /b` (or PowerShell `Start-Process`
-  without `-Wait`) and exits before its tool prints gets "printed no token".
-  Telling a late token from a forgotten grandchild needs reader threads that
-  see partial output instead of `communicate`. Workaround: make the wrapper
-  wait (`start /wait`, `-Wait`). When the job cannot be assigned (a nested
-  job that forbids it), the taskkill fallback cannot reach an orphan whose
-  parent exited, so such a run times out even though the token arrived.
 - **A resumed restore can run two timer chains for one record** (P4,
   2026-10-01, review of a404479). When the deferred timer sits in its
   readiness probe (outside the lock) while a new paste takes the record over,
@@ -244,20 +234,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   the new timer act on the record. It is never restored twice (the first
   success clears it), but the retry budget runs out about a second early. A
   per-record chain generation checked under the lock would close it.
-- **Custom endpoint trade-offs accepted after the 2026-10-03 review** (all
-  P4):
+- **Custom endpoint trade-offs kept after the 2026-10-03 review** (all P4):
   - A gateway that masks the key itself (LiteLLM-style "sk-...1234" plus a
     key hash in a 401 reason) is shown as sent: only the full stored key and
-    the key command's token are recognised and scrubbed.
+    the key command's token are recognised and scrubbed. Kept: mask formats
+    differ per gateway, what shows is the key's first and last few characters,
+    not the key, and a guessed pattern would give false assurance.
   - Scrubbing replaces every occurrence of a credential of 8+ characters, so
     a placeholder key that is an ordinary word (`localhost`) would cut that
-    word out of an error message.
-  - A key command resolved through PATHEXT to a `.vbs`/`.js` script fails
-    with "not a valid Win32 application" instead of "not found"; call its
-    interpreter explicitly.
+    word out of an error message. Kept on purpose: a cut word is cosmetic, a
+    real key that happens to be alphabetic and left in a log is not; a
+    "dictionary word" test could not tell the two apart.
   - Arguments to a `.cmd`/`.bat` key command containing `& | < > ^ %` are
     refused, because cmd.exe interprets them whatever the quoting (e.g. an
-    `az --query "accessToken | [0]"`); put such a call into a script.
-  - `shutil.which` searches the current directory and PATH, while
-    CreateProcess searched the app directory and System32 first, so a
-    same-named tool earlier in PATH can now win. Not demonstrated.
+    `az --query "accessToken | [0]"`); put such a call into a script. By
+    design: no quoting from the caller is safe against cmd.exe.

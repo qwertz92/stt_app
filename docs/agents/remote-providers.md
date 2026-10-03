@@ -377,7 +377,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     cmd.exe reading `& | < > ^ %` in an argument (reproduced: `x.cmd "a&b"`
     ran `b`), so `_resolve_program` refuses such an argument for a batch
     target, naming the character, never the argument (it may be a secret).
-    An unresolvable name stays as typed for the "not found" message.
+    An unresolvable name stays as typed for the "not found" message. The
+    lookup order is CreateProcess's (`_createprocess_search_path`: the
+    application's directory, `System32`, the Windows directory, then PATH;
+    `shutil.which` puts the current directory first itself), and a file
+    `PATHEXT` finds that Windows cannot start (`.vbs`, `.js`) is refused by
+    name with "call its interpreter explicitly" (2026-10-03).
     **It runs through `process_tree.run_bounded`, never `subprocess.run`**
     (2026-10-01): `subprocess.run(timeout=...)` kills the direct child and
     then reads the pipes to the end, which a grandchild holding them
@@ -393,7 +398,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (`NtResumeProcess`, since `Popen` closes the thread handle), and once the
     direct child has exited and the pipes stay open
     `_PIPES_GRACE_AFTER_EXIT_S` (0.5 s) longer, the job is terminated and
-    the child's own output and exit code returned. The job has no
+    the child's own output and exit code returned. That grace applies when
+    stdout already holds output or the child failed; a child that exited 0
+    with nothing on stdout may have left its tool to print the token (`start
+    /b`, `Start-Process` without `-Wait`), so the pipes are then waited for
+    until the call's timeout (2026-10-03: `_PipeReader` threads collect the
+    bytes, so "nothing yet" is told from "complete"; `communicate` could not).
+    Without a job (a nested job forbids one) the orphan survives the
+    `taskkill`, and the output collected so far is returned instead of a
+    timeout. The job has no
     kill-on-close limit, so a helper that detached a daemon from its stdio
     leaves it running. POSIX does the same through `killpg` on the child's
     session, which reaches the group after the leader exited.
