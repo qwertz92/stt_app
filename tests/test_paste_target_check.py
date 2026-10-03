@@ -79,7 +79,9 @@ class _Reader:
         ),
     ],
 )
-def test_both_sources_must_say_no_caret(label, reader, expected):
+def test_not_a_text_field_only_for_a_chromium_window_without_any_caret(
+    label, reader, expected
+):
     assert read_focused_caret(reader).verdict == expected, label
 
 
