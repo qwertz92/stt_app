@@ -182,11 +182,30 @@ def query_input_devices() -> tuple[list[InputDeviceInfo], bool]:
         except (TypeError, ValueError):
             continue
         name = str(device.get("name", "")).strip()
-        if not name or name in seen:
+        if not name:
             continue
+        name = _distinct_name(name, seen)
         seen.add(name)
         result.append(InputDeviceInfo(name=name, index=index))
     return result, True
+
+
+def _distinct_name(name: str, taken: set[str]) -> str:
+    """`name`, or `name (#2)`, `name (#3)` ... for a later device of that name.
+
+    Two identical microphones list under one name, and the persisted
+    selection is a name, so the second one could never be chosen. The first
+    keeps the plain name -- every existing selection still resolves to it --
+    and the others are numbered in PortAudio's enumeration order, the same
+    order every query sees until the next re-enumeration. A number never
+    reuses a name another device really has.
+    """
+    if name not in taken:
+        return name
+    number = 2
+    while f"{name} (#{number})" in taken:
+        number += 1
+    return f"{name} (#{number})"
 
 
 class InputDeviceChoices(NamedTuple):
@@ -235,7 +254,9 @@ def input_device_choices(selected_name: str) -> InputDeviceChoices:
 
 
 def list_input_devices() -> list[InputDeviceInfo]:
-    """Connected input devices of the preferred host API, first-name-wins.
+    """Connected input devices of the preferred host API.
+
+    Devices sharing a name are numbered (`query_input_devices`).
 
     Reads PortAudio's current (possibly stale) device list; pair with
     ``try_refresh_input_devices`` to pick up hot-plugged hardware.

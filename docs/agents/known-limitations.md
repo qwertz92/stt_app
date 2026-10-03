@@ -25,9 +25,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   "loadable from Model Dir" (`WhisperModel(download_root=...)` reads one
   root). `cached_model_paths` / `delete_cached_model` still reach it. Fix needs
   per-model paths in the scan subprocess protocol.
-- **Two input devices with the same name are one entry**:
-  `resolve_input_device` opens the first matching index. Names survive
-  re-enumeration and reboot; PortAudio indices do not.
 - Streaming inserts are append-only; focus-change detection is polled, so a
   very brief switch can be missed.
 - **The post-pause append gate is energy plus a speech check that admits

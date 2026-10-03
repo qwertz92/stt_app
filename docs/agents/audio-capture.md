@@ -23,7 +23,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
 - **Device selection and changes**:
   - `input_device_name` (empty = default) resolves to an index only at open
     (`audio_devices.resolve_input_device`); a missing selected microphone
-    fails the recording -- never record from another device.
+    fails the recording -- never record from another device. Devices sharing
+    a name are listed as `Name`, `Name (#2)`, `Name (#3)` in PortAudio's
+    enumeration order (`_distinct_name`; the first keeps the plain name so
+    old selections still resolve, a number never reuses a real device's name).
+    The order is stable only until the next re-enumeration; Windows usually
+    makes endpoint names unique itself, so this is for the rare twin.
   - **Every `sd.InputStream` open passes
     `audio_devices.input_stream_extra_settings(device_index)`**
     (`WasapiSettings(auto_convert=True)`): WASAPI shared mode rejects 16 kHz

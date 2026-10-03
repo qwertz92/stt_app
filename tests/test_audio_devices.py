@@ -84,7 +84,7 @@ def _clean_live_stream_registry(monkeypatch):
     monkeypatch.setattr(audio_devices, "_live_stream_ids", set())
 
 
-def test_list_prefers_wasapi_filters_inputs_and_dedupes(monkeypatch):
+def test_list_prefers_wasapi_filters_inputs_and_numbers_twins(monkeypatch):
     monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
 
     devices = list_input_devices()
@@ -92,6 +92,34 @@ def test_list_prefers_wasapi_filters_inputs_and_dedupes(monkeypatch):
     assert devices == [
         InputDeviceInfo(name="Headset Microphone (Full WASAPI Name)", index=2),
         InputDeviceInfo(name="USB Microphone", index=4),
+        InputDeviceInfo(name="USB Microphone (#2)", index=5),
+    ]
+
+
+def test_the_second_of_two_identical_microphones_can_be_selected(monkeypatch):
+    """Both listed under one name, only the first was ever reachable: the
+    persisted selection is a name and the lookup took the first match."""
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
+
+    assert resolve_input_device("USB Microphone") == 4
+    assert resolve_input_device("USB Microphone (#2)") == 5
+
+
+def test_a_number_never_reuses_the_name_of_a_real_device(monkeypatch):
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic (#2)", "hostapi": 0, "max_input_channels": 1},
+            {"name": "Mic", "hostapi": 0, "max_input_channels": 1},
+        ],
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert [info.name for info in list_input_devices()] == [
+        "Mic",
+        "Mic (#2)",
+        "Mic (#3)",
     ]
 
 
