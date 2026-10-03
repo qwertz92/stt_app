@@ -241,13 +241,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     first; `benchmark_environment._node_package_version` reads there first.
   - A running source-tree app holds its Node child's native DLLs; run
     `npm ci --omit=dev` only with the app closed.
-- **Python dependencies are exact pins, updated 2026-09-21 and measured
-  through their code** (locked: onnxruntime 1.30.0, huggingface-hub 1.32.0,
-  hf-xet 1.6.0, ctranslate2 4.8.2; direct pins are in `pyproject.toml`).
+- **Python dependencies are exact pins, updated 2026-10-03 and measured
+  through their code** (locked: onnxruntime 1.30.0, onnxruntime-genai 0.17.1,
+  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.0; direct
+  pins are in `pyproject.toml`).
   `uv lock --upgrade` moves only transitive packages; `uv tree --outdated
   --depth 1` shows stale direct pins; `requirements-win.txt` /
   `requirements-dev-win.txt` mirror them (a test compares). Evidence: suite,
-  `scripts/release_check_providers.py`, one real model per runtime.
+  `scripts/release_check_providers.py`, one real model per runtime. `uv audit`
+  and `pip-audit` report no known vulnerability on the lock.
+  - **`av` is a direct pin on the last 18.x, below the newest (19.0.1,
+    2026-10-03), because faster-whisper 1.2.1 breaks on 19.** It requires only
+    `av>=11` but calls `av.open(..., metadata_errors="ignore")`, which av 19
+    rejects with `TypeError`; every file-path transcription through
+    faster-whisper then fails (measured: `LocalFasterWhisperTranscriber.
+    transcribe_batch` on av 19.0.1, fine on 18.1.0;
+    `test_installed_av_decodes_a_file_the_way_faster_whisper_opens_it` fails on
+    19). Lift the pin when a faster-whisper release newer than 1.2.1 supports
+    av 19, and re-run that test.
+  - **`huggingface-hub` stays 1.x because `tokenizers` 0.23.2 requires
+    `<2.0`** (2.1.1 exists); nothing to measure until tokenizers lifts it. The
+    1.32.0 download claims below (no partial resume, process-unique temp
+    files) were re-checked on 1.33.0: its diff touches no resume or temp-file
+    path, and the download/progress suites pass.
+  - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
+    Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
+    streaming, at equal or better speed (2026-10-03, CPU).
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
