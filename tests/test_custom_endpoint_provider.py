@@ -493,6 +493,95 @@ def test_a_second_401_fails_without_the_token_in_the_message(runs, server):
     assert SECRET_TOKEN not in str(raised.value)
 
 
+def test_a_401_shows_the_reason_the_gateway_gave(server):
+    server(_http_error(401, '{"error": {"message": "Key expired on 2026-09-01"}}'))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 401" in message
+    assert "Key expired on 2026-09-01" in message
+
+
+def test_a_401_that_echoes_the_key_shows_no_reason(server):
+    """LiteLLM answers "Invalid proxy server token passed. Received API Key =
+    <the key>"; the key must not reach the overlay or the log."""
+    key = "sk-secret-TOKEN-123"
+    server(
+        _http_error(
+            401, json.dumps({"error": {"message": f"Invalid token. Received {key}"}})
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=key).transcribe_batch(WAV)
+    message = str(raised.value)
+    assert "HTTP 401" in message
+    assert key not in message
+    assert "Invalid token" not in message
+
+
+@pytest.mark.parametrize("use_command", [False, True])
+def test_a_secret_is_scrubbed_from_any_other_error_detail(runs, server, use_command):
+    secret = "sk-secret-TOKEN-123"
+    if use_command:
+        runs(_completed(f"{secret}\n"))
+        transcriber = _transcriber(api_key="", key_command="helper")
+    else:
+        transcriber = _transcriber(api_key=secret)
+    server(
+        _http_error(
+            400, f'{{"error": {{"message": "Bad header Bearer {secret} sent"}}}}'
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber.transcribe_batch(WAV)
+    message = str(raised.value)
+    assert secret not in message
+    assert "Bad header Bearer [hidden] sent" in message
+
+
+def test_a_secret_is_scrubbed_from_the_model_list_error_too(server):
+    secret = "sk-secret-TOKEN-123"
+    server(_http_error(500, f'{{"error": "key {secret} broke"}}'))
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_key=secret).list_models()
+    assert secret not in str(raised.value)
+    assert "key [hidden] broke" in str(raised.value)
+
+
+def test_a_short_placeholder_key_is_not_scrubbed(server):
+    """`none` is a placeholder for a server without authentication, and as a
+    word it would be cut out of every message."""
+    server(_http_error(500, '{"error": "none of the backends answered"}'))
+    with pytest.raises(TranscriptionError, match="none of the backends answered"):
+        _transcriber(api_key="none").transcribe_batch(WAV)
+
+
+def test_a_gateway_error_object_under_detail_is_rendered_as_its_message(server):
+    server(
+        _http_error(
+            403, '{"detail": {"error": "user not allowed to access model whisper-1"}}'
+        )
+    )
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber().transcribe_batch(WAV)
+    assert "user not allowed to access model whisper-1" in str(raised.value)
+    assert "{" not in str(raised.value)
+
+
+def test_a_chat_reply_that_is_an_error_object_shows_its_text(server):
+    server({"error": {"message": "model gpt-x not found", "type": "invalid"}})
+    with pytest.raises(TranscriptionError) as raised:
+        _transcriber(api_mode="chat").transcribe_batch(WAV)
+    assert "model gpt-x not found" in str(raised.value)
+    assert "no message content" not in str(raised.value)
+
+
+def test_a_transcription_reply_that_is_an_error_object_shows_its_text(server):
+    server({"error": {"message": "model whisper-1 not found"}})
+    with pytest.raises(TranscriptionError, match="model whisper-1 not found"):
+        _transcriber().transcribe_batch(WAV)
+
+
 def test_a_stored_key_is_not_retried_after_a_401(server):
     fake = server(_http_error(401))
     with pytest.raises(TranscriptionError, match="HTTP 401"):
@@ -868,15 +957,18 @@ def test_a_cmd_shim_whose_grandchild_holds_the_pipe_is_bounded_and_ended(
         encoding="utf-8",
     )
     monkeypatch.setenv("PATH", f"{tmp_path};{provider_module.os.environ['PATH']}")
-    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 2.0)
+    # Long enough for cmd.exe, python and the grandchild to start on a busy
+    # machine (2 s was not: the grandchild had not started when the tree was
+    # ended, and the heartbeat check below saw nothing to compare).
+    monkeypatch.setattr(provider_module, "CUSTOM_KEY_COMMAND_TIMEOUT_S", 6.0)
     transcriber = _transcriber(api_key="", key_command="hang-shim")
 
     started = time.monotonic()
     try:
-        with pytest.raises(TranscriptionError, match="did not finish within 2 s"):
+        with pytest.raises(TranscriptionError, match="did not finish within 6 s"):
             transcriber._run_key_command()
         elapsed = time.monotonic() - started
-        assert elapsed < 10.0, f"the timeout of 2 s took {elapsed:.1f} s"
+        assert elapsed < 15.0, f"the timeout of 6 s took {elapsed:.1f} s"
         time.sleep(0.5)
         before = _heartbeat(heartbeat)
         assert before, "the grandchild never started"
@@ -1226,13 +1318,14 @@ def test_an_html_model_list_names_the_page_rather_than_json(server):
 
 
 def test_a_json_answer_without_text_is_an_error_naming_its_keys(server):
-    """`{"error": ...}` with HTTP 200, or another shape, is not "no speech"."""
-    server({"error": {"message": "model not loaded"}, "id": "x"})
+    """A JSON shape without `text` is not "no speech". (An `error` member is
+    shown by its own text instead: see the 200-with-error test.)"""
+    server({"result": "x", "id": "x"})
     with pytest.raises(TranscriptionError) as raised:
         _transcriber().transcribe_batch(WAV)
     message = str(raised.value)
     assert "'text'" in message
-    assert "error" in message and "id" in message
+    assert "result" in message and "id" in message
 
 
 def test_an_empty_text_field_is_still_an_empty_transcript(server):

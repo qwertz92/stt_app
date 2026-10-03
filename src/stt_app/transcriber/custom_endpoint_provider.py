@@ -15,6 +15,7 @@ gateway may route audio only to a multimodal LLM:
 from __future__ import annotations
 
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -58,6 +59,7 @@ from ._http_utils import (
     multipart_form_data,
     normalize_transcript_text,
     read_http_error_detail,
+    reply_error_text,
     transcript_from_json,
 )
 from .base import (
@@ -99,6 +101,10 @@ _SPEECH_SYNTHESIS_NAME = re.compile(
 # A base URL pasted together with one of the routes the app appends.
 _PASTED_ROUTES = ("/audio/transcriptions", "/chat/completions", "/models")
 _ERROR_TAIL_MAX_CHARS = 200
+# A key shorter than this is a placeholder ("none" for a server without
+# authentication) and, as a word, would be cut out of every message.
+_MIN_SECRET_CHARS = 8
+_SCRUBBED = "[hidden]"
 _CODE_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n?(.*?)\n?```$", re.DOTALL)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("„", "“"))
 
@@ -566,6 +572,34 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             request.add_header("Content-Type", content_type)
         return request
 
+    def _secrets(self) -> list[str]:
+        return [
+            secret
+            for secret in (self._cached_token, self._api_key)
+            if len(secret) >= _MIN_SECRET_CHARS
+        ]
+
+    def _scrub(self, text: str) -> str:
+        for secret in self._secrets():
+            text = text.replace(secret, _SCRUBBED)
+        return text
+
+    @contextlib.contextmanager
+    def _errors_scrubbed(self):
+        """Lets no error raised inside show the token or the stored key.
+
+        A gateway may echo the credential it refused ("Received API Key =
+        ...", a request dump); the detail reaches the overlay and its log.
+        """
+        try:
+            yield
+        except TranscriptionError as exc:
+            message = str(exc)
+            scrubbed = self._scrub(message)
+            if scrubbed == message:
+                raise
+            raise TranscriptionError(scrubbed) from None
+
     def _http_error(
         self, exc: urllib.error.HTTPError, what: str, detail: str | None = None
     ) -> TranscriptionError:
@@ -575,9 +609,15 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 if self._key_command
                 else "the API key"
             )
+            reason = read_http_error_detail(exc) if detail is None else detail
+            # A gateway's reason ("Key expired on ...") tells what to do, but
+            # one that echoes the key it refused is dropped, not masked: a
+            # partly masked key is still part of the key.
+            if any(secret in reason for secret in self._secrets()):
+                reason = ""
             return TranscriptionError(
                 f"{_PROVIDER_NAME}: authentication failed (HTTP 401); the "
-                f"endpoint refused {source}."
+                f"endpoint refused {source}" + (f": {reason}" if reason else ".")
             )
         if exc.code == 429:
             return TranscriptionError(
@@ -617,18 +657,19 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         (embeddings, image generation, rerankers) are left out; an entry
         without a `mode` is kept, since most servers do not send one.
         """
-        try:
-            payload = self._send(
-                lambda token: self._request("/models", token, data=None),
-                timeout=_MODELS_TIMEOUT_S,
-                max_bytes=_MAX_MODELS_RESPONSE_BYTES,
-            )
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc, "model list") from exc
-        except TranscriptionError:
-            raise
-        except Exception as exc:
-            raise self._other_error(exc, "model list") from exc
+        with self._errors_scrubbed():
+            try:
+                payload = self._send(
+                    lambda token: self._request("/models", token, data=None),
+                    timeout=_MODELS_TIMEOUT_S,
+                    max_bytes=_MAX_MODELS_RESPONSE_BYTES,
+                )
+            except urllib.error.HTTPError as exc:
+                raise self._http_error(exc, "model list") from exc
+            except TranscriptionError:
+                raise
+            except Exception as exc:
+                raise self._other_error(exc, "model list") from exc
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
         except ValueError as exc:
@@ -700,24 +741,25 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
-        try:
-            if isinstance(audio_source, (bytes, bytearray)):
-                audio_bytes = bytes(audio_source)
-                filename = "audio.wav"
-            else:
-                path = Path(audio_source)
-                audio_bytes = path.read_bytes()
-                filename = path.name or "audio.wav"
-            self._emit_progress(progress_text)
-            if self._api_mode == CUSTOM_API_MODE_CHAT:
-                return self._chat_transcribe(audio_bytes, filename)
-            return self._transcriptions_transcribe(audio_bytes, filename)
-        except urllib.error.HTTPError as exc:
-            raise self._http_error(exc, "transcription") from exc
-        except TranscriptionError:
-            raise
-        except Exception as exc:
-            raise self._other_error(exc, "transcription") from exc
+        with self._errors_scrubbed():
+            try:
+                if isinstance(audio_source, (bytes, bytearray)):
+                    audio_bytes = bytes(audio_source)
+                    filename = "audio.wav"
+                else:
+                    path = Path(audio_source)
+                    audio_bytes = path.read_bytes()
+                    filename = path.name or "audio.wav"
+                self._emit_progress(progress_text)
+                if self._api_mode == CUSTOM_API_MODE_CHAT:
+                    return self._chat_transcribe(audio_bytes, filename)
+                return self._transcriptions_transcribe(audio_bytes, filename)
+            except urllib.error.HTTPError as exc:
+                raise self._http_error(exc, "transcription") from exc
+            except TranscriptionError:
+                raise
+            except Exception as exc:
+                raise self._other_error(exc, "transcription") from exc
 
     def _transcription_fields(self) -> list[tuple[str, str]]:
         fields: list[tuple[str, str]] = [("model", self._model)]
@@ -829,12 +871,19 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
 
     @staticmethod
     def _chat_text(payload: bytes) -> str:
+        parsed = None
         try:
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
             choice = parsed["choices"][0]
             message = choice["message"]
             content = message.get("content")
         except (ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            error_text = reply_error_text(parsed)
+            if error_text:
+                raise TranscriptionError(
+                    f"{_PROVIDER_NAME}: the endpoint answered HTTP 200 with an "
+                    f"error: {error_text}"
+                ) from exc
             raise TranscriptionError(
                 f"{_PROVIDER_NAME}: the chat reply has no message content."
             ) from exc

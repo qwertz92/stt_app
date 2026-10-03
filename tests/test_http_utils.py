@@ -11,6 +11,7 @@ from stt_app.transcriber._http_utils import (
     multipart_form_data,
     read_http_error_detail,
 )
+from stt_app.transcriber.base import TranscriptionError
 
 
 @pytest.mark.parametrize(
@@ -259,6 +260,29 @@ def test_a_detail_object_without_a_message_still_shows_something_readable():
     # "{'status': 'quota_exceeded', 'code': 429}", which the two assertions
     # this test used to make also accepted.
     assert detail == "quota_exceeded"
+
+
+def test_an_error_string_under_detail_is_the_message():
+    """A LiteLLM/FastAPI gateway answers 403 `{"detail": {"error": "..."}}`;
+    the object was shown as JSON text (review of 2026-10-03)."""
+    body = b'{"detail": {"error": "Authentication Error, user not allowed"}}'
+
+    assert read_http_error_detail(_http_error(body)) == (
+        "Authentication Error, user not allowed"
+    )
+
+
+def test_an_error_object_in_a_successful_reply_is_named():
+    from stt_app.transcriber._http_utils import transcript_from_json
+
+    with pytest.raises(TranscriptionError, match="model not found") as raised:
+        transcript_from_json(
+            b'{"error": {"message": "model not found"}}', prefix="Custom endpoint"
+        )
+    assert "HTTP 200" in str(raised.value)
+    # Without an error member the old message stays.
+    with pytest.raises(TranscriptionError, match="has no 'text' field"):
+        transcript_from_json(b'{"result": "x"}', prefix="Custom endpoint")
 
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():

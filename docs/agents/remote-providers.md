@@ -391,6 +391,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     the request sends `response_format=json`, so "Internal Server Error"
     was a proxy's error page, not a transcript (it used to be pasted). A
     top-level JSON string is still taken.
+  - **A credential never reaches an error message** (2026-10-03): every
+    error raised while sending a request or listing models passes
+    `_errors_scrubbed`, which replaces the active token and the stored key
+    with `[hidden]` (only credentials of 8+ characters: `none` is a
+    placeholder and would be cut out of ordinary words). A gateway's 401
+    reason ("Key expired on ...") is shown after the standard text, except
+    when it holds the credential: then it is dropped rather than masked,
+    because a partly masked key is still part of the key (LiteLLM answers
+    "Received API Key = ..."). A key that the gateway masks on its own, so
+    that only a part reaches us, cannot be recognised and is shown as the
+    gateway sent it. `{"detail": {"error": "..."}}` (FastAPI/LiteLLM 403)
+    reads as its message (`nested_error_text` also tries `error`, which
+    Fun-ASR's `task-failed` reader shares), and a 200 reply whose body is
+    an `error` object (`reply_error_text`) shows that text, in both API
+    styles, instead of "no 'text' field" / "no message content".
   - **Chat: `content: null` is an error, not silence** (2026-10-01): it is
     a refusal (named, shortened to 80 characters) or an answer cut off
     (`finish_reason` named, e.g. `length`). `content: ""` stays silence.

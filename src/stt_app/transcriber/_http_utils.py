@@ -178,6 +178,11 @@ def transcript_from_json(
         return normalize_transcript_text(parsed)
     value = parsed.get("text") if isinstance(parsed, dict) else None
     if not isinstance(value, str):
+        error_text = reply_error_text(parsed)
+        if error_text:
+            raise TranscriptionError(
+                f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
+            )
         keys = (
             ", ".join(sorted(str(key) for key in parsed)[:8])
             if isinstance(parsed, dict)
@@ -242,8 +247,9 @@ def nested_error_text(value: object) -> str:
     unwraps it instead -- the HTTP readers below through
     `read_http_error_detail`, Fun-ASR through its own `task-failed` header,
     which is a parsed WebSocket frame and never passes through an
-    `HTTPError`. The order is the one the HTTP shapes need and is shared
-    rather than copied so the two cannot drift.
+    `HTTPError`. The order is the one the HTTP shapes need (a gateway's
+    `{"detail": {"error": "..."}}` included) and is shared rather than
+    copied so the two cannot drift.
 
     Uncapped on purpose: each caller applies its own cap (300 characters for
     the HTTP providers, `_FAILURE_DETAIL_MAX_CHARS` for Fun-ASR), and a
@@ -251,11 +257,27 @@ def nested_error_text(value: object) -> str:
     """
     if not isinstance(value, dict):
         return ""
-    for key in ("message", "detail", "status", "code"):
+    for key in ("message", "detail", "error", "status", "code"):
         inner = value.get(key)
         if isinstance(inner, str) and inner.strip():
             return inner.strip()
     return ""
+
+
+def reply_error_text(parsed: object) -> str:
+    """The text of an `error` member of a reply that answered HTTP 200, or "".
+
+    Some gateways report a failed backend call inside a 200 reply
+    (`{"error": {"message": ...}}`); read as a transcript or a chat reply it
+    showed only "no 'text' field" or "no message content", which hid the one
+    thing the user could act on (review of 2026-10-03). Capped like an HTTP
+    error detail.
+    """
+    if not isinstance(parsed, dict):
+        return ""
+    error = parsed.get("error")
+    text = error.strip() if isinstance(error, str) else nested_error_text(error)
+    return text[:300]
 
 
 def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
