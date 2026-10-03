@@ -60,8 +60,6 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX,
     _PROVIDER_STATUS_BADGE_TEXTS,
-    _REMOTE_PROVIDER_LABEL_EXTRA_PX,
-    _REMOTE_REGION_CHOICES,
     ElidingLabel,
     _app_hotkey_to_qt_hotkey_text,
     _emit_background_signal,
@@ -71,7 +69,6 @@ from .settings_dialog_helpers import (
     _qt_hotkey_text_to_app_hotkey,
     configure_button_row,
     hint_font,
-    region_row_label,
     remote_model_values,
 )
 from .settings_dialog_history import _HistoryTabMixin
@@ -199,7 +196,10 @@ class SettingsDialog(
         self._provider_key_edits: dict[str, QtWidgets.QLineEdit] = {}
         self._provider_region_combos: dict[str, QtWidgets.QComboBox] = {}
         self._provider_status_labels: dict[str, QtWidgets.QLabel] = {}
-        self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
+        # The Providers tab's per-row widgets, keyed by provider.
+        self._provider_test_marks: dict[str, QtWidgets.QLabel] = {}
+        self._provider_test_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self._provider_remove_buttons: dict[str, QtWidgets.QPushButton] = {}
         self._provider_pending_clear: set[str] = set()
         self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
         self._active_local_model_scan_thread: threading.Thread | None = None
@@ -263,9 +263,13 @@ class SettingsDialog(
         self._remote_model_values: dict[str, str] = remote_model_values(
             self._loaded_settings
         )
-        # What the last "Fetch models" returned; never persisted -- only the
-        # chosen model is.
-        self._custom_fetched_models: tuple[str, ...] = ()
+        # What the last Refresh of the custom endpoint's models returned:
+        # `AppSettings.custom_models`, written by Save like a widget value
+        # (`_populate_setting_widgets` fills it, the unsaved-changes
+        # fingerprint watches it).
+        self._custom_fetched_models: tuple[str, ...] = tuple(
+            self._loaded_settings.custom_models
+        )
         self._custom_model_note = ""
         self._custom_model_note_error = False
         self._custom_models_fetch_id = 0
@@ -489,7 +493,7 @@ class SettingsDialog(
 
         - **The tab bar.** Its titles need 771 px at 9 pt; below that
           `usesScrollButtons` hides tabs behind two arrows, and the tab a
-          note sends the user to ("set the key on the API Keys tab") is then
+          note sends the user to ("set the key on the Providers tab") is then
           not on screen.
         - **The widest settings page.** The seven settings tabs are
           `QScrollArea`s, and a scroll area answers a fixed 58 px as its own
@@ -639,26 +643,6 @@ class SettingsDialog(
         )
         return text_width + _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX
 
-    def _remote_provider_label_width(
-        self,
-        provider_rows: tuple[tuple[str, str], ...],
-    ) -> int:
-        candidates = [title for _provider, title in provider_rows]
-        candidates.extend(
-            (
-                *(region_row_label(name) for name in _REMOTE_REGION_CHOICES),
-                "Azure Endpoint",
-                "Custom Endpoint",
-                "Key Command",
-                "API Style",
-                "Connection Target",
-            )
-        )
-        text_width = max(
-            self.fontMetrics().horizontalAdvance(text) for text in candidates
-        )
-        return text_width + _REMOTE_PROVIDER_LABEL_EXTRA_PX
-
     def _apply_shared_form_label_width(
         self,
         forms: tuple[QtWidgets.QFormLayout, ...],
@@ -680,15 +664,6 @@ class SettingsDialog(
         for label in label_widgets:
             label.setMinimumWidth(width)
             label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-
-    def _style_provider_last_test_label(
-        self,
-        label: QtWidgets.QLabel,
-        *,
-        color: str = "#555",
-    ) -> None:
-        label.setFont(hint_font())
-        label.setStyleSheet(f"color: {color}; padding: 0 0 6px 0;")
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
         # The size is the font's, not the stylesheet's: see `hint_font`.

@@ -280,7 +280,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     host is baked into the provider at construction.
   - **One field map, `settings_store._REMOTE_REGION_FIELDS`**: the
     controller imports it as `_ENGINE_REGION_FIELDS`, and the Settings
-    dialog's region selectors (API Keys tab, `_REMOTE_REGION_CHOICES` in
+    dialog's region selectors (Providers tab, `_REMOTE_REGION_CHOICES` in
     `settings_dialog_helpers.py`) read and write through it.
   - No schema bump: an absent key is the default.
   - **Not verified live**: no request was sent to either EU host (no Deepgram
@@ -373,9 +373,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     configured" target and the Import tab's credential check treat a typed
     command the same way.
   - **Model ids are free text**: the Transcription tab's remote combo is
-    editable only for `custom`, "Fetch models" lists `GET {base}/models` on a
+    editable only for `custom`, "Refresh" lists `GET {base}/models` on a
     worker thread with the typed (unsaved) fields and rolls back if
-    `Thread.start` fails; the list is never persisted. Entries whose LiteLLM
+    `Thread.start` fails. The list is saved by Save as `custom_models`
+    (2026-10-03; in the unsaved-changes fingerprint, a list in the JSON --
+    `to_dict` writes a list, since `load` rewrites a file that differs from
+    the payload and a tuple never equals JSON's list) and offered again after
+    a restart; a failed Refresh keeps the previous list. Entries whose LiteLLM
     `mode` is `embedding`/`image_generation`/`rerank` are dropped,
     `audio_transcription` then `chat` sort first, and within each group an
     id that names a speech recognizer (`whisper`, `transcri`, `parakeet`,

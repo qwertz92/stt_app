@@ -437,7 +437,7 @@ OpenAI REST API: a company gateway (for example LiteLLM or vLLM), a local
 speech server (speaches, faster-whisper-server, LocalAI) or a hosted
 OpenAI-compatible provider. It is batch-only.
 
-1. Settings -> **API Keys**: enter the **Custom Endpoint** base URL, for
+1. Settings -> **Providers**, group *Custom endpoint*: enter the **Base URL**, for
    example `https://llm-gateway.example.com/v1` or `http://localhost:8000/v1`.
    It is used as given; nothing is appended, so include the `/v1` (or
    whatever prefix the server uses). A pasted request URL ending in
@@ -445,8 +445,8 @@ OpenAI-compatible provider. It is batch-only.
    to its base. The endpoint may redirect the model list within its own
    server; an upload that is redirected, or any redirect to another
    server, fails with the target named, so the key is never sent there.
-2. Enter the key in the **Custom** row. A server without authentication
-   accepts any placeholder, such as `none`.
+2. Enter the key in the group's **API Key** row. A server without
+   authentication accepts any placeholder, such as `none`.
 3. Pick the **API Style**:
    - *OpenAI transcription API* sends `POST {base}/audio/transcriptions`
      with the WAV, the model, the language (unless Auto) and the custom
@@ -458,9 +458,9 @@ OpenAI-compatible provider. It is batch-only.
      reasoning model to a third in one measurement, and drops it for good
      when the server rejects it.
 4. Settings -> **Transcription**: select *Custom endpoint*, then type the
-   model id or press **Fetch models**, which lists what the endpoint offers
-   (`GET {base}/models`) and fills the Model box. The list is not saved;
-   only the chosen model is.
+   model id or press **Refresh**, which lists what the endpoint offers
+   (`GET {base}/models`) and fills the Model box. Save keeps the list, so it
+   is offered again after a restart.
 
 **Key command.** When the endpoint needs a short-lived token, enter a command
 that prints it, for example `my-token-helper --print` or, from Windows into
@@ -491,8 +491,8 @@ request with the message the overlay shows.
 **Speechmatics**
 
 1. Create a key in the Speechmatics portal and enter it in the
-   **Speechmatics** row on Settings -> **API Keys**.
-2. Pick the **Speechmatics Region** on the same tab: EU (default), US or
+   **Speechmatics** row on Settings -> **Providers**.
+2. Pick the **Region** right under that row: EU (default), US or
    Australia.
 3. On **Transcription**, set Engine to `Speechmatics` and pick the model:
    - `melia-1` (default) is the one that works with Language `Auto`: it
@@ -501,7 +501,7 @@ request with the message the overlay shows.
      vocabulary (Speechmatics offers no custom dictionary for it yet).
    - `enhanced` (highest accuracy) and `standard` need a chosen language;
      Auto is not offered for them. Both use the custom vocabulary.
-4. Run the connection test on the API Keys tab; it asks the region you
+4. Press **Test** in the Speechmatics row; it asks the region you
    picked.
 
 A job is uploaded, polled once a second and its text fetched; the app waits
@@ -511,7 +511,7 @@ most 30 minutes.
 **Mistral (Voxtral)**
 
 1. Create a key in Mistral's console and enter it in the **Mistral** row on
-   Settings -> **API Keys**.
+   Settings -> **Providers**.
 2. On **Transcription**, set Engine to `Mistral (Voxtral)`. The model is
    `voxtral-mini-2602` (Voxtral Mini Transcribe 2, $0.003 per minute).
 3. Language: Auto or one of 13 languages (English, Chinese, Hindi, Spanish,
@@ -531,9 +531,9 @@ and [announcement](https://mistral.ai/news/voxtral-transcribe-2/).
 
 ## Data residency regions (AssemblyAI, Deepgram, Speechmatics)
 
-Settings -> **API Keys** has a region selector for each provider that offers
-a choice: **AssemblyAI Region**, **Deepgram Region** and **Speechmatics
-Region**. Dictation, audio imports and the connection test all use the
+Settings -> **Providers** has a **Region** selector right under each
+provider that offers a choice: AssemblyAI, Deepgram and Speechmatics.
+Dictation, audio imports and the connection test all use the
 selected region; Save or Save API Keys stores it. Each choice's tooltip says
 what the vendor guarantees for it, and no more:
 
@@ -577,7 +577,7 @@ By default, keys are stored via keyring (Windows Credential Manager).
 
 If your environment blocks keyring writes/reads:
 
-1. Open **Settings → API Keys**.
+1. Open **Settings → Providers**.
 2. Enable **Allow insecure local API key fallback (plain text)**.
 3. Save again.
 

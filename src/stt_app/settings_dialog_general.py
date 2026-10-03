@@ -110,7 +110,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
 }
 
 # Where the two things the Model row does not do are done. The tabs are named
-# Models and API Keys, so both sentences name a tab the user can see; they are
+# Models and Providers, so both sentences name a tab the user can see; they are
 # appended to the notes already reserved under the Model combo rather than
 # given lines of their own, because the Transcription tab has 4 px of its
 # height budget left (measured).
@@ -118,7 +118,7 @@ _LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models t
 # Shorter than "The API key for this provider is set ...": with that wording
 # the Fun-ASR note needed 45 px of the 42 reserved at the dialog's minimum
 # width, and "this provider" repeats what the row already shows.
-_REMOTE_MODEL_KEY_POINTER = "The API key is set on the API Keys tab."
+_REMOTE_MODEL_KEY_POINTER = "The API key is set on the Providers tab."
 
 
 class _GeneralTabMixin:
@@ -225,14 +225,16 @@ class _GeneralTabMixin:
         # other signal (a typed custom model would otherwise outlive the pick).
         self.remote_model_combo.activated.connect(self._on_remote_model_activated)
         # Only the custom endpoint has a button here: its models are whatever
-        # the endpoint offers, fetched on request with the API Keys tab's
+        # the endpoint offers, fetched on request with the Providers tab's
         # typed (unsaved) URL and credentials. It sits beside the combo it
-        # fills rather than on the API Keys tab, because the result is read
-        # and picked here.
-        self.custom_fetch_models_button = QtWidgets.QPushButton("Fetch models")
+        # fills rather than on the Providers tab, because the result is read
+        # and picked here. The list it returns is saved with the settings
+        # (`custom_models`), so the combo offers it again after a restart.
+        self.custom_fetch_models_button = QtWidgets.QPushButton("Refresh")
         self.custom_fetch_models_button.setToolTip(
             "Ask the custom endpoint which models it offers (GET /models), "
-            "using the URL and key entered on the API Keys tab."
+            "using the URL and key entered on the Providers tab. Save keeps "
+            "the list for the next start."
         )
         self.custom_fetch_models_button.clicked.connect(self._fetch_custom_models)
         self._match_field_button_height(
@@ -415,7 +417,7 @@ class _GeneralTabMixin:
         # "Transcription", not "General": this is where the engine, the
         # model, the language and the mode are chosen, and a tab called
         # General says nothing about that while "Local" and "Remote" --
-        # now Models and API Keys -- read as if they did.
+        # now Models and Providers -- read as if they did.
         self.tabs.addTab(tab, "Transcription")
 
     # Shared with the overlay retranscribe dialog; the table itself lives in
@@ -645,10 +647,7 @@ class _GeneralTabMixin:
                 "East/Southeast Asia, but no German. Use Azure or local for German."
             )
         elif is_custom:
-            note = self._custom_model_note or (
-                "Batch-only. Type the model id, or fetch the list the "
-                "endpoint offers; its URL is set on the API Keys tab."
-            )
+            note = self._custom_model_note or self._custom_model_default_note()
 
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
@@ -663,6 +662,19 @@ class _GeneralTabMixin:
             else "color: #555; padding: 0;"
         )
         self.remote_model_combo.blockSignals(False)
+
+    def _custom_model_default_note(self) -> str:
+        """The custom endpoint's note before this session refreshed its list."""
+        count = len(self._custom_fetched_models)
+        if count:
+            return (
+                f"Batch-only. {count} model{'s' if count != 1 else ''} listed "
+                "at the last Refresh; a model id the list lacks can be typed."
+            )
+        return (
+            "Batch-only. Type the model id, or press Refresh to list the "
+            "endpoint's models; its URL is set on the Providers tab."
+        )
 
     def _language_modes_for_current_selection(self) -> tuple[str, ...]:
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)

@@ -29,14 +29,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   names are unchanged. Build order `_build_general_tab`,
   `_build_hotkeys_tab`, `_build_audio_tab`; the last applies the shared label
   column over `_general_forms`, `_hotkeys_forms` and its own. Eight tabs use
-  771 of 840 px at 9 pt (pinned by `tests/test_settings_dialog_general_ux.py`);
+  775 of 840 px at 9 pt (pinned by `tests/test_settings_dialog_general_ux.py`);
   a ninth needs scroll arrows.
 - **Tab titles say what the tab is for** (2026-09-20): Transcription, Hotkeys
-  && Display, Audio, Models, API Keys, History, Import Audio, Benchmark.
-  Module/attribute names keep the old ones (`settings_dialog_general.py`,
-  `_local_tab_index`). Notes point to
-  "the Models tab" / "the API Keys tab"; `settings_timing` logs visible titles
-  (`tab=Models`). A test pins the tab bar width.
+  && Display, Audio, Models, Providers, History, Import Audio, Benchmark
+  ("API Keys" became "Providers" on 2026-10-03: the tab also holds regions,
+  Azure's endpoint and the custom endpoint). Module/attribute names keep the
+  old ones (`settings_dialog_general.py`, `settings_dialog_remote.py`,
+  `_local_tab_index`). Notes point to "the Models tab" / "the Providers tab",
+  and every provider's missing-key error says "Settings -> Providers";
+  `settings_timing` logs visible titles (`tab=Models`). A test pins the tab
+  bar width.
 - **The vocabulary note says when the model ignores it** (2026-09-20):
   `config.supports_custom_vocabulary(engine, model)` (from
   `LOCAL_MODEL_RUNTIME`, `CUSTOM_VOCABULARY_ENGINES`) is the one answer,
@@ -90,7 +93,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     and frame, and the tab bar hint: below 771 px at 9 pt the bar hides tabs
     behind scroll arrows, and the tab a note sends the user to may be the
     hidden one. 2026-09-27: dialog minimum 797 px at 9 pt, 907 at 11.25, 1020
-    at 13.5.
+    at 13.5; 2026-10-03, with the longer "Providers" title: 801 / 912 / 1026
+    (still the tab bar; the Providers page needs 573 / 636 / 693).
   - It reads `self.tabs.minimumSizeHint()` plus root margins, never the
     dialog hint: a long failed-save message on the root status line once
     pinned 3077 px for the app's life (test: 400-character text on the status
@@ -111,7 +115,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   `open_benchmark_window_button.sizeHint()` is 26 px against 34 rendered.
 - **Unsaved changes are tracked by a fingerprint; a close asks** (2026-09-27,
   `settings_dialog_unsaved.py`). It covers every settings input, pending
-  remote models and key removals, and two History inputs. Save is enabled
+  remote models and key removals, the custom endpoint's listed models
+  (`custom_models`, keyed by name, not `id()`: the tuple is replaced on every
+  Refresh), and two History inputs. Save is enabled
   and "Unsaved changes" shows in amber only while it differs from the clean
   state. Close, Esc, title-bar X ask Save / Discard / Cancel; programmatic
   close and quit never ask. Clean state is recorded after `_populate` and
@@ -147,9 +153,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   `QTimer`s.
 - **A changing status line is reserved or elided, never left to grow**
   (growing lines moved buttons under the cursor).
-  - Wrapping lines (API Keys "Last test", the Run Benchmark window status)
-    use the two-line `_reserve_dynamic_hint_height` with the message as
-    tooltip.
+  - Wrapping lines (the Providers tab's shared connection-test line, the
+    Run Benchmark window status) use the two-line
+    `_reserve_dynamic_hint_height` with the message as tooltip.
   - Non-wrapping lines (Benchmark tab label, the bottom status line) are
     `settings_dialog_helpers.ElidingLabel`: horizontal policy `Ignored`,
     re-elided on resize, `text()` and tooltip keep the full message, shown as
@@ -173,20 +179,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   `onnx_auto_preferred_devices`); the field guard in
   `tests/test_settings_dialog_connection.py` fails for a new one, and
   `tests/test_settings_dialog_regions.py` pins the round trip.
-- **Region selectors sit on the API Keys tab** (2026-10-01): one row per
-  provider in `_REMOTE_REGION_CHOICES` ("AssemblyAI Region", "Deepgram
-  Region", "Speechmatics Region"; each choice carries its vendor guarantee
-  as an item tooltip) below the key rows, always visible and
-  enabled whatever the engine, so a pick moves nothing; the combo spans the
-  key/button/badge columns left-aligned at its own width, so it never raises
-  the page minimum. Next to the key because the connection test there uses
-  the region, and Save API Keys writes it too. Measured: dialog minimum
-  unchanged (797 / 907 / 1020 px at 9 / 11.25 / 13.5 pt); the API Keys page
-  minimum 578 px at 9 pt before and after, 717 -> 720 px at 13.5 pt (the
-  longer "Speechmatics Region" label).
+- **The Providers tab is one compact grid per group** (2026-10-03, UX
+  review item 5). Columns: name, key field (the only stretch, minimum
+  140 px), Test, Remove, a fixed-width last-test mark, the key-source badge.
+  "Cloud providers" holds the nine key providers; a provider's region
+  (`_REMOTE_REGION_CHOICES`, each choice's vendor guarantee as an item
+  tooltip) or Azure's endpoint is an indented sub-row right under it. The
+  region combo is left-aligned at its own width (never raises the page
+  minimum), always visible and enabled, so a pick moves nothing. "Custom
+  endpoint (OpenAI-compatible)" holds Base URL, API Style, Key Command and
+  the endpoint's own key row; both groups use `_new_provider_grid` and the
+  same captions, so their columns line up (a test pins it). Test is enabled
+  only with something to test (a typed key, a usable stored key not marked
+  for removal, or the custom key command) and no test running; Remove only
+  with something to remove; placeholders say "Stored; type a new key to
+  replace it" / "API key" / "Removed on Save". The former connection-target
+  combo is gone (a row's Test, or "Test All Configured"). The former visible
+  hints (region note, Azure endpoint, "status badges") moved into tooltips.
+  Measured: content height 1338 -> 818 px at 9 pt (the tab scrolled 219 px,
+  now not at all; 1764 -> 1016 px at 13.5 pt).
 - **Connection test results persist in `provider_connection_tests.json`**,
   not `settings.json`; restored on open, overwritten only for tested
-  providers, cleared when that provider's key is saved or deleted.
+  providers, cleared when that provider's key is saved or deleted. Each row
+  shows its result as a mark (the text in its tooltip); the one shared line
+  under the groups (`test_conn_result`, two lines reserved) reports the test
+  just run, or -- on opening and after a clear -- the most recent stored
+  result, naming the provider. The per-row "Last test" lines it replaced
+  reserved two lines each.
 - **Saves are explicit and failure-safe**: the insecure-storage checkbox is
   pending until Save/Save API Keys; a failed key operation keeps the typed
   value or pending delete and stops unrelated mutations; a provider changed

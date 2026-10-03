@@ -113,7 +113,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_audio.py` | Audio tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the Transcription tab) |
 | `settings_dialog_local.py` | Models tab: local-model management mixin (inventory, scan, download queue, delete; model selection lives on the Transcription tab) plus the "Local runtime" group (ONNX Device, Keep ONNX model loaded) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
-| `settings_dialog_remote.py` | API Keys tab: provider API keys, data-residency region selectors (AssemblyAI, Deepgram, Speechmatics) and connection-test mixin |
+| `settings_dialog_remote.py` | Providers tab: one compact row per cloud provider (key, Test, Remove, last-test mark, key-source badge) with region and Azure endpoint sub-rows, the custom endpoint group, the shared connection-test line, key storage |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
@@ -241,7 +241,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
   `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
-  picked on the API Keys tab; a label claims only what the vendor
+  picked on the Providers tab; a label claims only what the vendor
   guarantees (`docs/agents/remote-providers.md`); the field map is
   `settings_store._REMOTE_REGION_FIELDS`.
 - **Custom endpoint** (`custom`): base URL, free-text model, API style

@@ -88,7 +88,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         if not api_key:
             raise TranscriptionError(
                 "Speechmatics API key is missing. "
-                "Enter your key in Settings -> API Keys."
+                "Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._model = (

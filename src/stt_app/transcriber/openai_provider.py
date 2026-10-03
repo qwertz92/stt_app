@@ -61,7 +61,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         if not api_key:
             raise TranscriptionError(
-                "OpenAI API key is missing. Enter your key in Settings -> API Keys."
+                "OpenAI API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL

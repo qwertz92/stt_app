@@ -720,10 +720,9 @@ def remote_model_values(settings: object) -> dict[str, str]:
 class _RemoteProviderInfo:
     """One row in the canonical remote-provider table.
 
-    ``title`` is the short label used for the Remote-tab row and the
-    "<title> only" connection-test target; ``label`` is the longer display
-    label used in status/import text (falls back to ``name`` elsewhere via
-    :func:`_remote_provider_label`).
+    ``title`` is the short name of the provider's row on the Providers tab;
+    ``label`` is the longer display label used in status/import text (falls
+    back to ``name`` elsewhere via :func:`_remote_provider_label`).
     """
 
     name: str
@@ -755,16 +754,6 @@ _REMOTE_PROVIDER_LABELS: dict[str, str] = {
 
 def _remote_provider_label(name: str) -> str:
     return _REMOTE_PROVIDER_LABELS.get(name, name)
-
-
-_REMOTE_PROVIDER_TITLES: dict[str, str] = {
-    provider.name: provider.title for provider in _REMOTE_PROVIDERS
-}
-
-
-def region_row_label(name: str) -> str:
-    """The API Keys tab's label for a provider's region selector."""
-    return f"{_REMOTE_PROVIDER_TITLES.get(name, name)} Region"
 
 
 _REMOTE_API_KEY_PROVIDERS: tuple[str, ...] = tuple(

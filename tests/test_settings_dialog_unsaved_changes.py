@@ -194,12 +194,32 @@ def test_scrolling_a_page_or_a_list_is_not_an_edit(dialog: SettingsDialog) -> No
     )
 
 
-def test_the_connection_test_target_is_not_a_setting(dialog: SettingsDialog) -> None:
-    combo = dialog.test_conn_target_combo
-    combo.setCurrentIndex((combo.currentIndex() + 1) % combo.count())
+@pytest.mark.parametrize(
+    "edit",
+    [
+        lambda d: d.azure_endpoint_edit.setText(
+            "https://x.cognitiveservices.azure.com"
+        ),
+        lambda d: d.custom_endpoint_edit.setText("http://localhost:8000/v1"),
+        lambda d: d.custom_key_command_edit.setText("token-helper --print"),
+        lambda d: d.custom_api_mode_combo.setCurrentIndex(
+            d.custom_api_mode_combo.findData("chat")
+        ),
+        lambda d: d._provider_region_combos["deepgram"].setCurrentIndex(
+            d._provider_region_combos["deepgram"].findData("eu")
+        ),
+    ],
+    ids=["azure endpoint", "base url", "key command", "api style", "region"],
+)
+def test_the_providers_tab_inputs_moved_into_their_groups_are_tracked(
+    dialog: SettingsDialog, edit
+) -> None:
+    """The regions, Azure's endpoint and the custom endpoint's fields moved
+    into rows and a group of their own; each is still an unsaved change."""
+    edit(dialog)
     _settle(dialog)
 
-    assert dialog.has_unsaved_changes() is False
+    assert dialog.has_unsaved_changes() is True
 
 
 def test_a_save_leaves_nothing_to_save(dialog: SettingsDialog) -> None:
@@ -409,7 +429,7 @@ def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> N
     dialog._cached_local_models_dir = dialog.model_dir_edit.text().strip()
     dialog._cached_local_models_available = True
     dialog._active_connection_test_thread = object()
-    running_label = dialog._provider_last_test_labels["groq"]
+    running_label = dialog.test_conn_result
     running_label.setText("Testing...")
     _settle(dialog)
 

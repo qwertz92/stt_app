@@ -1719,6 +1719,31 @@ def test_the_custom_endpoint_settings_round_trip_and_default(tmp_path):
     assert picked.custom_model == "my/model"
 
 
+def test_the_custom_endpoint_model_list_round_trips_in_order(tmp_path, monkeypatch):
+    """The list the last Refresh returned, kept in the endpoint's order; a
+    hand-edited file can hold anything, and only model ids survive."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(custom_models=("whisper-1", "gemini-2.5-flash"))
+    store.save(saved)
+    rewrites: list[AppSettings] = []
+    monkeypatch.setattr(
+        store, "save", lambda settings, **_kw: rewrites.append(settings)
+    )
+    assert store.load() == saved
+    # `load` rewrites a file that differs from what a save would write; the
+    # tuple against JSON's list made that every single load.
+    assert rewrites == []
+    stored = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert stored["custom_models"] == ["whisper-1", "gemini-2.5-flash"]
+
+    assert AppSettings.from_dict({}).custom_models == ()
+    damaged = AppSettings.from_dict(
+        {"custom_models": [" a ", "", None, 3, "a", ["b"], "b"]}
+    )
+    assert damaged.custom_models == ("a", "b")
+    assert AppSettings.from_dict({"custom_models": "a,b"}).custom_models == ()
+
+
 def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     tmp_path,
 ):

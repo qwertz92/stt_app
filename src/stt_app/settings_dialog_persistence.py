@@ -197,6 +197,7 @@ class _PersistenceMixin:
                 **remote_model_values(settings),
             }
         )
+        self._custom_fetched_models = tuple(settings.custom_models)
         if hasattr(self, "azure_endpoint_edit"):
             blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
             self.azure_endpoint_edit.setText(
@@ -228,7 +229,7 @@ class _PersistenceMixin:
         self._refresh_provider_key_statuses()
 
     def _populate_views(self, settings: AppSettings) -> None:
-        """What the running jobs own: the connection-test target and labels,
+        """What the running jobs own: the connection-test marks and line,
         the Import tab's pickers, the local inventory views and both history
         lists. A reload waits while such a job runs (`reload_from_store`)."""
         self._import_model_values.update(
@@ -237,7 +238,6 @@ class _PersistenceMixin:
                 **remote_model_values(settings),
             }
         )
-        self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_model_selector()
@@ -511,7 +511,7 @@ class _PersistenceMixin:
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
             custom_key_command=self.custom_key_command_edit.text().strip(),
-            # The region selectors sit on the API Keys tab, so its own Save
+            # The region selectors sit on the Providers tab, so its own Save
             # writes them as well.
             assemblyai_region=self._region_shown("assemblyai"),
             deepgram_region=self._region_shown("deepgram"),
@@ -839,6 +839,7 @@ class _PersistenceMixin:
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
             custom_key_command=self.custom_key_command_edit.text().strip(),
+            custom_models=self._custom_fetched_models,
             speechmatics_model=self._remote_model_value_for_provider("speechmatics"),
             mistral_model=self._remote_model_value_for_provider("mistral"),
             assemblyai_region=self._region_shown("assemblyai"),

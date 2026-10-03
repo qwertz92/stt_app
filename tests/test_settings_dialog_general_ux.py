@@ -455,9 +455,10 @@ def test_the_eight_tab_titles_fit_the_default_width_without_scroll_arrows(
 
     `usesScrollButtons` is on, so an over-long bar does not clip -- it hides
     tabs behind two arrows, and the tab a user is told to open ("set the key
-    on the API Keys tab") is then not on screen. The eight titles measure
-    771 px of the 840 px the default dialog width gives the bar at 9 pt;
-    they measured 797 px before the rename.
+    on the Providers tab") is then not on screen. The eight titles measure
+    775 px of the 840 px the default dialog width gives the bar at 9 pt
+    (771 px while the fifth was "API Keys"); they measured 797 px before the
+    2026-09-20 rename.
     """
     app = QtWidgets.QApplication.instance()
     assert app is not None
@@ -524,11 +525,11 @@ def test_the_model_row_says_where_downloads_and_api_keys_live(
         dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
         app.processEvents()
         note = dialog.remote_model_note_label.text()
-        assert "API Keys tab" in note, (engine, note)
+        assert "Providers tab" in note, (engine, note)
         assert note == dialog.remote_model_note_label.toolTip()
         # Said once: Azure used to name the key here as well as the endpoint,
         # which filled both reserved lines with one instruction.
-        assert note.count("API Keys tab") == 1, (engine, note)
+        assert note.count("Providers tab") == 1, (engine, note)
 
 
 def test_audio_and_recording_tab_hosts_capture_settings(
@@ -546,7 +547,7 @@ def test_audio_and_recording_tab_hosts_capture_settings(
         "Hotkeys && Display",
         "Audio",
         "Models",
-        "API Keys",
+        "Providers",
     ]
 
     general_tab = dialog.tabs.widget(0)
@@ -1496,7 +1497,6 @@ def test_hint_text_follows_the_system_text_size(monkeypatch, tmp_path) -> None:
                 dialog.local_model_runtime_warning_label,
                 dialog.vocabulary_support_label,
                 dialog.local_onnx_device_note_label,
-                dialog._provider_last_test_labels["openai"],
                 dialog.local_models_scan_status_label,
             ):
                 assert label.font().pointSizeF() == pytest.approx(expected), (

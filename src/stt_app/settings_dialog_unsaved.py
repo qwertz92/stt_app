@@ -28,7 +28,7 @@ class _UnsavedChangesMixin:
 
     def _install_unsaved_changes_tracking(self) -> None:
         """Connect every setting widget; must run after `_build_ui`."""
-        self._unsaved_baseline: dict[int, object] = {}
+        self._unsaved_baseline: dict[int | str, object] = {}
         self._unsaved_widgets = self._watched_setting_widgets()
         timer = QtCore.QTimer(self)
         timer.setSingleShot(True)
@@ -44,12 +44,12 @@ class _UnsavedChangesMixin:
         """Every input on the pages before History, plus History's two.
 
         The settings pages are the ones built before the History tab
-        (Transcription, Hotkeys & Display, Audio, Models, API Keys); walking
+        (Transcription, Hotkeys & Display, Audio, Models, Providers); walking
         them rather than listing attribute names means a setting added to one
-        of them is tracked without anyone remembering to add it here. What is
-        on those pages and is not a setting is excluded by name.
+        of them is tracked without anyone remembering to add it here. Every
+        input on those pages is a setting: the connection-test target combo
+        that was not is gone (each provider row has its own Test button).
         """
-        excluded = {id(getattr(self, "test_conn_target_combo", None))}
         pages = [
             self.tabs.widget(index)
             for index in range(getattr(self, "_history_tab_index", 0))
@@ -57,7 +57,7 @@ class _UnsavedChangesMixin:
         widgets: list[QtWidgets.QWidget] = []
         for page in pages:
             for widget in page.findChildren(QtWidgets.QWidget):
-                if id(widget) in excluded or not self._is_setting_input(widget):
+                if not self._is_setting_input(widget):
                     continue
                 widgets.append(widget)
         for name in ("history_max_spin", "history_timezone_combo"):
@@ -125,10 +125,15 @@ class _UnsavedChangesMixin:
             return widget.keySequence().toString(QtGui.QKeySequence.PortableText)
         return None
 
-    def _unsaved_state_values(self) -> dict[int, object]:
-        """The fingerprint: every watched widget, plus two pending states
+    # The fingerprint key of the custom endpoint's listed models. A name, not
+    # an `id()` like the others: the tuple is replaced on every Refresh, so
+    # its id would differ from the baseline's even for an identical list.
+    _CUSTOM_MODELS_KEY = "custom_models"
+
+    def _unsaved_state_values(self) -> dict[int | str, object]:
+        """The fingerprint: every watched widget, plus three pending states
         that no widget shows as a value."""
-        values: dict[int, object] = {
+        values: dict[int | str, object] = {
             id(widget): self._setting_value(widget) for widget in self._unsaved_widgets
         }
         # A remote model chosen for a provider that is not selected now keeps
@@ -142,6 +147,8 @@ class _UnsavedChangesMixin:
         values[id(self._provider_pending_clear)] = tuple(
             sorted(self._provider_pending_clear)
         )
+        # A Refresh that changed the list is written by Save.
+        values[self._CUSTOM_MODELS_KEY] = self._custom_fetched_models
         return values
 
     def has_unsaved_changes(self) -> bool:

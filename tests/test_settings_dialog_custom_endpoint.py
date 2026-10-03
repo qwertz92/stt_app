@@ -1,5 +1,5 @@
-"""The Custom endpoint's settings: API Keys-tab fields, the editable model row
-and the "Fetch models" worker."""
+"""The Custom endpoint's settings: the Providers tab's group, the editable
+model row and the Refresh worker with its saved model list."""
 
 from __future__ import annotations
 
@@ -47,7 +47,8 @@ def test_the_fields_are_populated_and_the_model_row_is_editable():
         assert dialog.remote_model_combo.isEditable()
         assert dialog.remote_model_combo.currentText() == "whisper-1"
         assert not dialog.custom_fetch_models_button.isHidden()
-        assert dialog.test_conn_target_combo.findData("custom") >= 0
+        # The key command alone makes the endpoint testable.
+        assert dialog._provider_test_buttons["custom"].isEnabled()
 
         dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("openai"))
         assert not dialog.remote_model_combo.isEditable()
@@ -133,10 +134,77 @@ def test_fetch_models_fills_the_combo_from_the_typed_fields(monkeypatch):
         assert "offers 2 models" in dialog.remote_model_note_label.text()
         assert dialog.custom_fetch_models_button.isEnabled()
         assert dialog._background_work_active() is False
-        # The fetched list is not a setting.
+        # The list is saved with the settings, in the endpoint's order, so
+        # the combo offers it again after a restart.
+        assert dialog.has_unsaved_changes()
         dialog._save()
         assert store.saved is not None
         assert store.saved.custom_model == "whisper-1"
+        assert store.saved.custom_models == ("gemini-2.5-flash", "whisper-1")
+        assert not dialog.has_unsaved_changes()
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_saved_model_list_is_offered_after_a_restart():
+    dialog, store = _dialog(
+        AppSettings(
+            engine="custom",
+            custom_endpoint="http://localhost:8000/v1",
+            custom_model="whisper-1",
+            custom_models=("whisper-1", "gemini-2.5-flash"),
+        )
+    )
+    try:
+        combo = dialog.remote_model_combo
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            "whisper-1",
+            "gemini-2.5-flash",
+        ]
+        assert "2 models listed at the last Refresh" in (
+            dialog.remote_model_note_label.text()
+        )
+        assert not dialog.has_unsaved_changes()
+        dialog._save()
+        assert store.saved is None, "an untouched Save rewrote the file"
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_refresh_that_changed_the_list_is_an_unsaved_change(monkeypatch):
+    """Discarding it puts the saved list back; Save is what writes it."""
+
+    class _FakeTranscriber:
+        def __init__(self, **_kwargs):
+            pass
+
+        def list_models(self):
+            return [CustomEndpointModel("new-model", "audio_transcription")]
+
+    monkeypatch.setattr(
+        custom_endpoint_provider, "CustomEndpointTranscriber", _FakeTranscriber
+    )
+    saved_list = ("whisper-1",)
+    dialog, store = _dialog(
+        AppSettings(
+            engine="custom",
+            custom_endpoint="http://x/v1",
+            custom_model="whisper-1",
+            custom_models=saved_list,
+        ),
+        secrets={"custom": "k"},
+    )
+    try:
+        monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+        dialog._fetch_custom_models()
+        assert dialog._custom_fetched_models == ("new-model",)
+        assert dialog.has_unsaved_changes()
+
+        dialog._discard_unsaved_edits_while_busy()
+
+        assert dialog._custom_fetched_models == saved_list
+        assert not dialog.has_unsaved_changes()
+        assert store.saved is None
     finally:
         dialog.deleteLater()
 
@@ -166,8 +234,15 @@ def test_picking_the_current_list_entry_after_typing_replaces_the_typed_text(
     )
     app = QtWidgets.QApplication.instance()
     assert app is not None
+    # The list the fetch returns is already the saved one, so the pick below
+    # is the only thing that could make the dialog unsaved.
     dialog, store = _dialog(
-        AppSettings(engine="custom", custom_endpoint="http://x/v1", custom_model="B")
+        AppSettings(
+            engine="custom",
+            custom_endpoint="http://x/v1",
+            custom_model="B",
+            custom_models=("A", "B"),
+        )
     )
     try:
         monkeypatch.setattr(threading, "Thread", _ImmediateThread)

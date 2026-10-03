@@ -197,6 +197,7 @@ DEFAULTS = {
     "custom_model": DEFAULT_CUSTOM_MODEL,
     "custom_api_mode": DEFAULT_CUSTOM_API_MODE,
     "custom_key_command": DEFAULT_CUSTOM_KEY_COMMAND,
+    "custom_models": (),
     "assemblyai_region": DEFAULT_ASSEMBLYAI_REGION,
     "deepgram_region": DEFAULT_DEEPGRAM_REGION,
     "speechmatics_model": DEFAULT_SPEECHMATICS_MODEL,
@@ -328,6 +329,11 @@ class AppSettings:
     custom_model: str = DEFAULT_CUSTOM_MODEL
     custom_api_mode: str = DEFAULT_CUSTOM_API_MODE
     custom_key_command: str = DEFAULT_CUSTOM_KEY_COMMAND
+    # The model ids the endpoint listed at the last Refresh on the
+    # Transcription tab, so the model combo offers them again after a
+    # restart. A cache of the endpoint's answer, not a list the chosen model
+    # is checked against. No schema bump: an absent key is the empty list.
+    custom_models: tuple[str, ...] = ()
     # Data residency: "us" is the vendor's default endpoint (what every
     # build before these fields sent), "eu" its EU host. No schema bump:
     # an absent key is the default, and an older build keeps an unknown
@@ -764,6 +770,7 @@ class AppSettings:
             custom_model=_text_setting(merged.get("custom_model")),
             custom_api_mode=custom_api_mode,
             custom_key_command=_text_setting(merged.get("custom_key_command")),
+            custom_models=normalize_custom_models(merged.get("custom_models")),
             assemblyai_region=normalize_assemblyai_region(
                 merged.get("assemblyai_region")
             ),
@@ -780,6 +787,10 @@ class AppSettings:
         data["schema_version"] = max(
             int(self.schema_version or 0), CURRENT_SCHEMA_VERSION
         )
+        # The JSON shape, a list: `load` compares the file it read with this
+        # payload, and a tuple never equals the list JSON gives back, so every
+        # load rewrote the file.
+        data["custom_models"] = list(self.custom_models)
         return data
 
 
@@ -1038,6 +1049,17 @@ def normalize_onnx_auto_preferred_devices(value: Any) -> dict[str, str]:
         if normalized in ONNX_MEASURABLE_DEVICES:
             cleaned[model] = normalized
     return {model: cleaned[model] for model in sorted(cleaned)}
+
+
+def normalize_custom_models(value: Any) -> tuple[str, ...]:
+    """The custom endpoint's listed model ids: strings only, stripped, no
+    empties or repeats, in the order the endpoint gave them. Anything else in
+    a hand-edited file is dropped rather than rendered into a model id."""
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(
+        dict.fromkeys(text for text in (_text_setting(item) for item in value) if text)
+    )
 
 
 def preferred_onnx_device(settings: Any) -> str:

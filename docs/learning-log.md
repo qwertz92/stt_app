@@ -9161,3 +9161,21 @@ rows and connection tests on API Keys, and one region selector per provider
   printed its token and exited 0 failed with a timeout because a grandchild
   held the pipes; `taskkill /T` cannot reach an orphan. The child now runs
   in a Windows job object, and the call returns once the child exited.
+
+## 2026-10-03: the Providers tab (UX review item 5)
+
+The API Keys tab became "Providers": one compact row per cloud provider
+(key, Test, Remove, last-test mark, badge), its region or Azure's endpoint as
+an indented sub-row, the custom endpoint in a group of its own, and one
+shared connection-test line instead of ten two-line "Last test" labels. The
+content height fell from 1338 to 818 px at 9 pt, so the tab no longer
+scrolls. The custom endpoint's Refresh list (`custom_models`) is now saved.
+- **A tuple field must be written to JSON as a list.** `load` rewrites the
+  file whenever it differs from what a save would write, and `asdict` keeps
+  the tuple while JSON gives back a list, so every load rewrote
+  `settings.json` and its `.bak`. Found by the unsaved-changes test whose
+  failing store refused that rewrite; `to_dict` now writes a list and a
+  store test pins "load does not rewrite".
+- **Renaming a tab renames its sentences in the providers too.** Ten
+  missing-key errors said "Settings -> API Keys"; the factory test that
+  checks them is what makes the rename complete.
