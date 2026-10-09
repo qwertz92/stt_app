@@ -1881,6 +1881,42 @@ def test_stop_waits_for_the_first_burst_of_a_starved_running_stream(monkeypatch)
     assert frames <= int(3.5 * 16000) + 1600, f"{frames / 16000:.2f}s kept"
 
 
+def test_a_warm_stall_across_hotkey_and_stop_keeps_the_seconds_before_the_stop(
+    monkeypatch,
+):
+    """Review F3: the warm stream's callback thread stalls a second before
+    the hotkey and stays stalled past the stop. Its burst carries that
+    second before the attach too, so a cutoff counted from the attach was
+    reached a second early and the last second before the stop was refused
+    (kept 4.0 of the 5.0 s after the attach). The pre-attach part -- the
+    gap at attach -- counts towards the cutoff."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _RunningStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)  # the last block before the stall
+    clock.now += 1.0
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+    clock.now += 5.0  # the stop, still stalled
+
+    def _burst():
+        time.sleep(0.2)
+        for _ in range(65):  # 1 s before the attach, 5 s after it, then later
+            warm._dispatch(_block(), 1600, None, None)
+
+    burst = threading.Thread(target=_burst, daemon=True)
+    burst.start()
+    wav_bytes = capture.stop()
+    burst.join(timeout=5)
+    warm.close()
+
+    frames = _wav_frames(wav_bytes)
+    assert frames >= 59 * 1600, f"only {frames / 16000:.2f}s of 6.0 s kept"
+    assert frames <= 61 * 1600, f"{frames / 16000:.2f}s kept"
+
+
 @pytest.mark.parametrize(
     ("stream_class", "elapsed_s"),
     [(FakeInputStream, 3.0), (_StoppedStream, 3.0), (_RunningStream, 12.5)],

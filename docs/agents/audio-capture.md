@@ -188,7 +188,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   comes after the whole stall): a stream at pace at the stop is not waited
   for (measured on the same microphone afterwards: 72 ms, nothing after the
   stop kept), and during the wait a block at pace a block length after the
-  stop is refused and ends it (`_drain_done`). A healthy stream is behind
+  stop is refused and ends it (`_drain_done`). For a warm capture the
+  audio owed includes `warm_attach_gap` (`_CaptureTiming.pre_attach_s`): the
+  burst of a stall spanning hotkey and stop carries the seconds before the
+  attach too, and a cutoff counted from the attach refused the last ones
+  before the stop (review F3: 4.0 of 5.0 s kept). A healthy stream is behind
   by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
   never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
 - **`audio_capture_stats`, one line per recording** (logged by

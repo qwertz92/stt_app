@@ -197,6 +197,18 @@ class _CaptureTiming:
     def audio_s(self) -> float:
         return self.frames / self.sample_rate
 
+    def pre_attach_s(self) -> float:
+        """Audio from before a warm attach that the first burst carries.
+
+        The warm stream's silence at the attach, which a stalled callback
+        thread delivers with the rest (one block or less when healthy); 0
+        for a cold stream and for a warm one that never called back.
+        """
+        gap = self.warm_attach_gap_s
+        if gap is None or gap == float("inf"):
+            return 0.0
+        return min(gap, AUDIO_INPUT_BUFFER_S)
+
     def backlog_tolerance_s(self, wall_s: float) -> float:
         return AUDIO_BACKLOG_TOLERANCE_S + AUDIO_BACKLOG_DRIFT_PER_S * wall_s
 
@@ -1187,12 +1199,16 @@ class AudioCapture:
         """
         timing = self._timing
         stop_at = _clock()
+        # Review F3: a warm burst also carries the audio from before the
+        # attach, so the audio owed up to the stop includes it; counted from
+        # the attach alone, the last seconds before the stop were refused.
+        owed_s = wall_s + timing.pre_attach_s()
         if timing.blocks == 0:
             hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
             if wall_s >= hard_limit_s or self.stream_is_active() is not True:
                 return
             budget_s = hard_limit_s - wall_s
-        elif wall_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s) or (
+        elif owed_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s) or (
             self._at_real_time_pace(timing.last_gap_s)
             and timing.last_block_at is not None
             and stop_at - timing.last_block_at <= 1.5 * self._block_s
@@ -1201,7 +1217,7 @@ class AudioCapture:
         else:
             budget_s = AUDIO_STOP_DRAIN_MAX_S
         frames_before = timing.frames
-        cutoff = int(wall_s * self.sample_rate)
+        cutoff = int(owed_s * self.sample_rate)
         self._drain_cutoff_frames = cutoff
         self._drain_stop_at = stop_at
         self._drain_done = False
