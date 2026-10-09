@@ -1298,11 +1298,14 @@ class DictationController(QtCore.QObject):
         recording is one slot that holds the newest dictation and must not be
         overwritten by an older recording. A move that fails leaves the file
         where it was and answers that path (logged): the entry points at it,
-        and the next start deletes no file an entry points at.
+        and the next start deletes no file an entry points at. Nothing after
+        a successful move may stop the history write (the notice no longer
+        offers a moved file, so its transcript would be lost): a failed mtime
+        update or prune is logged, and the answer is where the file is.
         """
         if self._settings.save_all_recordings:
-            target_dir = os.path.abspath(self._resolve_recordings_dir())
             try:
+                target_dir = os.path.abspath(self._resolve_recordings_dir())
                 os.makedirs(target_dir, exist_ok=True)
                 recorded_at = recording.recorded_at or datetime.fromtimestamp(  # noqa: DTZ006 (local time on purpose, like the archive's names)
                     os.path.getmtime(recording.path)
@@ -1316,14 +1319,18 @@ class DictationController(QtCore.QObject):
                         target_dir, f"recording_{stamp}_{counter:06d}.wav"
                     )
                 shutil.move(str(recording.path), target)
-                # The newest archived file now: the prune goes by age, and
-                # the file's own age (the quit that kept it) could make it
-                # the one deleted, under the entry pointing at it.
-                os.utime(target)
             except OSError:
                 self._logger.exception("Failed to archive a transcribed recording")
                 return os.path.abspath(recording.path)
-            self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            try:
+                # The newest archived file now: the prune goes by age, and
+                # the file's own age (the quit that kept it) could make it
+                # the one deleted, under the entry pointing at it -- so no
+                # prune when this fails.
+                os.utime(target)
+                self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            except Exception:
+                self._logger.exception("Failed to prune the recordings archive")
             return target
         if self._settings.save_last_wav:
             try:
@@ -3261,14 +3268,22 @@ class DictationController(QtCore.QObject):
             # the user's audio beats deleting all but the newest file.
             return
         try:
-            files = [
-                os.path.join(directory, name)
-                for name in os.listdir(directory)
-                if _ARCHIVED_RECORDING_NAME_RE.fullmatch(name)
-            ]
+            names = os.listdir(directory)
         except OSError:
             return
-        files.sort(key=lambda path: os.path.getmtime(path))
+        aged = []
+        for name in names:
+            if not _ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                aged.append((os.path.getmtime(path), path))
+            except OSError:
+                # Deleted since the listing (another prune, the user): one
+                # file fewer to keep count of, not a reason to stop.
+                continue
+        aged.sort()
+        files = [path for _mtime, path in aged]
         while len(files) > keep:
             oldest = files.pop(0)
             try:

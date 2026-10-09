@@ -142,8 +142,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   is deleted, only after the entry exists. The entry points at the kept
   file. A gap transcript's file stays in the unfinished folder, never in
   the pruned archive. A failed move leaves the file in place with the entry
-  pointing at it; a history write that fails moves it back, so the next
-  start offers it again. A transcript it saved is also listed as not
+  pointing at it; nothing after a successful move (the mtime update, the
+  prune, which skips an archive file that vanished since its listing) can
+  stop the history write, since the notice no longer offers a moved file; a
+  history write that fails moves it back, so the next start offers it again. A transcript it saved is also listed as not
   inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
   controller's Qt thread (`unfinished_transcript_saved`, queued from the
   notice's worker) records an `_UndeliveredInsert` row with the entry and
