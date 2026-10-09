@@ -216,6 +216,8 @@ class FakeOverlay:
         self.queue_kinds = []
         # Mirrors `OverlayUI.detail_is_being_read`; a test sets it.
         self.detail_is_being_read = False
+        # `(text, tooltip)` per `set_not_inserted_badge`; "" hides the badge.
+        self.badges = []
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
@@ -246,6 +248,14 @@ class FakeOverlay:
         self.queue_kinds.append(
             [str(row[2]) if len(row) > 2 else "transcription" for row in rows]
         )
+
+    def set_not_inserted_badge(self, text, tooltip=""):
+        self.badges.append((str(text), str(tooltip)))
+
+    @property
+    def badge(self) -> str:
+        """The badge text the real overlay would show now."""
+        return self.badges[-1][0] if self.badges else ""
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))

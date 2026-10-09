@@ -9570,3 +9570,50 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   the insert that painted it); Edit needs it to be the shown entry, and an
   edit moves the offer only when it edits that entry -- which also lets a
   history edit of the delivered dictation reach its offer.
+
+## 2026-10-09: owner requests from a test on a slow work PC (not-inserted results, quit, unfinished recordings)
+
+- **A recording started during the quit's "Wait and insert" calls the quit
+  off** (owner decision). The wait refused every new recording until "Don't
+  quit" was chosen, so on a slow machine the hotkey was dead for as long as
+  the queue took. `start_recording` now clears `_quit_hold` before the
+  recording starts -- the quit window polls `hold_for_quit` every 250 ms, and
+  a hold left standing would stop the new recording on the next poll --,
+  emits `quit_canceled_by_recording` (the window closes as for "Don't quit")
+  and tells the tray "Quit canceled".
+- **A transcribed unfinished recording follows the recording settings**
+  (owner's report). `transcribe_unfinished_recording` deleted the file once
+  the transcript was in history, even with "Keep last recording after
+  successful transcription" or "Archive every recording" on. It now joins
+  the archive (archive name, retention count applied, its mtime set to now
+  -- with the quit's own mtime a full archive pruned the file it had just
+  moved, under the entry pointing at it) or, with only "Keep last", moves
+  to the recordings folder under its own name. The startup cleanup no longer
+  deletes a file a history entry links to, so a failed move keeps its audio.
+- **A transcript from the startup notice waits for the re-paste** (owner's
+  idea). The notice saved transcripts to history only; now each also
+  becomes a "Not inserted" row, so F10 pastes it at the current caret when
+  the user wants it, and the not-inserted count and the quit window count
+  it. The notice transcribes on a worker thread, so the row is recorded on
+  the controller's thread through a queued signal
+  (`unfinished_transcript_saved`); a test checks the thread.
+- **The re-paste works during a streaming dictation** (owner's request; his
+  old build refused it during any recording -- a batch capture has allowed
+  it since 2026-10-01). Into another window it goes out at once: the stream
+  writes only into its own window and a focus change suspends its live
+  inserts; the stream's next live insert then waits for that paste's
+  restore window, which only the stream's first live insert did before.
+  Into the stream's own window, where a paste would land inside the
+  streamed words or in front of the finalize's tail, it is held and the
+  tray says so; the stream's end starts the pace timer, which runs it.
+  Holding was chosen over refusing because a refusal made the user press
+  the hotkey again after the stream, and over pasting at once because the
+  order rule (one window, recording order) would break.
+- **Transcripts that were not inserted are counted on an amber badge**
+  (owner's request: on his slow PC several pastes of a long queue failed,
+  and the one Insert offer was painted over by the next recording). The
+  waiting rows already outlived a new recording in the queue panel, but
+  in a white title and light-yellow row text on the state colour -- easy
+  to miss on Listening green. The badge ("2 not inserted · Ctrl+Alt+F10")
+  sits in the queue header, amber with dark text, as tall as Clear queue,
+  so it moves nothing; measured at 9, 11.25 and 13.5 pt.

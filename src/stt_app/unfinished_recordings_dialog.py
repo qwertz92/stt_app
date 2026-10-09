@@ -16,6 +16,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtWidgets
 
 from .app_icon import load_app_icon
+from .config import TRAY_REPASTE_ACTION_LABEL
 from .dialog_style import apply_dialog_style, make_label_selectable, styled_message_box
 from .history_audio import reveal_paths_in_file_manager
 from .settings_dialog_helpers import (
@@ -159,9 +160,10 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.table.itemSelectionChanged.connect(self._update_buttons)
 
         note = QtWidgets.QLabel(
-            "Transcripts are saved to History; nothing is pasted. Show in folder "
-            "opens Explorer with the recordings selected, so you can listen to "
-            "them first; this window stays open.\n"
+            "Transcripts go to History and wait on the overlay as not inserted, "
+            f'for the re-paste hotkey or the tray\'s "{TRAY_REPASTE_ACTION_LABEL}". '
+            "Show in folder opens Explorer with the recordings selected, so you "
+            "can listen to them first; this window stays open.\n"
             f"Keep files and close moves the remaining recordings to {self._keep_dir}"
             " and does not ask again.\n"
             f"Ask again next start leaves them in {self._store.directory}."
@@ -369,7 +371,10 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
                 error=True,
             )
         else:
-            self._set_status(f"{done} transcribed into History.")
+            self._set_status(
+                f"{done} transcribed into History and listed on the overlay as "
+                "not inserted."
+            )
         self._update_buttons()
 
     def _reveal_rows(self) -> None:

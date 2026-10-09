@@ -310,9 +310,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   pending: quit as before. Otherwise a fixed-size tool window (480x278 at
   96 dpi, every state) offers Wait and insert / Quit now, keep the
   recordings / Don't quit. Wait calls `hold_for_quit()` on every 250 ms
-  poll: it stops the open recording (transcribed and inserted as usual) and
-  refuses new ones (`start_recording` sends the refusal to the tray while a
-  transcription owns the overlay). The coordinator quits once `can_wait` is
+  poll: it stops the open recording (transcribed and inserted as usual). A
+  new recording during the wait calls the quit off (owner decision
+  2026-10-09; it was refused until "Don't quit" before): `start_recording`,
+  past its capture and finalize guards, clears the hold first -- so the next
+  poll cannot stop the new recording --, emits `quit_canceled_by_recording`
+  (the coordinator closes the window as for "Don't quit") and sends "Quit
+  canceled" to the tray; a start refused further down leaves the quit called
+  off as well. The coordinator quits once `can_wait` is
   false -- which includes `paste_settling`: the last paste's restore window
   (`_paste_pace_wait_s`) and its target check must be over, or the quit
   flushes the restore under a late-reading target (review of 3ee1e23); a

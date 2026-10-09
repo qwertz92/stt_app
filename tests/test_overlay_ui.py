@@ -14,6 +14,7 @@ from stt_app.config import (
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
+    OVERLAY_STATE_COLORS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
@@ -3088,3 +3089,107 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
     assert "Pending insert" in painted[1], painted
     assert painted[2].startswith("Possibly inserted"), painted
     overlay.close()
+
+
+_BADGE_TEXT = "12 not inserted · Ctrl+Alt+Shift+F10"
+
+
+def _badge_fill(overlay) -> QtGui.QColor:
+    """The badge's painted background, read inside its padding."""
+    badge = overlay._not_inserted_badge
+    image = badge.grab().toImage()
+    return image.pixelColor(3, image.height() // 2)
+
+
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5])
+def test_the_not_inserted_badge_holds_through_every_state_without_moving(point_scale):
+    """Owner's request 2026-10-09: transcripts that were not inserted must be
+    unmistakable while the next recording starts and runs. The badge sits in
+    the queue panel's header, which no state change touches, so Listening
+    cannot paint over it; it shows the whole count and hotkey at 9, 11.25
+    and 13.5 pt; and showing it moves nothing -- not the overlay's size, not
+    the header row's height, not the Clear queue button."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            _shown_offscreen(overlay)
+            overlay.set_state("Error", "The transcript could not be inserted.")
+            rows = [
+                (-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED),
+                (-2, 'Not inserted · 12:00:05 · "two"', QUEUE_ROW_KIND_UNDELIVERED),
+            ]
+            overlay.set_transcription_queue(rows)
+            QtWidgets.QApplication.processEvents()
+            size = overlay.size()
+            header_height = overlay._queue_header_widget.height()
+            clear = overlay._queue_clear_button.geometry()
+
+            overlay.set_not_inserted_badge(_BADGE_TEXT, "Press it to insert them.")
+            QtWidgets.QApplication.processEvents()
+
+            badge = overlay._not_inserted_badge
+            assert badge.isVisible()
+            assert badge.text() == _BADGE_TEXT
+            assert badge.toolTip() == "Press it to insert them."
+            assert overlay.size() == size
+            assert overlay._queue_header_widget.height() == header_height
+            assert overlay._queue_clear_button.geometry() == clear
+            assert badge.width() >= badge.sizeHint().width(), "the badge is cut off"
+            assert badge.height() <= header_height
+            shown = badge.geometry()
+            for state in ("Listening", "Processing", "Done", "Error", "Idle"):
+                overlay.set_state(state, "Recording...")
+                QtWidgets.QApplication.processEvents()
+                assert badge.isVisible(), state
+                assert badge.geometry() == shown, state
+                assert overlay.width() == size.width(), state
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
+
+
+def test_the_not_inserted_badge_is_amber_not_error_red_or_listening_green():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_transcription_queue(
+        [(-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    for state in ("Listening", "Error"):
+        overlay.set_state(state, "x")
+        QtWidgets.QApplication.processEvents()
+        fill = _badge_fill(overlay)
+        assert fill.red() > 200 and 120 < fill.green() < 220 and fill.blue() < 80, (
+            state,
+            fill.name(),
+        )
+        assert fill.name() != OVERLAY_STATE_COLORS[state].lower(), state
+    overlay.close()
+
+
+def test_the_queue_title_leaves_the_count_to_the_badge():
+    """With the badge on, the title does not count the same rows a second
+    time; without it (only "possibly inserted" rows) it still does."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_transcription_queue([(1, "a"), (-1, "x", QUEUE_ROW_KIND_UNDELIVERED)])
+    assert (
+        overlay._queue_title_label.text() == "Transcribing 1 recording · 1 not inserted"
+    )
+
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    assert overlay._queue_title_label.text() == "Transcribing 1 recording"
+
+    overlay.set_not_inserted_badge("")
+    assert overlay._not_inserted_badge.isHidden()
+    assert (
+        overlay._queue_title_label.text() == "Transcribing 1 recording · 1 not inserted"
+    )
+    overlay.deleteLater()

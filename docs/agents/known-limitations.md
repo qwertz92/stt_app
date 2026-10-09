@@ -206,7 +206,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that skips the window (SIGINT/SIGTERM, Windows ending the session -- the
   latter not checked) drops held pastes as before; unfinished recordings
   are still kept by `shutdown`. A streaming finalize tail whose insert
-  fails gets an Insert offer but no row. Kept: a row store is ~4 h and the
+  fails gets an Insert offer but no row, so the overlay's not-inserted
+  badge does not count it either, and the next recording retires that
+  offer (2026-10-09). Kept: a row store is ~4 h and the
   owner chose the quit window (2026-10-09). The tail row is not just a
   missing call: rows keep stripped text and a tail's leading space is what
   separates it from the streamed words, and F10 would have to order a tail
@@ -223,7 +225,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   message (the tray still reports it, the audio is kept); the quit after
   launching an update installer (`update_ui.py`) skips the window. A
   transcript with a gap marker leaves its file in the unfinished folder,
-  linked from its history entry, and nothing lists or cleans those files.
+  linked from its history entry, and nothing lists or cleans those files;
+  the same holds for a transcribed unfinished recording whose move to the
+  recordings folder failed, and the `unfinished_*.wav` files "Keep last
+  recording after successful transcription" moves to the recordings folder
+  are never pruned (2026-10-09; the archive's count deletes only
+  `recording_*.wav`, and these are a few files per quit with pending work).
   Kept: each needs a store or history failure, or is cosmetic.
 - **A crash keeps only the newest unfinished recording** (2026-10-09): the
   quit writes every queued recording to the unfinished store, but a crash
@@ -259,7 +266,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   part of the old entry is resolved, `docs/agents/text-insertion.md`). A
   finalize whose dictation already inserted live text pastes its tail at
   once, even inside the restore window of a paste the finalize's own flush
-  just made for another window's queued result; a late reader of that paste
+  just made for another window's queued result, or of a re-paste the user
+  sent into another window during the stream (2026-10-09; the stream's live
+  inserts wait for that one, the tail does not); a late reader of that paste
   can then read the tail. For the stream's own window no earlier result can
   be waiting at that point (it would have held the first live insert), so
   order is not affected. Kept (cost vs effect): pacing the tail means

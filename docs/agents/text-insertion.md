@@ -313,6 +313,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   The tray report appends
   `_undelivered_hint`: the count and how to insert them -- the re-paste
   hotkey only while registered, else the tray's "Insert transcript again".
+  The overlay's amber badge counts every insertable row and names the
+  re-paste hotkey (`_update_not_inserted_badge`, run by every
+  `_update_queue_overlay` and every settings reload; owner's request
+  2026-10-09; `docs/agents/overlay.md`); a "possibly inserted" row is not
+  counted, and an Insert offer without a row (a streaming tail, a failed
+  re-paste of a text that has no row) is not either -- it is retired when
+  the next recording starts, so a count that included it would drop at
+  that moment (Known limitations: the tail row).
+  A transcript the startup notice of unfinished recordings saved to history
+  becomes such a row too (`_list_unfinished_transcript`, 2026-10-09, owner's
+  idea): never pasted on its own, listed "Not inserted" with the recording's
+  time, pasted by the re-paste at the current caret like any failed row.
 - **A paste that reports success has its target checked, report-only**
   (2026-10-03, `paste_target_check.PasteTargetCheck`, wired in `main.py`;
   the controller's `paste_target_check` argument defaults to None = no
@@ -517,11 +529,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   overlay. It also runs during an open batch capture (owner's decision,
   2026-10-01): through the pace, into the current focus with its own target,
   leaving the recording's target snapshot and its overlay session alone, and
-  reporting through the tray. Refused with the reason during a recording
-  start or stop (the start or stop takes the target snapshot, and a paste
-  then races it), during a streaming recording (live inserts write at the
-  caret) and during a streaming finalize, whose tail would land behind the
-  paste. A failed or doubtful insert still shows briefly in the tray and
+  reporting through the tray. Refused with the reason only during a
+  recording start or stop (the start or stop takes the target snapshot, and
+  a paste then races it; a fraction of a second). During a streaming
+  recording or its pending finalize (owner's request 2026-10-09; it was
+  refused, and the user had to press it again afterwards) the paste's
+  window decides (`_streaming_window_has_focus`, top-level window as the
+  order rule counts it; unknown counts as the stream's window, and with
+  `current_window` insertion every window is): into another window it goes
+  out at once -- the stream writes only into its own window, a focus change
+  suspends its live inserts --, and the stream's next live insert then
+  waits for that paste's restore window (`_stream_waits_for_paste_pace`);
+  into the stream's own window, where live inserts write at the caret and
+  the finalize still pastes its tail, it is held as a `_PendingRepaste`
+  with `after_stream` (a later request replaces it), the tray says it will
+  be inserted when the stream has finished, a pace tick during the stream
+  leaves it held, and `_reset_streaming_state` starts the pace timer, so it
+  runs after the stream's end, rebuilt from its rows like any held
+  re-paste, at whatever has the focus then. A failed or doubtful insert still shows briefly in the tray and
   stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
   inserted, never pasted again. The `_last_transcript` fallback

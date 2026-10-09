@@ -6,6 +6,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import time
 from datetime import datetime
 
 from conftest import (
@@ -185,29 +186,46 @@ def test_a_quit_keeps_the_failures_waiting_for_retry_once_each(monkeypatch, tmp_
     _ = app
 
 
-def test_waiting_to_quit_stops_the_open_recording_and_refuses_a_new_one(
-    monkeypatch, tmp_path
-):
+def test_waiting_to_quit_stops_the_open_recording(monkeypatch, tmp_path):
     controller, app, _overlay, _unfinished, _history = _controller(
         monkeypatch, tmp_path
     )
-    tray_messages = []
-    controller.busy_overlay_error.connect(tray_messages.append)
     controller.start_recording()
 
     controller.hold_for_quit()
 
     assert controller._audio_capture is None, "the open recording was not stopped"
     assert controller.quit_pending_work().transcribing == 1
-    starts = len(FakeCapture.instances)
-    controller.start_recording()
-    assert len(FakeCapture.instances) == starts, "a recording started while quitting"
-    # The transcription owns the overlay, so the refusal goes to the tray.
-    assert any("Don't quit" in message for message in tray_messages)
+    controller.shutdown()
+    _ = app
 
-    controller.release_quit_hold()
+
+def test_a_new_recording_during_the_wait_calls_the_quit_off(monkeypatch, tmp_path):
+    """Owner decision 2026-10-09: the wait used to refuse a new recording
+    until "Don't quit" was chosen. Dictating again now releases the hold,
+    tells the quit window to close and records as usual."""
+    controller, app, _overlay, _unfinished, _history = _controller(
+        monkeypatch, tmp_path
+    )
+    tray_messages = []
+    canceled = []
+    controller.busy_overlay_error.connect(tray_messages.append)
+    controller.quit_canceled_by_recording.connect(lambda: canceled.append(True))
+    controller.hold_for_quit()
+    starts = len(FakeCapture.instances)
+
     controller.start_recording()
-    assert len(FakeCapture.instances) == starts + 1
+
+    assert len(FakeCapture.instances) == starts + 1, "the recording was refused"
+    assert controller._audio_capture is not None
+    assert canceled == [True]
+    assert any("Quit canceled" in message for message in tray_messages)
+    # The hold is gone: a stray hold-free poll path must not stop it, and a
+    # second start emits nothing more.
+    assert controller._quit_hold is False
+    controller.stop_recording()
+    controller.start_recording()
+    assert canceled == [True]
     controller.shutdown()
     _ = app
 
@@ -257,6 +275,204 @@ def test_a_transcript_with_a_gap_keeps_its_recording(monkeypatch, tmp_path):
     assert ok is True
     assert recording.path.is_file()
     assert history.load()[0].source_audio_path == os.path.abspath(recording.path)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcribed_unfinished_recording_waits_for_the_re_paste(
+    monkeypatch, tmp_path
+):
+    """Owner's idea 2026-10-09: nothing is pasted on its own -- the window it
+    was dictated for is long gone -- but the transcript is listed as not
+    inserted, so the re-paste hotkey pastes it at the current caret, and it
+    counts as not inserted."""
+    controller, app, overlay, unfinished, history = _controller(monkeypatch, tmp_path)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(
+        controller, "_transcribe_import_worker", lambda *_a: "hello again"
+    )
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert controller._text_inserter.calls == [], "pasted without being asked"
+    [row] = controller._undelivered_inserts
+    assert row.text == "hello again"
+    assert row.parts[0][0] == history.load()[0], "an edit must reach the row"
+    assert overlay.queue_kinds[-1] == ["undelivered"]
+    # The time the recording was made, as every row shows it.
+    assert "· 00:00:00 ·" in overlay.queue_updates[-1][0][1]
+    assert controller.quit_pending_work().not_inserted == 1
+
+    controller.repaste_last_transcript()
+
+    assert [call[0] for call in controller._text_inserter.calls] == ["hello again"]
+    assert controller._undelivered_inserts == []
+    controller.shutdown()
+    _ = app
+
+
+def test_unfinished_transcripts_are_listed_on_the_qt_thread(monkeypatch, tmp_path):
+    """The startup notice transcribes on a worker thread; the row it leaves
+    is listed by the controller's own thread, never from the worker."""
+    import threading
+
+    controller, app, _overlay, unfinished, _history = _controller(monkeypatch, tmp_path)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "later")
+    recording = _kept_recording(unfinished)
+    listed_on = []
+    original = controller._record_undelivered_insert
+
+    def _spy(*args, **kwargs):
+        listed_on.append(threading.current_thread())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(controller, "_record_undelivered_insert", _spy)
+    worker = threading.Thread(
+        target=controller.transcribe_unfinished_recording, args=(recording,)
+    )
+    worker.start()
+    worker.join(10)
+    assert listed_on == [], "listed from the worker thread"
+    deadline = time.monotonic() + 5
+    while not listed_on and time.monotonic() < deadline:
+        app.processEvents()
+    assert listed_on == [threading.main_thread()]
+    assert [row.text for row in controller._undelivered_inserts] == ["later"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcribed_unfinished_recording_is_archived_like_any_recording(
+    monkeypatch, tmp_path
+):
+    """With "Archive every recording" on, a dictation's audio stays in the
+    recordings folder; a recording from the startup notice was deleted
+    instead (owner's report 2026-10-09). It now joins the archive under the
+    archive's own name, the retention count applies, and its history entry
+    points at it."""
+    import re
+
+    archive = tmp_path / "recordings"
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch,
+        tmp_path,
+        save_all_recordings=True,
+        recordings_dir=str(archive),
+        recordings_max_count=2,
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hello")
+    archive.mkdir()
+    oldest = archive / "recording_20260101_000000_000000.wav"
+    older = archive / "recording_20260102_000000_000000.wav"
+    for age, path in ((200, oldest), (100, older)):
+        path.write_bytes(b"RIFF-old")
+        stamp = time.time() - age
+        os.utime(path, (stamp, stamp))
+    recording = _kept_recording(unfinished)
+    # Written by the quit, before every archived file: oldest of the three.
+    kept_at = time.time() - 300
+    os.utime(recording.path, (kept_at, kept_at))
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert unfinished.list_recordings() == []
+    [entry] = history.load()
+    archived = entry.source_audio_path
+    assert os.path.dirname(archived) == os.path.abspath(archive)
+    assert re.fullmatch(
+        r"recording_20260101_000000_[0-9]{6}\.wav", os.path.basename(archived)
+    ), archived
+    with open(archived, "rb") as handle:
+        assert handle.read() == b"RIFF-kept"
+    # The count applies as to any archived recording, and this one counts as
+    # the newest: pruned at once, its entry would point at nothing.
+    assert not oldest.exists()
+    assert older.exists()
+    controller.shutdown()
+    _ = app
+
+
+def test_keep_last_recording_keeps_a_transcribed_unfinished_recording(
+    monkeypatch, tmp_path
+):
+    """With "Keep last recording after successful transcription" on, a
+    dictation's audio stays after its transcript; the notice's transcription
+    deleted it. It goes to the recordings folder under its own name, where
+    no retention count deletes it, and its entry points at it."""
+    keep_dir = tmp_path / "recordings"
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, save_last_wav=True, recordings_dir=str(keep_dir)
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hello")
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert unfinished.list_recordings() == []
+    kept = keep_dir / recording.path.name
+    assert kept.read_bytes() == b"RIFF-kept"
+    assert history.load()[0].source_audio_path == os.path.abspath(kept)
+    controller.shutdown()
+    _ = app
+
+
+def test_an_archive_move_that_fails_keeps_the_file_and_links_it(monkeypatch, tmp_path):
+    archive = tmp_path / "recordings"
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, save_all_recordings=True, recordings_dir=str(archive)
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hello")
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("locked")
+
+    monkeypatch.setattr("stt_app.controller.shutil.move", _refuse)
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert recording.path.is_file(), "a failed move deleted the recording"
+    assert history.load()[0].source_audio_path == os.path.abspath(recording.path)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_keeps_its_audio_out_of_the_pruned_archive(
+    monkeypatch, tmp_path
+):
+    """The only audio of a transcript with a gap marker is never put where
+    the archive's retention count could delete it."""
+    archive = tmp_path / "recordings"
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch,
+        tmp_path,
+        save_all_recordings=True,
+        recordings_dir=str(archive),
+        recordings_max_count=1,
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(
+        controller,
+        "_transcribe_import_worker",
+        lambda *_a: "first [no text returned for 3:00-6:00] rest",
+    )
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert recording.path.is_file()
+    assert history.load()[0].source_audio_path == os.path.abspath(recording.path)
+    assert not archive.exists() or not any(archive.iterdir())
     controller.shutdown()
     _ = app
 

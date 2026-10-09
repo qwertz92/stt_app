@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import faulthandler
 import logging
+import os
 import signal
 import sys
 import threading
@@ -915,6 +916,10 @@ def _local_time(created_at: str) -> datetime | None:
     return moment.astimezone().replace(tzinfo=None)
 
 
+def _path_key(path) -> str:
+    return os.path.normcase(os.path.abspath(str(path)))
+
+
 def _without_transcribed_recordings(
     recordings: list[UnfinishedRecording],
     history_store: TranscriptHistoryStore | None,
@@ -938,15 +943,23 @@ def _without_transcribed_recordings(
     except Exception:
         entries = []
     texts_by_id: dict[str, list[str]] = {}
+    linked_audio: set[str] = set()
     for entry in entries:
         recording_id = str(getattr(entry, "source_recording_id", "") or "").strip()
         if recording_id and str(getattr(entry, "mode", "") or "") == "import":
             texts_by_id.setdefault(recording_id, []).append(str(entry.text or ""))
+            audio = str(getattr(entry, "source_audio_path", "") or "").strip()
+            if audio:
+                linked_audio.add(_path_key(audio))
     offered = []
     for recording in recordings:
         texts = texts_by_id.get(recording.recording_id)
         if texts is None:
             offered.append(recording)
+            continue
+        if _path_key(recording.path) in linked_audio:
+            # Its entry links to this very file (a gap transcript, or one
+            # whose move to the recordings folder failed): the only audio.
             continue
         if not any(transcript_has_gap(text) for text in texts):
             try:
