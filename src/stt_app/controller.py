@@ -17,7 +17,7 @@ from typing import NamedTuple
 
 from PySide6 import QtCore, QtGui
 
-from . import audio_devices, silero_vad
+from . import audio_devices, local_runtime_support, silero_vad
 from .app_paths import resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import AudioDeviceChangeListener
@@ -8700,6 +8700,11 @@ class DictationController(QtCore.QObject):
             use_legacy_cancel_flag and self._preload_cancel_requested
         ):
             raise RuntimeError("Model download canceled.")
+        # Before any download: on Windows ARM64 (no CTranslate2) the preload
+        # fetched a whole Whisper model only to fail loading it afterwards.
+        reason = local_runtime_support.unavailable_reason(settings.model_size)
+        if reason:
+            raise RuntimeError(reason)
         if getattr(settings, "offline_mode", False):
             return
 

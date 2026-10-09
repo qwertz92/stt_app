@@ -3765,6 +3765,38 @@ def test_download_model_for_preload_skips_when_cached(monkeypatch):
     _ = app
 
 
+def test_download_model_for_preload_refuses_a_model_this_machine_cannot_run(
+    monkeypatch,
+):
+    # Windows ARM64 has no CTranslate2: the startup/Save preload fetched the
+    # whole Whisper model and only then failed to load it (review of 7aac63d).
+    from stt_app import local_runtime_support
+
+    controller, app = _make_controller()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="large-v3")
+    monkeypatch.setattr(
+        local_runtime_support,
+        "faster_whisper_unavailable_reason",
+        lambda: "No CTranslate2 build for this machine.",
+    )
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": [],
+    )
+    started = []
+    monkeypatch.setattr(
+        "stt_app.controller.start_model_download_process",
+        lambda *args, **kwargs: started.append(args),
+    )
+
+    with pytest.raises(RuntimeError, match="No CTranslate2 build"):
+        controller._download_model_for_preload(settings)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
 def test_download_model_for_preload_can_be_canceled():
     controller, app = _make_controller()
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
