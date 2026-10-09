@@ -4843,44 +4843,70 @@ class DictationController(QtCore.QObject):
         else:
             self._preload_progress_timer.stop()
 
-    def _paste_carried_the_offer(self, insertion_text: str) -> bool:
-        """Did this paste carry the pending offer's words?
+    def _repaste_carries_offer(
+        self,
+        text: str,
+        *,
+        undelivered: Sequence[_UndeliveredInsert],
+        shown_fallback: bool,
+    ) -> bool:
+        """Does this re-paste carry the pending offer's own dictation?
 
-        Equality was the test, and the tray's "Insert transcript again"
-        pastes `_last_transcript`, the whole dictation -- of which a
-        streaming tail's offer is the last part. Measured: the tail's
-        insert failed before the keystroke, the tray's re-paste failed after
-        it, and the next repaint armed Insert for words that had just
-        reached the window, so pressing it pasted them a third time.
-        Compared with the whitespace folded, because the tail is inserted
-        with a leading space that the transcript does not carry.
+        Asked by `_repaste` before it pastes: a success retires the offer,
+        and a failure after the keystroke marks it as possibly pasted
+        (`_insert_offer_may_have_pasted`). A foreground or queued insert
+        never carries it, so an unrelated transcript cannot mark it.
 
-        Carried means the offer is the pasted text or its last words: the
-        overlay's Insert pastes exactly the offer, and the tray's re-paste
-        pastes the dictation it is the tail of. A plain substring test was
-        wider than that -- a queued transcript containing the tail's word
-        ("Milch und Brot" for a tail " und", "Wochenende" for " ende")
-        that failed after its keystroke marked the tail as possibly pasted,
-        and every later repaint hid Insert for words that had reached no
-        window (measured on the real painter). Only `_repaste` asks at all:
-        a foreground or queued insert never carries the offer, so an
-        unrelated transcript that happens to end with its words cannot mark
-        it either. `tail_prefix` decides both, also for a tail that starts
-        with punctuation (inserted without a space).
+        - A paste of waiting rows (``undelivered``) carries an offer built
+          from rows, by identity: every one of its rows still listed is
+          among them. It never carries a row-less offer -- a streaming tail,
+          or a failed re-paste of a text without a row -- since those rows
+          are other dictations. Matched by text, F10 on a failed "Ich komme
+          morgen." row carried a streaming tail "." or " morgen.", which
+          then was no longer offered anywhere (2026-10-09 review).
+        - Otherwise the offer itself (the overlay's Insert, or an F10 of
+          the text whose re-paste failed) carries it, compared with the
+          whitespace folded: the tail is inserted with a leading space.
+        - And for a row-less offer, the tray's re-paste of the shown
+          transcript (``shown_fallback``) carries it when the offer is its
+          last words (`tail_prefix`): the whole dictation of which the tail
+          is the part that failed. Equality was the test once; the tail's
+          insert failed before the keystroke, the tray's re-paste failed
+          after it, and the next repaint armed Insert for words that had
+          just reached the window. A plain substring test was wider than
+          that ("Wochenende" carried " ende").
         """
-        return tail_prefix(insertion_text, self._insert_action_text) is not None
+        offer = self._insert_action_text
+        if not offer:
+            return False
+        own_rows = self._insert_action_rows
+        if undelivered:
+            listed = self._still_insertable(own_rows)
+            return bool(listed) and all(
+                any(row is pasted for pasted in undelivered) for row in listed
+            )
+        prefix = tail_prefix(text, offer)
+        if prefix == "":
+            return True
+        return prefix is not None and shown_fallback and not own_rows
 
-    def _edit_reaches(self, text: str) -> bool:
+    def _edit_reaches(self, text: str, rows: Sequence[_UndeliveredInsert] = ()) -> bool:
         """Whether the overlay's Edit, which edits the shown transcript and
         its history entry, also edits ``text`` -- a failed or doubtful paste
         of it, or the tail of it a streaming finalize could not insert.
 
         Then Edit is enabled on the Error that offers ``text`` (owner's rule
         2026-10-09): an edit there is what Insert and the re-paste paste.
+        ``rows`` are the listed rows ``text`` is built from, if any: then
+        the shown entry must be one of theirs. Matched by text alone, a
+        failed F10 of another dictation's "okay." row enabled Edit, and the
+        edit went to the shown "okay." entry while the row kept its text.
         """
-        return (
-            self._last_history_entry is not None
-            and tail_prefix(self._last_transcript, text) is not None
+        entry = self._last_history_entry
+        if entry is None or tail_prefix(self._last_transcript, text) is None:
+            return False
+        return not rows or any(
+            part_entry == entry for row in rows for part_entry, _part in row.parts
         )
 
     def _preload_abort_hint(self, action: str) -> str:
@@ -6553,15 +6579,17 @@ class DictationController(QtCore.QObject):
         Jobs older than token ``before`` -- every job during a capture,
         whose own job does not exist until it stops -- that will paste
         their result: an insert delivery that was not stopped, and not a
-        streaming finalize (its words went in live). Transcribing, or done
-        and held in the paste queue: both are still to come. One that
-        fails, is stopped or is delivered to history leaves `_jobs` or
-        stops matching, and holds nothing back any more.
+        streaming finalize (its words went in live) unless it waits in the
+        paste queue (`insertion_deferred`: nothing of it was inserted live,
+        so it is pasted like a batch result). Transcribing, or done and held
+        in the paste queue: both are still to come. One that fails, is
+        stopped or is delivered to history leaves `_jobs` or stops
+        matching, and holds nothing back any more.
         """
         return any(
             (before is None or job.token < before)
             and not job.aborting
-            and job.mode != "streaming"
+            and (job.mode != "streaming" or job.insertion_deferred)
             and job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and self._same_order_window(job.target_handle, handle)
             for job in self._jobs.values()
@@ -6804,7 +6832,7 @@ class DictationController(QtCore.QObject):
                 if may_have_pasted
                 else OVERLAY_ERROR_ACTION_INSERT
             ),
-            editable=self._edit_reaches(transcript),
+            editable=self._edit_reaches(transcript, (row,) if row is not None else ()),
         )
         self._reveal_overlay_result(is_error=True)
 
@@ -7870,7 +7898,7 @@ class DictationController(QtCore.QObject):
                 painted,
                 copy_text=pending,
                 error_action=OVERLAY_ERROR_ACTION_NONE,
-                editable=self._edit_reaches(pending),
+                editable=self._edit_reaches(pending, self._insert_action_rows),
             )
         else:
             painted = f"{detail}\n\nStill not inserted:\n{pending}"
@@ -7879,7 +7907,7 @@ class DictationController(QtCore.QObject):
                 painted,
                 copy_text=pending,
                 error_action=OVERLAY_ERROR_ACTION_INSERT,
-                editable=self._edit_reaches(pending),
+                editable=self._edit_reaches(pending, self._insert_action_rows),
             )
         self._offer_painted = ("Error", painted)
 
@@ -7972,13 +8000,14 @@ class DictationController(QtCore.QObject):
         show_overlay_error: bool = True,
         target_handle=_UNSET_TARGET,
         target_signature=_UNSET_TARGET,
-        may_carry_offer: bool = False,
+        carries_offer: bool = False,
         keep_rows: Sequence[_UndeliveredInsert] = (),
     ) -> bool:
         """Paste ``text``; True when it was inserted.
 
         ``keep_rows`` are the listed rows the text is built from, which a
         paste whose keystroke went out must not drop as superseded.
+        ``carries_offer`` is `_repaste_carries_offer`'s answer for it.
         """
         if not text.strip():
             return True
@@ -8045,16 +8074,12 @@ class DictationController(QtCore.QObject):
             # know, or it offers the same words again and they land twice.
             may_have_pasted = isinstance(exc, TextMayHaveBeenPastedError)
             self._last_insert_may_have_pasted = may_have_pasted
-            if (
-                may_have_pasted
-                and may_carry_offer
-                and self._paste_carried_the_offer(insertion_text)
-            ):
+            if may_have_pasted and carries_offer:
                 # The pending offer's own re-paste, or the tray's re-paste of
                 # the dictation the offer is the tail of: its text is now the
                 # one most likely in the document, whatever a later,
                 # unrelated insert does to the per-attempt flag above. Only
-                # `_repaste` passes `may_carry_offer`: a queued transcript
+                # `_repaste` passes `carries_offer`: a queued transcript
                 # that merely contained the tail's word used to mark it here.
                 self._insert_offer_may_have_pasted = True
             if may_have_pasted:
@@ -8081,7 +8106,7 @@ class DictationController(QtCore.QObject):
                         error_action=OVERLAY_ERROR_ACTION_NONE,
                         # The edit reaches history and Copy; nothing pastes
                         # a text whose keystroke went out.
-                        editable=self._edit_reaches(insertion_text),
+                        editable=self._edit_reaches(insertion_text, keep_rows),
                     )
                 # The keystroke went out, so this is a paste like any other for
                 # the doubtful rows before it: the text in front of it is as
@@ -8123,7 +8148,7 @@ class DictationController(QtCore.QObject):
                     detail,
                     copy_text=insertion_text,
                     error_action=OVERLAY_ERROR_ACTION_INSERT,
-                    editable=self._edit_reaches(insertion_text),
+                    editable=self._edit_reaches(insertion_text, keep_rows),
                 )
             self._logger.exception("Text insertion failed")
             return False
@@ -8375,6 +8400,16 @@ class DictationController(QtCore.QObject):
         # replace it, and a failed paste paint "Error" over it).
         session = self._overlay_session_active()
         rows = [*undelivered, *offer_rows]
+        # Decided before the paste: a successful one retires its rows.
+        carried = self._repaste_carries_offer(
+            text,
+            undelivered=undelivered,
+            shown_fallback=(
+                display_entry is self._KEEP_DISPLAY
+                and not rows
+                and text == self._last_transcript
+            ),
+        )
         inserted = self._insert_text_at_target(
             text,
             restore_focus=True,
@@ -8385,7 +8420,7 @@ class DictationController(QtCore.QObject):
             show_overlay_error=not session,
             target_handle=target,
             target_signature=signature,
-            may_carry_offer=True,
+            carries_offer=carried,
             keep_rows=rows,
         )
         if not inserted:
@@ -8405,7 +8440,6 @@ class DictationController(QtCore.QObject):
                 self._reveal_overlay_result(is_error=True)
             return
         self._retire_undelivered(rows)
-        carried = self._paste_carried_the_offer(text)
         if carried:
             self._retire_insert_offer()
         if display_entry is not self._KEEP_DISPLAY:
@@ -8648,10 +8682,11 @@ class DictationController(QtCore.QObject):
         it is transcribed, so an edit matters for insertion only while it
         was not -- a result still in the paste queue, a waiting-insert row,
         the Insert offer. Each of those follows the edit, and so do the
-        shown transcript (Copy, the re-paste fallback, Edit) and the last
-        background delivery (the re-paste). Entries match by value, as the
-        store's own `update_entry` does: a history editor holds a copy read
-        back from the file.
+        shown transcript (Copy, the re-paste fallback, Edit) -- also when it
+        is a coalesced row's joined text, which has no entry of its own --
+        and the last background delivery (the re-paste). Entries match by
+        value, as the store's own `update_entry` does: a history editor
+        holds a copy read back from the file.
 
         Nothing here pastes. A row whose keystroke may have gone out takes
         the edited text for its label and stays unpastable, and the shown
@@ -8669,16 +8704,41 @@ class DictationController(QtCore.QObject):
         def is_original(entry: TranscriptHistoryEntry | None) -> bool:
             return entry is not None and entry == original
 
+        old_shown = self._last_transcript
+        shown_row = self._shown_transcript_row
+        shows_joined_row = False
         changed_rows: list[_UndeliveredInsert] = []
         for row in self._undelivered_inserts:
             if not any(is_original(entry) for entry, _part in row.parts):
                 continue
+            if row is shown_row and row.text == old_shown.strip():
+                shows_joined_row = self._last_history_entry is None
             row.parts = tuple(
                 (updated, new_text) if is_original(entry) else (entry, part)
                 for entry, part in row.parts
             )
             row.text = _join_transcripts([part for _entry, part in row.parts])
             changed_rows.append(row)
+        # A paste whose target check still runs becomes a row on a "not a
+        # text field" verdict, built from the check's copy: it takes the
+        # edit too, or that row kept the old text and no later edit
+        # reached it.
+        for check_id, check in list(self._paste_checks.items()):
+            check_parts = check.parts or ((check.history_entry, check.text.strip()),)
+            if not any(is_original(entry) for entry, _part in check_parts):
+                continue
+            check_parts = tuple(
+                (updated, new_text) if is_original(entry) else (entry, part)
+                for entry, part in check_parts
+            )
+            self._paste_checks[check_id] = replace(
+                check,
+                text=_join_transcripts([part for _entry, part in check_parts]),
+                history_entry=(
+                    updated if is_original(check.history_entry) else check.history_entry
+                ),
+                parts=check_parts if check.parts else (),
+            )
         queued = 0
         for index, (job, _text) in enumerate(self._deferred_background_results):
             if is_original(job.history_entry):
@@ -8688,14 +8748,19 @@ class DictationController(QtCore.QObject):
         delivered = self._delivered_after_shown
         if delivered is not None and is_original(delivered[1]):
             self._delivered_after_shown = (new_text, updated)
-        old_shown = self._last_transcript
         shown_followed = is_original(self._last_history_entry)
+        # Not through `_set_last_transcript`: its setter forgets the shown
+        # transcript's row and queued token, and the re-paste fallback reads
+        # both to never paste that dictation twice.
         if shown_followed:
-            # Not through `_set_last_transcript`: its setter forgets the
-            # shown transcript's row and queued token, and the re-paste
-            # fallback reads both to never paste that dictation twice.
             self._shown_transcript = new_text
             self._last_history_entry = updated
+        elif shows_joined_row:
+            # The shown transcript is a coalesced row's joined text, with no
+            # entry of its own: Copy yields the row as edited (owner's rule
+            # 2026-10-09). Edit still refuses there -- no single entry.
+            self._shown_transcript = shown_row.text
+            shown_followed = True
         offer = ""
         pending = self._insert_action_text
         offer_rows = self._insert_action_rows
@@ -8706,7 +8771,7 @@ class DictationController(QtCore.QObject):
                 )
                 offer = "followed"
         elif pending and shown_followed:
-            tail = retarget_tail(old_shown, new_text, pending)
+            tail = retarget_tail(old_shown, self._last_transcript, pending)
             if tail:
                 self._insert_action_text = tail
                 offer = "followed"

@@ -245,7 +245,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   for its window still transcribing or held by a recording landed after or
   inside the streamed words (the finalize's flush, or the pace holding it
   while the tail pasted at once). Now the stream's live inserts wait while
-  `_earlier_result_waits_for` its window; such a result that is done may
+  `_earlier_result_waits_for` its window (a batch result, or an earlier
+  stream's result held in the paste queue); such a result that is done may
   paste during the capture while nothing of the stream is in the document
   and its window is in front (`_stream_lets_earlier_result_go_first`; the
   partial handler retries the flush); the first live insert waits for that
@@ -435,15 +436,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     rows whose `parts` hold the edited entry (a coalesced row keeps one
     `(entry, text)` part per result and rejoins them), the queued result's
     text, `_delivered_after_shown`, the shown pair (Copy, Edit, the
-    re-paste fallback) and the offer -- rejoined from its rows, or for a
+    re-paste fallback; a shown coalesced row's joined text, which has no
+    entry, takes the rejoined row text so Copy yields the edit, while Edit
+    still refuses there) and the offer -- rejoined from its rows, or for a
     row-less offer (a streaming tail, or the whole shown transcript)
     `streaming_text.retarget_tail`: the words in front of the tail are in
     the document, so an edit can only move the tail; an edit that removes
     it retires the offer, one that changes those words keeps the offer and
     says so. Entries match by value, as `update_entry` does. Both entry
     points: the overlay's Edit (`edit_last_transcript`), enabled on an
-    Error when `_edit_reaches` its text (the shown pair has an entry and
-    the text is it or its tail; `OverlayUI.set_state(editable=)`), and the
+    Error when `_edit_reaches` its text (the shown pair has an entry, the
+    text is it or its tail, and when the text is built from listed rows the
+    shown entry is one of theirs -- by text alone a failed F10 of another
+    dictation's equal row enabled an Edit that went to the shown entry;
+    `OverlayUI.set_state(editable=)`), and the
     two history editors through `history_ui_actions.notify_history_edit`
     -> `on_history_entry_edited`, which repaints only an overlay that still
     shows the old offer or transcript and never a session. Nothing pastes
@@ -453,18 +459,31 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     `_shown_transcript_token` -- with Edit enabled on a possibly-inserted
     result, the re-paste fallback would then paste it a second time (a test
     calling Edit there measured it). A paced
-    re-paste rebuilds its text from its rows when it runs.
+    re-paste rebuilds its text from its rows when it runs. A paste whose
+    target check still runs (`_paste_checks`) takes the edit as well, so a
+    "not a text field" verdict lists the edited text (2026-10-09 review;
+    built from the check's copy, that row kept the old text for good).
   - **The offer carries its own action**: after a post-keystroke failure (six
     `TextMayHaveBeenPastedError` raise sites in `text_inserter.py`, two via
     the `combined_error` alias and `_ClipboardContentionAfterPaste`) Insert
     is withheld, decided by the offer's own `_insert_offer_may_have_pasted`,
     never the per-attempt `_last_insert_may_have_pasted` a later paste in the
     same flush resets.
-  - **A paste that carries the offer marks it** (`_paste_carried_the_offer`
-    = `streaming_text.tail_prefix`: whitespace-folded equal, or ends with it
-    at a word boundary, a punctuation tail included; asked only
-    by `_repaste` via `may_carry_offer` -- a substring test marked
-    "Wochenende" for " ende"). A re-paste retires only an offer it carried.
+  - **A paste that carries the offer marks it** (`_repaste_carries_offer`,
+    asked only by `_repaste`, before the paste, and handed to the insert as
+    `carries_offer`). Carried means the offer's own dictation was pasted: a
+    paste of waiting rows carries an offer built from rows when every one of
+    its rows still listed is among them, by identity, and never a row-less
+    offer (a streaming tail); otherwise the offer's own text
+    (whitespace-folded equal) carries it, and for a row-less offer so does
+    the tray's re-paste of the shown transcript it is the tail of
+    (`streaming_text.tail_prefix`: ends with it at a word boundary, a
+    punctuation tail included; a substring test marked "Wochenende" for
+    " ende"). A re-paste retires only an offer it carried. Why identity
+    (2026-10-09 review): matched by text, F10 on a failed "Ich komme
+    morgen." row carried a streaming tail "." or " morgen." and retired it,
+    and F10 on rows "B C" did not carry B's own offer, whose Insert then
+    pasted B a second time.
   - **Clear retires the offer it dismissed** (`OverlayUI.detail_cleared` ->
     `on_overlay_detail_cleared`), not one hidden behind a later Error.
   - **The preload progress poll** repaints only the painter's own Error

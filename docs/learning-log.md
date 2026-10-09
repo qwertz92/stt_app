@@ -9458,3 +9458,44 @@ recording an earlier session did not transcribe in one notice.
   paste's restore window and target check are over, and the notice's last
   button reads "Close" once nothing is left. The reviewer also drove
   `SHOpenFolderAndSelectItems` for real: two files selected.
+
+
+## 2026-10-09: what carries an offer, and the edit's last gaps
+
+Follow-ups to the edit-follows and per-window-order rules, from their review
+(no P1/P2 found).
+- **"Carried" is a question about the dictation, not the text.** A re-paste
+  retired the Insert offer whenever the pasted text ended with it
+  (`tail_prefix`). F10 on an unrelated failed row "Ich komme morgen."
+  therefore carried a streaming tail "." or " morgen.", and the tail was
+  offered nowhere any more. `_repaste_carries_offer` now matches a paste of
+  rows to an offer built from rows by identity and never to a row-less
+  offer; the text rule stays only for the offer's own text and the shown
+  transcript the tail belongs to. The same identity rule closed a case the
+  text rule missed the other way: F10 on rows "B C" did not carry B's own
+  offer, and its Insert pasted B a second time.
+- **Copy follows an edit inside a coalesced row.** The failed joined paste
+  of two queued results is the shown transcript with no entry, so the
+  edit-follow, which matched the shown pair by entry, left Copy on the old
+  joined text while the row and the offer followed. The shown text now
+  takes the rejoined row text when the shown row is the edited one --
+  written past the `_last_transcript` setter, which would forget that row
+  and let the re-paste fallback paste a possibly-inserted text again (a
+  test edits a possibly-inserted joined row and presses F10).
+- **A stream's result in the paste queue is a paste like any other.**
+  `_earlier_result_waits_for` skipped every streaming job ("its words went
+  in live"), but since the order fix a stream with nothing inserted live is
+  queued as an ordinary paste. A second stream for the same window whose
+  first partial arrived after the restore window but before the pace timer
+  ran inserted its words ahead of it (reproduced in a test with the paced
+  fake inserter; not seen in the field). Streaming jobs with
+  `insertion_deferred` now count.
+- **Two small edit gaps closed rather than recorded** (P4 each). Edit was
+  enabled on a failed F10 of another dictation's row whose words equal the
+  shown transcript (`_edit_reaches` matched by text; it now also requires
+  the shown entry among the rows' entries), and a paste whose target check
+  was still running during an edit produced, on a "not a text field"
+  verdict, a row with the old text that no later edit reached (the pending
+  `_PasteCheck` now follows the edit).
+- Recorded instead of fixed: a paced Insert of a streaming tail keeps the
+  text it was pressed for (`docs/agents/known-limitations.md`).
