@@ -204,18 +204,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `copy_on_error` fallback (`QGuiApplication.clipboard().setText`) leaves a
   failed paste's transcript on the clipboard as an ordinary copy, so it is
   in Win+V: the user is meant to paste it by hand.
-- **The streaming finalize tail is not paced** (from code reading,
-  2026-10-01, not reproduced in a test): it pastes at once in
-  `_on_transcription_ready`. Trigger: a batch result queued before a switch
-  to streaming finishes during the streaming recording, waits for it, and
-  reaches the finalize's flush. Inside the last live insert's restore window
-  it is held by the pace and pasted after the tail (token order inverted);
-  outside it, it pastes and the tail follows inside its restore window.
-  Holding the tail would route the append-only finalize through the paste
-  queue, a larger change; the inverted order keeps the streamed dictation in
-  one piece. Kept 2026-10-03 (owner decision on the order, ~4-6 h): the
-  deferred batch result lands inside a streaming dictation whichever goes
-  first.
+- **A streaming tail behind live text is not paced** (2026-10-09; the order
+  part of the old entry is resolved, `docs/agents/text-insertion.md`). A
+  finalize whose dictation already inserted live text pastes its tail at
+  once, even inside the restore window of a paste the finalize's own flush
+  just made for another window's queued result; a late reader of that paste
+  can then read the tail. For the stream's own window no earlier result can
+  be waiting at that point (it would have held the first live insert), so
+  order is not affected. Kept (cost vs effect): pacing the tail means
+  holding the rest of a streamed dictation behind another window's paste,
+  through the paste queue's coalescing, for a race only a renderer that
+  reads the clipboard late loses; about 2 h.
+- **A streaming dictation shows no live text while an earlier result for
+  its window is still transcribing** (2026-10-09, by design: the owner's
+  order rule). A slow remote batch job keeps the stream's words off the
+  window until it is pasted, fails or is stopped; the overlay still shows
+  them live and nothing is lost. When that result is pasted during the
+  stream, its completion tone (if enabled) plays into the stream's
+  microphone, as for an immediate-mode paste during a batch recording.
 - **A transcript left on the clipboard after an abandoned restore**
   (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
   restoring the user's own content may add their copy to Win+V again, as
@@ -223,12 +229,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   empties the clipboard first, so the late read by the busy target that the
   abandon protects could see an empty clipboard; ~1 h, and it raises the
   risk the abandon exists to avoid.
-- **Copy yields the pending offer after an edit made while one is pending**,
-  and Edit stays disabled until the offer is retired. Offer semantics. Kept
-  2026-10-03 (owner decision): letting Edit change a pending offer's text and
-  rows is a behaviour choice that also enables Edit in the offer state in the
-  overlay; ~2 h. The case needs a result delivered while the Edit dialog is
-  open.
 - **The benchmark's 6 s environment query can be outlived by a grandchild**
   holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share

@@ -66,7 +66,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   - `edit_last_transcript` reads the entry with the text before
     `TranscriptEditDialog.get_text`, whose modal `exec()` keeps delivering
     results; if the pair moved on, the edit goes to history only
-    (`transcript_edit_saved_behind_newer_result`).
+    (`transcript_edit_saved_behind_newer_result`), plus whatever of that
+    entry still waits to be inserted.
+  - **An edit is followed by what was not inserted** (2026-10-09):
+    `_follow_transcript_edit`, from the overlay's Edit and from both history
+    editors (`on_history_entry_edited`), rewrites waiting rows, queued
+    results, the last background delivery, the shown pair and the offer
+    for the edited entry; it writes `_shown_transcript` past the setter so
+    the shown transcript keeps its row and queued token. The overlay Edit
+    still clears `_delivered_after_shown` (the edited text is what F10
+    re-pastes) and paints its confirmation only with no session active.
+    Detail: `docs/agents/text-insertion.md`.
   - Every mark is keyed by the job's `source_recording_id`
     (`LastRecordingStore.mark_completed()` etc. get `expected_recording_id`;
     `_persist_last_recording_audio` runs before the silence gate):
@@ -140,7 +150,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     The mode changes only delivery. A remote stream finalize has its own worker
     (`_stream_finalize_executor_for`) unless an older job is still working
     (`_has_undelivered_older_job`), else it could paste the later dictation
-    first.
+    first. A streaming dictation's live inserts wait for an earlier result
+    for their window (`_stream_live_insert_held`, 2026-10-09); the order
+    rule and every case it covers: `docs/agents/text-insertion.md`.
   - A `_TranscriptionJob` holds the target window, `background_delivery`
     and `aborting`. Foreground = token active, no newer recording, not
     aborting; `_new_recording_active()` excludes `_streaming_recording`.

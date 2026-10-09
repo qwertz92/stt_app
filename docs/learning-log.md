@@ -9268,3 +9268,31 @@ Lang menu. Both microphone pickers now share
   of the same function; `run_bounded` adds the flag itself, and an AST test
   fails on any `subprocess` call in `src/stt_app` without `creationflags`.
 
+
+## 2026-10-09: edits reach what was not inserted; one window, one order
+
+Two owner decisions, both resolving accepted limitations.
+- **An edit is what a not-yet-inserted result pastes.** The Insert offer,
+  a waiting-insert row and a result still in the paste queue now follow an
+  edit made in the overlay or in either history editor, and Copy yields it.
+  Edit is enabled on the offer's Error when it edits that text. Two traps
+  found on the way: the `_last_transcript` setter forgets the shown row and
+  queued token, so an edit of a "possibly inserted" result made the
+  re-paste fallback paste it again (the pair is now written past the
+  setter); and a coalesced row knew only its joined text, so it now keeps
+  one `(entry, text)` part per result. A streaming tail offer moves with an
+  edit of the words after the ones already in the window
+  (`streaming_text.retarget_tail`); an edit of those words cannot, and the
+  overlay says so.
+- **Results for one window go in recording order.** Only streaming broke
+  it: live inserts never waited for an earlier batch result for the same
+  window, which then landed after or inside the streamed words. The stream
+  now holds its live inserts while such a result is to come, lets it paste
+  first while nothing of the stream is in the window, waits for that
+  paste's restore window, and a stream with nothing inserted is pasted
+  through the queue. The deferred queue, the FIFO executor, the remote
+  finalize lane and F10's row join already kept the order; the reasons are
+  in `docs/agents/text-insertion.md`.
+- Lesson: a rule stated per window needs one definition of "window": the
+  coalescing key includes focus and caret, the order rule uses the
+  top-level handle (`_same_order_window`).
