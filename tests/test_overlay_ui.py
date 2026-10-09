@@ -3059,6 +3059,7 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
             model=model,
             created_at=datetime(2026, 10, 1, 12, 0, second, tzinfo=UTC),
             insertion_deferred=True,
+            settings=SimpleNamespace(language_mode="de"),
         )
         for second, model in (
             (0, "nemotron-3.5-asr-streaming-0.6b-int4"),
