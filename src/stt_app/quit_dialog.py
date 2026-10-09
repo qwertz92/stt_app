@@ -304,7 +304,8 @@ class QuitCoordinator(QtCore.QObject):
             dialog.show_question(self._controller.quit_pending_work())
             return
         # Every poll: a capture that finished opening after the last one is
-        # stopped too, and a new recording stays refused.
+        # stopped too. A new recording calls the quit off instead
+        # (`_on_quit_canceled_by_recording` closes the window first).
         self._controller.hold_for_quit()
         work = self._controller.quit_pending_work()
         if work.can_wait:

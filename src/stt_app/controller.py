@@ -1688,10 +1688,12 @@ class DictationController(QtCore.QObject):
             # the tray, since this recording takes the overlay. A start
             # refused further down leaves the quit called off all the same.
             self._quit_hold = False
-            self._logger.info("quit_canceled reason=recording_started")
+            self._logger.info("quit_canceled reason=recording_requested")
             self.quit_canceled_by_recording.emit()
+            # Worded for the request, not the recording: a start refused
+            # further down (a model still loading) calls the quit off too.
             self.busy_overlay_error.emit(
-                "Quit canceled: a new recording started. The app keeps "
+                "Quit canceled by the request to record. The app keeps "
                 "running; choose Quit in the tray again to quit."
             )
         self._recording_start_in_progress = True

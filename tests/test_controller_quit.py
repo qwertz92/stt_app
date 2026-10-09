@@ -220,7 +220,13 @@ def test_a_new_recording_during_the_wait_calls_the_quit_off(monkeypatch, tmp_pat
     assert len(FakeCapture.instances) == starts + 1, "the recording was refused"
     assert controller._audio_capture is not None
     assert canceled == [True]
-    assert any("Quit canceled" in message for message in tray_messages)
+    # True even when the start is then refused further down: it names the
+    # request (hotkey, Record button or tray), not a recording that may not
+    # have started.
+    assert any(
+        message.startswith("Quit canceled by the request to record")
+        for message in tray_messages
+    ), tray_messages
     # The hold is gone: a stray hold-free poll path must not stop it, and a
     # second start emits nothing more.
     assert controller._quit_hold is False

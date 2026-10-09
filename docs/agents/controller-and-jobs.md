@@ -316,7 +316,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   past its capture and finalize guards, clears the hold first -- so the next
   poll cannot stop the new recording --, emits `quit_canceled_by_recording`
   (the coordinator closes the window as for "Don't quit") and sends "Quit
-  canceled" to the tray; a start refused further down leaves the quit called
+  canceled by the request to record" to the tray (worded so it stays true
+  when the start is refused); a start refused further down leaves the quit called
   off as well. The coordinator quits once `can_wait` is
   false -- which includes `paste_settling`: the last paste's restore window
   (`_paste_pace_wait_s`) and its target check must be over, or the quit
