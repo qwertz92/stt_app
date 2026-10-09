@@ -5,13 +5,12 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from importlib import metadata
 from pathlib import Path
 from typing import Any
 
-from .process_tree import no_window_flags
+from .process_tree import run_bounded
 
 
 @dataclass(slots=True)
@@ -627,17 +626,15 @@ def _first_command_line(args: list[str]) -> str:
 def _command_lines(args: list[str], *, timeout: float = 3.0) -> list[str]:
     if shutil.which(args[0]) is None:
         return []
-    kwargs: dict[str, Any] = {}
-    if flags := no_window_flags():
-        kwargs["creationflags"] = flags
     try:
-        completed = subprocess.run(
+        # `run_bounded`, not `subprocess.run`: the latter kills the direct
+        # child on a timeout and then reads its pipes to the end, so a
+        # descendant holding them (a wrapper script's tool, a scanner hook)
+        # kept the benchmark's environment query open past its budget.
+        completed = run_bounded(
             args,
-            check=False,
-            capture_output=True,
-            text=True,
             timeout=timeout,
-            **kwargs,
+            text=True,
         )
     except Exception:
         return []

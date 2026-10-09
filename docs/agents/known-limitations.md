@@ -229,8 +229,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   rows is a behaviour choice that also enables Edit in the offer state in the
   overlay; ~2 h. The case needs a result delivered while the Edit dialog is
   open.
-- **The benchmark's 6 s environment query can be outlived by a grandchild**
-  holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share
   `BenchmarkHistoryEntry.identity_key()`** (`created_at` has second
   resolution) and open one pop-out. Only with equal status and summary too,
