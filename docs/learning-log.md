@@ -9499,3 +9499,9 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   `_PasteCheck` now follows the edit).
 - Recorded instead of fixed: a paced Insert of a streaming tail keeps the
   text it was pressed for (`docs/agents/known-limitations.md`).
+- **A held Insert rebuilds its text from its rows** (second review, P3).
+  `_run_pending_repaste` rebuilt only F10's rows; an Insert built from rows
+  and held by the pace pasted the text it was pressed for, so an edit saved
+  within the window left the offer (now the edit) pending, and its next
+  Insert put the edit into the document as well. The known-limitations
+  entry claimed the opposite and is corrected.

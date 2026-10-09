@@ -6410,7 +6410,14 @@ class DictationController(QtCore.QObject):
                 still_waiting[0].history_entry if len(still_waiting) == 1 else None
             )
             undelivered = tuple(still_waiting)
-        # Rows dismissed meanwhile drop out: the Insert still pastes its text.
+        if pending.offer_rows:
+            # The Insert's text rebuilt from its rows as they are now: an edit
+            # saved meanwhile is what it pastes, and then still counts as
+            # carrying the offer. Pasting the old text left the offer (now
+            # the edit) pending, and its next Insert pasted the edit as well.
+            text = _join_transcripts([row.text for row in pending.offer_rows])
+        # Rows dismissed meanwhile drop out: the Insert still pastes their
+        # text, but retires only the rows still listed.
         offer_rows = self._still_insertable(pending.offer_rows)
         self._repaste(
             text,

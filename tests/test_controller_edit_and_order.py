@@ -207,6 +207,38 @@ def test_a_history_edit_of_a_coalesced_waiting_row_is_what_f10_pastes(tmp_path):
         controller.shutdown()
 
 
+def test_an_insert_held_by_the_pace_pastes_an_edit_made_meanwhile(tmp_path):
+    """Insert is pressed inside the previous paste's restore window and held;
+    a history edit is saved before it runs. The held Insert pastes the edit
+    and retires the offer. Before, it pasted the text it was pressed for,
+    the offer (now the edited text) survived, and a later Insert put the
+    edit into the document as well."""
+    inserter = PacedTextInserter()
+    inserter.should_fail = True
+    controller, _app, overlay, history = _controller(tmp_path, inserter=inserter)
+    try:
+        controller._on_transcription_ready("transcript B.")
+        _assert_offer(overlay, "transcript B.")
+        inserter.should_fail = False
+        inserter.last_keystroke_at = inserter.now
+        controller.insert_failed_text()
+        assert controller._pending_repaste is not None
+
+        [entry] = history.load()
+        assert history.update_entry_text(entry, "transcript B, edited.") == 1
+        controller.on_history_entry_edited(
+            entry, edited_entry(entry, "transcript B, edited.")
+        )
+        inserter.now += CLIPBOARD_RESTORE_DELAY_S
+        controller._on_paste_pace_timeout()
+
+        assert [call[0] for call in inserter.calls[1:]] == ["transcript B, edited."]
+        assert controller._insert_action_text == ""
+        assert controller._undelivered_inserts == []
+    finally:
+        controller.shutdown()
+
+
 def test_edit_stays_off_for_another_dictations_row_with_the_same_words(tmp_path):
     """The shown transcript "okay." was inserted; another dictation's
     "okay." waits as a row. F10 on that row fails and offers Insert for
