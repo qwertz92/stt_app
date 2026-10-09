@@ -435,7 +435,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     rows whose `parts` hold the edited entry (a coalesced row keeps one
     `(entry, text)` part per result and rejoins them), the queued result's
     text, `_delivered_after_shown`, the shown pair (Copy, Edit, the
-    re-paste fallback) and the offer -- rejoined from its rows, or for a
+    re-paste fallback; a shown coalesced row's joined text, which has no
+    entry, takes the rejoined row text so Copy yields the edit, while Edit
+    still refuses there) and the offer -- rejoined from its rows, or for a
     row-less offer (a streaming tail, or the whole shown transcript)
     `streaming_text.retarget_tail`: the words in front of the tail are in
     the document, so an edit can only move the tail; an edit that removes

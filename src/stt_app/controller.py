@@ -8674,10 +8674,11 @@ class DictationController(QtCore.QObject):
         it is transcribed, so an edit matters for insertion only while it
         was not -- a result still in the paste queue, a waiting-insert row,
         the Insert offer. Each of those follows the edit, and so do the
-        shown transcript (Copy, the re-paste fallback, Edit) and the last
-        background delivery (the re-paste). Entries match by value, as the
-        store's own `update_entry` does: a history editor holds a copy read
-        back from the file.
+        shown transcript (Copy, the re-paste fallback, Edit) -- also when it
+        is a coalesced row's joined text, which has no entry of its own --
+        and the last background delivery (the re-paste). Entries match by
+        value, as the store's own `update_entry` does: a history editor
+        holds a copy read back from the file.
 
         Nothing here pastes. A row whose keystroke may have gone out takes
         the edited text for its label and stays unpastable, and the shown
@@ -8695,10 +8696,15 @@ class DictationController(QtCore.QObject):
         def is_original(entry: TranscriptHistoryEntry | None) -> bool:
             return entry is not None and entry == original
 
+        old_shown = self._last_transcript
+        shown_row = self._shown_transcript_row
+        shows_joined_row = False
         changed_rows: list[_UndeliveredInsert] = []
         for row in self._undelivered_inserts:
             if not any(is_original(entry) for entry, _part in row.parts):
                 continue
+            if row is shown_row and row.text == old_shown.strip():
+                shows_joined_row = self._last_history_entry is None
             row.parts = tuple(
                 (updated, new_text) if is_original(entry) else (entry, part)
                 for entry, part in row.parts
@@ -8714,14 +8720,19 @@ class DictationController(QtCore.QObject):
         delivered = self._delivered_after_shown
         if delivered is not None and is_original(delivered[1]):
             self._delivered_after_shown = (new_text, updated)
-        old_shown = self._last_transcript
         shown_followed = is_original(self._last_history_entry)
+        # Not through `_set_last_transcript`: its setter forgets the shown
+        # transcript's row and queued token, and the re-paste fallback reads
+        # both to never paste that dictation twice.
         if shown_followed:
-            # Not through `_set_last_transcript`: its setter forgets the
-            # shown transcript's row and queued token, and the re-paste
-            # fallback reads both to never paste that dictation twice.
             self._shown_transcript = new_text
             self._last_history_entry = updated
+        elif shows_joined_row:
+            # The shown transcript is a coalesced row's joined text, with no
+            # entry of its own: Copy yields the row as edited (owner's rule
+            # 2026-10-09). Edit still refuses there -- no single entry.
+            self._shown_transcript = shown_row.text
+            shown_followed = True
         offer = ""
         pending = self._insert_action_text
         offer_rows = self._insert_action_rows
@@ -8732,7 +8743,7 @@ class DictationController(QtCore.QObject):
                 )
                 offer = "followed"
         elif pending and shown_followed:
-            tail = retarget_tail(old_shown, new_text, pending)
+            tail = retarget_tail(old_shown, self._last_transcript, pending)
             if tail:
                 self._insert_action_text = tail
                 offer = "followed"

@@ -9474,3 +9474,11 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   transcript the tail belongs to. The same identity rule closed a case the
   text rule missed the other way: F10 on rows "B C" did not carry B's own
   offer, and its Insert pasted B a second time.
+- **Copy follows an edit inside a coalesced row.** The failed joined paste
+  of two queued results is the shown transcript with no entry, so the
+  edit-follow, which matched the shown pair by entry, left Copy on the old
+  joined text while the row and the offer followed. The shown text now
+  takes the rejoined row text when the shown row is the edited one --
+  written past the `_last_transcript` setter, which would forget that row
+  and let the re-paste fallback paste a possibly-inserted text again (a
+  test edits a possibly-inserted joined row and presses F10).

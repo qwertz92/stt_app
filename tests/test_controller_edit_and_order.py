@@ -24,6 +24,8 @@ from conftest import (
     FakeWindowFocusHelper,
     make_controller,
 )
+from PySide6 import QtGui
+from test_controller import FakeClipboard
 from test_controller_queue import (
     PacedTextInserter,
     _make_queue_controller,
@@ -79,6 +81,24 @@ class _PostPasteFailingInserter(FakeTextInserter):
         self.calls.append((text, target_hwnd, paste_mode))
         raise TextMayHaveBeenPastedError(
             "The text was pasted but the clipboard could not be restored."
+        )
+
+
+class _SwitchableInserter(FakeTextInserter):
+    """Fails before the keystroke (``should_fail``) or after it (``post_paste``)."""
+
+    post_paste = False
+
+    def insert_text_with_options(
+        self, text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
+    ):
+        if self.post_paste:
+            self.calls.append((text, target_hwnd, paste_mode))
+            raise TextMayHaveBeenPastedError(
+                "The text was pasted but the clipboard could not be restored."
+            )
+        return super().insert_text_with_options(
+            text, target_hwnd, paste_mode, restore_clipboard
         )
 
 
@@ -187,6 +207,70 @@ def test_a_history_edit_of_a_coalesced_waiting_row_is_what_f10_pastes(tmp_path):
         controller.shutdown()
 
 
+def _coalesced_failure(controller, inserter):
+    """Two queued results for one window fail as one paste; returns B's job."""
+    controller._target_window_handle = 987
+    job_b = controller._register_transcription_job(77, controller.settings, "batch")
+    job_c = controller._register_transcription_job(78, controller.settings, "batch")
+    controller._active_request_token = 99
+    controller._handle_background_transcription_ready(job_b, "queued B")
+    controller._handle_background_transcription_ready(job_c, "queued C")
+    controller._active_request_token = None
+    controller._flush_deferred_background_results()
+    return job_b
+
+
+def test_copy_follows_a_history_edit_inside_a_coalesced_row(monkeypatch, tmp_path):
+    """The failed coalesced paste is the shown transcript, with no single
+    entry. An edit of one of its results changes what Copy yields (owner's
+    decision 2026-10-09); before, the row and the offer followed and the
+    tray's Copy still put the old joined text on the clipboard."""
+    clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    inserter = FakeTextInserter(should_fail=True)
+    controller, _app, _overlay, history = _controller(tmp_path, inserter=inserter)
+    try:
+        job_b = _coalesced_failure(controller, inserter)
+        entry_b = job_b.history_entry
+        assert history.update_entry_text(entry_b, "edited B") == 1
+        controller.on_history_entry_edited(entry_b, edited_entry(entry_b, "edited B"))
+
+        assert controller.copy_last_transcript_to_clipboard() is True
+        assert clipboard.text() == "edited B queued C"
+    finally:
+        controller.shutdown()
+
+
+def test_copy_follows_an_edit_of_a_possibly_inserted_row_that_stays_unpasted(
+    monkeypatch, tmp_path
+):
+    """The coalesced paste may have landed. Copy yields the edit, but the
+    shown transcript keeps its row: writing it through the
+    `_last_transcript` setter forgot that row, and the re-paste fallback
+    then pasted a text that may already be in the window."""
+    clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    inserter = _SwitchableInserter()
+    inserter.post_paste = True
+    controller, _app, overlay, history = _controller(tmp_path, inserter=inserter)
+    try:
+        job_b = _coalesced_failure(controller, inserter)
+        inserter.post_paste = False
+        assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+        pastes = len(inserter.calls)
+        entry_b = job_b.history_entry
+        assert history.update_entry_text(entry_b, "edited B") == 1
+        controller.on_history_entry_edited(entry_b, edited_entry(entry_b, "edited B"))
+
+        assert controller.copy_last_transcript_to_clipboard() is True
+        assert clipboard.text() == "edited B queued C"
+        controller.repaste_last_transcript()
+        assert len(inserter.calls) == pastes
+        assert "may already have been inserted" in overlay.states[-1][1]
+    finally:
+        controller.shutdown()
+
+
 def test_a_history_edit_reaches_a_result_still_waiting_to_be_pasted(
     monkeypatch, tmp_path
 ):
@@ -248,24 +332,6 @@ def test_an_edit_of_a_streaming_tail_offer_moves_the_tail(monkeypatch, tmp_path)
         assert controller._insert_action_text == ""
     finally:
         controller.shutdown()
-
-
-class _SwitchableInserter(FakeTextInserter):
-    """Fails before the keystroke (``should_fail``) or after it (``post_paste``)."""
-
-    post_paste = False
-
-    def insert_text_with_options(
-        self, text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
-    ):
-        if self.post_paste:
-            self.calls.append((text, target_hwnd, paste_mode))
-            raise TextMayHaveBeenPastedError(
-                "The text was pasted but the clipboard could not be restored."
-            )
-        return super().insert_text_with_options(
-            text, target_hwnd, paste_mode, restore_clipboard
-        )
 
 
 @pytest.mark.parametrize(
