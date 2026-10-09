@@ -9,6 +9,7 @@ import os
 import time
 from datetime import datetime
 
+import pytest
 from conftest import (
     FakeCapture,
     FakeOverlay,
@@ -219,7 +220,13 @@ def test_a_new_recording_during_the_wait_calls_the_quit_off(monkeypatch, tmp_pat
     assert len(FakeCapture.instances) == starts + 1, "the recording was refused"
     assert controller._audio_capture is not None
     assert canceled == [True]
-    assert any("Quit canceled" in message for message in tray_messages)
+    # True even when the start is then refused further down: it names the
+    # request (hotkey, Record button or tray), not a recording that may not
+    # have started.
+    assert any(
+        message.startswith("Quit canceled by the request to record")
+        for message in tray_messages
+    ), tray_messages
     # The hold is gone: a stray hold-free poll path must not stop it, and a
     # second start emits nothing more.
     assert controller._quit_hold is False
@@ -419,6 +426,96 @@ def test_keep_last_recording_keeps_a_transcribed_unfinished_recording(
     kept = keep_dir / recording.path.name
     assert kept.read_bytes() == b"RIFF-kept"
     assert history.load()[0].source_audio_path == os.path.abspath(kept)
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("failing_step", ["utime", "prune"])
+def test_a_failure_after_the_archive_move_still_saves_the_transcript(
+    monkeypatch, tmp_path, failing_step
+):
+    """Owner's rule: a transcript is never lost. Once the file is in the
+    archive, the notice no longer offers it, so a step after the move --
+    another archive file vanishing under the prune's age sort, a refused
+    mtime update -- must not stop the history write, and the entry points
+    at where the file really is."""
+    archive = tmp_path / "recordings"
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, save_all_recordings=True, recordings_dir=str(archive)
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hello")
+
+    def _vanished(*_args, **_kwargs):
+        raise FileNotFoundError("gone")
+
+    if failing_step == "utime":
+        monkeypatch.setattr("stt_app.controller.os.utime", _vanished)
+    else:
+        monkeypatch.setattr(controller, "_prune_recordings", _vanished)
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    [entry] = history.load()
+    assert os.path.isfile(entry.source_audio_path), entry.source_audio_path
+    assert os.path.dirname(entry.source_audio_path) == os.path.abspath(archive)
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unresolvable_recordings_folder_keeps_the_file_and_links_it(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, save_all_recordings=True
+    )
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hello")
+
+    def _refuse():
+        raise OSError("no recordings folder")
+
+    monkeypatch.setattr(controller, "_resolve_recordings_dir", _refuse)
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert recording.path.is_file()
+    assert history.load()[0].source_audio_path == os.path.abspath(recording.path)
+    controller.shutdown()
+    _ = app
+
+
+def test_the_prune_skips_an_archive_file_that_vanishes_meanwhile(monkeypatch, tmp_path):
+    """Another prune or the user can delete an archive file between the
+    listing and the age sort; the prune then goes on with the rest."""
+    controller, app, _overlay, _unfinished, _history = _controller(
+        monkeypatch, tmp_path
+    )
+    archive = tmp_path / "recordings"
+    archive.mkdir()
+    names = [f"recording_2026010{day}_000000_000000.wav" for day in (1, 2, 3)]
+    for age, name in zip((300, 200, 100), names, strict=True):
+        path = archive / name
+        path.write_bytes(b"RIFF")
+        stamp = time.time() - age
+        os.utime(path, (stamp, stamp))
+    real_getmtime = os.path.getmtime
+
+    def _getmtime(path):
+        if os.path.basename(path) == names[1]:
+            raise FileNotFoundError(path)
+        return real_getmtime(path)
+
+    monkeypatch.setattr("stt_app.controller.os.path.getmtime", _getmtime)
+
+    controller._prune_recordings(str(archive), 1)
+
+    assert not (archive / names[0]).exists()
+    assert (archive / names[2]).exists()
     controller.shutdown()
     _ = app
 

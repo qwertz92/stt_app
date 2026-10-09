@@ -853,6 +853,10 @@ class DictationController(QtCore.QObject):
         # A re-paste went into another window during the stream: its next
         # live insert waits for that paste's restore window.
         self._stream_waits_for_paste_pace = False
+        # The finalize a stream's runtime failure left in flight
+        # (`_reset_streaming_state(keep_session_text=True)`): it still pastes
+        # the tail, so a re-paste held for the stream waits for it too.
+        self._stream_kept_finalize_token: int | None = None
         # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
@@ -1298,11 +1302,14 @@ class DictationController(QtCore.QObject):
         recording is one slot that holds the newest dictation and must not be
         overwritten by an older recording. A move that fails leaves the file
         where it was and answers that path (logged): the entry points at it,
-        and the next start deletes no file an entry points at.
+        and the next start deletes no file an entry points at. Nothing after
+        a successful move may stop the history write (the notice no longer
+        offers a moved file, so its transcript would be lost): a failed mtime
+        update or prune is logged, and the answer is where the file is.
         """
         if self._settings.save_all_recordings:
-            target_dir = os.path.abspath(self._resolve_recordings_dir())
             try:
+                target_dir = os.path.abspath(self._resolve_recordings_dir())
                 os.makedirs(target_dir, exist_ok=True)
                 recorded_at = recording.recorded_at or datetime.fromtimestamp(  # noqa: DTZ006 (local time on purpose, like the archive's names)
                     os.path.getmtime(recording.path)
@@ -1316,14 +1323,18 @@ class DictationController(QtCore.QObject):
                         target_dir, f"recording_{stamp}_{counter:06d}.wav"
                     )
                 shutil.move(str(recording.path), target)
-                # The newest archived file now: the prune goes by age, and
-                # the file's own age (the quit that kept it) could make it
-                # the one deleted, under the entry pointing at it.
-                os.utime(target)
             except OSError:
                 self._logger.exception("Failed to archive a transcribed recording")
                 return os.path.abspath(recording.path)
-            self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            try:
+                # The newest archived file now: the prune goes by age, and
+                # the file's own age (the quit that kept it) could make it
+                # the one deleted, under the entry pointing at it -- so no
+                # prune when this fails.
+                os.utime(target)
+                self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            except Exception:
+                self._logger.exception("Failed to prune the recordings archive")
             return target
         if self._settings.save_last_wav:
             try:
@@ -1471,8 +1482,9 @@ class DictationController(QtCore.QObject):
             self._show_overlay_hotkey_notice = None
             self._repaste_hotkey_registration_ok = True
             self._repaste_hotkey_notice = None
-        # The badge names the re-paste hotkey, which this reload may change.
-        self._update_not_inserted_badge()
+            # The badge names the re-paste hotkey, which this reload may
+            # change (`_register_all_global_hotkeys` refreshes it otherwise).
+            self._update_not_inserted_badge()
 
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
@@ -1676,10 +1688,12 @@ class DictationController(QtCore.QObject):
             # the tray, since this recording takes the overlay. A start
             # refused further down leaves the quit called off all the same.
             self._quit_hold = False
-            self._logger.info("quit_canceled reason=recording_started")
+            self._logger.info("quit_canceled reason=recording_requested")
             self.quit_canceled_by_recording.emit()
+            # Worded for the request, not the recording: a start refused
+            # further down (a model still loading) calls the quit off too.
             self.busy_overlay_error.emit(
-                "Quit canceled: a new recording started. The app keeps "
+                "Quit canceled by the request to record. The app keeps "
                 "running; choose Quit in the tray again to quit."
             )
         self._recording_start_in_progress = True
@@ -3262,14 +3276,22 @@ class DictationController(QtCore.QObject):
             # the user's audio beats deleting all but the newest file.
             return
         try:
-            files = [
-                os.path.join(directory, name)
-                for name in os.listdir(directory)
-                if _ARCHIVED_RECORDING_NAME_RE.fullmatch(name)
-            ]
+            names = os.listdir(directory)
         except OSError:
             return
-        files.sort(key=lambda path: os.path.getmtime(path))
+        aged = []
+        for name in names:
+            if not _ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
+                continue
+            path = os.path.join(directory, name)
+            try:
+                aged.append((os.path.getmtime(path), path))
+            except OSError:
+                # Deleted since the listing (another prune, the user): one
+                # file fewer to keep count of, not a reason to stop.
+                continue
+        aged.sort()
+        files = [path for _mtime, path in aged]
         while len(files) > keep:
             oldest = files.pop(0)
             try:
@@ -3318,16 +3340,39 @@ class DictationController(QtCore.QObject):
         self._target_window_handle = None
         self._target_focus_signature = None
         self._stream_waits_for_paste_pace = False
+        if keep_session_text:
+            finalize = self._pending_streaming_job()
+            self._stream_kept_finalize_token = (
+                finalize.token if finalize is not None else None
+            )
+        self._release_stream_held_repaste()
+
+    def _stream_still_delivering(self) -> bool:
+        """Whether a streaming dictation may still paste into its window:
+        the stream itself, or the finalize its runtime failure left in
+        flight, whose tail is still to come."""
+        if self._streaming_recording:
+            return True
+        token = self._stream_kept_finalize_token
+        job = self._jobs.get(token) if token is not None else None
+        return job is not None and not job.aborting
+
+    def _release_stream_held_repaste(self) -> None:
+        """Let a re-paste held for a stream go once the stream is over.
+
+        The pace timer runs it on the next turn of the event loop, after
+        whatever the stream's end still paints and pastes, and after the
+        restore window of the stream's own last paste. Called when the
+        streaming state is reset and when a job ends, since a failure's
+        pending finalize ends later than the reset.
+        """
         pending = self._pending_repaste
         if (
             pending is not None
             and pending.after_stream
+            and not self._stream_still_delivering()
             and not self._paste_pace_timer.isActive()
         ):
-            # The stream that held a re-paste is over: the pace timer runs it
-            # on the next turn of the event loop, after whatever the stream's
-            # end still paints and pastes, and after the restore window of
-            # the stream's own last paste.
             self._paste_pace_timer.start(_pace_ms(self._paste_pace_wait_s()))
 
     @property
@@ -4000,6 +4045,9 @@ class DictationController(QtCore.QObject):
             self._save_stashed_streaming_partial(job)
             job.insertion_deferred = False
             self._update_queue_overlay()
+        if request_token == self._stream_kept_finalize_token:
+            self._stream_kept_finalize_token = None
+            self._release_stream_held_repaste()
 
     def _save_stashed_streaming_partial(self, job: _TranscriptionJob) -> None:
         """Keep a streaming dictation whose finalize produced nothing.
@@ -6599,7 +6647,7 @@ class DictationController(QtCore.QObject):
         pending = self._pending_repaste
         if pending is None:
             return
-        if pending.after_stream and self._streaming_recording:
+        if pending.after_stream and self._stream_still_delivering():
             # The pace timer ran for another paste; this one waits for the
             # stream's end (`_reset_streaming_state` lets it go).
             return
@@ -8596,7 +8644,7 @@ class DictationController(QtCore.QObject):
                 message = f"{message} {hint}"
             self.show_overlay_error(message)
             return
-        if self._streaming_recording and self._streaming_window_has_focus():
+        if self._stream_still_delivering() and self._streaming_window_has_focus():
             # Live inserts write at that caret while the microphone is open,
             # and a pending finalize still inserts its tail past the text
             # already there: a paste now would land inside the streamed
@@ -10029,6 +10077,9 @@ class DictationController(QtCore.QObject):
         self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
         self._show_overlay_hotkey_registration_ok = self._register_show_overlay_hotkey()
         self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
+        # The badge names the re-paste hotkey only while it is registered:
+        # a save, the startup and every resume land here.
+        self._update_not_inserted_badge()
         return (
             self._hotkey_registration_ok
             and self._cancel_hotkey_registration_ok

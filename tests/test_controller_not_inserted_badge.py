@@ -107,3 +107,20 @@ def test_a_settings_save_renames_the_hotkey_on_the_badge():
     assert overlay.badge == "1 not inserted · Ctrl+Alt+F9"
     controller.shutdown()
     _ = app
+
+
+def test_a_resume_that_reclaims_the_hotkey_renames_it_on_the_badge():
+    """`refresh_hotkey_registration` runs at startup and after every resume;
+    the badge must name the hotkey once it works again, and drop it once it
+    no longer does."""
+    controller, app, overlay, _inserter = _controller()
+    controller._repaste_hotkey_registration_ok = False
+    _row(controller, "one")
+    assert overlay.badge == "1 not inserted · tray menu"
+
+    controller.refresh_hotkey_registration()
+
+    assert controller._repaste_hotkey_registration_ok is True
+    assert overlay.badge == "1 not inserted · Ctrl+Alt+F10"
+    controller.shutdown()
+    _ = app

@@ -190,3 +190,30 @@ def test_a_batch_recording_still_lets_the_re_paste_through():
     controller._audio_capture = None
     controller.shutdown()
     _ = (app, QtWidgets)
+
+
+def test_a_stream_failure_with_its_finalize_pending_keeps_the_re_paste_held():
+    """A runtime failure tears the stream down while its finalize is still
+    in flight (`_reset_streaming_state(keep_session_text=True)`); that
+    finalize still pastes its tail into the window. The held re-paste goes
+    only after it -- released earlier, it landed in front of the tail."""
+    controller, app, inserter, _focus, _tray = _streaming_controller(capture_open=False)
+    token = controller._next_request_token()
+    controller._register_transcription_job(
+        token, controller._settings, "streaming", source_recording_id=""
+    )
+    controller.repaste_last_transcript()
+
+    controller._streaming_recording = False
+    controller._reset_streaming_state(keep_session_text=True)
+    _wait_for_timer(app, controller)
+    controller._on_paste_pace_timeout()
+
+    assert inserter.calls == [], "pasted before the finalize's tail"
+    assert controller._pending_repaste is not None
+
+    controller._finish_transcription_job(token)
+    _wait_for_timer(app, controller)
+
+    assert [call[0] for call in inserter.calls] == ["hello again"]
+    controller.shutdown()

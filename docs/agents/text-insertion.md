@@ -315,7 +315,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   hotkey only while registered, else the tray's "Insert transcript again".
   The overlay's amber badge counts every insertable row and names the
   re-paste hotkey (`_update_not_inserted_badge`, run by every
-  `_update_queue_overlay` and every settings reload; owner's request
+  `_update_queue_overlay`, every hotkey registration -- save, startup,
+  resume -- and a reload without one; owner's request
   2026-10-09; `docs/agents/overlay.md`); a "possibly inserted" row is not
   counted, and an Insert offer without a row (a streaming tail, a failed
   re-paste of a text that has no row) is not either -- it is retired when
@@ -544,8 +545,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   the finalize still pastes its tail, it is held as a `_PendingRepaste`
   with `after_stream` (a later request replaces it), the tray says it will
   be inserted when the stream has finished, a pace tick during the stream
-  leaves it held, and `_reset_streaming_state` starts the pace timer, so it
-  runs after the stream's end, rebuilt from its rows like any held
+  leaves it held, and the stream's end starts the pace timer
+  (`_release_stream_held_repaste`, from `_reset_streaming_state` and from
+  `_finish_transcription_job`): a runtime failure that leaves the finalize
+  in flight (`keep_session_text=True`, `_stream_kept_finalize_token`) is not
+  the end -- that finalize still pastes the tail, so the hold lasts until
+  its job ends (`_stream_still_delivering`). It then runs after the stream's end, rebuilt from its rows like any held
   re-paste, at whatever has the focus then. A failed or doubtful insert still shows briefly in the tray and
   stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
