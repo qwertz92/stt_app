@@ -41,7 +41,11 @@ from stt_app.config import (
 from stt_app.settings_store import AppSettings
 from stt_app.streaming_text import tail_prefix
 from stt_app.text_inserter import TextMayHaveBeenPastedError
-from stt_app.transcript_history import TranscriptHistoryStore, edited_entry
+from stt_app.transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    edited_entry,
+)
 
 
 def _patch_edit_dialog(monkeypatch, get_text):
@@ -203,6 +207,76 @@ def test_a_history_edit_of_a_coalesced_waiting_row_is_what_f10_pastes(tmp_path):
         controller.repaste_last_transcript()
         assert inserter.calls[-1][0] == "edited B queued C"
         assert controller._undelivered_inserts == []
+    finally:
+        controller.shutdown()
+
+
+def test_an_insert_held_by_the_pace_pastes_an_edit_made_meanwhile(tmp_path):
+    """Insert is pressed inside the previous paste's restore window and held;
+    a history edit is saved before it runs. The held Insert pastes the edit
+    and retires the offer. Before, it pasted the text it was pressed for,
+    the offer (now the edited text) survived, and a later Insert put the
+    edit into the document as well."""
+    inserter = PacedTextInserter()
+    inserter.should_fail = True
+    controller, _app, overlay, history = _controller(tmp_path, inserter=inserter)
+    try:
+        controller._on_transcription_ready("transcript B.")
+        _assert_offer(overlay, "transcript B.")
+        inserter.should_fail = False
+        inserter.last_keystroke_at = inserter.now
+        controller.insert_failed_text()
+        assert controller._pending_repaste is not None
+
+        [entry] = history.load()
+        assert history.update_entry_text(entry, "transcript B, edited.") == 1
+        controller.on_history_entry_edited(
+            entry, edited_entry(entry, "transcript B, edited.")
+        )
+        inserter.now += CLIPBOARD_RESTORE_DELAY_S
+        controller._on_paste_pace_timeout()
+
+        assert [call[0] for call in inserter.calls[1:]] == ["transcript B, edited."]
+        assert controller._insert_action_text == ""
+        assert controller._undelivered_inserts == []
+    finally:
+        controller.shutdown()
+
+
+def test_a_failed_re_paste_of_another_dictation_is_no_tail_of_the_shown_one(
+    monkeypatch, tmp_path
+):
+    """The shown "Alles okay." was inserted; F10 re-pastes the last
+    background delivery "okay." (another dictation) and fails before the
+    keystroke. The offer "okay." is that dictation's, not the shown one's
+    tail: Edit stays off on it, and an edit of the shown transcript leaves
+    it alone. Before, Edit was enabled, the edit "Alles gut." retargeted the
+    offer to " gut." as if it were a streaming tail, and Insert pasted that
+    fragment. An edit of its own entry is what Insert then pastes."""
+    inserter = FakeTextInserter()
+    controller, _app, overlay, _history = _controller(tmp_path, inserter=inserter)
+    _patch_edit_dialog(monkeypatch, lambda parent, text: "Alles gut.")
+    try:
+        controller._on_transcription_ready("Alles okay.")
+        delivered = TranscriptHistoryEntry.new(
+            text="okay.", engine="local", model="small", mode="batch"
+        )
+        controller._delivered_after_shown = ("okay.", delivered)
+        inserter.should_fail = True
+        controller.repaste_last_transcript()
+        inserter.should_fail = False
+        _assert_offer(overlay, "okay.", editable=False)
+
+        assert controller.edit_last_transcript() is True
+        assert controller._insert_action_text == "okay."
+
+        controller.on_history_entry_edited(
+            delivered, edited_entry(delivered, "okay, gut.")
+        )
+        assert controller._insert_action_text == "okay, gut."
+        controller.insert_failed_text()
+        assert inserter.calls[-1][0] == "okay, gut."
+        assert controller._insert_action_text == ""
     finally:
         controller.shutdown()
 

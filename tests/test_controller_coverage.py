@@ -9609,14 +9609,13 @@ def test_the_progress_poll_leaves_a_progress_line_the_user_is_reading_alone():
 
 
 def test_a_queued_transcript_that_contains_the_tails_words_does_not_mark_the_offer():
-    """`_paste_carried_the_offer` was a substring test with no word boundary,
-    asked by every insert. A queued transcript that merely contains the
-    tail's words -- "Milch und Brot" for a tail " und", "Wochenende" for
-    " ende" -- failing after its keystroke marked the tail as possibly
-    pasted, and every later repaint withheld Insert for words that had
-    reached no window (measured on the real painter). The tail is the
-    pasted text or its last words, and only the re-paste roads can carry
-    it at all."""
+    """Whether a paste carries the offer was once a substring test with no
+    word boundary, asked by every insert. A queued transcript that merely
+    contains the tail's words -- "Milch und Brot" for a tail " und",
+    "Wochenende" for " ende" -- failing after its keystroke marked the tail
+    as possibly pasted, and every later repaint withheld Insert for words
+    that had reached no window (measured on the real painter). Only the
+    re-paste roads can carry it at all (`_repaste_carries_offer`)."""
     inserter = _SwitchableInserter()
     controller, app, overlay = _failed_tail_offer(inserter)
     _stage_a_running_job(controller)

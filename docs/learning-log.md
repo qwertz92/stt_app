@@ -9499,3 +9499,22 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   `_PasteCheck` now follows the edit).
 - Recorded instead of fixed: a paced Insert of a streaming tail keeps the
   text it was pressed for (`docs/agents/known-limitations.md`).
+- **A held Insert rebuilds its text from its rows** (second review, P3).
+  `_run_pending_repaste` rebuilt only F10's rows; an Insert built from rows
+  and held by the pace pasted the text it was pressed for, so an edit saved
+  within the window left the offer (now the edit) pending, and its next
+  Insert put the edit into the document as well. The known-limitations
+  entry claimed the opposite and is corrected.
+- **A re-paste's target check keeps its rows' parts** (second review, P3):
+  `_repaste` built its `_PasteCheck` without `parts`, so a joined F10 that
+  the check reported as "not a text field" listed `(None, joined text)`,
+  which no edit reached.
+- **A row-less offer knows its own dictation** (second review, P3). Edit
+  and the edit follow-up treated every row-less offer as a streaming tail
+  of the shown transcript, by text: a failed F10 of the last background
+  delivery "okay." under a shown "Alles okay." had Edit enabled, the edit
+  "Alles gut." retargeted the offer to " gut.", and Insert pasted that
+  fragment. The offer now records its entry (`_insert_action_entry`, from
+  the insert that painted it); Edit needs it to be the shown entry, and an
+  edit moves the offer only when it edits that entry -- which also lets a
+  history edit of the delivered dictation reach its offer.
