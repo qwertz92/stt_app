@@ -373,3 +373,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     refused, because cmd.exe interprets them whatever the quoting (e.g. an
     `az --query "accessToken | [0]"`); put such a call into a script. By
     design: no quoting from the caller is safe against cmd.exe.
+- **Touch, pen and precision-touchpad taps may not reach the floating
+  overlay's click watch** (2026-10-10, unmeasured): it registers mouse raw
+  input only (`raw_mouse_input`), and such taps may arrive from another device
+  class, so a tap into the active editor can leave the overlay above it.

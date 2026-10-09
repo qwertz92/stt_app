@@ -112,8 +112,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     window raised that window over the overlay, which stayed above the
     editor. Press handled ~6 ms after it was injected; a `GetRawInputData`
     read costs ~3 us; 0 `WM_INPUT` once the watch stopped.
-  - Not covered: touch and pen taps (a digitizer, not the mouse usage page;
-    unmeasured) and typing without a click, which leaves the overlay above.
+  - **A closed menu puts a waiting overlay back above the editor**
+    (2026-10-10). The Language, microphone and detail context menus are
+    activated popups; when one closes, Windows re-activates the editor and
+    raises it over the overlay (measured: below the editor already at
+    `aboutToHide`, after Esc, an item choice and a click on the Language
+    button). `_after_menu_closed`, a zero-timer from each menu's
+    `aboutToHide`, puts it back with `HWND_TOP` while it still waits --
+    `HWND_NOTOPMOST` has no effect on a window that is already not topmost
+    (SetWindowPos docs; measured: it stayed below). After the fix: above the
+    editor and still waiting after Esc, an item and the button click; below
+    it, wait ended, after a click into the editor that closed the menu. A
+    press while a popup is open (`activePopupWidget()`) is kept
+    with its top-level window and judged after that, so a click into the
+    editor that closes the menu still sends the overlay behind it and a
+    click on a menu item does not. A new popup of the overlay connects the
+    same way.
+  - Not covered: touch, pen and precision-touchpad taps (known
+    limitations) and typing without a click, which leaves the overlay above.
 - **The Language and microphone menus are `_RebuildableMenu`s, rebuilt only
   while hidden** (2026-10-03). `QMenu.clear()` deletes the actions under an
   open popup -- and one the user has chosen whose `triggered` has not run

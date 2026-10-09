@@ -593,6 +593,7 @@ class _FakeZOrderUser32:
         return self.roots.get(hwnd, hwnd)
 
 
+_HWND_TOP = 0
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _EDITOR_HWND = 0x5150
@@ -786,6 +787,95 @@ def test_a_raw_mouse_press_reaches_the_click_handler_with_its_cursor_position(
     app.processEvents()
 
     assert presses == [(321, 654)]
+    overlay.hide()
+
+
+_POPUP_HWND = 0x7070
+
+
+def _close_menu(overlay, menu_name):
+    """Close one of the overlay's menus the way Qt does: `aboutToHide`."""
+    if menu_name == "detail":
+        # Built and run inside `_show_detail_context_menu`; `exec` returns
+        # once the popup has hidden. Patching `QMenu.exec` itself does not
+        # reach the call (the real modal popup ran), a subclass does.
+        class _ClosingMenu(QtWidgets.QMenu):
+            def exec(self, *_args):
+                self.aboutToHide.emit()
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(overlay_ui_module.QtWidgets, "QMenu", _ClosingMenu)
+            overlay._show_detail_context_menu(QtCore.QPoint(1, 1))
+    else:
+        getattr(overlay, menu_name).aboutToHide.emit()
+    QtWidgets.QApplication.instance().processEvents()
+
+
+@pytest.mark.parametrize("menu_name", ["_language_menu", "_microphone_menu", "detail"])
+def test_a_closed_menu_puts_the_waiting_overlay_back_above_the_editor(
+    monkeypatch, raw_mouse_input_calls, menu_name
+):
+    # The popup is activated; when it closes, Windows re-activates the editor
+    # and raises it above the floating overlay (measured 2026-10-10), which
+    # then sat below the editor although nobody clicked into it.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+
+    _close_menu(overlay, menu_name)
+
+    # HWND_NOTOPMOST does nothing to a window that is not topmost already.
+    assert user32.positions == [_HWND_TOP]
+    assert raw_mouse_input_calls.registrations[-1] == (_RIDEV_INPUTSINK, hwnd)
+    overlay.hide()
+
+
+def test_a_closed_menu_leaves_an_overlay_alone_that_no_longer_waits(monkeypatch):
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, _hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    user32.window_at = _EDITOR_CHILD_HWND
+    overlay._on_desktop_mouse_press(40, 50)  # behind the editor now
+    user32.positions.clear()
+
+    _close_menu(overlay, "_language_menu")
+
+    assert user32.positions == []
+    overlay.hide()
+
+
+@pytest.mark.parametrize(
+    ("pressed", "moved_to"),
+    [
+        # The press that closed the menu landed in the editor: it goes behind.
+        ("editor", [_HWND_TOP, _EDITOR_HWND]),
+        # A menu item: the overlay stays above the editor.
+        ("popup", [_HWND_TOP]),
+    ],
+)
+def test_a_press_while_a_menu_is_open_is_judged_after_the_menu_closed(
+    monkeypatch, raw_mouse_input_calls, pressed, moved_to
+):
+    # While the popup is open it is the foreground window, and the editor is
+    # raised only when the popup closes; judged at once, a press into the
+    # editor would be dropped and the overlay put back above the editor.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    popup = object()
+    monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: popup)
+    user32.window_at = {"editor": _EDITOR_CHILD_HWND, "popup": _POPUP_HWND}[pressed]
+
+    overlay._on_desktop_mouse_press(40, 50)
+    assert user32.positions == []
+
+    monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: None)
+    user32.window_at = 0  # the popup is gone from under the press point
+    _close_menu(overlay, "_language_menu")
+
+    assert user32.positions == moved_to
+    still_waiting = pressed == "popup"
+    last = raw_mouse_input_calls.registrations[-1]
+    assert last == (
+        (_RIDEV_INPUTSINK, hwnd) if still_waiting else (_RIDEV_REMOVE, None)
+    )
     overlay.hide()
 
 

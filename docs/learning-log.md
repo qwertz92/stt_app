@@ -54,6 +54,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - A test of the raw-input parser writes the bytes at the SDK offsets: the
   first draft spelled the `ulButtons` union as two USHORTs, which put
   `usButtonFlags` at offset 26 instead of 28 (the union's ULONG aligns it).
+- **The overlay's own menus let the editor in front** (review of the
+  change above). The Language menu popup becomes the foreground window; when
+  it closed (Esc, an item, a click on its button) the editor was re-activated
+  and raised, and the overlay sat below it while still waiting -- measured on
+  the desktop, already at `aboutToHide`. A zero-timer after `aboutToHide`
+  puts it back; a press during the popup is judged after it, so a click into
+  the editor that closes the menu still counts. The first version used
+  `HWND_NOTOPMOST`, which the desktop showed doing nothing: it "has no effect
+  if the window is already a non-topmost window"; `HWND_TOP` works. A test that
+  patched `QMenu.exec` on the class ran the real modal popup and hung the
+  run; replacing `QtWidgets.QMenu` with a subclass reaches the call.
 
 ## 2026-10-09 (overlay: the Pinned/Floating blink and a floating overlay that stayed in front)
 

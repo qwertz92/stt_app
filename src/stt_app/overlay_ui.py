@@ -53,6 +53,7 @@ COPY_BUTTON_CAPTIONS = (COPY_BUTTON_TEXT, COPY_BUTTON_COPIED_TEXT)
 _GWL_EXSTYLE = -20
 _WS_EX_TOPMOST = 0x00000008
 _WS_EX_NOACTIVATE = 0x08000000
+_HWND_TOP = 0
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _SWP_NOSIZE = 0x0001
@@ -550,6 +551,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._waiting_for_click = False
         # The window the mouse raw-input watch delivers to, 0 while off.
         self._click_watch_hwnd = 0
+        # The top-level window under a press made while one of the overlay's
+        # menus was open, judged once it has closed (`_after_menu_closed`).
+        self._press_during_menu = 0
         initial_flags = self._base_window_flags()
         self.setWindowFlags(initial_flags)
         self._applied_window_flags = initial_flags
@@ -700,6 +704,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_menu = _RebuildableMenu(
             self._language_button, self._fill_language_menu
         )
+        self._language_menu.aboutToHide.connect(self._schedule_after_menu_closed)
         self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
 
@@ -749,6 +754,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._microphone_menu = _RebuildableMenu(
             self._microphone_button, self._fill_microphone_menu
         )
+        self._microphone_menu.aboutToHide.connect(self._schedule_after_menu_closed)
         self._microphone_button.clicked.connect(self._show_microphone_menu)
         self._opacity_value_label = QtWidgets.QLabel("")
         self._opacity_value_label.setFixedWidth(_OPACITY_VALUE_LABEL_WIDTH)
@@ -1833,23 +1839,63 @@ class OverlayUI(QtWidgets.QWidget):
             return
         try:
             user32 = _overlay_user32()
-            hwnd = int(self.winId())
-            foreground = _window_to_stay_behind(user32, hwnd)
-            if not foreground or _top_level_window_at(user32, x, y) != foreground:
+            pressed = _top_level_window_at(user32, x, y)
+            if QtWidgets.QApplication.activePopupWidget() is not None:
+                # The open menu is the foreground window, and closing it
+                # re-activates and raises the editor: judged after that.
+                self._press_during_menu = pressed
                 return
-            if not _is_above(user32, hwnd, foreground):
-                # A window was activated above the overlay since it waits.
-                self._waiting_for_click = False
-                return
-            flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
-            # Refused behind a higher-integrity window (access denied, e.g.
-            # an elevated Task Manager): the overlay stays above it, waiting.
-            if user32.SetWindowPos(hwnd, foreground, 0, 0, 0, 0, flags):
-                self._waiting_for_click = False
+            self._follow_press(user32, pressed)
         except Exception:
             logger.debug(
                 "Following a click behind the foreground failed", exc_info=True
             )
+        finally:
+            self._sync_click_watch()
+
+    def _follow_press(self, user32, pressed: int) -> None:
+        """Go behind the foreground window if `pressed` is it, below the overlay."""
+        hwnd = int(self.winId())
+        foreground = _window_to_stay_behind(user32, hwnd)
+        if not foreground or pressed != foreground:
+            return
+        if not _is_above(user32, hwnd, foreground):
+            # A window was activated above the overlay since it waits.
+            self._waiting_for_click = False
+            return
+        flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+        # Refused behind a higher-integrity window (access denied, e.g. an
+        # elevated Task Manager): the overlay stays above it, waiting.
+        if user32.SetWindowPos(hwnd, foreground, 0, 0, 0, 0, flags):
+            self._waiting_for_click = False
+
+    def _schedule_after_menu_closed(self) -> None:
+        # One event-loop turn later: the popup is gone by then.
+        QtCore.QTimer.singleShot(0, self._after_menu_closed)
+
+    def _after_menu_closed(self) -> None:
+        """Put a waiting overlay back above the editor its menu let in front.
+
+        An open menu is the foreground window; when it closes, Windows
+        re-activates the editor and raises it above the floating overlay
+        (measured 2026-10-10), although the user never clicked into it. A
+        press that closed the menu is judged now, against the editor.
+
+        `HWND_TOP`, not `HWND_NOTOPMOST`: that "has no effect if the window
+        is already a non-topmost window" (SetWindowPos docs; measured: the
+        overlay stayed below the editor).
+        """
+        pressed, self._press_during_menu = self._press_during_menu, 0
+        if not self._waiting_for_click or self._wants_topmost():
+            return
+        try:
+            user32 = _overlay_user32()
+            flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+            user32.SetWindowPos(int(self.winId()), _HWND_TOP, 0, 0, 0, 0, flags)
+            if pressed:
+                self._follow_press(user32, pressed)
+        except Exception:
+            logger.debug("Restoring the overlay after a menu failed", exc_info=True)
         finally:
             self._sync_click_watch()
 
@@ -1895,6 +1941,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _show_detail_context_menu(self, pos) -> None:
         menu = QtWidgets.QMenu(self)
+        menu.aboutToHide.connect(self._schedule_after_menu_closed)
         copy_action = menu.addAction("Copy text")
         clear_action = menu.addAction("Clear text from overlay")
         clear_action.setEnabled(self._clear_button.isEnabled())
