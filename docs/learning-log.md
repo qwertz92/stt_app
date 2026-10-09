@@ -9509,3 +9509,12 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   `_repaste` built its `_PasteCheck` without `parts`, so a joined F10 that
   the check reported as "not a text field" listed `(None, joined text)`,
   which no edit reached.
+- **A row-less offer knows its own dictation** (second review, P3). Edit
+  and the edit follow-up treated every row-less offer as a streaming tail
+  of the shown transcript, by text: a failed F10 of the last background
+  delivery "okay." under a shown "Alles okay." had Edit enabled, the edit
+  "Alles gut." retargeted the offer to " gut.", and Insert pasted that
+  fragment. The offer now records its entry (`_insert_action_entry`, from
+  the insert that painted it); Edit needs it to be the shown entry, and an
+  edit moves the offer only when it edits that entry -- which also lets a
+  history edit of the delivered dictation reach its offer.

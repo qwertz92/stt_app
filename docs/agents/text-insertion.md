@@ -439,16 +439,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     re-paste fallback; a shown coalesced row's joined text, which has no
     entry, takes the rejoined row text so Copy yields the edit, while Edit
     still refuses there) and the offer -- rejoined from its rows, or for a
-    row-less offer (a streaming tail, or the whole shown transcript)
-    `streaming_text.retarget_tail`: the words in front of the tail are in
-    the document, so an edit can only move the tail; an edit that removes
-    it retires the offer, one that changes those words keeps the offer and
-    says so. Entries match by value, as `update_entry` does. Both entry
+    row-less offer `streaming_text.retarget_tail` against its own entry
+    (`_insert_action_entry`: the dictation whose streaming tail it is, or
+    the one a failed re-paste pasted whole): the words in front of the tail
+    are in the document, so an edit can only move the tail; an edit that
+    removes it retires the offer, one that changes those words keeps the
+    offer and says so. Matched against the shown transcript instead, a
+    failed F10 of another dictation's "okay." counted as the tail of the
+    shown "Alles okay.", and its edit "Alles gut." made Insert paste
+    " gut." (2026-10-09 second review). Entries match by value, as `update_entry` does. Both entry
     points: the overlay's Edit (`edit_last_transcript`), enabled on an
     Error when `_edit_reaches` its text (the shown pair has an entry, the
     text is it or its tail, and when the text is built from listed rows the
-    shown entry is one of theirs -- by text alone a failed F10 of another
-    dictation's equal row enabled an Edit that went to the shown entry;
+    shown entry is one of theirs, and without rows the offer's own entry
+    is the shown one -- by text alone a failed F10 of another dictation's
+    equal row enabled an Edit that went to the shown entry;
     `OverlayUI.set_state(editable=)`), and the
     two history editors through `history_ui_actions.notify_history_edit`
     -> `on_history_entry_edited`, which repaints only an overlay that still
