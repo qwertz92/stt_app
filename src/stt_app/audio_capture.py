@@ -100,9 +100,9 @@ def _open_input_stream(
 
     The one place both opens -- `AudioCapture`'s cold stream and the warm
     stream -- get their parameters from. ``latency`` is PortAudio's input
-    buffer (see `AUDIO_INPUT_BUFFER_S`): the device default holds 0.01-0.18 s,
-    so a callback thread that is not scheduled for longer loses everything
-    said meanwhile. A driver that refuses the large buffer is opened with its
+    buffer (see `AUDIO_INPUT_BUFFER_S`): the device default holds about
+    0.1-0.2 s, so a callback thread that is not scheduled for longer loses
+    everything said meanwhile. A driver that refuses the large buffer is opened with its
     default rather than not at all, and the log says so.
     """
     settings = {

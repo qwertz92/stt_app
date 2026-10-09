@@ -9518,3 +9518,40 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   the insert that painted it); Edit needs it to be the shown entry, and an
   edit moves the offer only when it edits that entry -- which also lets a
   history edit of the delivered dictation reach its offer.
+
+## 2026-10-10: audio lost at the start on a starved machine
+
+Field report from the owner's slow corporate laptop (endpoint protection,
+often 100% CPU), never seen at home: a recording sometimes stopped on its
+own at once with a red error (or a very short text), and once, warm stream
+on and the overlay green, the first ~10 s were not captured.
+- **PortAudio's default input buffer holds about 0.1-0.2 s.** The app passed no
+  `latency`, so sounddevice used the device's "high" default (0.18 s MME,
+  0.01 s WASAPI). Reproduced on HomeBase by blocking the callback for 10 s:
+  10.1 s (MME) and 9.9 s (WASAPI) of a 13 s recording were gone, and WASAPI
+  did not even set the overflow flag. With a 12 s buffer nothing was lost;
+  unstalled runs were identical at every size. The home log has one
+  `input overflow` (2026-08-26, during a CPU model load), so the mechanism
+  exists there too, only shorter. Fix: `AUDIO_INPUT_BUFFER_S` = 20 s.
+- **`stream.stop()` discards the buffered backlog**: a stop during a stall
+  kept 1.1 s of 2 s. `stop` now waits for it, bounded; the first version
+  waited only until the deficit was back inside the 0.5 s tolerance and left
+  0.47 s of a real 4 s stall behind, so it now waits until the stop moment
+  is reached within one block. A "nothing arrived for 1 s" exit was dropped
+  before it shipped: a real 4 s stall delivers nothing for longer than that.
+- **The first-callback watchdog aborted a starved stream after 2 s** -- the
+  "stops on its own, red error" report. It now waits up to 12 s while
+  PortAudio reports the stream active. Not reproduced on the laptop itself;
+  `audio_capture_callback_timeout` / `audio_capture_callback_slow` in its
+  log settle it.
+- **A bigger buffer means bigger bursts**: Deepgram's 32-chunk send queue
+  would have failed the stream after any stall over 3.2 s; it is sized for
+  the buffer now.
+- **Checked and not a cause**: the VAD auto-stop and the streaming pause
+  detection count captured samples, not wall time; the silence gate measures
+  the recorded audio. The only wall-clock timer that stopped a recording was
+  the watchdog.
+- **PortAudio timestamps are no use for attribution**: after a stall MME
+  reports `inputBufferAdcTime` 0 and WASAPI reports times in the future, so
+  audio from before a warm attach cannot be cut out
+  (`docs/agents/known-limitations.md`).

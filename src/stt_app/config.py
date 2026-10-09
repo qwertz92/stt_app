@@ -1949,7 +1949,8 @@ AUDIO_BLOCK_DURATION_MS = 100
 # another thread holding the GIL -- the device keeps capturing into this
 # buffer, and whatever does not fit is lost. Measured 2026-10-10 on HomeBase
 # with the callback blocked for 10 s: the device default ("high": 0.18 s on
-# MME, 0.01 s on WASAPI) lost 10.1 s (MME) and 9.9 s (WASAPI, without even
+# MME, 0.01 s on WASAPI; about 0.1-0.2 s in effect with the 100 ms block)
+# lost 10.1 s (MME) and 9.9 s (WASAPI, without even
 # setting the overflow flag); 12 s lost nothing. Unstalled, every size from
 # "high" to 30 s delivered the same frames with the same first-callback delay
 # (110-175 ms) on all ten MME and WASAPI inputs there: a callback still comes

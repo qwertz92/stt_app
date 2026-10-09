@@ -364,3 +364,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     refused, because cmd.exe interprets them whatever the quoting (e.g. an
     `az --query "accessToken | [0]"`); put such a call into a script. By
     design: no quoting from the caller is safe against cmd.exe.
+- **Audio capture under a starved callback thread** (2026-10-10,
+  `docs/agents/audio-capture.md`):
+  - A stall longer than `AUDIO_INPUT_BUFFER_S` (20 s) still loses audio;
+    MME then drops the whole stall, not just the overflow (measured: 10 s
+    stall with the 0.18 s default, 10.1 s lost).
+  - A warm stream whose callback thread is stalled when the hotkey comes
+    puts the audio from its last block up to the attach into the recording
+    (up to 20 s of what was said before the hotkey). PortAudio's timestamps
+    cannot place it, and cutting by the attach time would cut words spoken
+    while the overlay said "Starting dictation" in green. Recognisable by
+    `warm_attach_gap_ms` in `audio_capture_stats`. Fixing it needs the
+    hotkey's own message time (`MSG.time`) carried to the capture (~2-3 h).
+  - A starved stream that never delivers waits 12 s (the hard limit), not
+    2 s, before its Error, unless PortAudio reports it inactive.
+  - A stop during a stall can hold the Qt thread for up to
+    `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives.
+  - "Starting dictation. Please wait..." is painted in the Listening
+    (green) state before a cold open finishes, and audio before the open is
+    lost. The text says so, the colour does not; changing the state is an
+    owner decision (overlay design).

@@ -133,11 +133,72 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   refresh worker, queued to the Qt thread), so the caption names today's
   default device. A Settings save does not undo an overlay pick: the
   dialog's combo is diffed against `_populated_settings`.
-- **First audio callback watchdog**: a bounded Qt timer after capture start.
-  A timeout is an abort: late bytes are kept for Retry, never submitted; only
+- **First audio callback watchdog** (two stages since 2026-10-10): a Qt timer
+  armed at capture start. At `AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS` (2 s)
+  with no block, a stream PortAudio does not report stopped
+  (`AudioCapture.stream_is_active() is not False`) is starved, not dead: it
+  logs `audio_capture_callback_slow` and re-arms up to
+  `AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS` (12 s, below the input
+  buffer, so a burst just before it still holds everything). The 2 s abort
+  was the field report "a recording stops on its own right away and a red
+  error appears" on a laptop at 100% CPU. A stream reported inactive aborts
+  at once. The overlay keeps "Speak now" (the audio is buffered). The abort
+  itself is unchanged: late bytes are kept for Retry, never submitted; only
   late bytes write the retry slot (persisted, marked failed under the id the
   persist returned); without them the Error offers no Retry. Snapshot
   diagnostics before `capture.stop()`.
+- **Every microphone stream asks for a 20 s PortAudio input buffer**
+  (`AUDIO_INPUT_BUFFER_S`, passed as `latency` by `_open_input_stream`, the
+  one constructor both the cold capture and the warm stream use;
+  2026-10-10). While the callback thread is not scheduled (CPU load, an
+  endpoint scanner, the GIL held elsewhere) the device keeps capturing into
+  this buffer, and what does not fit is lost. Measured on HomeBase with the
+  callback blocked for 10 s: the device default ("high": 0.18 s MME, 0.01 s
+  WASAPI) lost 10.1 s (MME) / 9.9 s (WASAPI -- with no overflow flag at
+  all); 12 s lost nothing. Unstalled, "high" through 30 s gave identical
+  frames and first-callback delays (110-175 ms) on all ten MME/WASAPI inputs
+  there; MME open/start/close cost +4/+5/+8 ms at 20 s. A driver that
+  refuses the buffer is reopened with its default (`audio_input_buffer_refused`).
+  Consumers of the chunk callback must take a 20 s burst: Deepgram's send
+  queue is sized for it (`docs/agents/streaming.md`); AssemblyAI's SDK queue
+  and the local streaming queues are unbounded.
+- **`stop` collects a backlog the callback thread still owes** (2026-10-10):
+  stopping the stream discards what PortAudio buffered but has not delivered
+  (measured: a stop 2 s in, during a 3 s stall, kept 1.1 s; with the wait,
+  as much as an unstalled run). When the captured audio is behind the wall
+  clock (since the warm attach, or since a cold `start()` returned) by more
+  than `AUDIO_BACKLOG_TOLERANCE_S` + `AUDIO_BACKLOG_DRIFT_PER_S` x length,
+  `stop` waits on `_audio_arrived` until the audio reaches the stop moment
+  within one block, at most `AUDIO_STOP_DRAIN_MAX_S` (3 s, on the Qt thread),
+  or until PortAudio reports the stream stopped; blocks past the stop moment
+  are refused (`_drain_cutoff_frames`). No "silent for a while" exit: a
+  starved thread delivers nothing for seconds, then everything. Never for a
+  capture with zero blocks (the watchdog's case). A healthy stream is behind
+  by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
+  never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
+- **`audio_capture_stats`, one line per recording** (logged by
+  `AudioCapture.stop`; WARNING when the audio fell behind, a gap exceeded
+  0.5 s or an overflow flag came): first-callback delay, callbacks, audio
+  against wall seconds and the deficit, longest gap, overflow and status
+  counts, audio arrived by 1/2/3 s wall (`audio_by_1s_2s_3s`, about
+  0.9/1.9/2.9 when healthy), `warm_attach_gap_ms` (time since the warm
+  stream's previous callback at attach) and the stop's wait. The per-block
+  "Audio stream status" warning is written once per recording: it runs on
+  the PortAudio thread. A refused warm attach logs
+  `warm_microphone_attach_refused reason=...` (the recording cold-opens).
+  WASAPI never sets the overflow flag for a starved callback (measured), so
+  the deficit and the gaps are the evidence, not `overflows`.
+- **No pre-roll and no trim at a warm attach** (2026-10-10). PortAudio's
+  per-block timestamps cannot place audio in time (MME reports 0, WASAPI
+  times in the future, measured after a stall), so audio before the attach
+  cannot be told from audio after it. A callback thread stalled across the
+  hotkey therefore delivers the seconds since its last block, the part before
+  the attach included; they are kept (the overlay was already green,
+  "Starting dictation", for part of them) and `warm_attach_gap_ms` records
+  it (`docs/agents/known-limitations.md`). A deliberate pre-roll is not
+  added: on a healthy stream the warm path loses only the short "Starting"
+  phase (a 25 ms event drain, plus the start tone when it is on), and a
+  pre-roll would record that tone, which plays right before the attach.
 - **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
   on/0.004)**: a batch recording whose loudest 100 ms window
   (`measure_peak_windowed_rms`, ~-48 dBFS) stays below the threshold is not
