@@ -35,6 +35,7 @@ from .config import (
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_ENGINE,
     DEFAULT_INSERT_TARGET,
+    DEFAULT_LANGUAGE_MODE,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
@@ -3913,7 +3914,14 @@ class DictationController(QtCore.QObject):
         # word that tells a finished result waiting to be pasted from a
         # running transcription.
         status = "Pending insert · " if job.insertion_deferred else ""
-        return f"{rank_label} · {status}{timestamp} · {provider}"
+        # The language the recording was made in (the job's own snapshot, not
+        # the one selected now), a short code right after the time so the
+        # elided row keeps it; the full name is not needed to tell two apart.
+        language_mode = job.settings.language_mode
+        language = (
+            "Auto" if language_mode == DEFAULT_LANGUAGE_MODE else language_mode.upper()
+        )
+        return f"{rank_label} · {status}{timestamp} · {language} · {provider}"
 
     @staticmethod
     def _undelivered_row_label(entry: _UndeliveredInsert) -> str:

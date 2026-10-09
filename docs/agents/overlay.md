@@ -129,7 +129,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   every row label is one line (`ElidingLabel`, the whole label in its
   tooltip), and the controller puts each row's status ("Pending insert",
   "Not inserted", "Possibly inserted, check the window") before the
-  provider, model or preview, so eliding never hides it; a label that
+  provider, model or preview, so eliding never hides it; a transcription
+  row names the language its recording was made in (`EN`, `DE`, `Auto`: the
+  job's own snapshot, not the current selection) as a short code right after
+  the time, before the provider (2026-10-09); a label that
   changes in place never changes a row's height
   (wrapped, the long "Possibly inserted, check the window" label grew rows
   from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
