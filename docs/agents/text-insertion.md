@@ -445,8 +445,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     it retires the offer, one that changes those words keeps the offer and
     says so. Entries match by value, as `update_entry` does. Both entry
     points: the overlay's Edit (`edit_last_transcript`), enabled on an
-    Error when `_edit_reaches` its text (the shown pair has an entry and
-    the text is it or its tail; `OverlayUI.set_state(editable=)`), and the
+    Error when `_edit_reaches` its text (the shown pair has an entry, the
+    text is it or its tail, and when the text is built from listed rows the
+    shown entry is one of theirs -- by text alone a failed F10 of another
+    dictation's equal row enabled an Edit that went to the shown entry;
+    `OverlayUI.set_state(editable=)`), and the
     two history editors through `history_ui_actions.notify_history_edit`
     -> `on_history_entry_edited`, which repaints only an overlay that still
     shows the old offer or transcript and never a session. Nothing pastes
@@ -456,7 +459,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     `_shown_transcript_token` -- with Edit enabled on a possibly-inserted
     result, the re-paste fallback would then paste it a second time (a test
     calling Edit there measured it). A paced
-    re-paste rebuilds its text from its rows when it runs.
+    re-paste rebuilds its text from its rows when it runs. A paste whose
+    target check still runs (`_paste_checks`) takes the edit as well, so a
+    "not a text field" verdict lists the edited text (2026-10-09 review;
+    built from the check's copy, that row kept the old text for good).
   - **The offer carries its own action**: after a post-keystroke failure (six
     `TextMayHaveBeenPastedError` raise sites in `text_inserter.py`, two via
     the `combined_error` alias and `_ClipboardContentionAfterPaste`) Insert

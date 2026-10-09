@@ -142,6 +142,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   re-paste inserts it; and the failed whole-dictation re-paste is the paste
   the user asked for, so its Insert retries exactly that. Keeping the tail's
   Insert instead is ~1 h if the owner prefers it.
+- **A paced Insert of a streaming tail keeps the text it was pressed for**
+  (2026-10-09, P4, from code): an Insert pressed inside the previous
+  paste's restore window is held as `_PendingRepaste` with its text, and
+  `_run_pending_repaste` rebuilds only row-backed texts. An edit of the
+  dictation within those up to 1.5 s moves the tail's offer, but the held
+  Insert still pastes the old tail. Kept: the held Insert runs at most
+  1.5 s after the press, so an edit would have to be saved within that
+  time; a fix (remember that the request was the offer's and read the
+  offer again when it runs) is ~30 min with its tests.
 - **The paste target check sees only Chromium windows and Win32 carets**
   (2026-10-03). A paste into a non-text element of any other application
   -- a Win32 button, a Qt or Java window, a terminal that draws its own

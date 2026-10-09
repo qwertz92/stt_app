@@ -758,3 +758,30 @@ def test_a_report_never_paints_over_a_newer_result(monkeypatch, tmp_path):
     assert len(_rows(overlay)) == 1
     controller.shutdown()
     _ = app
+
+
+def test_an_edit_while_the_check_runs_reaches_the_doubtful_row(monkeypatch, tmp_path):
+    """The paste went out and its check is still running when the user
+    edits the transcript. A "not a text field" verdict then lists the
+    paste as not inserted, and F10 pastes the edit (owner's rule
+    2026-10-09); before, the row was built from the check's own copy of
+    the text and entry, so it kept the old text and no later edit reached
+    it."""
+    check = FakePasteTargetCheck()
+    controller, app, _overlay, inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    monkeypatch.setattr(
+        "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+        staticmethod(lambda parent, text: "hello there"),
+    )
+    _dictate(controller, "hello world")
+    assert controller.edit_last_transcript() is True
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    [row] = controller._undelivered_inserts
+    assert row.text == "hello there"
+    assert row.history_entry is not None and row.history_entry.text == "hello there"
+    controller.repaste_last_transcript()
+    assert inserter.calls[-1][0] == "hello there"
+    controller.shutdown()
+    _ = app

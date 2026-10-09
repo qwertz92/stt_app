@@ -4890,17 +4890,23 @@ class DictationController(QtCore.QObject):
             return True
         return prefix is not None and shown_fallback and not own_rows
 
-    def _edit_reaches(self, text: str) -> bool:
+    def _edit_reaches(self, text: str, rows: Sequence[_UndeliveredInsert] = ()) -> bool:
         """Whether the overlay's Edit, which edits the shown transcript and
         its history entry, also edits ``text`` -- a failed or doubtful paste
         of it, or the tail of it a streaming finalize could not insert.
 
         Then Edit is enabled on the Error that offers ``text`` (owner's rule
         2026-10-09): an edit there is what Insert and the re-paste paste.
+        ``rows`` are the listed rows ``text`` is built from, if any: then
+        the shown entry must be one of theirs. Matched by text alone, a
+        failed F10 of another dictation's "okay." row enabled Edit, and the
+        edit went to the shown "okay." entry while the row kept its text.
         """
-        return (
-            self._last_history_entry is not None
-            and tail_prefix(self._last_transcript, text) is not None
+        entry = self._last_history_entry
+        if entry is None or tail_prefix(self._last_transcript, text) is None:
+            return False
+        return not rows or any(
+            part_entry == entry for row in rows for part_entry, _part in row.parts
         )
 
     def _preload_abort_hint(self, action: str) -> str:
@@ -6826,7 +6832,7 @@ class DictationController(QtCore.QObject):
                 if may_have_pasted
                 else OVERLAY_ERROR_ACTION_INSERT
             ),
-            editable=self._edit_reaches(transcript),
+            editable=self._edit_reaches(transcript, (row,) if row is not None else ()),
         )
         self._reveal_overlay_result(is_error=True)
 
@@ -7892,7 +7898,7 @@ class DictationController(QtCore.QObject):
                 painted,
                 copy_text=pending,
                 error_action=OVERLAY_ERROR_ACTION_NONE,
-                editable=self._edit_reaches(pending),
+                editable=self._edit_reaches(pending, self._insert_action_rows),
             )
         else:
             painted = f"{detail}\n\nStill not inserted:\n{pending}"
@@ -7901,7 +7907,7 @@ class DictationController(QtCore.QObject):
                 painted,
                 copy_text=pending,
                 error_action=OVERLAY_ERROR_ACTION_INSERT,
-                editable=self._edit_reaches(pending),
+                editable=self._edit_reaches(pending, self._insert_action_rows),
             )
         self._offer_painted = ("Error", painted)
 
@@ -8100,7 +8106,7 @@ class DictationController(QtCore.QObject):
                         error_action=OVERLAY_ERROR_ACTION_NONE,
                         # The edit reaches history and Copy; nothing pastes
                         # a text whose keystroke went out.
-                        editable=self._edit_reaches(insertion_text),
+                        editable=self._edit_reaches(insertion_text, keep_rows),
                     )
                 # The keystroke went out, so this is a paste like any other for
                 # the doubtful rows before it: the text in front of it is as
@@ -8142,7 +8148,7 @@ class DictationController(QtCore.QObject):
                     detail,
                     copy_text=insertion_text,
                     error_action=OVERLAY_ERROR_ACTION_INSERT,
-                    editable=self._edit_reaches(insertion_text),
+                    editable=self._edit_reaches(insertion_text, keep_rows),
                 )
             self._logger.exception("Text insertion failed")
             return False
@@ -8713,6 +8719,26 @@ class DictationController(QtCore.QObject):
             )
             row.text = _join_transcripts([part for _entry, part in row.parts])
             changed_rows.append(row)
+        # A paste whose target check still runs becomes a row on a "not a
+        # text field" verdict, built from the check's copy: it takes the
+        # edit too, or that row kept the old text and no later edit
+        # reached it.
+        for check_id, check in list(self._paste_checks.items()):
+            check_parts = check.parts or ((check.history_entry, check.text.strip()),)
+            if not any(is_original(entry) for entry, _part in check_parts):
+                continue
+            check_parts = tuple(
+                (updated, new_text) if is_original(entry) else (entry, part)
+                for entry, part in check_parts
+            )
+            self._paste_checks[check_id] = replace(
+                check,
+                text=_join_transcripts([part for _entry, part in check_parts]),
+                history_entry=(
+                    updated if is_original(check.history_entry) else check.history_entry
+                ),
+                parts=check_parts if check.parts else (),
+            )
         queued = 0
         for index, (job, _text) in enumerate(self._deferred_background_results):
             if is_original(job.history_entry):

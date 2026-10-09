@@ -9490,3 +9490,12 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   ran inserted its words ahead of it (reproduced in a test with the paced
   fake inserter; not seen in the field). Streaming jobs with
   `insertion_deferred` now count.
+- **Two small edit gaps closed rather than recorded** (P4 each). Edit was
+  enabled on a failed F10 of another dictation's row whose words equal the
+  shown transcript (`_edit_reaches` matched by text; it now also requires
+  the shown entry among the rows' entries), and a paste whose target check
+  was still running during an edit produced, on a "not a text field"
+  verdict, a row with the old text that no later edit reached (the pending
+  `_PasteCheck` now follows the edit).
+- Recorded instead of fixed: a paced Insert of a streaming tail keeps the
+  text it was pressed for (`docs/agents/known-limitations.md`).

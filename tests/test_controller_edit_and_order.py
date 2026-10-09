@@ -207,6 +207,32 @@ def test_a_history_edit_of_a_coalesced_waiting_row_is_what_f10_pastes(tmp_path):
         controller.shutdown()
 
 
+def test_edit_stays_off_for_another_dictations_row_with_the_same_words(tmp_path):
+    """The shown transcript "okay." was inserted; another dictation's
+    "okay." waits as a row. F10 on that row fails and offers Insert for
+    it. The overlay's Edit edits the shown entry, not that row's, so it
+    stays disabled there; matched by text alone it was enabled, and the
+    edit then went to the shown entry while the row kept the old text."""
+    inserter = FakeTextInserter()
+    controller, _app, overlay, _history = _controller(tmp_path, inserter=inserter)
+    try:
+        controller._on_transcription_ready("okay.")
+        assert controller._last_history_entry is not None
+        controller._record_undelivered_insert(
+            "okay.",
+            may_have_pasted=False,
+            created_at=datetime.now().astimezone(),
+            history_entry=None,
+        )
+        inserter.should_fail = True
+
+        controller.repaste_last_transcript()
+
+        _assert_offer(overlay, "okay.", editable=False)
+    finally:
+        controller.shutdown()
+
+
 def _coalesced_failure(controller, inserter):
     """Two queued results for one window fail as one paste; returns B's job."""
     controller._target_window_handle = 987
