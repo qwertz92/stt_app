@@ -10,6 +10,28 @@ and git history. Entry order is kept ("above/below" refers to this file);
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-downloads.md` (original AGENTS.md: `df2642a`).
 
+- **Windows ARM64 drops CTranslate2 and nothing else**
+  (2026-10-09). CTranslate2 has no `win_arm64` wheel, so `pyproject.toml`'s
+  `[tool.uv] override-dependencies` re-states faster-whisper's own
+  `ctranslate2>=4.0` for every platform except Windows ARM64; `uv sync` there
+  then installs faster-whisper without it, on purpose: the Silero speech
+  check reads `faster_whisper/assets/silero_vad_v6.onnx` through
+  `find_spec`, and faster-whisper carries `tokenizers` (Granite CTC), `av` and
+  `huggingface-hub`. `uv sync --frozen --dry-run --python-platform
+  aarch64-pc-windows-msvc` is the check; without the override it stops at
+  ctranslate2. `local_runtime_support.unavailable_reason(model)` is the one
+  answer, from `find_spec` of `ctranslate2` and `faster_whisper` (no import:
+  CTranslate2 loads a large native library, and pickers ask per row). It is
+  asked by the transcriber (before the download in `_ensure_model`, and only
+  for the default model factory), the benchmark `_run_case`, the picker label
+  (`[unavailable]`), the note under the model picker, the Models tab (row
+  status, "Download selected", "Download all missing"). The model stays in
+  every picker instead of being hidden: a stored selection must keep showing as
+  itself (a selected local model is strict, never substituted or rewritten).
+  A failing `find_spec` answers "available", so a quirk of the lookup never
+  locks the user out of a working runtime. Do not add `faster-whisper` to a
+  platform marker: that would also drop the Silero graph. Unverified: that
+  the app starts and these paths behave on real ARM64 hardware.
 - **Temp files for audio**: `transcribe_batch` writes a temp WAV because
   `WhisperModel.transcribe()` is most reliable with file paths.
 - **Inventories live in their own JSON cache, not `settings.json`**, so the

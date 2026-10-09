@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import local_runtime_support
 from .benchmark_history import BenchmarkHistoryEntry
 from .config import (
     ASSEMBLYAI_MODELS,
@@ -556,9 +557,14 @@ def local_model_precision_label(model_name: str) -> str:
 def local_model_label(model_name: str) -> str:
     label = LOCAL_MODEL_LABELS.get(model_name, model_name)
     precision = local_model_precision_label(model_name)
-    if not precision:
-        return label
-    return f"{label} [{precision}]"
+    if precision:
+        label = f"{label} [{precision}]"
+    # The row stays in every picker so that a stored selection still shows up
+    # as itself; what it cannot do is said on the row, and the reason in the
+    # note under the model picker.
+    if local_runtime_support.unavailable_reason(model_name):
+        label += local_runtime_support.UNAVAILABLE_LABEL_SUFFIX
+    return label
 
 
 def local_model_short_label(model_name: str) -> str:

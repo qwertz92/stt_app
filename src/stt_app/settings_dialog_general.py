@@ -7,6 +7,7 @@ from typing import ClassVar
 
 from PySide6 import QtCore, QtWidgets
 
+from . import local_runtime_support
 from .config import (
     ASSEMBLYAI_STREAMING_MODEL_LABEL,
     CANARY_MODEL_SIZE,
@@ -994,7 +995,15 @@ class _GeneralTabMixin:
         # text and color change, so model switches never shift the layout.
         warning_style = "color: #b71c1c;"
         note_style = "color: #666666;"
-        if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
+        unavailable = (
+            local_runtime_support.unavailable_reason(model_name)
+            if engine == "local"
+            else None
+        )
+        if unavailable:
+            style = warning_style
+            text = unavailable
+        elif engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             style = warning_style
             # The order Auto tries is no longer fixed -- a benchmark can put
             # CPU first -- and the ONNX Device row on the Models tab owns it
@@ -1042,7 +1051,7 @@ class _GeneralTabMixin:
             style = note_style
             text = " "
 
-        if engine == "local" and model_name:
+        if engine == "local" and model_name and not unavailable:
             # Where the download lives, now that the tab is called Models
             # rather than Local: this row offers models that may not be on
             # disk yet, and nothing beside it said where to get them. It goes

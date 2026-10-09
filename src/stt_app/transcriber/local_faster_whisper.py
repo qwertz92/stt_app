@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 
-from .. import silero_vad
+from .. import local_runtime_support, silero_vad
 from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -911,6 +911,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return self._model
         with self._model_lock:
             if self._model is None:
+                # Before the download below, which would otherwise fetch
+                # hundreds of megabytes for a model whose runtime cannot be
+                # imported here. Only the real import is asked: a factory
+                # handed in by a caller supplies its own runtime.
+                if self._model_factory is _default_model_factory:
+                    reason = local_runtime_support.unavailable_reason(self.model_size)
+                    if reason:
+                        raise TranscriptionError(reason)
                 kwargs: dict = {
                     "device": self.device,
                     "compute_type": self.compute_type,

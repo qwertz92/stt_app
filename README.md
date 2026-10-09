@@ -41,6 +41,18 @@ python main.py
 
 </details>
 
+### Windows on ARM64
+
+Not tested on real ARM64 hardware yet. The x64 installer below should install
+on Windows 11 on ARM and run the whole app, Whisper models included, under
+Windows' x64 emulation. To run from source in a native ARM64 Python instead,
+use `uv` (the pip route cannot skip CTranslate2): CTranslate2 has no ARM64
+build, so the faster-whisper models (`tiny` to `distil-large-v3.5`) show as
+`[unavailable]` and are never downloaded. Parakeet (the default), Canary,
+Granite, Nemotron and every cloud engine need nothing that lacks an ARM64
+build. Cohere and Granite 4.x also need [Node.js](https://nodejs.org/en/download)
+22 or newer; an ARM64 `.msi` exists, and an x64 Node runs under emulation too.
+
 ## End-user Windows download
 
 For end users, the recommended path is a GitHub Release asset, not the source

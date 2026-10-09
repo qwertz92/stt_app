@@ -9268,3 +9268,74 @@ Lang menu. Both microphone pickers now share
   of the same function; `run_bounded` adds the flag itself, and an AST test
   fails on any `subprocess` call in `src/stt_app` without `creationflags`.
 
+
+## 2026-10-09: Windows ARM64 - only CTranslate2 is missing
+
+The owner asked whether a Windows ARM64 machine loses only faster-whisper or
+more, and whether the rest could run. Answer: only CTranslate2 (so the seven
+Whisper models) has no ARM64 build. Every other runtime dependency has a
+`win_arm64` wheel or is pure Python. The old limitation text ("CTranslate2
+requires x86 AVX/SSE") named the wrong cause: CTranslate2's docs say its x86-64
+wheels need SSE4.1 and choose AVX/AVX2/AVX512 at run time. The cause is that
+no `win_arm64` wheel exists.
+- Checked 2026-10-09 against the PyPI JSON file list of each package at the
+  locked version (`https://pypi.org/pypi/<pkg>/<version>/json`):
+  | package (locked) | Windows ARM64 |
+  | --- | --- |
+  | PySide6 / shiboken6 6.11.2 | `cp310-abi3-win_arm64` |
+  | numpy 2.5.3, pywin32 312, websockets 17.2, pyyaml 6.0.3, cffi 2.1.1, pydantic-core 2.46.5 | `cp312-cp312-win_arm64` |
+  | onnxruntime 1.30.0, onnxruntime-genai 0.17.1 | `cp312-cp312-win_arm64` |
+  | av 18.1.0, tokenizers 0.23.2, hf-xet 1.6.0 | `abi3-win_arm64` |
+  | sounddevice 0.5.6 | `py3-none-win_arm64`; the wheel carries `libportaudioarm64.dll` |
+  | pyinstaller 6.22.3, ruff 0.16.10, coverage 7.16.2 (dev) | `win_arm64` wheel |
+  | onnx-asr, keyring, comtypes, assemblyai, groq, truststore, websocket-client, faster-whisper | pure Python (`py3-none-any`) |
+  | cryptography 50.0.2 | no win_arm64 wheel, but only `secretstorage` (Linux) needs it |
+  | **ctranslate2 4.8.2** | **`win_amd64` only; no release ever had a `win_arm64` wheel; no sdist for 4.8.2** |
+- Node runner: `@huggingface/transformers` 4.3.0 nests `onnxruntime-node`
+  1.29.0, whose package ships `bin/napi-v6/win32/arm64/` (`onnxruntime.dll`,
+  `onnxruntime_binding.node`, `DirectML.dll`, `dxcompiler.dll`, `dxil.dll`;
+  the unpkg listing mirrors the x64 folder file for file); `sharp` has a
+  `win32-arm64` package in `package-lock.json`. Node.js 24.21.0 and 26.11.1
+  publish `win-arm64` zips and 24.21.0 an `arm64.msi` (nodejs.org/dist).
+  Whether WebGPU or DirectML works on a given Snapdragon GPU is not known.
+- Silero (`silero_vad.py`) finds its graph in the faster-whisper package with
+  `find_spec`; without the package it answers `None` ("unmeasured"), and the
+  energy gates then decide alone (known, designed behaviour).
+- `uv pip compile --python-platform aarch64-pc-windows-msvc` and
+  `uv sync --frozen --dry-run --python-platform aarch64-pc-windows-msvc` both
+  failed on the unchanged project with "ctranslate2 ... doesn't have a source
+  distribution or wheel for the current platform": **a missing wheel fails the
+  whole install, not just the Whisper models.** `uv lock` itself was never the
+  problem (the lock is universal).
+- Emulation: `ArchitecturesAllowed=x64compatible` in `installer/windows/
+  stt_app.iss` matches Arm64 Windows 11 running x64 (Inno Setup's
+  architecture-identifier help), so the released x64 installer already
+  installs there. Microsoft's Prism emulator runs x64 apps from Windows 11
+  24H2 (learn.microsoft.com, "How emulation works on Arm"); AVX/AVX2 emulation
+  reached 24H2 and later builds in late 2025, per press coverage of
+  Microsoft's blog post (the post itself did not render for the fetch tool, so
+  this is secondary). CTranslate2's x86 wheels need SSE4.1 only and dispatch
+  on the CPU features the emulated CPU reports. Not verified: that the x64
+  build, CTranslate2 included, really runs under Prism.
+- Change: `[tool.uv] override-dependencies` removes only `ctranslate2` on
+  Windows ARM64 (the uv.lock diff is the `[manifest]` block and one marker on
+  faster-whisper's ctranslate2 edge); `local_runtime_support.py` answers
+  `unavailable_reason(model)`; the transcriber (before its download), the
+  benchmark, the picker label, the note under the model picker and the Models
+  tab use it. The x64 `uv sync --frozen --dry-run` still plans ctranslate2
+  4.8.2, the ARM64 one plans everything else and no ctranslate2.
+- A frozen build must not mistake itself for ARM64: a throwaway PyInstaller
+  onedir of a script with the same lazy `from faster_whisper import
+  WhisperModel`, run on this x64 machine, answered `find_spec('ctranslate2')`
+  and `find_spec('faster_whisper')` with a spec for both (and `None` for a
+  package that does not exist), so the installed app marks no model.
+- Negative control: with each of the seven enforcement sites disabled in turn,
+  `tests/test_local_runtime_support.py` failed for six of them (transcriber
+  guard, benchmark guard, picker label, note, download filter, row status);
+  the seventh was the red colour of one message, which no test reads.
+- Not done: no native ARM64 build of the installer (a PyInstaller spec built
+  on an ARM64 Python, `windows-11-arm` runner or similar, an `arm64` Inno
+  Setup target and a separate release asset; not trivial because the release
+  workflow, its checks and the update checker's asset name are all x64-only).
+  Nothing ran on ARM64 hardware; the tests make `find_spec` answer as that
+  platform would.
