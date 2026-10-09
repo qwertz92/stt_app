@@ -315,7 +315,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   hotkey only while registered, else the tray's "Insert transcript again".
   The overlay's amber badge counts every insertable row and names the
   re-paste hotkey (`_update_not_inserted_badge`, run by every
-  `_update_queue_overlay` and every settings reload; owner's request
+  `_update_queue_overlay`, every hotkey registration -- save, startup,
+  resume -- and a reload without one; owner's request
   2026-10-09; `docs/agents/overlay.md`); a "possibly inserted" row is not
   counted, and an Insert offer without a row (a streaming tail, a failed
   re-paste of a text that has no row) is not either -- it is retired when

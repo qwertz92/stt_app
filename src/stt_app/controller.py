@@ -1482,8 +1482,9 @@ class DictationController(QtCore.QObject):
             self._show_overlay_hotkey_notice = None
             self._repaste_hotkey_registration_ok = True
             self._repaste_hotkey_notice = None
-        # The badge names the re-paste hotkey, which this reload may change.
-        self._update_not_inserted_badge()
+            # The badge names the re-paste hotkey, which this reload may
+            # change (`_register_all_global_hotkeys` refreshes it otherwise).
+            self._update_not_inserted_badge()
 
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
@@ -10073,6 +10074,9 @@ class DictationController(QtCore.QObject):
         self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
         self._show_overlay_hotkey_registration_ok = self._register_show_overlay_hotkey()
         self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
+        # The badge names the re-paste hotkey only while it is registered:
+        # a save, the startup and every resume land here.
+        self._update_not_inserted_badge()
         return (
             self._hotkey_registration_ok
             and self._cancel_hotkey_registration_ok
