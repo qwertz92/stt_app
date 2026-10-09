@@ -9538,3 +9538,10 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   moved, under the entry pointing at it) or, with only "Keep last", moves
   to the recordings folder under its own name. The startup cleanup no longer
   deletes a file a history entry links to, so a failed move keeps its audio.
+- **A transcript from the startup notice waits for the re-paste** (owner's
+  idea). The notice saved transcripts to history only; now each also
+  becomes a "Not inserted" row, so F10 pastes it at the current caret when
+  the user wants it, and the not-inserted count and the quit window count
+  it. The notice transcribes on a worker thread, so the row is recorded on
+  the controller's thread through a queued signal
+  (`unfinished_transcript_saved`); a test checks the thread.

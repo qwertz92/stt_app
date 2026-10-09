@@ -610,6 +610,10 @@ class DictationController(QtCore.QObject):
     # the quit is called off (owner decision 2026-10-09), and the quit window
     # (`quit_dialog.QuitCoordinator`) closes.
     quit_canceled_by_recording = QtCore.Signal()
+    # A recording from the startup notice was transcribed into history:
+    # (text, history entry, recorded at). Emitted from the notice's worker
+    # thread; the queued connection lists it on the Qt thread.
+    unfinished_transcript_saved = QtCore.Signal(str, object, object)
 
     def __init__(
         self,
@@ -926,6 +930,7 @@ class DictationController(QtCore.QObject):
         self.audio_devices_changed.connect(self._on_audio_devices_changed)
         self.paste_target_checked.connect(self._on_paste_target_checked)
         self.audio_devices_refreshed.connect(self.refresh_overlay_microphone_options)
+        self.unfinished_transcript_saved.connect(self._list_unfinished_transcript)
 
     @property
     def settings(self) -> AppSettings:
@@ -1179,11 +1184,15 @@ class DictationController(QtCore.QObject):
         """Transcribe a recording an earlier session left, into history only.
 
         Blocking: the startup notice calls it on a worker thread. Nothing is
-        pasted -- the window it was dictated for is long gone. Once the
-        transcript is in history the file is deleted, unless the transcript
-        carries a gap marker: then it stays, like a dictation's recording with
-        a gap (`_mark_last_recording_completed`), and the entry points at it.
-        A failure keeps the file. Returns ``(ok, transcript or error)``.
+        pasted -- the window it was dictated for is long gone -- but the
+        transcript is listed as not inserted (owner's idea 2026-10-09), so
+        the re-paste pastes it at the current caret when the user wants it
+        (`_list_unfinished_transcript`). Once the transcript is in history
+        the file is kept or deleted as the recording settings say
+        (`_retain_unfinished_audio`), unless the transcript carries a gap
+        marker: then it stays, like a dictation's recording with a gap
+        (`_mark_last_recording_completed`), and the entry points at it. A
+        failure keeps the file. Returns ``(ok, transcript or error)``.
         """
         path = str(recording.path)
         if not os.path.isfile(path):
@@ -1240,7 +1249,34 @@ class DictationController(QtCore.QObject):
             len(text),
             kept_path or "no",
         )
+        self.unfinished_transcript_saved.emit(text, entry, recording.recorded_at)
         return True, text
+
+    @QtCore.Slot(str, object, object)
+    def _list_unfinished_transcript(
+        self,
+        text: str,
+        entry: TranscriptHistoryEntry | None,
+        recorded_at: datetime | None,
+    ) -> None:
+        """List a transcript from the startup notice as not inserted.
+
+        A row like a failed paste's: the queue panel and the not-inserted
+        count show it, the re-paste joins it with the others and retires it
+        once pasted, Dismiss drops it, an edit of its entry reaches it. Its
+        time is the recording's own (local wall clock, as the file name
+        says).
+        """
+        self._record_undelivered_insert(
+            text,
+            may_have_pasted=False,
+            created_at=(
+                recorded_at.astimezone()
+                if recorded_at is not None
+                else datetime.now().astimezone()
+            ),
+            history_entry=entry,
+        )
 
     def _retain_unfinished_audio(self, recording: UnfinishedRecording) -> str:
         """Keep a transcribed unfinished recording as the settings keep any

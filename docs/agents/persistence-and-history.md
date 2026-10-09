@@ -143,7 +143,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   file. A gap transcript's file stays in the unfinished folder, never in
   the pruned archive. A failed move leaves the file in place with the entry
   pointing at it; a history write that fails moves it back, so the next
-  start offers it again. "Keep files and close"
+  start offers it again. A transcript it saved is also listed as not
+  inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
+  controller's Qt thread (`unfinished_transcript_saved`, queued from the
+  notice's worker) records an `_UndeliveredInsert` row with the entry and
+  the recording's time, which the re-paste pastes at the current caret and
+  the not-inserted count includes (`docs/agents/text-insertion.md`). "Keep files and close"
   moves files to the recordings folder under their own name, which the
   archive prune (`recording_<stamp>.wav` only) never deletes; a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.

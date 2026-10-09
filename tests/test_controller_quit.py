@@ -279,6 +279,72 @@ def test_a_transcript_with_a_gap_keeps_its_recording(monkeypatch, tmp_path):
     _ = app
 
 
+def test_a_transcribed_unfinished_recording_waits_for_the_re_paste(
+    monkeypatch, tmp_path
+):
+    """Owner's idea 2026-10-09: nothing is pasted on its own -- the window it
+    was dictated for is long gone -- but the transcript is listed as not
+    inserted, so the re-paste hotkey pastes it at the current caret, and it
+    counts as not inserted."""
+    controller, app, overlay, unfinished, history = _controller(monkeypatch, tmp_path)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(
+        controller, "_transcribe_import_worker", lambda *_a: "hello again"
+    )
+    recording = _kept_recording(unfinished)
+
+    ok, _text = controller.transcribe_unfinished_recording(recording)
+
+    assert ok is True
+    assert controller._text_inserter.calls == [], "pasted without being asked"
+    [row] = controller._undelivered_inserts
+    assert row.text == "hello again"
+    assert row.parts[0][0] == history.load()[0], "an edit must reach the row"
+    assert overlay.queue_kinds[-1] == ["undelivered"]
+    # The time the recording was made, as every row shows it.
+    assert "· 00:00:00 ·" in overlay.queue_updates[-1][0][1]
+    assert controller.quit_pending_work().not_inserted == 1
+
+    controller.repaste_last_transcript()
+
+    assert [call[0] for call in controller._text_inserter.calls] == ["hello again"]
+    assert controller._undelivered_inserts == []
+    controller.shutdown()
+    _ = app
+
+
+def test_unfinished_transcripts_are_listed_on_the_qt_thread(monkeypatch, tmp_path):
+    """The startup notice transcribes on a worker thread; the row it leaves
+    is listed by the controller's own thread, never from the worker."""
+    import threading
+
+    controller, app, _overlay, unfinished, _history = _controller(monkeypatch, tmp_path)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "later")
+    recording = _kept_recording(unfinished)
+    listed_on = []
+    original = controller._record_undelivered_insert
+
+    def _spy(*args, **kwargs):
+        listed_on.append(threading.current_thread())
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(controller, "_record_undelivered_insert", _spy)
+    worker = threading.Thread(
+        target=controller.transcribe_unfinished_recording, args=(recording,)
+    )
+    worker.start()
+    worker.join(10)
+    assert listed_on == [], "listed from the worker thread"
+    deadline = time.monotonic() + 5
+    while not listed_on and time.monotonic() < deadline:
+        app.processEvents()
+    assert listed_on == [threading.main_thread()]
+    assert [row.text for row in controller._undelivered_inserts] == ["later"]
+    controller.shutdown()
+    _ = app
+
+
 def test_a_transcribed_unfinished_recording_is_archived_like_any_recording(
     monkeypatch, tmp_path
 ):
