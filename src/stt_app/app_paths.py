@@ -101,6 +101,11 @@ def recordings_dir() -> Path:
     return path
 
 
+def unfinished_recordings_dir() -> Path:
+    """Recordings an earlier session did not transcribe (not created here)."""
+    return appdata_root() / "unfinished_recordings"
+
+
 def resolve_recordings_dir(configured: str = "") -> Path:
     """Where recordings are archived: the configured directory, else default."""
     value = str(configured or "").strip()

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import NamedTuple
+from uuid import uuid4
 
 from PySide6 import QtCore, QtGui
 
@@ -130,6 +131,7 @@ from .transcriber.base import (
     transcript_has_gap,
 )
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
@@ -268,6 +270,32 @@ class _TranscriptionJob:
     # list it and Clear queue or its Cancel cannot drop it. Cleared when a
     # recording or a window defers it again, which lists it as before.
     pace_held: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class PendingQuitWork:
+    """What a quit right now would cut short (`quit_pending_work`)."""
+
+    # A microphone capture is open, or a start or stop is in progress.
+    recording: bool = False
+    # Jobs still producing a transcript: running, queued, or finalizing.
+    transcribing: int = 0
+    # Finished transcripts held for their paste (a window, a recording, the
+    # paste pace), plus a re-paste the pace holds. They are in history.
+    waiting_to_insert: int = 0
+    # Listed rows whose paste failed or is doubtful. They are in history.
+    not_inserted: int = 0
+    # Failed recordings held for Retry. Quitting keeps their audio.
+    failed: int = 0
+
+    @property
+    def can_wait(self) -> bool:
+        """Whether waiting would still deliver something."""
+        return self.recording or self.transcribing > 0 or self.waiting_to_insert > 0
+
+    @property
+    def asks_before_quit(self) -> bool:
+        return self.can_wait or self.not_inserted > 0
 
 
 @dataclass(slots=True)
@@ -564,6 +592,7 @@ class DictationController(QtCore.QObject):
         show_overlay_hotkey_manager: HotkeyManager | None = None,
         repaste_hotkey_manager: HotkeyManager | None = None,
         paste_target_check: PasteTargetCheck | None = None,
+        unfinished_recording_store: UnfinishedRecordingStore | None = None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
@@ -583,6 +612,15 @@ class DictationController(QtCore.QObject):
         self._secret_store = secret_store
         self._history_store = history_store or TranscriptHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
+        self._unfinished_recording_store = (
+            unfinished_recording_store or UnfinishedRecordingStore()
+        )
+        # True while a quit waits for the pending work (`hold_for_quit`): new
+        # recordings are refused, or the wait could never end.
+        self._quit_hold = False
+        # When each recording a job was registered for ended, by recording id,
+        # so a failure kept for Retry is kept at quit under its own time.
+        self._recorded_at_by_recording_id: dict[str, datetime] = {}
 
         self._settings: AppSettings = self._settings_store.load()
         self._warm_up_speech_check()
@@ -896,11 +934,12 @@ class DictationController(QtCore.QObject):
         self._preload_cancel_requested = True
         self._cancel_preload_generation(self._preload_generation)
         self._terminate_preload_download_process()
+        capture_wav = b""
         if self._audio_capture is not None:
             try:
-                self._audio_capture.stop()
+                capture_wav = self._audio_capture.stop() or b""
             except Exception:
-                pass
+                self._logger.exception("Failed to stop the open capture at shutdown")
             self._audio_capture = None
         if self._warm_mic_stream is not None:
             try:
@@ -932,6 +971,11 @@ class DictationController(QtCore.QObject):
             if active_stream_lease is not None:
                 active_stream_lease.release()
         self._active_stream_settings = None
+        # Before the jobs below are marked aborting and their audio dropped.
+        try:
+            self._keep_unfinished_recordings(capture_wav)
+        except BaseException:
+            self._logger.exception("Failed to keep the unfinished recordings")
         for job in list(self._jobs.values()):
             job.aborting = True
             future = job.future
@@ -978,6 +1022,168 @@ class DictationController(QtCore.QObject):
                 executor.shutdown(wait=False, cancel_futures=True)
             except BaseException:
                 self._logger.exception("Failed to shut down the %s executor", name)
+
+    def _keep_unfinished_recordings(self, capture_wav: bytes) -> None:
+        """Write every recording without a transcript to the unfinished store.
+
+        The open capture, each job still transcribing, and the failures held
+        for Retry: their audio is otherwise only in memory, because the
+        managed last recording holds the newest recording alone. The next
+        start offers them (`main._offer_unfinished_recordings`). A job whose
+        transcript is finished and only waits for its paste is not one of
+        them -- its text is in history -- and neither is a job the user
+        cancelled. One recording reached by two roads (a retry running for
+        the slot's bytes) is written once.
+        """
+        now = datetime.now()  # noqa: DTZ005 (local wall clock, as the queue rows show it)
+        candidates: list[tuple[bytes, str, datetime]] = []
+        if capture_wav:
+            candidates.append((capture_wav, "", now))
+        for job in self._jobs.values():
+            if job.aborting or job.insertion_deferred:
+                continue
+            payload = self._request_audio_by_token.get(job.token)
+            if payload is not None:
+                candidates.append((payload[0], job.source_recording_id, job.created_at))
+        for wav_bytes, recording_id in (
+            (self._last_failed_wav_bytes, self._last_failed_recording_id),
+            *self._older_failed_audio,
+        ):
+            if wav_bytes:
+                recorded_at = self._recorded_at_by_recording_id.get(recording_id, now)
+                candidates.append((wav_bytes, recording_id, recorded_at))
+        seen_ids: set[str] = set()
+        seen_unnamed: list[bytes] = []
+        kept = failed = 0
+        for wav_bytes, recording_id, recorded_at in candidates:
+            if recording_id:
+                if recording_id in seen_ids:
+                    continue
+                seen_ids.add(recording_id)
+            else:
+                if any(wav_bytes == other for other in seen_unnamed):
+                    continue
+                seen_unnamed.append(wav_bytes)
+            try:
+                path = self._unfinished_recording_store.save(
+                    wav_bytes,
+                    recording_id=recording_id or uuid4().hex,
+                    recorded_at=recorded_at,
+                )
+            except (OSError, ValueError):
+                failed += 1
+                self._logger.exception(
+                    "Failed to keep an unfinished recording. recording_id=%s",
+                    recording_id or "n/a",
+                )
+                continue
+            kept += path is not None
+        if kept or failed:
+            self._logger.info(
+                "unfinished_recordings_kept count=%d failed=%d dir=%s",
+                kept,
+                failed,
+                self._unfinished_recording_store.directory,
+            )
+
+    def quit_pending_work(self) -> PendingQuitWork:
+        """What quitting now would cut short; see `PendingQuitWork`."""
+        live = [job for job in self._jobs.values() if not job.aborting]
+        waiting = sum(1 for job in live if job.insertion_deferred)
+        return PendingQuitWork(
+            recording=(
+                self._audio_capture is not None
+                or self._recording_start_in_progress
+                or self._recording_stop_in_progress
+            ),
+            transcribing=len(live) - waiting,
+            waiting_to_insert=waiting + (self._pending_repaste is not None),
+            not_inserted=len(self._undelivered_inserts),
+            failed=bool(self._last_failed_wav_bytes) + len(self._older_failed_audio),
+        )
+
+    def hold_for_quit(self) -> None:
+        """Let the pending work finish for a quit: refuse new recordings and
+        stop the open one, which is then transcribed and inserted as usual.
+
+        Idempotent; the quit window calls it on every poll, so a capture
+        that finished opening after the first call is stopped too.
+        """
+        self._quit_hold = True
+        if (
+            self._audio_capture is not None
+            and not self._recording_start_in_progress
+            and not self._recording_stop_in_progress
+        ):
+            self._logger.info("quit_wait_stops_recording")
+            with self._overlay_batch():
+                self.stop_recording()
+
+    def release_quit_hold(self) -> None:
+        """The quit was called off: dictation works again."""
+        self._quit_hold = False
+
+    def transcribe_unfinished_recording(
+        self,
+        recording: UnfinishedRecording,
+        progress_callback: Callable[[str], None] | None = None,
+    ) -> tuple[bool, str]:
+        """Transcribe a recording an earlier session left, into history only.
+
+        Blocking: the startup notice calls it on a worker thread. Nothing is
+        pasted -- the window it was dictated for is long gone. Once the
+        transcript is in history the file is deleted, unless the transcript
+        carries a gap marker: then it stays, like a dictation's recording with
+        a gap (`_mark_last_recording_completed`), and the entry points at it.
+        A failure keeps the file. Returns ``(ok, transcript or error)``.
+        """
+        path = str(recording.path)
+        if not os.path.isfile(path):
+            return False, "The recording is no longer available."
+        settings = replace(self._settings, mode="batch")
+        try:
+            text = (
+                self._executor.submit(
+                    self._transcribe_import_worker,
+                    path,
+                    settings,
+                    progress_callback,
+                )
+                .result()
+                .strip()
+            )
+        except Exception as exc:
+            self._logger.exception("Failed to transcribe an unfinished recording")
+            return False, str(exc) or type(exc).__name__
+        if not text:
+            return False, _EMPTY_MODEL_TRANSCRIPT_MESSAGE
+        keep_file = transcript_has_gap(text)
+        entry = self._append_transcript_history(
+            text,
+            settings,
+            "import",
+            source_recording_id=recording.recording_id,
+            source_audio_path=os.path.abspath(path) if keep_file else "",
+            track_for_edit=False,
+        )
+        if entry is None:
+            return False, (
+                "The transcript could not be saved to history (see the log); "
+                f"the recording was kept. Transcript: {text}"
+            )
+        if not keep_file:
+            try:
+                self._unfinished_recording_store.discard(recording)
+            except OSError:
+                # Its transcript is in history, so the next start deletes it.
+                self._logger.exception("Failed to delete a transcribed recording")
+        self._logger.info(
+            "unfinished_recording_transcribed recording_id=%s chars=%d kept=%s",
+            recording.recording_id,
+            len(text),
+            keep_file,
+        )
+        return True, text
 
     def _flush_pending_clipboard_restore(self) -> None:
         """Put the user's clipboard back before the process goes away.
@@ -1277,6 +1483,14 @@ class DictationController(QtCore.QObject):
     def start_recording(self) -> None:
         if self._recording_start_in_progress:
             self._logger.info("Ignored nested start_recording while start is active.")
+            return
+        if self._quit_hold:
+            # The quit window waits for the pending work to end; a new
+            # recording would keep it waiting.
+            self.show_overlay_error(
+                'Quitting after the pending transcriptions. Choose "Don\'t quit" '
+                "in the quit window to dictate again."
+            )
             return
         if self._audio_capture is not None:
             # A recording is already active. This can happen when a queued
@@ -3586,6 +3800,8 @@ class DictationController(QtCore.QObject):
             source_audio_path=str(source_audio_path or "").strip(),
         )
         self._jobs[request_token] = job
+        if source_recording_id:
+            self._recorded_at_by_recording_id[source_recording_id] = job.created_at
         self._update_queue_overlay()
         return job
 

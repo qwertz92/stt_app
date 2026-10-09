@@ -129,3 +129,70 @@ def test_apply_engine_model_selection_ignores_an_unknown_engine():
     updated = apply_engine_model_selection(settings, "nope", "whatever")
 
     assert updated == settings
+
+
+def test_one_file_is_revealed_through_explorers_select_switch(monkeypatch, tmp_path):
+    from PySide6 import QtCore
+
+    from stt_app import history_audio
+
+    audio = tmp_path / "one.wav"
+    audio.write_bytes(b"RIFF")
+    started = []
+    monkeypatch.setattr(
+        QtCore.QProcess,
+        "startDetached",
+        staticmethod(lambda program, args: started.append((program, args)) or True),
+    )
+
+    assert history_audio.reveal_paths_in_file_manager([audio]) is True
+    assert started == [
+        ("explorer.exe", [f"/select,{QtCore.QDir.toNativeSeparators(str(audio))}"])
+    ]
+
+
+def test_several_files_are_selected_together_in_their_folder(monkeypatch, tmp_path):
+    """Explorer's command line selects one file; the owner listens to several
+    recordings before deciding, so all of them must be selected at once."""
+    import threading
+
+    from stt_app import history_audio
+
+    first, second = tmp_path / "a.wav", tmp_path / "b.wav"
+    elsewhere = tmp_path / "other" / "c.wav"
+    for path in (first, second):
+        path.write_bytes(b"RIFF")
+    calls = []
+    done = threading.Event()
+
+    def _select(folder, items):
+        calls.append((folder, items))
+        done.set()
+        return True
+
+    monkeypatch.setattr(history_audio, "select_items_in_folder", _select)
+
+    assert history_audio.reveal_paths_in_file_manager([first, second, elsewhere])
+    assert done.wait(5)
+    assert calls == [(first.resolve().parent, [first.resolve(), second.resolve()])]
+
+
+def test_a_failed_selection_opens_the_folder_instead(monkeypatch, tmp_path):
+    import threading
+
+    from stt_app import history_audio
+
+    opened = []
+    done = threading.Event()
+    monkeypatch.setattr(history_audio, "select_items_in_folder", lambda *_a: False)
+
+    def _open(path):
+        opened.append(path)
+        done.set()
+
+    monkeypatch.setattr(history_audio.os, "startfile", _open, raising=False)
+
+    history_audio.reveal_paths_in_file_manager([tmp_path / "a.wav", tmp_path / "b.wav"])
+
+    assert done.wait(5)
+    assert opened == [str(tmp_path.resolve())]
