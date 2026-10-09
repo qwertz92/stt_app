@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-10 (overlay: a floating overlay stays above the editor until it is clicked)
+
+- **"Directly behind the foreground window" overshot.** The 2026-10-09 fix
+  below placed a floating overlay behind the foreground window whenever
+  topmost was dropped, so with Floating it was gone at once -- after the
+  Floating click and ~1.8 s after every recording start. The owner's rule
+  (2026-10-09): on top of the normal band, as before, until he clicks
+  another window, including the one that is already active. Measured
+  before the change (real overlay, foreign-process EDIT window, SendInput):
+  directly below the editor right after the Floating click and after a
+  reveal ended.
+- **Nothing reports a click into the active window.** A WinEvent probe saw
+  no event at all for a click into an active plain window, and only
+  `EVENT_SYSTEM_CAPTURESTART` (the control's own `SetCapture`) for an EDIT
+  control. A `WH_MOUSE_LL` hook would see it but runs a Python callback in
+  every click's path. Mouse raw input with `RIDEV_INPUTSINK` delivers a
+  posted `WM_INPUT` copy of every mouse event to the overlay's window, which
+  `nativeEvent` already receives; the watch exists only while the overlay
+  waits. After the change: directly above the editor after the Floating
+  click and a reveal, still above after a click on the overlay, directly
+  below after a left or right click into the active editor, ~6 ms after the
+  press; no `WM_INPUT` once it went behind.
+- A test of the raw-input parser writes the bytes at the SDK offsets: the
+  first draft spelled the `ulButtons` union as two USHORTs, which put
+  `usButtonFlags` at offset 26 instead of 28 (the union's ULONG aligns it).
+
 ## 2026-10-09 (overlay: the Pinned/Floating blink and a floating overlay that stayed in front)
 
 - **Toggling Pinned/Floating recreated the native window.** `_apply_window_flags`

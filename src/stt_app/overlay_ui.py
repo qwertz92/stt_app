@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import raw_mouse_input
 from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
@@ -58,6 +59,9 @@ _SWP_NOSIZE = 0x0001
 _SWP_NOMOVE = 0x0002
 _SWP_NOACTIVATE = 0x0010
 _SWP_SHOWWINDOW = 0x0040
+_GW_HWNDPREV = 3
+_GA_ROOT = 2
+_Z_ORDER_WALK_LIMIT = 10_000
 
 
 @functools.cache
@@ -89,6 +93,9 @@ def _overlay_user32():
         "SetWindowLongW": ((wt.HWND, ctypes.c_int, wt.LONG), wt.LONG),
         "IsWindowVisible": ((wt.HWND,), wt.BOOL),
         "IsIconic": ((wt.HWND,), wt.BOOL),
+        "GetWindow": ((wt.HWND, wt.UINT), wt.HWND),
+        "WindowFromPoint": ((wt.POINT,), wt.HWND),
+        "GetAncestor": ((wt.HWND, wt.UINT), wt.HWND),
     }
     for name, (argtypes, restype) in signatures.items():
         function = getattr(user32, name)
@@ -98,7 +105,7 @@ def _overlay_user32():
 
 
 def _window_to_stay_behind(user32, overlay_hwnd: int) -> int:
-    """The window a floating overlay goes directly behind, or 0 for none.
+    """The window a floating overlay may go directly behind, or 0 for none.
 
     That is the foreground window, unless going behind it would hide the
     overlay where nobody looks (the desktop, a minimised window) or make it
@@ -114,6 +121,30 @@ def _window_to_stay_behind(user32, overlay_hwnd: int) -> int:
     if is_shell_surface_window(user32, foreground):
         return 0
     return foreground
+
+
+def _top_level_window_at(user32, x: int, y: int) -> int:
+    """The top-level window under the screen point (physical pixels), or 0."""
+    import ctypes.wintypes as wt
+
+    child = user32.WindowFromPoint(wt.POINT(x, y))
+    return int(user32.GetAncestor(child, _GA_ROOT) or 0) if child else 0
+
+
+def _is_above(user32, upper: int, lower: int) -> bool:
+    """Is `upper` anywhere above `lower` in the z-order?
+
+    Walks up from `lower`, which sits near the top when it is the foreground
+    window. Bounded: the z-order may change during the walk (GetWindow docs).
+    """
+    hwnd = lower
+    for _ in range(_Z_ORDER_WALK_LIMIT):
+        hwnd = int(user32.GetWindow(hwnd, _GW_HWNDPREV) or 0)
+        if not hwnd:
+            return False
+        if hwnd == upper:
+            return True
+    return False
 
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
@@ -509,6 +540,12 @@ class OverlayUI(QtWidgets.QWidget):
         # Windows only: SetWindowPos failed, so Qt's WindowStaysOnTopHint
         # carries topmost (recreating the window) until topmost is dropped.
         self._topmost_uses_window_flag = False
+        # Windows only: a floating overlay was put on top of the normal band
+        # and stays above the window being typed in until the user clicks
+        # into that window (`_on_desktop_mouse_press`).
+        self._waiting_for_click = False
+        # The window the mouse raw-input watch delivers to, 0 while off.
+        self._click_watch_hwnd = 0
         initial_flags = self._base_window_flags()
         self.setWindowFlags(initial_flags)
         self._applied_window_flags = initial_flags
@@ -1023,11 +1060,14 @@ class OverlayUI(QtWidgets.QWidget):
         if sys.platform != "win32":
             return
         self._apply_noactivate_style()
-        if self._apply_native_z_order():
-            return
-        if self._wants_topmost() and not self._topmost_uses_window_flag:
+        if (
+            not self._apply_native_z_order()
+            and self._wants_topmost()
+            and not self._topmost_uses_window_flag
+        ):
             self._topmost_uses_window_flag = True
             self._sync_qt_window_flags(show=raise_window)
+        self._sync_click_watch()
 
     def _sync_qt_window_flags(self, *, show: bool) -> None:
         desired_flags = self._base_window_flags()
@@ -1628,8 +1668,23 @@ class OverlayUI(QtWidgets.QWidget):
                 _MA_NOACTIVATE = 3
                 if msg.message == _WM_MOUSEACTIVATE:
                     return True, _MA_NOACTIVATE
+                if (
+                    msg.message == raw_mouse_input.WM_INPUT
+                    and self._click_watch_hwnd
+                    and raw_mouse_input.mouse_button_pressed(msg.lParam)
+                ):
+                    # `pt` is where the cursor was when the press happened.
+                    # Handled after this window procedure returns, because
+                    # moving the overlay re-enters it.
+                    QtCore.QTimer.singleShot(
+                        0,
+                        functools.partial(
+                            self._on_desktop_mouse_press, msg.pt.x, msg.pt.y
+                        ),
+                    )
             except Exception:
                 pass
+        # Not handled: DefWindowProc must still see a WM_INPUT (cleanup).
         return super().nativeEvent(event_type, message)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
@@ -1655,6 +1710,21 @@ class OverlayUI(QtWidgets.QWidget):
                 # Qt's flag does not carry topmost here (`_base_window_flags`),
                 # so the first show, and a show after a recreation, sets it.
                 self._apply_native_z_order()
+            else:
+                # A shown window appears on top of its band, so a floating
+                # overlay is above the window being typed in again.
+                self._waiting_for_click = True
+                self._sync_click_watch()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:
+        super().hideEvent(event)
+        self._waiting_for_click = False
+        self._sync_click_watch()
+
+    def shutdown(self) -> None:
+        """Remove the mouse raw-input watch before the application quits."""
+        self._waiting_for_click = False
+        self._sync_click_watch()
 
     def _on_screen_changed(self, _screen: QtGui.QScreen | None) -> None:
         if self._compact_mode:
@@ -1678,15 +1748,12 @@ class OverlayUI(QtWidgets.QWidget):
     def _apply_native_z_order(self) -> bool:
         """Set the topmost state with SetWindowPos, never activating the overlay.
 
-        Topmost while pinned or revealed. Otherwise not HWND_NOTOPMOST alone:
-        that places the window above every non-topmost window, i.e. above the
-        editor the user is typing in. The overlay never activates, so that
-        editor stays the active window and nothing re-raises it; the owner
-        saw it stay under a floating overlay until it was re-activated
-        (minimise and restore). So the overlay goes directly behind the
-        foreground window (`_window_to_stay_behind`) instead. A window Qt has
-        not shown yet is not moved there: once shown it appears like any
-        newly shown window.
+        Topmost while pinned or revealed. Otherwise `HWND_NOTOPMOST`, which
+        puts the overlay on top of the normal band -- above the window being
+        typed in, where it stays until the user clicks into that window
+        (`_on_desktop_mouse_press`). Going straight behind the foreground
+        window instead (8a72099) made a floating overlay vanish the moment
+        Floating was clicked or a reveal ended.
         """
         if sys.platform != "win32":
             return False
@@ -1702,19 +1769,70 @@ class OverlayUI(QtWidgets.QWidget):
                 # Re-shows a window the system hid (resume, 2026-06-08).
                 flags |= _SWP_SHOWWINDOW
             if self._wants_topmost():
+                self._waiting_for_click = False
                 return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
-            # "If a topmost window is repositioned ... after any non-topmost
-            # window, it is no longer topmost" (SetWindowPos remarks), so one
-            # call both drops topmost and places the overlay.
-            behind = _window_to_stay_behind(user32, hwnd) if shown else 0
-            if behind and user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags):
-                return True
-            # Refused behind a higher-integrity window (access denied, e.g.
-            # an elevated Task Manager): without this the overlay stayed
-            # topmost while it said "Floating".
+            # A hidden overlay starts waiting in its `showEvent`.
+            self._waiting_for_click = shown
             return bool(user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags))
         except Exception:
             return False
+
+    def _sync_click_watch(self) -> None:
+        """Watch mouse presses only while a floating overlay waits for one.
+
+        The watch (`raw_mouse_input`) delivers a `WM_INPUT` for every mouse
+        event on the desktop, movements included, so it runs only between
+        the overlay landing on top of the normal band and the click that
+        sends it behind the window being typed in.
+        """
+        if sys.platform != "win32":
+            return
+        wanted = self._waiting_for_click and not self._wants_topmost()
+        hwnd = int(self.winId()) if wanted else 0
+        if hwnd == self._click_watch_hwnd:
+            return
+        if hwnd:
+            self._click_watch_hwnd = (
+                hwnd if raw_mouse_input.watch_mouse_presses(hwnd) else 0
+            )
+        else:
+            raw_mouse_input.stop_watching_mouse_presses()
+            self._click_watch_hwnd = 0
+
+    def _on_desktop_mouse_press(self, x: int, y: int) -> None:
+        """Go behind the window being typed in once the user clicks into it.
+
+        Windows raises a window when it is activated, not when the user
+        clicks into the window that is already active, so a floating overlay
+        stayed above the editor until it was minimised and restored. Every
+        other press leaves the overlay where it is: on the overlay itself; on
+        an inactive window, which its activation raises above the overlay;
+        and on a desktop, taskbar, topmost or minimised foreground window
+        (`_window_to_stay_behind`), where the overlay keeps waiting.
+        """
+        if not self._waiting_for_click or self._wants_topmost():
+            return
+        try:
+            user32 = _overlay_user32()
+            hwnd = int(self.winId())
+            foreground = _window_to_stay_behind(user32, hwnd)
+            if not foreground or _top_level_window_at(user32, x, y) != foreground:
+                return
+            if not _is_above(user32, hwnd, foreground):
+                # A window was activated above the overlay since it waits.
+                self._waiting_for_click = False
+                return
+            flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+            # Refused behind a higher-integrity window (access denied, e.g.
+            # an elevated Task Manager): the overlay stays above it, waiting.
+            if user32.SetWindowPos(hwnd, foreground, 0, 0, 0, 0, flags):
+                self._waiting_for_click = False
+        except Exception:
+            logger.debug(
+                "Following a click behind the foreground failed", exc_info=True
+            )
+        finally:
+            self._sync_click_watch()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)

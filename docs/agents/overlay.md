@@ -72,22 +72,48 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   Measured after the change: no events on either click; topmost survives
   hide/show, `raise_()`, state changes, moves and a stylesheet re-apply.
   Other platforms keep the flag (`_always_on_top`).
-- **Dropping topmost puts the overlay directly behind the foreground window**
-  (`_apply_native_z_order`, `_window_to_stay_behind`; 2026-10-09). Plain
-  `HWND_NOTOPMOST` places it above every non-topmost window, i.e. above the
-  editor being dictated into; the overlay never activates, so that editor
-  stayed active and stayed underneath until minimise/restore (owner report;
-  measured 4 and 7 windows below the overlay after a Floating click and after
-  a reveal ended). One SetWindowPos with the foreground window as
-  `hWndInsertAfter` both clears topmost and places it (measured: directly
-  below, not topmost, also for another process's window). Never behind a
-  topmost window (the overlay would join the topmost band), a minimised one,
-  a shell surface (`window_focus.is_shell_surface_window`: behind the desktop
-  it is invisible), itself, or while Qt has not shown it yet (startup applies
-  a saved Floating before the first show) -- then `HWND_NOTOPMOST`. So a
-  floating overlay revealed for a recording or result goes behind the
-  editor when the reveal ends. `SWP_SHOWWINDOW` is passed only once the
-  `QWindow` is visible: `showEvent` runs before Qt shows the native window.
+- **A floating overlay stays on top of the normal band until the user clicks
+  into the window below it** (2026-10-10, owner's requirement of
+  2026-10-09). Dropping topmost (Floating click, end of a reveal) is
+  `HWND_NOTOPMOST`, and a shown floating overlay waits
+  (`_waiting_for_click`). Going directly behind the foreground window
+  instead (8a72099, `hWndInsertAfter` = that window) made the overlay vanish
+  the moment Floating was clicked or a reveal ended. Clicking an inactive
+  window raises it natively (activation); a click into the window that is
+  *already* active does not, which kept the editor under the overlay until
+  minimise/restore. So while waiting, `raw_mouse_input` registers mouse raw
+  input (`RIDEV_INPUTSINK`) for the overlay's window; `nativeEvent` reads
+  each `WM_INPUT`, and a button press runs `_on_desktop_mouse_press` on the
+  next event-loop turn with the message's `pt`. The overlay goes directly
+  behind the foreground window (`SWP_NOACTIVATE`) only when the top-level
+  window under the press is that window, `_window_to_stay_behind` accepts it
+  (not topmost, minimised, a shell surface or the overlay) and the overlay
+  is still above it (`_is_above`, a bounded `GW_HWNDPREV` walk); then the
+  watch stops. A press on the overlay or an inactive window, an ineligible
+  foreground, or a refused call (elevated foreground: access denied) leave
+  it waiting; a window activated above it ends the wait. The watch runs only
+  while waiting and shown -- every mouse movement on the desktop is a
+  `WM_INPUT` then -- and stops on topmost, hide and `shutdown()`
+  (`aboutToQuit`). `SWP_SHOWWINDOW` is passed only once the `QWindow` is
+  visible: `showEvent` runs before Qt shows the native window.
+  - **Why raw input**: no WinEvent reports the click (measured: a plain
+    window produced none for a click into it while active; an EDIT control
+    produced `EVENT_SYSTEM_CAPTURESTART` only because it captures the
+    mouse). A `WH_MOUSE_LL` hook puts a Python callback (the GIL) into
+    every click's path, and Windows silently removes a hook that misses
+    `LowLevelHooksTimeout`. `WM_INPUT` is a posted copy: the click never
+    waits for this process. One mouse registration exists per process;
+    nothing else registers one.
+  - **Measured** (real overlay, foreign-process EDIT window, `SendInput`):
+    before, the overlay was directly below the editor right after the
+    Floating click and after a reveal ended; after, directly above it, still
+    above after a click on its own label, and directly below after a left
+    or right click into the active editor. A click into another, inactive
+    window raised that window over the overlay, which stayed above the
+    editor. Press handled ~6 ms after it was injected; a `GetRawInputData`
+    read costs ~3 us; 0 `WM_INPUT` once the watch stopped.
+  - Not covered: touch and pen taps (a digitizer, not the mouse usage page;
+    unmeasured) and typing without a click, which leaves the overlay above.
 - **The Language and microphone menus are `_RebuildableMenu`s, rebuilt only
   while hidden** (2026-10-03). `QMenu.clear()` deletes the actions under an
   open popup -- and one the user has chosen whose `triggered` has not run
