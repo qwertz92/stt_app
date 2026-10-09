@@ -145,6 +145,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `retranscribe_dialog.py` | Compact language-only retranscription of one history entry's retained audio |
 | `app_paths.py` | Centralized app data/config path helpers |
 | `last_recording_store.py` | Managed last-recording state (path, status, recovery) for Retry and Import |
+| `unfinished_recordings.py` | Recordings a quit left untranscribed: a directory of WAV files named by time and recording id, no index |
+| `unfinished_recordings_dialog.py` | Startup notice listing those recordings: transcribe all/selected into history, show in folder, delete, keep files |
+| `quit_dialog.py` | The tray's Quit: quits at once, or asks (wait and insert / quit now / don't quit) while work is pending |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
 | `logger.py` | Application logging setup and diagnostics text |
 | `ssl_utils.py` | System trust store injection and CA bundle resolution |
@@ -176,8 +179,8 @@ commit. Entries are written as "rule, then why, then what was measured".
 | [`docs/agents/text-insertion.md`](docs/agents/text-insertion.md) | `text_inserter.py`, `window_focus.py`, clipboard capture/restore, deferred/queued inserts, the Insert offer, re-paste |
 | [`docs/agents/audio-capture.md`](docs/agents/audio-capture.md) | `audio_capture.py`, `audio_devices.py`, `audio_device_listener.py`, the warm stream, the watchdog, the silence gate |
 | [`docs/agents/streaming.md`](docs/agents/streaming.md) | `streaming_text.py`, rolling-window merge, pause/segment logic, stream handshake, finalize and runtime failures |
-| [`docs/agents/controller-and-jobs.md`](docs/agents/controller-and-jobs.md) | `controller.py` job delivery, cancel, retry slot, last-recording marks, preload, runtime lease and cache identity |
-| [`docs/agents/persistence-and-history.md`](docs/agents/persistence-and-history.md) | `persistence.py`, any JSON store, `secret_store.py`, transcript history and its audio linkage |
+| [`docs/agents/controller-and-jobs.md`](docs/agents/controller-and-jobs.md) | `controller.py` job delivery, cancel, retry slot, last-recording marks, preload, runtime lease and cache identity, `quit_dialog.py` |
+| [`docs/agents/persistence-and-history.md`](docs/agents/persistence-and-history.md) | `persistence.py`, any JSON store, `secret_store.py`, transcript history and its audio linkage, `unfinished_recordings*.py` |
 | [`docs/agents/local-models-and-downloads.md`](docs/agents/local-models-and-downloads.md) | local runtimes (faster-whisper, onnx-asr, Granite CTC, Nemotron, Node/ONNX), ONNX device policy, model inventory, download slot and progress, dependency versions |
 | [`docs/agents/remote-providers.md`](docs/agents/remote-providers.md) | `transcriber/*_provider.py`, remote model rosters, batch splitting, provider error text |
 | [`docs/agents/benchmark.md`](docs/agents/benchmark.md) | `local_benchmark.py`, `benchmark_*.py`, the Benchmark tab and windows, benchmark claims in docs |

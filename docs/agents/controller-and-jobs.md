@@ -261,6 +261,36 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   and no Python thread runs once finalization starts. Measured: a thread
   that never ends now exits the process after 15 s with its stack logged.
   The hang's own cause is still unknown; the next one names it in the log.
+  The tray's Quit reaches `app.quit` only after the quit window below is
+  done, so a deliberate wait is never cut short by this watchdog.
+- **The tray's Quit asks first when work is pending** (owner decision
+  2026-10-09; `quit_dialog.QuitCoordinator`). `quit_pending_work()`
+  (`PendingQuitWork`) counts an open recording, jobs still transcribing,
+  finished results held for their paste (window, recording, pace, a held
+  re-paste) and the not-inserted rows; aborting jobs do not count. Nothing
+  pending: quit as before. Otherwise a fixed-size tool window (480x278 at
+  96 dpi, every state) offers Wait and insert / Quit now, keep the
+  recordings / Don't quit. Wait calls `hold_for_quit()` on every 250 ms
+  poll: it stops the open recording (transcribed and inserted as usual) and
+  refuses new ones (`start_recording` sends the refusal to the tray while a
+  transcription owns the overlay). The coordinator quits once `can_wait` is
+  false, unless a paste or a transcription failed during the wait -- then
+  it says so and waits for Quit or Don't quit. Don't quit, Esc and the
+  title bar's close call `release_quit_hold()`. A tool window, because
+  `window_focus` never picks one of ours as a paste target: a wait's paste
+  into "the current window" reaches the user's window, not the dialog.
+  SIGINT/SIGTERM still quit at once.
+- **A quit keeps every recording that has no transcript**
+  (`_keep_unfinished_recordings`, from `shutdown` before the jobs are marked
+  aborting): the open capture, each job still transcribing (its request
+  audio), the Retry slot and `_older_failed_audio`, written to the
+  `UnfinishedRecordingStore` under the job's recording id ("" gets a fresh
+  uuid) and its `created_at` (Retry entries through
+  `_recorded_at_by_recording_id`, filled at job registration). Left out: a
+  finished result waiting for its paste (its text is in history) and an
+  aborting job (the user stopped it). One recording reached twice (a retry
+  of the slot's bytes) is written once. Why: the managed last recording is
+  one slot, so a quit with a queue lost every older recording.
 - **The WebGPU runner exits on `shutdown`** (`process.exit(0)` in
   `webgpu_asr_runner.mjs`): leaving the request loop did not end Node,
   because ONNX Runtime's WebGPU device keeps its event loop alive, so every

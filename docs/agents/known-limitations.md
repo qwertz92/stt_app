@@ -174,14 +174,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   (one clipboard). Only the last SendInput keystroke is tracked. Kept
   2026-10-03 (by design): a late reader of the previous paste reads whatever
   the one clipboard holds then, whichever window the next paste is aimed at.
-- **Paced pastes and waiting-insert rows end with the app**: shutdown drops
-  them (the texts stay in history), and a streaming finalize tail whose
-  insert fails gets an Insert offer but no row. Kept 2026-10-03 (owner
-  decision): whether quitting should deliver held pastes or persist rows is a
-  product choice (a row store is ~4 h). The tail row is not just a missing
-  call: rows keep stripped text and a tail's leading space is what separates
-  it from the streamed words, and F10 would have to order a tail row against
-  failed batch rows (~4 h once decided).
+- **Not-inserted rows are not carried into the next session** (2026-10-09):
+  the tray's Quit now asks first and can wait for held pastes
+  (`quit_dialog.py`), and it lists the rows as "in History", but a row
+  itself is gone after the quit; only its text in history remains. A quit
+  that skips the window (SIGINT/SIGTERM, Windows ending the session -- the
+  latter not checked) drops held pastes as before; unfinished recordings
+  are still kept by `shutdown`. A streaming finalize tail whose insert
+  fails gets an Insert offer but no row. Kept: a row store is ~4 h and the
+  owner chose the quit window (2026-10-09). The tail row is not just a
+  missing call: rows keep stripped text and a tail's leading space is what
+  separates it from the streamed words, and F10 would have to order a tail
+  row against failed batch rows (~4 h once decided).
+- **A crash keeps only the newest unfinished recording** (2026-10-09): the
+  quit writes every queued recording to the unfinished store, but a crash
+  or a killed process runs no `shutdown`, so only the managed last
+  recording survives, as before. A transcription the Import tab or the
+  startup notice runs when the app quits is not tracked as a job: the quit
+  window does not count it, and its file stays where it was (offered again
+  at the next start for the notice). Writing every recording to the store
+  at stop time would close the crash case; ~3 h, not asked for.
 - **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
   a NULL owner, so a clipboard manager can still close it under us; three
   reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
