@@ -874,15 +874,19 @@ def test_immediate_insert_blocked_during_streaming_recording(
     monkeypatch,
     tmp_path,
 ):
-    """A streaming recording never allows mid-recording background pastes."""
-    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+    """A streaming recording allows no mid-recording background paste into
+    another window. (One for its own window goes ahead of the stream's first
+    live insert, for the order: `test_controller_edit_and_order.py`.)"""
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
     controller._settings = replace(
         controller._settings, immediate_background_insert=True
     )
 
+    focus.captured = 111
     token_a = _record_and_stop(controller)
+    focus.captured = 987
     controller._settings = replace(controller._settings, mode="streaming")
     controller.start_recording()
     assert controller._streaming_recording is True
@@ -2316,11 +2320,15 @@ def test_streaming_cancel_flushes_deferred_background_insert(
     monkeypatch,
     tmp_path,
 ):
-    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+    controller, app, _overlay, inserter, focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
 
+    # Recorded for another window: a result for the stream's own window would
+    # go ahead of the stream at once instead of waiting for it.
+    focus.captured = 111
     token_a = _record_and_stop(controller)
+    focus.captured = 987
     controller._settings = replace(controller._settings, mode="streaming")
     controller.start_recording()
     controller._on_transcription_ready("transcript A", request_token=token_a)
@@ -2345,11 +2353,15 @@ def test_stream_runtime_failure_flushes_deferred_background_insert(
     monkeypatch,
     tmp_path,
 ):
-    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+    controller, app, overlay, inserter, focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
 
+    # Recorded for another window: a result for the stream's own window would
+    # go ahead of the stream at once instead of waiting for it.
+    focus.captured = 111
     token_a = _record_and_stop(controller)
+    focus.captured = 987
     controller._settings = replace(controller._settings, mode="streaming")
     controller.start_recording()
     controller._on_transcription_ready("transcript A", request_token=token_a)

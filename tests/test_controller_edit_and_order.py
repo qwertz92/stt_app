@@ -13,6 +13,7 @@ an earlier result for another window holds nothing back.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 
 from conftest import (
     FakeOverlay,
@@ -22,11 +23,13 @@ from conftest import (
     make_controller,
 )
 from test_controller_queue import (
+    PacedTextInserter,
     _make_queue_controller,
     _record_and_stop,
 )
 
 from stt_app.config import (
+    CLIPBOARD_RESTORE_DELAY_S,
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
@@ -260,3 +263,128 @@ def test_an_edit_of_words_already_in_the_window_keeps_the_tail(monkeypatch, tmp_
         assert controller._last_transcript == "Erster Teil zweiter teil"
     finally:
         controller.shutdown()
+
+
+# -- Order per target window --------------------------------------------------
+
+
+_PARTIALS = (
+    "eins zwei drei vier",
+    "eins zwei drei vier fuenf sechs",
+    "eins zwei drei vier fuenf sechs sieben acht",
+    "eins zwei drei vier fuenf sechs sieben acht neun zehn",
+)
+
+
+def _stream(controller, partials=_PARTIALS):
+    for partial in partials:
+        controller._on_transcription_partial(partial)
+
+
+def test_a_streaming_dictation_never_pastes_ahead_of_an_earlier_result(
+    monkeypatch, tmp_path
+):
+    """A batch dictation for the same window is still transcribing when a
+    streaming one starts. The streaming words wait; the earlier result is
+    pasted as soon as it is ready -- nothing of the stream is in the window
+    yet -- and the stream then catches up. Before, the live words went in
+    first and the earlier result landed after or inside them."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    assert controller._streaming_recording is True
+
+    _stream(controller, _PARTIALS[:2])
+    assert inserter.calls == [], "the stream pasted ahead of the earlier result"
+
+    controller._on_transcription_ready("dictation A.", request_token=token_a)
+    assert [call[0] for call in inserter.calls] == ["dictation A."]
+
+    _stream(controller, _PARTIALS[2:])
+    pasted = [call[0] for call in inserter.calls]
+    assert pasted[0] == "dictation A."
+    assert len(pasted) > 1 and "eins" in "".join(pasted[1:])
+    controller.shutdown()
+    _ = app
+
+
+def test_an_earlier_result_for_another_window_holds_no_stream_back(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    focus.captured = 111
+    token_a = _record_and_stop(controller)
+    focus.captured = 987
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+
+    _stream(controller)
+    assert inserter.calls, "the stream waited for another window's result"
+    controller._on_transcription_ready("dictation A.", request_token=token_a)
+    assert "dictation A." not in [call[0] for call in inserter.calls]
+    assert controller._deferred_background_results
+    controller.shutdown()
+    _ = app
+
+
+def test_the_first_live_insert_waits_for_the_earlier_pastes_restore_window(
+    monkeypatch, tmp_path
+):
+    """The earlier result's paste may still be read late from the clipboard;
+    a live insert right behind it would overwrite it."""
+    inserter = PacedTextInserter()
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller._on_transcription_ready("dictation A.", request_token=token_a)
+    assert [call[0] for call in inserter.calls] == ["dictation A."]
+
+    inserter.now += 0.5
+    _stream(controller)
+    assert [call[0] for call in inserter.calls] == ["dictation A."]
+
+    inserter.now += CLIPBOARD_RESTORE_DELAY_S
+    _stream(controller, (_PARTIALS[-1], f"{_PARTIALS[-1]} elf"))
+    assert len(inserter.calls) > 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stream_with_nothing_inserted_queues_behind_a_held_earlier_result(
+    monkeypatch, tmp_path
+):
+    """At the stream's stop the earlier result is held by the paste pace.
+    The streaming result -- none of it in the window yet -- used to paste at
+    once and so ahead of it; it now joins the paste queue behind it."""
+    inserter = PacedTextInserter()
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    # The user is in another window: nothing is pasted during the stream.
+    focus.current = 555
+    controller._on_transcription_ready("dictation A.", request_token=token_a)
+    focus.current = 987
+    controller.stop_recording()
+    token_s = controller._active_request_token
+    # A paste into some window just went out.
+    inserter.last_keystroke_at = inserter.now
+
+    controller._on_transcription_ready("dictation S.", request_token=token_s)
+    assert inserter.calls == []
+
+    inserter.now += CLIPBOARD_RESTORE_DELAY_S
+    controller._on_paste_pace_timeout()
+    assert [call[0] for call in inserter.calls] == ["dictation A. dictation S."]
+    controller.shutdown()
+    _ = app

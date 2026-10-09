@@ -777,6 +777,9 @@ class DictationController(QtCore.QObject):
         # True while another window holds focus during a live stream: the
         # session keeps recording, but nothing is pasted until it stops.
         self._stream_insertion_suspended = False
+        # True while live insertion waits for an earlier result for the same
+        # window (`_stream_live_insert_held`); kept to log each change once.
+        self._stream_insert_held = False
         # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
@@ -1864,6 +1867,7 @@ class DictationController(QtCore.QObject):
         # references afterward silently dropped those first audio blocks.
         self._stream_abort_requested = False
         self._stream_insertion_suspended = False
+        self._stream_insert_held = False
         self._stream_insert_failures = 0
         self._stream_text_state.reset()
         self._active_session_mode = "streaming"
@@ -2939,6 +2943,7 @@ class DictationController(QtCore.QObject):
             # in that join while this reset runs from a cancel.
         self._stream_abort_requested = False
         self._stream_insertion_suspended = False
+        self._stream_insert_held = False
         self._stream_insert_failures = 0
         if not keep_session_text:
             self._stream_text_state.reset()
@@ -5927,12 +5932,32 @@ class DictationController(QtCore.QObject):
             return
 
         if session_mode == "streaming":
-            # Exempt from the paste pace: the live inserts pace themselves
-            # through the locked prefix, and this tail is the rest of a
-            # dictation whose words are already in the document.
+            nothing_inserted = not self._stream_text_state.committed_text
             final_insertion, final_text = self._stream_text_state.finalize_append_only(
                 text
             )
+            if (
+                final_insertion
+                and nothing_inserted
+                and job is not None
+                and (
+                    self._earlier_result_waits_for(job.target_handle, before=job.token)
+                    or self._paste_pace_wait_s() > 0.0
+                )
+            ):
+                # None of this dictation is in the document, so it is a paste
+                # like a batch result's: behind an earlier result for its
+                # window that the pace or a recording still holds (owner's
+                # rule 2026-10-09, order per window; pasted at once it went
+                # in ahead of that result), and after the previous paste's
+                # restore window.
+                self._deliver_foreground_through_paste_queue(
+                    job, final_insertion, history_entry, shown=final_text
+                )
+                return
+            # Otherwise exempt from the paste pace: the live inserts pace
+            # themselves through the locked prefix, and this tail is the rest
+            # of a dictation whose words are already in the document.
             if final_insertion and not self._insert_text_at_target(
                 final_insertion,
                 restore_focus=True,
@@ -6004,6 +6029,8 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob,
         text: str,
         history_entry: TranscriptHistoryEntry | None,
+        *,
+        shown: str | None = None,
     ) -> None:
         """Show a foreground result now and paste it with the paste queue.
 
@@ -6019,6 +6046,10 @@ class DictationController(QtCore.QObject):
         `keep_transcript_in_clipboard` is not applied separately here: the
         paste itself skips the restore then, so the clipboard ends up with
         the text that was pasted, the joined one when others went with it.
+
+        A streaming result none of which was inserted live comes here too;
+        ``shown`` is its finalized transcript, painted instead of the
+        insertion text.
         """
         job.history_entry = history_entry
         job.insertion_deferred = True
@@ -6027,7 +6058,7 @@ class DictationController(QtCore.QObject):
         job.paste_paced = True
         self._jobs[job.token] = job
         self._deferred_background_results.append((job, text))
-        self._overlay.set_state("Done", text)
+        self._overlay.set_state("Done", text if shown is None else shown)
         self._reveal_overlay_result(is_error=False)
         self._mark_last_recording_completed(job, text)
         self._last_transcribe_settings = None
@@ -6240,9 +6271,11 @@ class DictationController(QtCore.QObject):
     ) -> bool:
         """Whether a finished queued result may paste while a capture runs.
 
-        Requires ``immediate_background_insert``. A streaming recording never
-        allows it: live partial inserts already write at the caret and a
-        focus change suspends them. A batch recording allows it — the
+        During a streaming recording only an earlier result for the stream's
+        own window, ahead of the stream's first live insert
+        (`_stream_lets_earlier_result_go_first`); otherwise live inserts
+        write at the caret and a focus change suspends them. During a batch
+        recording it requires ``immediate_background_insert``, and then the
         microphone does not care about a paste, the new recording's own
         target was already snapshotted at its start, and focus is restored to
         the finished job's window like in any other delivery. The historical
@@ -6251,9 +6284,92 @@ class DictationController(QtCore.QObject):
         """
         if job is None:
             return False
-        if not bool(getattr(self._settings, "immediate_background_insert", False)):
-            return False
-        return not self._streaming_recording
+        if self._streaming_recording:
+            return self._stream_lets_earlier_result_go_first(job)
+        return bool(getattr(self._settings, "immediate_background_insert", False))
+
+    def _stream_lets_earlier_result_go_first(self, job: _TranscriptionJob) -> bool:
+        """Whether an earlier result may paste during a streaming capture.
+
+        Only one for the stream's own window, and only while nothing of the
+        stream is in the document (`committed_text` empty) and its window is
+        in front: the result then lands where the stream will continue, in
+        recording order (owner's rule 2026-10-09), and no focus is taken
+        from a window the user switched to. Every other result waits for the
+        stream to end, as before. The stream holds its own live inserts
+        meanwhile (`_stream_live_insert_held`), independent of
+        ``immediate_background_insert``.
+        """
+        return (
+            not self._stream_text_state.committed_text
+            and not self._stream_abort_requested
+            and self._same_order_window(job.target_handle, self._target_window_handle)
+            and self._is_stream_target_active()
+        )
+
+    def _same_order_window(self, handle: int | None, other: int | None) -> bool:
+        """Whether two results go to one window, as far as their order goes.
+
+        By the top-level window, not the coalescing key's focus and caret: a
+        second text field of the same window is the same window to the
+        user. With `current_window` insertion every result goes to whatever
+        has the focus when it is pasted, so all of them count as one.
+        """
+        return self._insert_target_is_current_window() or handle == other
+
+    def _earlier_result_waits_for(
+        self, handle: int | None, *, before: int | None = None
+    ) -> bool:
+        """Whether a result for window ``handle`` is still to be pasted.
+
+        Jobs older than token ``before`` -- every job during a capture,
+        whose own job does not exist until it stops -- that will paste
+        their result: an insert delivery that was not stopped, and not a
+        streaming finalize (its words went in live). Transcribing, or done
+        and held in the paste queue: both are still to come. One that
+        fails, is stopped or is delivered to history leaves `_jobs` or
+        stops matching, and holds nothing back any more.
+        """
+        return any(
+            (before is None or job.token < before)
+            and not job.aborting
+            and job.mode != "streaming"
+            and job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
+            and self._same_order_window(job.target_handle, handle)
+            for job in self._jobs.values()
+        )
+
+    def _stream_live_insert_held(self) -> bool:
+        """Whether the streaming dictation's next live insert must wait.
+
+        Order per target window (owner's rule 2026-10-09): a batch result
+        recorded before this dictation and still to be pasted into its window
+        goes first, so the live words wait for it; when it is already done
+        it is given the chance to go now
+        (`_stream_lets_earlier_result_go_first`). An earlier result for
+        another window holds nothing.
+        The first live insert also waits for the previous paste's restore
+        window (`_paste_pace_wait_s`): right behind the earlier result's
+        paste it would overwrite a clipboard the window may read late. The
+        words are not lost: `live_text` stays current and the next allowed
+        insert, or the finalize, carries them.
+        """
+        handle = self._target_window_handle
+        if self._deferred_background_results and self._earlier_result_waits_for(handle):
+            self._flush_deferred_background_results()
+        held = self._earlier_result_waits_for(handle) or (
+            not self._stream_text_state.committed_text
+            and self._paste_pace_wait_s() > 0.0
+        )
+        if held != self._stream_insert_held:
+            self._stream_insert_held = held
+            self._logger.info(
+                "streaming_insertion_%s",
+                "held: an earlier result or its paste comes first"
+                if held
+                else "released",
+            )
+        return held
 
     def _insert_target_is_current_window(self) -> bool:
         return (
@@ -7093,7 +7209,11 @@ class DictationController(QtCore.QObject):
             # arrives between a window switch and the next tick must not
             # paste into the new window, so the same check runs here first.
             self._on_stream_focus_poll()
-        if STREAMING_LIVE_INSERT_ENABLED and not self._stream_insertion_suspended:
+        if (
+            STREAMING_LIVE_INSERT_ENABLED
+            and not self._stream_insertion_suspended
+            and not self._stream_live_insert_held()
+        ):
             previous_committed = self._stream_text_state.committed_text
             append = self._stream_text_state.apply_partial_append_only(text)
             display_text = append.display_text
@@ -7146,6 +7266,7 @@ class DictationController(QtCore.QObject):
                     )
                     return
         else:
+            # Suspended for another window, or held for an earlier result.
             # Keep the live text current even though nothing is pasted.
             # `_current_streaming_partial_text` prefers `live_text`, so
             # leaving it stale made an abort or a dropped socket save the
