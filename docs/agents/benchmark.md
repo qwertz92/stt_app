@@ -288,11 +288,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   the dialog's minimum.
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
-  height decides how short a dialog still shows the whole tab, since the
-  page is not a scroll area: explicit 210/400 px box minimums, 110 px for
+  height decides how short a dialog still shows the whole tab without
+  scrolling: explicit 210/400 px box minimums, 110 px for
   the results table and 220 px for the details asked for 675 px of page
   (806 px of dialog), and below that the Results action row was cut off.
   Now no box minimum, results table = header + two rows, details 120 px:
-  542 px of page. `tests/test_benchmark_tab_layout.py` pins the budget; a
-  smaller dialog still clips (proposal: a scroll fallback, which touches
-  the dialog's sizing rules).
+  542 px of page, 502 after the two action rows became one (2026-10-09).
+  `tests/test_benchmark_tab_layout.py` pins the budget.
+- **Below that height the tab scrolls; it does not squeeze further**
+  (2026-10-09). The page is a `QScrollArea` from `_create_scroll_tab`, like
+  the seven settings tabs, with the horizontal bar `AlwaysOff` (the dialog's
+  minimum width covers the page, so a bar could only mean clipping, which the
+  width pin already prevents). Measured at the dialog's minimum width: the content
+  needs 502 / 526 / 549 px at 9 / 11.25 / 13.5 pt, so the bar appears below a
+  dialog height of 633 / 665 / 696 px (chrome 131 / 139 / 147 px); at 680 px
+  it shows at 13.5 pt only (16 px of range) and not at 9 or 11.25 pt. Below
+  the threshold History keeps 90 px, the results table its header and two
+  rows and the details 120 px, and the action row is reachable by scrolling
+  (the dialog's own 400 px minimum height leaves a 233 / 265 / 296 px range).
+  The splitter still squeezes the boxes down to those minimums before the bar
+  appears, so a dialog above the threshold looks as it always did. The
+  dialog minimum width stays the tab bar's: 801 / 912 / 1026 px.

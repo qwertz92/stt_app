@@ -36,6 +36,7 @@ def test_the_benchmark_tab_fits_a_dialog_on_a_small_screen():
     view overlapped it by 9 px."""
     dialog, app = _shown_benchmark_tab()
     page = dialog.tabs.widget(dialog._benchmark_tab_index)
+    content_height = page.widget().minimumSizeHint().height()
     chrome = dialog.height() - page.height()
     point_size = app.font().pointSizeF()
     if point_size != 9.0:
@@ -43,22 +44,18 @@ def test_the_benchmark_tab_fits_a_dialog_on_a_small_screen():
         pytest.skip(
             f"the {_SMALL_SCREEN_DIALOG_HEIGHT} px budget is a 9 pt number; this "
             f"session runs at {point_size} pt and the page needs "
-            f"{page.minimumSizeHint().height()} px plus {chrome} px around it"
+            f"{content_height} px plus {chrome} px around it"
         )
 
-    assert page.minimumSizeHint().height() + chrome <= _SMALL_SCREEN_DIALOG_HEIGHT
+    assert content_height + chrome <= _SMALL_SCREEN_DIALOG_HEIGHT
 
     dialog.resize(dialog.width(), _SMALL_SCREEN_DIALOG_HEIGHT)
     QtTest.QTest.qWait(50)
     app.processEvents()
 
-    for button in (
-        dialog.clear_benchmark_results_button,
-        dialog.open_benchmark_results_window_button,
-        dialog.export_benchmark_results_button,
-        dialog.delete_benchmark_history_button,
-        dialog.clear_benchmark_history_button,
-    ):
+    # Fits without scrolling: the page needs less than the dialog gives it.
+    assert page.verticalScrollBar().isVisible() is False
+    for button in _action_buttons(dialog):
         assert _bottom_in(page, button) <= page.height(), button.text()
     details_bottom = _bottom_in(page, dialog.benchmark_summary_text)
     actions_top = dialog.clear_benchmark_results_button.mapTo(page, QtCore.QPoint()).y()
@@ -202,3 +199,78 @@ def test_the_action_row_sits_under_the_splitter_not_inside_a_box():
             box = box.parentWidget()
         assert box.findChildren(QtWidgets.QPushButton) == []
     dialog.hide()
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_a_short_dialog_scrolls_the_benchmark_tab_instead_of_squeezing_it(
+    point_size: float,
+):
+    """The tab squeezed its tables down to their minimums and then clipped the
+    action row for any dialog shorter than the page's minimum height (673 px at
+    9 pt). It is a scroll area now: from that height down the page keeps the
+    minimums, the vertical bar appears and reaches the row, and there is never
+    a horizontal bar, at the narrowest dialog too. Above it nothing scrolls."""
+    with _AppFont(point_size) as app:
+        dialog, _ = _dialog()
+        dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+        dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+        dialog.show()
+        QtTest.QTest.qWait(50)
+        app.processEvents()
+        page = dialog.tabs.widget(dialog._benchmark_tab_index)
+        assert isinstance(page, QtWidgets.QScrollArea)
+        assert page.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAlwaysOff
+        # With every tab a scroll area the minimum width must still be the tab
+        # bar's: the pane frame was once read as 61 px (the bar's hint minus
+        # the stack's) instead of the 6 it is, and the dialog got 55 px wider.
+        tabs = dialog.tabs
+        frame = tabs.width() - tabs.currentWidget().parentWidget().width()
+        margins = dialog.layout().contentsMargins()
+        assert dialog.minimumWidth() == (
+            tabs.tabBar().sizeHint().width() + frame + margins.left() + margins.right()
+        )
+        content = page.widget()
+        needed = content.minimumSizeHint().height()
+        chrome = dialog.height() - page.viewport().height()
+        results = dialog.benchmark_results_table
+        row = dialog.open_benchmark_results_window_button
+
+        def settle(height: int) -> None:
+            dialog.resize(dialog.minimumWidth(), height)
+            QtTest.QTest.qWait(50)
+            app.processEvents()
+
+        settle(needed + chrome + 40)
+        roomy = page.verticalScrollBar().isVisible()
+        settle(needed + chrome - 40)
+        short_heights = (
+            dialog.benchmark_history_list.height(),
+            results.height(),
+            dialog.benchmark_summary_text.height(),
+        )
+        short_bar = page.verticalScrollBar().isVisible()
+        settle(dialog.minimumHeight())
+        shortest = page.verticalScrollBar().maximum()
+        horizontal = (
+            page.horizontalScrollBar().isVisible(),
+            page.horizontalScrollBar().maximum(),
+        )
+        page.verticalScrollBar().setValue(page.verticalScrollBar().maximum())
+        app.processEvents()
+        row_bottom = row.mapTo(page.viewport(), QtCore.QPoint(0, row.height())).y()
+        row_right = max(
+            button.mapTo(page.viewport(), QtCore.QPoint(button.width(), 0)).x()
+            for button in _action_buttons(dialog)
+        )
+        viewport = page.viewport().size()
+        dialog.hide()
+
+    assert roomy is False
+    assert short_bar is True
+    assert short_heights[0] >= dialog.benchmark_history_list.minimumHeight()
+    assert short_heights[2] >= 120
+    assert shortest > 0
+    assert horizontal == (False, 0)
+    assert row_bottom <= viewport.height()
+    assert row_right <= viewport.width()

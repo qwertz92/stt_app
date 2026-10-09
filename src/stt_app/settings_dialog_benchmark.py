@@ -1011,7 +1011,12 @@ class _BenchmarkMixin:
         run options, run/cancel controls) lives only in that pop-out window,
         built by ``_build_benchmark_window``.
         """
-        tab = QtWidgets.QWidget()
+        # A scroll area like every other tab, so a dialog shorter than the
+        # page's minimum height scrolls instead of clipping the action row
+        # (the splitter squeezes the tables down to their minimums first). No
+        # horizontal bar: the dialog's minimum width already covers the page.
+        scroll, tab = self._create_scroll_tab()
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         layout = QtWidgets.QVBoxLayout(tab)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
@@ -1058,7 +1063,7 @@ class _BenchmarkMixin:
         layout.addWidget(self.benchmark_main_splitter, 1)
         layout.addLayout(self._build_benchmark_action_row())
 
-        self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+        self._benchmark_tab_index = self.tabs.addTab(scroll, "Benchmark")
         # True while Results shows a finished run whose history write failed:
         # Results then holds its only copy, and a selection asks first.
         self._benchmark_shown_entry_unsaved = False

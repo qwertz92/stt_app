@@ -2439,10 +2439,12 @@ def test_benchmark_tab_hosts_history_and_results_directly():
     assert note_bottom <= list_top
     assert list_bottom <= actions_top
 
-    # The Benchmark tab itself is a plain widget (not a scroll area) so the
-    # splitter manages available space directly.
+    # The Benchmark tab is a scroll area that never scrolls sideways: the
+    # splitter manages the space until the page's minimum height, and a
+    # shorter dialog scrolls it.
     tab_widget = dialog.tabs.widget(dialog._benchmark_tab_index)
-    assert not isinstance(tab_widget, QtWidgets.QScrollArea)
+    assert isinstance(tab_widget, QtWidgets.QScrollArea)
+    assert tab_widget.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAlwaysOff
 
     # The header row exposes a button to open the "Run Benchmark" window and
     # a status label that is visible without opening that window.
@@ -4063,15 +4065,16 @@ def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
 
     for index in range(dialog.tabs.count()):
         widget = dialog.tabs.widget(index)
-        if index == dialog._benchmark_tab_index:
-            # The Benchmark tab is a slim, non-scrolling launcher page; the
-            # full scrollable benchmark UI lives in the pop-out window.
-            assert not isinstance(widget, QtWidgets.QScrollArea)
-            continue
         assert isinstance(widget, QtWidgets.QScrollArea)
         assert widget.widgetResizable() is True
         assert widget.sizeAdjustPolicy() == QtWidgets.QAbstractScrollArea.AdjustIgnored
-        assert widget.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
+        # The Benchmark tab never scrolls sideways (the minimum width covers
+        # it); the others do when their content is wider than the dialog.
+        assert widget.horizontalScrollBarPolicy() == (
+            QtCore.Qt.ScrollBarAlwaysOff
+            if index == dialog._benchmark_tab_index
+            else QtCore.Qt.ScrollBarAsNeeded
+        )
 
     assert dialog.tabs.tabBar().usesScrollButtons() is True
     assert dialog.tabs.tabBar().elideMode() == QtCore.Qt.ElideRight

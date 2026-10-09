@@ -753,7 +753,13 @@ def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     QtTest.QTest.qWait(50)
     app.processEvents()
-    needed = dialog.minimumSizeHint().width()
+    # The page is a scroll area, whose own hint is a fixed 72 px: its need is
+    # its content's width plus the vertical bar it may show.
+    page = dialog.tabs.widget(dialog._benchmark_tab_index)
+    needed = (
+        page.widget().minimumSizeHint().width()
+        + page.verticalScrollBar().sizeHint().width()
+    )
 
     point_size = app.font().pointSizeF()
     if point_size != 9.0:
