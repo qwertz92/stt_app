@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-09 (a queued recording keeps the language it was recorded in)
+
+- **Owner's wish: switch the language between recordings while a queue waits
+  (recording 1 English, recording 2 German) and have each transcribed in its
+  own.** Checked before changing anything, because the code already looked
+  right: every batch and streaming job is registered with
+  `replace(settings)` taken when the recording *starts*, the worker receives
+  that snapshot, and `_get_or_create_transcriber` applies its `language_mode`
+  to the leased runtime (`language_mode` is not in the cache key, and the
+  Cohere Node runner takes `language` per request). A scenario test with real
+  workers run in queue order confirmed it: both jobs saw their own language
+  on one cached runtime, and a switch during a running job changed nothing
+  for it and reloaded nothing (Cohere with Keep ONNX model loaded off builds
+  a runtime per job regardless of language: 2 runtimes, languages en, de).
+  Negative control: letting the worker read `self._settings` instead of its
+  snapshot fails 4 of the 6 new tests.
+- **So no behaviour change was needed; the tests pin it, and one thing was
+  added: each queue row shows its recording's language** (`EN`, `DE`,
+  `Auto`, right after the time; one elided line, no size change). Without it
+  the owner could not tell which queued row was which language.
+- **Not changed on purpose:** Retry and re-transcription use what is selected
+  now (the way to fix a wrong language); paste mode, insert target, clipboard
+  keeping and the completion tone are read at delivery. There is no tray
+  language menu; the language is changed in the overlay or the Settings
+  dialog. Detail: `docs/agents/controller-and-jobs.md`.
+
 ## 2026-10-09 (overlay: the Pinned/Floating blink and a floating overlay that stayed in front)
 
 - **Toggling Pinned/Floating recreated the native window.** `_apply_window_flags`

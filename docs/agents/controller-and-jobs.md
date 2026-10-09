@@ -228,6 +228,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   applies it when a job acquires the runtime. Restricting providers override
   `_normalize_language_mode`. `controller.set_language_mode` only persists
   and syncs UI. Guard: `tests/test_factory.py`.
+  - **A queued recording keeps the settings it was recorded under**
+    (owner wish and verified state, 2026-10-09). The snapshot is taken when the
+    recording starts (`_start_batch_recording(replace(self._settings))` ->
+    `_active_batch_settings`; streaming `_active_stream_settings`), is the
+    `_TranscriptionJob.settings` and the `settings` argument of the worker, and
+    covers language, engine, model and custom vocabulary alike. The worker takes
+    the language from that snapshot when it acquires the runtime
+    (`_get_or_create_transcriber`); acquisition is serialized by the runtime
+    lease, so recording 1 in English and recording 2 in German run with their
+    own language one after the other on one cached runtime. A switch while a job
+    runs changes nothing for it, and it neither cancels nor reloads anything
+    (the Cohere Node runner takes `language` per request, `local_webgpu_asr.py`
+    `_language_arg`; it is a fresh runtime per job unless Keep ONNX model loaded
+    is on, whatever the language). Delivery-time preferences -- paste mode,
+    insert target, clipboard keeping, completion tone -- stay the current ones on
+    purpose: they describe where text goes now, not how audio was made.
+    Tests: `test_each_queued_recording_is_transcribed_in_the_language_it_was_recorded_in`
+    and `test_a_language_switch_never_changes_or_reloads_queued_work`.
+  - **Retry and re-transcription use what is selected now**, unchanged:
+    `retry_last_transcription` resubmits the kept bytes under
+    `replace(self._settings)` ("Retrying transcription with current settings...")
+    and the History retranscribe / Import take their settings at the click. That
+    is how a wrong language is fixed (switch, then Retry); only a first attempt
+    is pinned to its recording. Pinned by `test_retry_uses_the_language_selected_now`.
+  - Model, engine or vocabulary changed between two queued recordings do reload
+    the cached runtime when the second job acquires it (their identity differs);
+    only language never does.
 - **A save reloads the model only when the model changed**:
   `_transcriber_identity(settings)` describes what `create_transcriber`
   bakes in; reset only when it differs, preload
