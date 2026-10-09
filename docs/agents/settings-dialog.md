@@ -82,9 +82,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     both status labels. Completed and partial canceled runs save to History
     automatically; Export only shares. faster-whisper results store
     CTranslate2's resolved device, not `auto`.
-- **The minimum width is the widest of tab bar, every settings page and the
-  Benchmark page, measured on the tab widget, never on the dialog, never past
-  the screen.** `_pin_content_minimum_width` runs at construction and 0 ms
+- **The minimum width is the widest of tab bar and every page (the Benchmark
+  page included, a scroll area like the rest since 2026-10-09), measured on the
+  tab widget, never on the dialog, never past the screen.** `_pin_content_minimum_width` runs at construction and 0 ms
   after every show and tab switch, only raising the minimum: the Benchmark
   page reported 555 px until painted and 585 after, less since its History
   row lost "Load Selected" on 2026-10-03 (layout caches refresh only
@@ -97,6 +97,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     at 13.5; 2026-10-03, with the longer "Providers" title: 801 / 912 / 1026
     (still the tab bar; the Providers page needs 583 / 674 / 757 since the
   fields below the key column were narrowed to it).
+  - The tab widget's pane frame is asked of the style
+    (`sizeFromContents(CT_TabWidget)`: 6 px), not derived as the tab widget's
+    minimum minus the page stack's. That difference was 6 only while a
+    non-scroll page (the Benchmark page) made the stack wide; once every page
+    scrolled it read 61 px (the scrolling bar's 133 px minus the stack's 72)
+    and pinned the dialog 55 px too wide.
   - It reads `self.tabs.minimumSizeHint()` plus root margins, never the
     dialog hint: a long failed-save message on the root status line once
     pinned 3077 px for the app's life (test: 400-character text on the status

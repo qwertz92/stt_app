@@ -58,6 +58,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   - Open in Window and pop-out Export stay enabled during a run (they never
     touch `_current_benchmark_cases`); Export calls the dialog's one flow.
   - The action row reads the selection, not `currentRow()`.
+  - **The tab has one action row** (2026-10-09, `_build_benchmark_action_row`,
+    under the splitter, in no box): Open in Window, Export..., Clear Loaded,
+    then History's Delete Selected and Clear History. Before, History and
+    Results each had a row with their own Open in Window and Export for the
+    same run. `_benchmark_subject_entry` is what Open in Window and Export
+    act on: the shown run, else the selected row. They differ in three cases:
+    a run whose history write failed (shown, in no row; Export is the only
+    way to keep it), a Ctrl+click deselect (shown, nothing selected), and a
+    running benchmark (nothing stored is shown, so Open in Window takes the
+    selected row while Export stays disabled). `_update_benchmark_action_row`
+    is the only writer of the five buttons' states. The captions are fixed
+    (no state swaps one), so no button changes width.
   - A delete or clear that finds nothing refreshes list and action row (the
     re-read may have quarantined a damaged file).
 - **A minimise of the settings dialog is not a dismissal**: its hideEvent,
@@ -118,6 +130,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
     two-line status (2026-10-03): inside it, "Show Run Options" pushed Run
     295 px down out of the 812 px viewport, a 13th model moved it 20 px,
     and with twelve models it needed a scroll at the default size.
+  - **"Show Results" sits at the footer's far end** (2026-10-09), disabled
+    until a run finished with results and again from the next start or while
+    one runs (`_last_finished_benchmark_entry`, set in `_on_benchmark_finished`
+    beside `_current_benchmark_entry`, cleared in `_run_local_benchmark`). The
+    finish already shows the run and selects its row, but the Run window is an
+    owned top-level and Windows keeps it above its owner, so it can cover the
+    result; and the user may have changed tab or row since. The click
+    (`_show_last_benchmark_results`) raises the dialog on the Benchmark tab,
+    selects that run's row if another run is shown (no unsaved-result question
+    can arise: an unsaved run is only ever the last finished one, which is the
+    one shown) and hides this window ("Run Benchmark..." reopens it with its
+    state). A run that left History says "That run is no longer available."
+    and disables the button. The caption is fixed, so the footer never moves
+    (a test at the 680 px minimum window and 9 / 11.25 / 13.5 pt).
   - The audio line is derived from the field on every edit
     (`_update_benchmark_audio_status`: none / "File not found" / "Selected"),
     read through `_benchmark_audio_path`, which strips the double quotes of
@@ -276,13 +302,48 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   in Benchmark History...". The History row lost a button, so the page's
   minimum width fell (dialog hint 611 -> 508 px); the tab bar still sets
   the dialog's minimum.
+- **The History list's Models cell counts the models the run measured, and
+  no column changes width when a row arrives** (2026-10-09). The column
+  already existed and joined `options.model_names` whole (1006 px of text for
+  twelve models in a 189 px cell, no count). `_benchmark_models_label` now
+  writes "12 models: tiny, base, ..." from the distinct models of the stored
+  cases in run order (a canceled run does not claim the models it never
+  reached; no stored case falls back to the selected names, none is "-"); the
+  cell is elided on the right by the table, so the count stays in view, and
+  its tooltip lists one model per line. Widths: Recorded, Runs, Best RTF and
+  Status were `ResizeToContents`, so the first "Completed with errors" took
+  59 px (9 pt) from Audio and Models and the next date 20 px more.
+  `_pin_benchmark_history_columns` (called from
+  `_reserve_feedback_button_widths`, after polish, because the header padding
+  comes from the stylesheet) makes each `Fixed` at the larger of its header
+  and its widest possible value: the widest digit in a date, four digits, a
+  three-digit RTF, the longest of `BENCHMARK_STATUS_LABELS`. Audio is
+  `Interactive` at 24 average characters, Models the one `Stretch` column.
+  The vertical bar is `AlwaysOn`: appearing with the row that outgrew the
+  list it took 12 px (9 pt) from Models. Measured at the minimum dialog
+  width, columns 94 / 150 / Models / 48 / 70 / 124 px at 9 pt, unchanged from
+  the empty list through five different runs and twenty rows, at 9, 11.25 and
+  13.5 pt.
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
-  height decides how short a dialog still shows the whole tab, since the
-  page is not a scroll area: explicit 210/400 px box minimums, 110 px for
+  height decides how short a dialog still shows the whole tab without
+  scrolling: explicit 210/400 px box minimums, 110 px for
   the results table and 220 px for the details asked for 675 px of page
   (806 px of dialog), and below that the Results action row was cut off.
   Now no box minimum, results table = header + two rows, details 120 px:
-  542 px of page. `tests/test_benchmark_tab_layout.py` pins the budget; a
-  smaller dialog still clips (proposal: a scroll fallback, which touches
-  the dialog's sizing rules).
+  542 px of page, 502 after the two action rows became one (2026-10-09).
+  `tests/test_benchmark_tab_layout.py` pins the budget.
+- **Below that height the tab scrolls; it does not squeeze further**
+  (2026-10-09). The page is a `QScrollArea` from `_create_scroll_tab`, like
+  the seven settings tabs, with the horizontal bar `AlwaysOff` (the dialog's
+  minimum width covers the page, so a bar could only mean clipping, which the
+  width pin already prevents). Measured at the dialog's minimum width: the content
+  needs 502 / 526 / 549 px at 9 / 11.25 / 13.5 pt, so the bar appears below a
+  dialog height of 633 / 665 / 696 px (chrome 131 / 139 / 147 px); at 680 px
+  it shows at 13.5 pt only (16 px of range) and not at 9 or 11.25 pt. Below
+  the threshold History keeps 90 px, the results table its header and two
+  rows and the details 120 px, and the action row is reachable by scrolling
+  (the dialog's own 400 px minimum height leaves a 233 / 265 / 296 px range).
+  The splitter still squeezes the boxes down to those minimums before the bar
+  appears, so a dialog above the threshold looks as it always did. The
+  dialog minimum width stays the tab bar's: 801 / 912 / 1026 px.

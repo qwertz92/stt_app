@@ -43,6 +43,7 @@ from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
     _THREAD_START_ERRORS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
+    BENCHMARK_STATUS_LABELS,
     ElidingLabel,
     _benchmark_status_text,
     _emit_background_signal,
@@ -158,6 +159,21 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
         border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
     }}
 """
+
+# The History list's columns. Recorded, Runs, Best RTF and Status never change
+# width (`_pin_benchmark_history_columns`); Audio keeps a width of its own and
+# Models takes whatever is left, which is where the long text is.
+_BENCHMARK_HISTORY_COLUMNS = (
+    "Recorded",
+    "Audio",
+    "Models",
+    "Runs",
+    "Best RTF",
+    "Status",
+)
+_BENCHMARK_HISTORY_AUDIO_COLUMN = 1
+_BENCHMARK_HISTORY_MODELS_COLUMN = 2
+_BENCHMARK_HISTORY_AUDIO_CHARACTERS = 24
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
 _BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX = 120
@@ -327,6 +343,23 @@ def _benchmark_plan_sequence(
     return tuple(
         (case.model, case.device_target, case.display_compute_type) for case in planned
     )
+
+
+def _benchmark_models_label(entry: BenchmarkHistoryEntry) -> tuple[str, str]:
+    """The History row's Models cell and its tooltip.
+
+    The models the run measured, once each in run order ("12 models: tiny,
+    base, ..."), so a canceled run does not claim the models it never reached;
+    a run with no stored case falls back to the models it was started with.
+    The cell shows the whole sentence and the table elides it at the column's
+    width, which keeps the count in view; the tooltip lists one model per line.
+    """
+    names = list(dict.fromkeys(case.model for case in entry.cases if case.model))
+    names = names or [name for name in entry.options.model_names if name]
+    if not names:
+        return "-", "-"
+    count = f"{len(names)} model{'' if len(names) == 1 else 's'}"
+    return f"{count}: {', '.join(names)}", f"{count}:\n" + "\n".join(names)
 
 
 def _benchmark_created_label(value: str) -> str:
@@ -1011,7 +1044,12 @@ class _BenchmarkMixin:
         run options, run/cancel controls) lives only in that pop-out window,
         built by ``_build_benchmark_window``.
         """
-        tab = QtWidgets.QWidget()
+        # A scroll area like every other tab, so a dialog shorter than the
+        # page's minimum height scrolls instead of clipping the action row
+        # (the splitter squeezes the tables down to their minimums first). No
+        # horizontal bar: the dialog's minimum width already covers the page.
+        scroll, tab = self._create_scroll_tab()
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
         layout = QtWidgets.QVBoxLayout(tab)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
@@ -1056,12 +1094,68 @@ class _BenchmarkMixin:
         self.benchmark_main_splitter.addWidget(results_box)
         self.benchmark_main_splitter.setSizes([220, 420])
         layout.addWidget(self.benchmark_main_splitter, 1)
+        layout.addLayout(self._build_benchmark_action_row())
 
-        self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+        self._benchmark_tab_index = self.tabs.addTab(scroll, "Benchmark")
         # True while Results shows a finished run whose history write failed:
         # Results then holds its only copy, and a selection asks first.
         self._benchmark_shown_entry_unsaved = False
         self._build_benchmark_window()
+
+    def _build_benchmark_action_row(self) -> QtWidgets.QHBoxLayout:
+        """The one action row under History and Results.
+
+        On the left what acts on the run Results shows, on the right what acts
+        on History itself. It sits under the splitter, not inside either box,
+        so dragging the splitter never moves it and the two boxes need no row
+        of their own (before, each had one, and "Open in Window" was in both).
+        """
+        actions = QtWidgets.QHBoxLayout()
+        self._configure_button_row(actions)
+        self.open_benchmark_results_window_button = QtWidgets.QPushButton(
+            "Open in Window"
+        )
+        self.open_benchmark_results_window_button.setEnabled(False)
+        self.open_benchmark_results_window_button.setToolTip(
+            "Open the run shown in Results in its own window, so several runs "
+            "can be compared side by side. While a benchmark runs, this opens "
+            "the selected History row instead."
+        )
+        self.open_benchmark_results_window_button.clicked.connect(
+            self._open_benchmark_subject_window
+        )
+        self.export_benchmark_results_button = QtWidgets.QPushButton("Export...")
+        self.export_benchmark_results_button.setEnabled(False)
+        self.export_benchmark_results_button.setToolTip(
+            "Export the run shown in Results to CSV, XLSX or Markdown. Runs "
+            "are already saved in Benchmark History."
+        )
+        self.export_benchmark_results_button.clicked.connect(
+            self._export_benchmark_subject
+        )
+        self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Loaded")
+        self.clear_benchmark_results_button.setToolTip(
+            "Clear the displayed result without deleting its saved history entry."
+        )
+        self.clear_benchmark_results_button.clicked.connect(
+            self._clear_loaded_benchmark_result
+        )
+        self.delete_benchmark_history_button = QtWidgets.QPushButton("Delete Selected")
+        self.delete_benchmark_history_button.setEnabled(False)
+        self.delete_benchmark_history_button.clicked.connect(
+            self._delete_selected_benchmark_history
+        )
+        self.clear_benchmark_history_button = QtWidgets.QPushButton("Clear History")
+        self.clear_benchmark_history_button.clicked.connect(
+            self._clear_benchmark_history
+        )
+        actions.addWidget(self.open_benchmark_results_window_button)
+        actions.addWidget(self.export_benchmark_results_button)
+        actions.addWidget(self.clear_benchmark_results_button)
+        actions.addStretch(1)
+        actions.addWidget(self.delete_benchmark_history_button)
+        actions.addWidget(self.clear_benchmark_history_button)
+        return actions
 
     def _build_benchmark_history_box(self) -> QtWidgets.QGroupBox:
         history_box = QtWidgets.QGroupBox("Benchmark History")
@@ -1078,9 +1172,11 @@ class _BenchmarkMixin:
         self._style_note_label(self.benchmark_history_note_label)
         history_layout.addWidget(self.benchmark_history_note_label)
 
-        self.benchmark_history_list = _BenchmarkHistoryTable(0, 6)
+        self.benchmark_history_list = _BenchmarkHistoryTable(
+            0, len(_BENCHMARK_HISTORY_COLUMNS)
+        )
         self.benchmark_history_list.setHorizontalHeaderLabels(
-            ["Recorded", "Audio", "Models", "Runs", "Best RTF", "Status"]
+            list(_BENCHMARK_HISTORY_COLUMNS)
         )
         self.benchmark_history_list.setMinimumHeight(90)
         # Tab leaves the table: with cell-by-cell navigation a keyboard user
@@ -1106,14 +1202,18 @@ class _BenchmarkMixin:
         self.benchmark_history_list.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
+        # The vertical bar is always there (disabled while everything fits):
+        # it appeared with the row that outgrew the list and took 12 px (9 pt)
+        # from the Models column, the one width a new row could still change.
+        self.benchmark_history_list.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOn
+        )
+        # Widths come from `_pin_benchmark_history_columns`, which needs the
+        # polished table; Models is the one stretching column.
         history_header = self.benchmark_history_list.horizontalHeader()
-        history_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        history_header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        history_header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        for column in (3, 4, 5):
-            history_header.setSectionResizeMode(
-                column, QtWidgets.QHeaderView.ResizeToContents
-            )
+        history_header.setSectionResizeMode(
+            _BENCHMARK_HISTORY_MODELS_COLUMN, QtWidgets.QHeaderView.Stretch
+        )
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._on_benchmark_history_selection_changed
         )
@@ -1122,41 +1222,6 @@ class _BenchmarkMixin:
         )
         history_layout.addWidget(self.benchmark_history_list, 1)
 
-        benchmark_history_actions = QtWidgets.QHBoxLayout()
-        self._configure_button_row(benchmark_history_actions)
-        self.export_benchmark_history_button = QtWidgets.QPushButton(
-            "Export Selected..."
-        )
-        self.export_benchmark_history_button.setEnabled(False)
-        self.export_benchmark_history_button.clicked.connect(
-            self._export_selected_benchmark_history
-        )
-        self.open_benchmark_history_window_button = QtWidgets.QPushButton(
-            "Open in Window"
-        )
-        self.open_benchmark_history_window_button.setEnabled(False)
-        self.open_benchmark_history_window_button.setToolTip(
-            "Open the selected run in its own window, so several runs can be "
-            "compared side by side."
-        )
-        self.open_benchmark_history_window_button.clicked.connect(
-            self._open_selected_benchmark_history_window
-        )
-        self.delete_benchmark_history_button = QtWidgets.QPushButton("Delete Selected")
-        self.delete_benchmark_history_button.setEnabled(False)
-        self.delete_benchmark_history_button.clicked.connect(
-            self._delete_selected_benchmark_history
-        )
-        self.clear_benchmark_history_button = QtWidgets.QPushButton("Clear History")
-        self.clear_benchmark_history_button.clicked.connect(
-            self._clear_benchmark_history
-        )
-        benchmark_history_actions.addWidget(self.export_benchmark_history_button)
-        benchmark_history_actions.addWidget(self.open_benchmark_history_window_button)
-        benchmark_history_actions.addStretch(1)
-        benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
-        benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
-        history_layout.addLayout(benchmark_history_actions)
         return history_box
 
     def _build_benchmark_results_box(self) -> QtWidgets.QGroupBox:
@@ -1179,39 +1244,6 @@ class _BenchmarkMixin:
         self.benchmark_transcript_text = self.benchmark_summary_text.transcript_text
         results_layout.addWidget(self.benchmark_results_panel)
 
-        results_actions = QtWidgets.QHBoxLayout()
-        self._configure_button_row(results_actions)
-        self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Loaded")
-        self.clear_benchmark_results_button.setToolTip(
-            "Clear the displayed result without deleting its saved history entry."
-        )
-        self.clear_benchmark_results_button.clicked.connect(
-            self._clear_loaded_benchmark_result
-        )
-        self.open_benchmark_results_window_button = QtWidgets.QPushButton(
-            "Open in Window"
-        )
-        self.open_benchmark_results_window_button.setEnabled(False)
-        self.open_benchmark_results_window_button.setToolTip(
-            "Open the displayed result in its own window, so several runs can "
-            "be compared side by side."
-        )
-        self.open_benchmark_results_window_button.clicked.connect(
-            self._open_current_benchmark_results_window
-        )
-        self.export_benchmark_results_button = QtWidgets.QPushButton("Export Loaded...")
-        self.export_benchmark_results_button.setEnabled(False)
-        self.export_benchmark_results_button.setToolTip(
-            "Export the displayed result. Runs are already saved in Benchmark History."
-        )
-        self.export_benchmark_results_button.clicked.connect(
-            self._export_current_benchmark_results
-        )
-        results_actions.addWidget(self.clear_benchmark_results_button)
-        results_actions.addWidget(self.open_benchmark_results_window_button)
-        results_actions.addWidget(self.export_benchmark_results_button)
-        results_actions.addStretch(1)
-        results_layout.addLayout(results_actions)
         return results_box
 
     def _build_benchmark_window(self) -> None:
@@ -1587,9 +1619,19 @@ class _BenchmarkMixin:
         self.cancel_benchmark_button = QtWidgets.QPushButton("Cancel Benchmark")
         self.cancel_benchmark_button.setEnabled(False)
         self.cancel_benchmark_button.clicked.connect(self._cancel_local_benchmark)
+        self.show_benchmark_results_button = QtWidgets.QPushButton("Show Results")
+        self.show_benchmark_results_button.setEnabled(False)
+        self.show_benchmark_results_button.setToolTip(
+            "Close this window and show the run that just finished on the "
+            "Benchmark tab."
+        )
+        self.show_benchmark_results_button.clicked.connect(
+            self._show_last_benchmark_results
+        )
         benchmark_actions.addWidget(self.run_benchmark_button)
         benchmark_actions.addWidget(self.cancel_benchmark_button)
         benchmark_actions.addStretch(1)
+        benchmark_actions.addWidget(self.show_benchmark_results_button)
         outer_layout.addLayout(benchmark_actions)
 
         self._refresh_benchmark_plan_from_widgets()
@@ -1766,6 +1808,56 @@ class _BenchmarkMixin:
             ):
                 self._mark_benchmark_plan_case(row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED)
 
+    def _pin_benchmark_history_columns(self) -> None:
+        """Give the History list columns whose width no row can change.
+
+        Recorded, Runs, Best RTF and Status were `ResizeToContents`, so the
+        first "Completed with errors" took 59 px (9 pt) from the Audio and
+        Models columns and a first two-digit date shift took 20 px more: the
+        list moved whenever a run arrived. Each is now as wide as the larger of
+        its header and the widest value it can hold (the widest digit in a
+        date, four digits, a three-digit RTF, the longest status label).
+        Audio gets a width of its own (a user can still drag it); Models
+        stretches over the rest. Called from
+        `SettingsDialog._reserve_feedback_button_widths`, after the table is a
+        polished child of the styled dialog: its header padding comes from the
+        stylesheet, and measured earlier the widths come out too small.
+        """
+        table = getattr(self, "benchmark_history_list", None)
+        if table is None:
+            return
+        table.ensurePolished()
+        header = table.horizontalHeader()
+        header.ensurePolished()
+        metrics = table.fontMetrics()
+        text_margin = 2 * (
+            table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+        )
+        digit = max("0123456789", key=metrics.horizontalAdvance)
+        widest_values = {
+            0: f"{digit * 4}-{digit * 2}-{digit * 2} {digit * 2}:{digit * 2}",
+            3: digit * 4,
+            4: f"{digit * 3}.{digit * 3}",
+            5: max(BENCHMARK_STATUS_LABELS.values(), key=metrics.horizontalAdvance),
+        }
+        for column, sample in widest_values.items():
+            header.setSectionResizeMode(column, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(
+                column,
+                max(
+                    header.sectionSizeFromContents(column).width(),
+                    metrics.horizontalAdvance(sample) + text_margin,
+                ),
+            )
+        header.setSectionResizeMode(
+            _BENCHMARK_HISTORY_AUDIO_COLUMN, QtWidgets.QHeaderView.Interactive
+        )
+        header.resizeSection(
+            _BENCHMARK_HISTORY_AUDIO_COLUMN,
+            _BENCHMARK_HISTORY_AUDIO_CHARACTERS * metrics.averageCharWidth()
+            + text_margin,
+        )
+
     def _pin_benchmark_header_row_height(self) -> None:
         """Match the status label and the bar to the button as it renders.
 
@@ -1797,6 +1889,59 @@ class _BenchmarkMixin:
         bar.setMaximum(total)
         bar.setValue(max(0, min(int(done), total)))
         bar.show()
+
+    def _show_last_benchmark_results(self) -> None:
+        """Show Results: the Benchmark tab with the run that just finished.
+
+        The finish already shows that run (and selects its row) on the tab, but
+        the Run Benchmark window sits above its owner on Windows and may be
+        covering it, and the user may have gone to another tab or another row
+        since. So this raises the dialog on the Benchmark tab, shows the run
+        again if another one replaced it, and closes this window (the "Run
+        Benchmark..." button brings it back with its state).
+        """
+        entry = self._last_finished_benchmark_entry
+        if entry is None or self._active_benchmark_thread is not None:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        self.tabs.setCurrentIndex(self._benchmark_tab_index)
+        key = entry.identity_key()
+        if not self._benchmark_run_is_shown(key):
+            row = self._benchmark_history_row_of(key)
+            if row is None:
+                # Deleted from History, or an unsaved run the user discarded.
+                self._last_finished_benchmark_entry = None
+                self._set_benchmark_status(
+                    "That run is no longer available.", "#b26a00"
+                )
+                self._update_benchmark_actions()
+                return
+            # The selection loads the run. It never asks about an unsaved
+            # shown run here: that can only be the last finished one, which
+            # is the run being shown.
+            self.benchmark_history_list.setCurrentRow(row)
+        self.benchmark_window.hide()
+
+    def _benchmark_run_is_shown(self, key: tuple[str, str, str]) -> bool:
+        shown = self._current_benchmark_entry
+        return shown is not None and shown.identity_key() == key
+
+    def _benchmark_history_row_of(self, key: tuple[str, str, str]) -> int | None:
+        table = self.benchmark_history_list
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            candidate = item.data(QtCore.Qt.UserRole) if item is not None else None
+            if (
+                isinstance(candidate, BenchmarkHistoryEntry)
+                and candidate.identity_key() == key
+            ):
+                return row
+        return None
 
     def _open_benchmark_window(self) -> None:
         """Show the benchmark window, raising the existing one if already open."""
@@ -2039,19 +2184,10 @@ class _BenchmarkMixin:
             and self._benchmark_cancel_event is not None
             and not self._benchmark_cancel_event.is_set()
         )
-        self.clear_benchmark_results_button.setEnabled(
-            (not busy) and self._benchmark_result_is_shown()
+        self.show_benchmark_results_button.setEnabled(
+            (not busy) and self._last_finished_benchmark_entry is not None
         )
-        self.export_benchmark_results_button.setEnabled(
-            (not busy) and self._current_benchmark_entry is not None
-        )
-        # Deliberately not gated on `busy`: a pop-out is a read-only view of a
-        # stored entry and cannot disturb `_current_benchmark_cases`, which is
-        # what the other Results/History actions are disabled for.
-        self.open_benchmark_results_window_button.setEnabled(
-            self._current_benchmark_entry is not None
-        )
-        self._update_benchmark_history_actions()
+        self._update_benchmark_action_row()
 
     def _benchmark_result_is_shown(self) -> bool:
         """Whether Results shows a run: a stored entry or a run's cases."""
@@ -2256,6 +2392,7 @@ class _BenchmarkMixin:
         self._deselect_benchmark_history()
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
+        self._last_finished_benchmark_entry = None
         self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_options = options
         self._current_benchmark_environment = None
@@ -2557,6 +2694,7 @@ class _BenchmarkMixin:
                 environment=self._current_benchmark_environment,
             )
             self._current_benchmark_entry = entry
+            self._last_finished_benchmark_entry = entry
             self.benchmark_results_panel.show_entry(entry)
             try:
                 self._benchmark_history_store.add_entry(entry)
@@ -2790,17 +2928,22 @@ class _BenchmarkMixin:
                 default=float("nan"),
             )
             actual_runs = sum(len(case.runs) for case in entry.cases)
+            models_label, models_tooltip = _benchmark_models_label(entry)
             values = [
                 _benchmark_created_label(entry.created_at),
                 entry.options.audio_name or Path(entry.options.audio_path).name or "-",
-                ", ".join(entry.options.model_names) or "-",
+                models_label,
                 str(actual_runs),
                 _format_number(best_rtf),
                 _benchmark_status_text(entry.status),
             ]
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                item.setToolTip(value)
+                item.setToolTip(
+                    models_tooltip
+                    if column == _BENCHMARK_HISTORY_MODELS_COLUMN
+                    else value
+                )
                 if column == 0:
                     item.setData(QtCore.Qt.UserRole, entry)
                 self.benchmark_history_list.setItem(row, column, item)
@@ -2812,7 +2955,7 @@ class _BenchmarkMixin:
         if selected_row >= 0:
             self.benchmark_history_list.setCurrentRow(selected_row)
         restore_vertical_scrollbar(self.benchmark_history_list, previous_scroll)
-        self._update_benchmark_history_actions()
+        self._update_benchmark_action_row()
         self._show_benchmark_empty_state_if_idle()
 
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
@@ -2831,17 +2974,38 @@ class _BenchmarkMixin:
         entry = item.data(QtCore.Qt.UserRole)
         return entry if isinstance(entry, BenchmarkHistoryEntry) else None
 
-    def _update_benchmark_history_actions(self) -> None:
-        if not hasattr(self, "export_benchmark_history_button"):
+    def _benchmark_subject_entry(self) -> BenchmarkHistoryEntry | None:
+        """The stored run Open in Window and Export act on.
+
+        The run Results shows. A running benchmark owns Results and shows no
+        stored run, so then it is the selected History row (the one thing
+        Open in Window may still read). With no run running the selected row
+        is the shown run, except for a run whose history write failed (shown,
+        in no row) and after a Ctrl+click deselect (shown, nothing selected);
+        the shown run wins in both.
+        """
+        if self._current_benchmark_entry is not None:
+            return self._current_benchmark_entry
+        return self._selected_benchmark_history_entry()
+
+    def _update_benchmark_action_row(self) -> None:
+        if not hasattr(self, "clear_benchmark_history_button"):
             return
         busy = self._active_benchmark_thread is not None
-        has_selection = self._selected_benchmark_history_entry() is not None
-        self.export_benchmark_history_button.setEnabled((not busy) and has_selection)
-        # Not gated on `busy`, unlike its neighbours: opening a stored run in a
-        # window of its own reads the entry and nothing else, so it cannot
-        # reach the case list a running benchmark is filling.
-        self.open_benchmark_history_window_button.setEnabled(has_selection)
-        self.delete_benchmark_history_button.setEnabled((not busy) and has_selection)
+        subject = self._benchmark_subject_entry()
+        # Not gated on `busy`: opening a stored run in a window of its own
+        # reads the entry and nothing else, so it cannot reach the case list
+        # a running benchmark is filling.
+        self.open_benchmark_results_window_button.setEnabled(subject is not None)
+        self.export_benchmark_results_button.setEnabled(
+            (not busy) and subject is not None
+        )
+        self.clear_benchmark_results_button.setEnabled(
+            (not busy) and self._benchmark_result_is_shown()
+        )
+        self.delete_benchmark_history_button.setEnabled(
+            (not busy) and self._selected_benchmark_history_entry() is not None
+        )
         self.clear_benchmark_history_button.setEnabled(
             (not busy) and self.benchmark_history_list.count() > 0
         )
@@ -2853,7 +3017,7 @@ class _BenchmarkMixin:
         row), and not for the run already shown: a finished run selects its
         own new row, and reloading it would replace the finish's status line.
         """
-        self._update_benchmark_history_actions()
+        self._update_benchmark_action_row()
         if self._active_benchmark_thread is not None:
             return
         entry = self._selected_benchmark_history_entry()
@@ -2876,7 +3040,7 @@ class _BenchmarkMixin:
         """Ask before a load replaces a run that only Results still holds.
 
         A finished run whose history write failed is in no row; a click on
-        any row replaced it silently, and only Export Loaded could still
+        any row replaced it silently, and only Export could still
         have saved it.
         """
         if not self._benchmark_shown_entry_unsaved:
@@ -2885,7 +3049,7 @@ class _BenchmarkMixin:
             self,
             "Replace unsaved result",
             "The run shown in Results was not saved to Benchmark History; "
-            f"Export Loaded... is the only way to keep it.\n\n{question}",
+            f"Export... is the only way to keep it.\n\n{question}",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
@@ -2901,7 +3065,7 @@ class _BenchmarkMixin:
             table.clearSelection()
         finally:
             table.blockSignals(False)
-        self._update_benchmark_history_actions()
+        self._update_benchmark_action_row()
 
     def _load_benchmark_history_item(
         self,
@@ -2944,16 +3108,10 @@ class _BenchmarkMixin:
         # the size the user had dragged it to. Only a run's finish resets it.
         self._update_benchmark_actions()
 
-    def _open_current_benchmark_results_window(self) -> None:
-        if self._current_benchmark_entry is None:
-            return
-        self._open_benchmark_results_window(self._current_benchmark_entry)
-
-    def _open_selected_benchmark_history_window(self) -> None:
-        entry = self._selected_benchmark_history_entry()
-        if entry is None:
-            return
-        self._open_benchmark_results_window(entry)
+    def _open_benchmark_subject_window(self) -> None:
+        entry = self._benchmark_subject_entry()
+        if entry is not None:
+            self._open_benchmark_results_window(entry)
 
     def _open_benchmark_results_window(
         self,
@@ -3008,16 +3166,10 @@ class _BenchmarkMixin:
         for key in list(self._benchmark_result_windows):
             self._close_benchmark_results_window(key)
 
-    def _export_current_benchmark_results(self) -> None:
-        if self._current_benchmark_entry is None:
-            return
-        self._export_benchmark_entry(self._current_benchmark_entry)
-
-    def _export_selected_benchmark_history(self) -> None:
-        entry = self._selected_benchmark_history_entry()
-        if entry is None:
-            return
-        self._export_benchmark_entry(entry)
+    def _export_benchmark_subject(self) -> None:
+        entry = self._benchmark_subject_entry()
+        if entry is not None:
+            self._export_benchmark_entry(entry)
 
     def _export_benchmark_entry(self, entry: BenchmarkHistoryEntry) -> None:
         suggested = (

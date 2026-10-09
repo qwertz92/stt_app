@@ -247,6 +247,9 @@ class SettingsDialog(
         self._benchmark_cancel_event: threading.Event | None = None
         self._current_benchmark_cases: list[BenchmarkCase] = []
         self._current_benchmark_entry: BenchmarkHistoryEntry | None = None
+        # The run the Run Benchmark window's "Show Results" button shows: the
+        # last one that finished with results, None from the next start.
+        self._last_finished_benchmark_entry: BenchmarkHistoryEntry | None = None
         self._current_benchmark_options: BenchmarkOptions | None = None
         self._current_benchmark_environment: BenchmarkEnvironment | None = None
         # Stored runs opened in a window of their own, keyed by
@@ -491,6 +494,7 @@ class SettingsDialog(
             if isinstance(button, QtWidgets.QPushButton):
                 reserve_button_width_for_texts(button, texts)
         self._pin_benchmark_header_row_height()
+        self._pin_benchmark_history_columns()
 
     def _pin_content_minimum_width(self) -> None:
         """Never let the dialog be narrower than its widest content.
@@ -510,10 +514,10 @@ class SettingsDialog(
           Audio by 36 px and Models by 124 px (measured at 9 pt). The
           content's own minimum plus a vertical scrollbar is what a page
           needs.
-        - **The Benchmark page**, the one page that is not a scroll area. It
-          reports its full width only once it has been painted (see
-          docs/agents/settings-dialog.md), so this also runs after every
-          show and tab switch.
+        - **The Benchmark page**, a scroll area like the rest since
+          2026-10-09. Its content reports its full width only once it has been
+          painted (see docs/agents/settings-dialog.md), so this also runs
+          after every show and tab switch.
 
         It measures the tab widget and its pages, never the dialog: the root
         layout also holds the bottom status line, whose text after a failed
@@ -564,10 +568,22 @@ class SettingsDialog(
         current = tabs.currentWidget()
         stack = current.parentWidget() if current is not None else None
         stack_minimum = stack.minimumSizeHint().width() if stack is not None else 0
-        # What the tab widget adds around its pages (its pane frame): Qt's own
-        # minimum is the page stack's minimum passed through the style, and
-        # the tab bar, which scrolls, asks for less than any page.
-        frame = max(0, tabs.minimumSizeHint().width() - stack_minimum)
+        # What the tab widget adds around its pages (its pane frame), asked of
+        # the style that draws it. It used to be read as the tab widget's
+        # minimum minus the page stack's, which holds only while a page wider
+        # than the scrolling tab bar sets the stack's minimum: with every page
+        # a `QScrollArea` the stack answered 72 px and the bar's 133 px set the
+        # tab widget's, so the "frame" came out 61 px instead of 6 and pinned
+        # the dialog 55 px too wide (9 pt).
+        frame_option = QtWidgets.QStyleOptionTabWidgetFrame()
+        frame_option.initFrom(tabs)
+        frame = (
+            tabs.style()
+            .sizeFromContents(
+                QtWidgets.QStyle.CT_TabWidget, frame_option, QtCore.QSize(0, 0), tabs
+            )
+            .width()
+        )
         pages = stack_minimum
         for index in range(tabs.count()):
             page = tabs.widget(index)
