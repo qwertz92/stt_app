@@ -3228,7 +3228,7 @@ class _ScriptedCapture(FakeCapture):
 
     queue: list[bytes] = []
 
-    def stop(self):
+    def stop(self, *, drain=True):
         self.stopped = True
         return _ScriptedCapture.queue.pop(0)
 

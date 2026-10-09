@@ -1006,7 +1006,8 @@ class DictationController(QtCore.QObject):
         capture_wav = b""
         if self._audio_capture is not None:
             try:
-                capture_wav = self._audio_capture.stop() or b""
+                # No backlog wait at quit (`AudioCapture.stop`).
+                capture_wav = self._audio_capture.stop(drain=False) or b""
             except Exception:
                 self._logger.exception("Failed to stop the open capture at shutdown")
             self._audio_capture = None
@@ -6076,7 +6077,8 @@ class DictationController(QtCore.QObject):
 
         wav_bytes = b""
         try:
-            wav_bytes = capture.stop()
+            # Not the user's stop: no backlog wait (`AudioCapture.stop`).
+            wav_bytes = capture.stop(drain=False)
         except Exception:
             self._logger.exception("Failed to stop active audio capture")
 
@@ -8062,7 +8064,8 @@ class DictationController(QtCore.QObject):
         wav_bytes = b""
         if capture is not None:
             try:
-                wav_bytes = capture.stop()
+                # Not the user's stop: no backlog wait (`AudioCapture.stop`).
+                wav_bytes = capture.stop(drain=False)
             except Exception:
                 self._logger.exception("Failed to stop audio capture during abort")
         source_audio_path = ""

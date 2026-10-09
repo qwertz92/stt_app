@@ -1807,6 +1807,18 @@ def test_a_catching_up_burst_is_waited_for_no_longer_than_the_hard_limit(
     assert 0.35 <= waited < 0.6
 
 
+def test_a_stop_without_drain_keeps_what_arrived_at_once(monkeypatch):
+    """A cancel, an abort or a quit (`drain=False`) does not wait for the
+    backlog the user's stop would collect."""
+    capture, _callback = _slow_burst_capture(monkeypatch)
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop(drain=False)
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 10 * 1600
+
+
 class _StoppedStream(FakeInputStream):
     """PortAudio reports the stream no longer active (its device went away)."""
 

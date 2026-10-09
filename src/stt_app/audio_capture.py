@@ -1173,7 +1173,14 @@ class AudioCapture:
                 f"Failed to start microphone capture: {exc}"
             ) from exc
 
-    def stop(self) -> bytes:
+    def stop(self, *, drain: bool = True) -> bytes:
+        """End the capture and return its audio as WAV bytes.
+
+        `drain` waits for a backlog a starved callback thread still owes
+        (`_drain_backlog_locked`), holding the caller -- the Qt thread -- up
+        to the first-callback hard limit. Only the user's stop asks for it; a
+        cancel, an abort or a quit keeps what arrived without waiting.
+        """
         with self._lock:
             timing = self._timing
             wall_s = None
@@ -1182,7 +1189,7 @@ class AudioCapture:
                 timing.reported = True
                 wall_s = _clock() - timing.anchor
                 timing.close_marks(wall_s)
-                if self._accepting_audio:
+                if drain and self._accepting_audio:
                     self._drain_backlog_locked(wall_s)
             self._accepting_audio = False
             self._capture_generation += 1

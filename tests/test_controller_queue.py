@@ -948,7 +948,7 @@ def test_silence_gate_skips_transcription_of_silent_recording(
         wav_file.setframerate(16000)
         wav_file.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
     silence = buffer.getvalue()
-    monkeypatch.setattr(FakeCapture, "stop", lambda _self: silence)
+    monkeypatch.setattr(FakeCapture, "stop", lambda _self, **_kwargs: silence)
 
     controller.start_recording()
     controller.stop_recording()

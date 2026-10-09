@@ -1456,9 +1456,9 @@ def test_blocks_a_streaming_stop_waits_for_reach_the_transcriber(monkeypatch):
     transcriber = FakeStreamingTranscriber()
 
     class _DrainingCapture(FakeCapture):
-        def stop(self):
+        def stop(self, *, drain=True):
             self.chunk_callback(b"late block")
-            return super().stop()
+            return super().stop(drain=drain)
 
     FakeCapture.instances = []
     monkeypatch.setattr("stt_app.controller.AudioCapture", _DrainingCapture)
@@ -1474,6 +1474,69 @@ def test_blocks_a_streaming_stop_waits_for_reach_the_transcriber(monkeypatch):
 
     assert transcriber.chunks == [b"late block"]
     assert controller._stopping_capture is None
+    controller.shutdown()
+    _ = app
+
+
+def _end_by_cancel(controller):
+    controller.cancel_current_action()
+
+
+def _end_by_abort(controller):
+    controller._on_stream_abort_requested("Streaming aborted: test.", False)
+
+
+def _end_by_shutdown(controller):
+    controller.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("mode", "end"),
+    [
+        ("batch", _end_by_cancel),
+        ("streaming", _end_by_cancel),
+        ("streaming", _end_by_abort),
+        ("batch", _end_by_shutdown),
+    ],
+    ids=["batch cancel", "streaming cancel", "streaming abort", "shutdown"],
+)
+def test_only_the_users_stop_waits_for_a_starved_capture(monkeypatch, mode, end):
+    """Review round 2 P3: the stop's backlog wait holds the Qt thread up to
+    12 s. A cancel, an abort and a quit are not the user's stop: they keep
+    what arrived (canceled recording, Retry slot, unfinished store) without
+    waiting for it, and only `stop_recording` waits."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode=mode, model_size="small")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+
+    end(controller)
+
+    assert capture.stop_calls == [{"drain": False}]
+    controller.shutdown()
+    _ = app
+
+
+def test_the_users_stop_waits_for_a_starved_capture(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+    monkeypatch.setattr(
+        controller, "_submit_batch_transcription", lambda *a, **kw: None
+    )
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+
+    controller.stop_recording()
+
+    assert capture.stop_calls == [{"drain": True}]
     controller.shutdown()
     _ = app
 
@@ -1569,9 +1632,9 @@ def test_stop_recording_logs_pre_stop_warm_stream_context(caplog):
             self.callback_count = 7
             self._wav_bytes = b""
 
-        def stop(self):
+        def stop(self, *, drain=True):
             self.uses_warm_stream = False
-            return super().stop()
+            return super().stop(drain=drain)
 
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -2177,9 +2240,9 @@ def test_vad_auto_stop_marshals_stop_recording_to_qt_thread():
             self._wav_bytes = b""
             self.stop_thread_id = None
 
-        def stop(self):
+        def stop(self, *, drain=True):
             self.stop_thread_id = threading.get_ident()
-            return super().stop()
+            return super().stop(drain=drain)
 
     capture = _ThreadTrackingCapture()
     controller._audio_capture = capture
@@ -2237,7 +2300,7 @@ def test_a_cancel_whose_capture_cannot_be_stopped_says_so(caplog):
     controller, app = _make_controller(overlay=overlay)
 
     class _RefusingCapture(FakeCapture):
-        def stop(self):
+        def stop(self, *, drain=True):
             raise RuntimeError("PortAudio refused to stop the stream")
 
     controller._audio_capture = _RefusingCapture()
@@ -3048,7 +3111,7 @@ class _EmptyCapture(FakeCapture):
     """A capture whose stop hands back no audio: a stream that died
     before it produced any."""
 
-    def stop(self):
+    def stop(self, *, drain=True):
         self.stopped = True
         return b""
 

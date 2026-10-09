@@ -402,6 +402,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     before the first block of a running stream up to the watchdog's 12 s
     hard limit. Not waiting loses the recording; not blocking would need a
     two-phase stop in the controller (~4-6 h with its re-entrancy cases).
+  - A cancel, an abort (a stream runtime failure included) or a quit
+    during a stall does not wait for the backlog, so the audio kept for
+    the canceled recording, Retry or the unfinished store lacks the
+    seconds still in PortAudio's buffer. Waiting would hold the Qt thread
+    up to 12 s on paths the user did not ask to wait on.
   - Loss and backlog are told apart only by a steady second of real-time
     arrivals (the settled deficit). A stop within that second after a
     permanent loss waits until it passes, and a burst that drains at

@@ -413,13 +413,16 @@ class FakeCapture:
         self._wav_bytes = b"RIFF"
         self.last_saved_path = None
         self.last_saved_bytes = None
+        # The keyword arguments of every `stop` call.
+        self.stop_calls: list[dict] = []
         FakeCapture.instances.append(self)
 
     def start(self):
         self.started = True
 
-    def stop(self):
+    def stop(self, *, drain=True):
         self.stopped = True
+        self.stop_calls.append({"drain": drain})
         return self._wav_bytes
 
     def save_wav(self, path, wav_bytes):
