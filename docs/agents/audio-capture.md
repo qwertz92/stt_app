@@ -193,8 +193,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   times in the future, measured after a stall), so audio before the attach
   cannot be told from audio after it. A callback thread stalled across the
   hotkey therefore delivers the seconds since its last block, the part before
-  the attach included; they are kept (the overlay was already green,
-  "Starting dictation", for part of them) and `warm_attach_gap_ms` records
+  the attach included; they are kept (cutting at the attach would also cut
+  what was said between the hotkey and the attach) and `warm_attach_gap_ms` records
   it (`docs/agents/known-limitations.md`). A deliberate pre-roll is not
   added: on a healthy stream the warm path loses only the short "Starting"
   phase (a 25 ms event drain, plus the start tone when it is on), and a

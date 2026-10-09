@@ -9,7 +9,8 @@ when nothing is pending.
 "Wait and insert" keeps the app running until the pending transcriptions are
 delivered as usual, then quits. The quit itself -- and with it the quit
 watchdog armed on `aboutToQuit` in `main` -- only starts once the wait is over,
-so a long wait is never cut short by the watchdog. "Quit now" quits; the
+so a long wait is never cut short by the watchdog. A recording started during
+the wait calls the quit off and closes the window. "Quit now" quits; the
 controller's shutdown keeps the unfinished recordings for the next start.
 """
 
@@ -254,6 +255,12 @@ class QuitCoordinator(QtCore.QObject):
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(QUIT_WAIT_POLL_MS)
         self._timer.timeout.connect(self._poll)
+        # A recording started during the wait calls the quit off (owner
+        # decision 2026-10-09); the controller has released its hold already
+        # and told the tray. `getattr`: the controller is injected.
+        canceled = getattr(controller, "quit_canceled_by_recording", None)
+        if canceled is not None:
+            canceled.connect(self._on_quit_canceled_by_recording)
 
     @property
     def dialog(self) -> QuitDialog | None:
@@ -330,6 +337,13 @@ class QuitCoordinator(QtCore.QObject):
                 + " offered at the next start."
             )
         return " ".join(["Done waiting.", *parts]) if parts else ""
+
+    def _on_quit_canceled_by_recording(self) -> None:
+        """Close the window like "Don't quit": the user is dictating again."""
+        dialog = self._dialog
+        if dialog is not None:
+            # `close` reports the dismissal once, which runs `_dismiss`.
+            dialog.close()
 
     def _dismiss(self) -> None:
         self._timer.stop()

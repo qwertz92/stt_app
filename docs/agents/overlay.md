@@ -27,6 +27,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   minimum and a short state kept the tall height. Size computations add
   `_container_frame_margins()`, and `set_state` applies the stylesheet before
   measuring, or `OVERLAY_MAX_HEIGHT` does not hold.
+- **The wait before "Speak now" is painted "Starting", not in the Listening
+  green** (`set_state(..., starting=True)`, colour `OVERLAY_STATE_COLORS
+  ["Starting"]`): nothing is recorded until the microphone is open, and the
+  owner saw a green overlay while his first seconds were missing (2026-10-09).
+  The state stays "Listening" for every control and check; only label and
+  colour differ. "Speak now" and the remote "You can speak now" are green.
 - **Record button**: header starts with Record/Stop (`record_toggle_requested`
   -> `controller.toggle_recording`); fixed-width captions and a stylesheet
   property keep the layout still. Its indicator is a generated icon
@@ -72,22 +78,64 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   Measured after the change: no events on either click; topmost survives
   hide/show, `raise_()`, state changes, moves and a stylesheet re-apply.
   Other platforms keep the flag (`_always_on_top`).
-- **Dropping topmost puts the overlay directly behind the foreground window**
-  (`_apply_native_z_order`, `_window_to_stay_behind`; 2026-10-09). Plain
-  `HWND_NOTOPMOST` places it above every non-topmost window, i.e. above the
-  editor being dictated into; the overlay never activates, so that editor
-  stayed active and stayed underneath until minimise/restore (owner report;
-  measured 4 and 7 windows below the overlay after a Floating click and after
-  a reveal ended). One SetWindowPos with the foreground window as
-  `hWndInsertAfter` both clears topmost and places it (measured: directly
-  below, not topmost, also for another process's window). Never behind a
-  topmost window (the overlay would join the topmost band), a minimised one,
-  a shell surface (`window_focus.is_shell_surface_window`: behind the desktop
-  it is invisible), itself, or while Qt has not shown it yet (startup applies
-  a saved Floating before the first show) -- then `HWND_NOTOPMOST`. So a
-  floating overlay revealed for a recording or result goes behind the
-  editor when the reveal ends. `SWP_SHOWWINDOW` is passed only once the
-  `QWindow` is visible: `showEvent` runs before Qt shows the native window.
+- **A floating overlay stays on top of the normal band until the user clicks
+  into the window below it** (2026-10-10, owner's requirement of
+  2026-10-09). Dropping topmost (Floating click, end of a reveal) is
+  `HWND_NOTOPMOST`, and a shown floating overlay waits
+  (`_waiting_for_click`). Going directly behind the foreground window
+  instead (8a72099, `hWndInsertAfter` = that window) made the overlay vanish
+  the moment Floating was clicked or a reveal ended. Clicking an inactive
+  window raises it natively (activation); a click into the window that is
+  *already* active does not, which kept the editor under the overlay until
+  minimise/restore. So while waiting, `raw_mouse_input` registers mouse raw
+  input (`RIDEV_INPUTSINK`) for the overlay's window; `nativeEvent` reads
+  each `WM_INPUT`, and a button press runs `_on_desktop_mouse_press` on the
+  next event-loop turn with the message's `pt`. The overlay goes directly
+  behind the foreground window (`SWP_NOACTIVATE`) only when the top-level
+  window under the press is that window, `_window_to_stay_behind` accepts it
+  (not topmost, minimised, a shell surface or the overlay) and the overlay
+  is still above it (`_is_above`, a bounded `GW_HWNDPREV` walk); then the
+  watch stops. A press on the overlay or an inactive window, an ineligible
+  foreground, or a refused call (elevated foreground: access denied) leave
+  it waiting; a window activated above it ends the wait. The watch runs only
+  while waiting and shown -- every mouse movement on the desktop is a
+  `WM_INPUT` then -- and stops on topmost, hide and `shutdown()`
+  (`aboutToQuit`). `SWP_SHOWWINDOW` is passed only once the `QWindow` is
+  visible: `showEvent` runs before Qt shows the native window.
+  - **Why raw input**: no WinEvent reports the click (measured: a plain
+    window produced none for a click into it while active; an EDIT control
+    produced `EVENT_SYSTEM_CAPTURESTART` only because it captures the
+    mouse). A `WH_MOUSE_LL` hook puts a Python callback (the GIL) into
+    every click's path, and Windows silently removes a hook that misses
+    `LowLevelHooksTimeout`. `WM_INPUT` is a posted copy: the click never
+    waits for this process. One mouse registration exists per process;
+    nothing else registers one.
+  - **Measured** (real overlay, foreign-process EDIT window, `SendInput`):
+    before, the overlay was directly below the editor right after the
+    Floating click and after a reveal ended; after, directly above it, still
+    above after a click on its own label, and directly below after a left
+    or right click into the active editor. A click into another, inactive
+    window raised that window over the overlay, which stayed above the
+    editor. Press handled ~6 ms after it was injected; a `GetRawInputData`
+    read costs ~3 us; 0 `WM_INPUT` once the watch stopped.
+  - **A closed menu puts a waiting overlay back above the editor**
+    (2026-10-10). The Language, microphone and detail context menus are
+    activated popups; when one closes, Windows re-activates the editor and
+    raises it over the overlay (measured: below the editor already at
+    `aboutToHide`, after Esc, an item choice and a click on the Language
+    button). `_after_menu_closed`, a zero-timer from each menu's
+    `aboutToHide`, puts it back with `HWND_TOP` while it still waits --
+    `HWND_NOTOPMOST` has no effect on a window that is already not topmost
+    (SetWindowPos docs; measured: it stayed below). After the fix: above the
+    editor and still waiting after Esc, an item and the button click; below
+    it, wait ended, after a click into the editor that closed the menu. A
+    press while a popup is open (`activePopupWidget()`) is kept
+    with its top-level window and judged after that, so a click into the
+    editor that closes the menu still sends the overlay behind it and a
+    click on a menu item does not. A new popup of the overlay connects the
+    same way.
+  - Not covered: touch, pen and precision-touchpad taps (known
+    limitations) and typing without a click, which leaves the overlay above.
 - **The Language and microphone menus are `_RebuildableMenu`s, rebuilt only
   while hidden** (2026-10-03). `QMenu.clear()` deletes the actions under an
   open popup -- and one the user has chosen whose `triggered` has not run
@@ -129,7 +177,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   every row label is one line (`ElidingLabel`, the whole label in its
   tooltip), and the controller puts each row's status ("Pending insert",
   "Not inserted", "Possibly inserted, check the window") before the
-  provider, model or preview, so eliding never hides it; a label that
+  provider, model or preview, so eliding never hides it; a transcription
+  row names the language its recording was made in (`EN`, `DE`, `Auto`: the
+  job's own snapshot, not the current selection) as a short code right after
+  the time, before the provider (2026-10-09); a label that
   changes in place never changes a row's height
   (wrapped, the long "Possibly inserted, check the window" label grew rows
   from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
@@ -138,6 +189,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   (`_queue_title`: "Transcribing N recordings" -- it said "files" until
   2026-10-03 (UX review item 6g), though the user handled no file --, "N
   transcripts not inserted", or both joined by " · "). Both buttons emit `queue_cancel_requested`.
+- **The not-inserted badge sits in the queue header** (owner's request
+  2026-10-09): `set_not_inserted_badge(text, tooltip)`, "" hides it. The
+  controller writes "N not inserted · <re-paste hotkey>" ("· tray menu"
+  while no hotkey is registered) and the how-to as its tooltip. Amber
+  (`#ffb300`, dark bold text), apart from every state colour, and in the
+  queue panel because no `set_state` touches that panel: the next
+  recording's Listening cannot paint over it, while its waiting rows keep
+  the panel visible. Layout: [title (eliding, the stretch)][badge][Clear
+  queue]; the badge is exactly as tall as Clear queue
+  (`_fit_buttons_to_font`) and its minimum width is pinned to 1 px, so
+  showing it changes neither the header's height nor the overlay's width --
+  only the title gets narrower (it may elide at 11.25 pt and up). With the
+  badge shown the title leaves the waiting count out (`_queue_title(...,
+  badge_shown=True)`). Measured with real widgets, Listening, one
+  transcription and two waiting rows, badge "2 not inserted · Ctrl+Alt+F10":
+  9 pt overlay 470x234 and header 20 px with and without it, badge 173x20;
+  11.25 pt 503x242, header 22, badge 218x22; 13.5 pt 560x268, header 26,
+  badge 258x26.
 - **A dragged overlay is clamped from where the user put it**, not from
   `self.pos()` (a tall result pushed it up for good). The remembered position
   and `_manual_positioned` have one writer, `_claim_manual_position`. A

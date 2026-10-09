@@ -156,6 +156,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `silero_vad.py` | Silero VAD v6 speech check (the graph faster-whisper ships, ONNX Runtime CPU, one thread, built on a background thread with a 60 s retry after a failed load): `check_speech_*` for the batch silence gate, `measure_speech_pcm16` for the streaming post-pause gate; `None` = unmeasured, never gates |
 | `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
 | `paste_target_check.py` | Report-only check after a paste whether the focus showed a caret (Win32 caret, MSAA `OBJID_CARET` in Chromium windows) on one MTA worker thread; "not a text field" makes the controller report the paste as doubtful |
+| `raw_mouse_input.py` | Mouse raw input (`RIDEV_INPUTSINK`) delivered as `WM_INPUT` to one window: registration, removal and the button-press test; the floating overlay's watch for a click into the active window |
 | `win_tray_icon.py` | Hand-registered Windows notification icon (`Shell_NotifyIcon` + native menu) with a `QSystemTrayIcon` fallback |
 | `hotkey.py` | Global hotkey registration via Win32 RegisterHotKey |
 | `benchmark_environment.py` | Best-effort benchmark system metadata |

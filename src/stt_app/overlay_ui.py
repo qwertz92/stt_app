@@ -8,6 +8,7 @@ from collections.abc import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import raw_mouse_input
 from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
@@ -52,12 +53,16 @@ COPY_BUTTON_CAPTIONS = (COPY_BUTTON_TEXT, COPY_BUTTON_COPIED_TEXT)
 _GWL_EXSTYLE = -20
 _WS_EX_TOPMOST = 0x00000008
 _WS_EX_NOACTIVATE = 0x08000000
+_HWND_TOP = 0
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _SWP_NOSIZE = 0x0001
 _SWP_NOMOVE = 0x0002
 _SWP_NOACTIVATE = 0x0010
 _SWP_SHOWWINDOW = 0x0040
+_GW_HWNDPREV = 3
+_GA_ROOT = 2
+_Z_ORDER_WALK_LIMIT = 10_000
 
 
 @functools.cache
@@ -89,6 +94,9 @@ def _overlay_user32():
         "SetWindowLongW": ((wt.HWND, ctypes.c_int, wt.LONG), wt.LONG),
         "IsWindowVisible": ((wt.HWND,), wt.BOOL),
         "IsIconic": ((wt.HWND,), wt.BOOL),
+        "GetWindow": ((wt.HWND, wt.UINT), wt.HWND),
+        "WindowFromPoint": ((wt.POINT,), wt.HWND),
+        "GetAncestor": ((wt.HWND, wt.UINT), wt.HWND),
     }
     for name, (argtypes, restype) in signatures.items():
         function = getattr(user32, name)
@@ -98,7 +106,7 @@ def _overlay_user32():
 
 
 def _window_to_stay_behind(user32, overlay_hwnd: int) -> int:
-    """The window a floating overlay goes directly behind, or 0 for none.
+    """The window a floating overlay may go directly behind, or 0 for none.
 
     That is the foreground window, unless going behind it would hide the
     overlay where nobody looks (the desktop, a minimised window) or make it
@@ -114,6 +122,30 @@ def _window_to_stay_behind(user32, overlay_hwnd: int) -> int:
     if is_shell_surface_window(user32, foreground):
         return 0
     return foreground
+
+
+def _top_level_window_at(user32, x: int, y: int) -> int:
+    """The top-level window under the screen point (physical pixels), or 0."""
+    import ctypes.wintypes as wt
+
+    child = user32.WindowFromPoint(wt.POINT(x, y))
+    return int(user32.GetAncestor(child, _GA_ROOT) or 0) if child else 0
+
+
+def _is_above(user32, upper: int, lower: int) -> bool:
+    """Is `upper` anywhere above `lower` in the z-order?
+
+    Walks up from `lower`, which sits near the top when it is the foreground
+    window. Bounded: the z-order may change during the walk (GetWindow docs).
+    """
+    hwnd = lower
+    for _ in range(_Z_ORDER_WALK_LIMIT):
+        hwnd = int(user32.GetWindow(hwnd, _GW_HWNDPREV) or 0)
+        if not hwnd:
+            return False
+        if hwnd == upper:
+            return True
+    return False
 
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
@@ -229,15 +261,19 @@ def _queue_entry(item) -> tuple[int, str, str]:
     return int(token), str(label), kind
 
 
-def _queue_title(entries) -> str:
+def _queue_title(entries, *, badge_shown: bool = False) -> str:
     """Count running transcriptions and waiting inserts apart.
 
     A queued job is a dictation recording, which the tray's messages call
     "Recording HH:MM:SS"; "file" named something the user never handled.
+    With the not-inserted badge shown, the badge carries the waiting count
+    and the title leaves it out rather than count the same rows twice.
     """
     waiting = sum(1 for _t, _l, kind in entries if kind == QUEUE_ROW_KIND_UNDELIVERED)
     running = len(entries) - waiting
     transcribing = f"Transcribing {running} recording" + ("" if running == 1 else "s")
+    if badge_shown:
+        return transcribing if running else ""
     if not waiting:
         return transcribing
     if not running:
@@ -509,6 +545,15 @@ class OverlayUI(QtWidgets.QWidget):
         # Windows only: SetWindowPos failed, so Qt's WindowStaysOnTopHint
         # carries topmost (recreating the window) until topmost is dropped.
         self._topmost_uses_window_flag = False
+        # Windows only: a floating overlay was put on top of the normal band
+        # and stays above the window being typed in until the user clicks
+        # into that window (`_on_desktop_mouse_press`).
+        self._waiting_for_click = False
+        # The window the mouse raw-input watch delivers to, 0 while off.
+        self._click_watch_hwnd = 0
+        # The top-level window under a press made while one of the overlay's
+        # menus was open, judged once it has closed (`_after_menu_closed`).
+        self._press_during_menu = 0
         initial_flags = self._base_window_flags()
         self.setWindowFlags(initial_flags)
         self._applied_window_flags = initial_flags
@@ -568,7 +613,7 @@ class OverlayUI(QtWidgets.QWidget):
         _state_fm = QtGui.QFontMetrics(state_font)
         _max_state_w = max(
             _state_fm.horizontalAdvance(s)
-            for s in ("Idle", "Listening", "Processing", "Done", "Error")
+            for s in ("Idle", "Starting", "Listening", "Processing", "Done", "Error")
         )
         self._state_label.setMinimumWidth(_max_state_w)
 
@@ -659,6 +704,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_menu = _RebuildableMenu(
             self._language_button, self._fill_language_menu
         )
+        self._language_menu.aboutToHide.connect(self._schedule_after_menu_closed)
         self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
 
@@ -708,6 +754,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._microphone_menu = _RebuildableMenu(
             self._microphone_button, self._fill_microphone_menu
         )
+        self._microphone_menu.aboutToHide.connect(self._schedule_after_menu_closed)
         self._microphone_button.clicked.connect(self._show_microphone_menu)
         self._opacity_value_label = QtWidgets.QLabel("")
         self._opacity_value_label.setFixedWidth(_OPACITY_VALUE_LABEL_WIDTH)
@@ -878,6 +925,11 @@ class OverlayUI(QtWidgets.QWidget):
             _QUEUE_CLEAR_BUTTON_HEIGHT,
             "Clear queue",
         )
+        # The badge beside it is exactly as tall, so showing or hiding it
+        # never changes the queue header's height.
+        self._not_inserted_badge.setFixedHeight(
+            self._queue_clear_button.maximumHeight()
+        )
         # Balanced last, because it widens the narrower group from the sizes
         # set above. The stretching state label between the two groups is
         # centred on the header -- and so on the overlay, whose horizontal
@@ -1023,11 +1075,14 @@ class OverlayUI(QtWidgets.QWidget):
         if sys.platform != "win32":
             return
         self._apply_noactivate_style()
-        if self._apply_native_z_order():
-            return
-        if self._wants_topmost() and not self._topmost_uses_window_flag:
+        if (
+            not self._apply_native_z_order()
+            and self._wants_topmost()
+            and not self._topmost_uses_window_flag
+        ):
             self._topmost_uses_window_flag = True
             self._sync_qt_window_flags(show=raise_window)
+        self._sync_click_watch()
 
     def _sync_qt_window_flags(self, *, show: bool) -> None:
         desired_flags = self._base_window_flags()
@@ -1091,6 +1146,7 @@ class OverlayUI(QtWidgets.QWidget):
         copy_text: str | None = None,
         error_action: str | None = None,
         editable: bool = False,
+        starting: bool = False,
     ) -> None:
         """Render an overlay state.
 
@@ -1107,10 +1163,16 @@ class OverlayUI(QtWidgets.QWidget):
         transcript that was not inserted, whose edit is what Insert and the
         re-paste then paste (the controller decides; owner's rule
         2026-10-09).
+
+        ``starting`` paints a Listening state as "Starting" in its own colour:
+        the dictation has begun but the microphone is not open yet, so nothing
+        is recorded and the Listening green would invite speech too early.
+        Every control still behaves as in Listening.
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
-        self._state_label.setText(state)
+        shown_state = "Starting" if starting and state == "Listening" else state
+        self._state_label.setText(shown_state)
         self._detail_label.setText(detail)
         self._state = state
         self._detail = detail
@@ -1139,7 +1201,7 @@ class OverlayUI(QtWidgets.QWidget):
         # part of its contents margins, so measuring first would size the
         # window for an unstyled container and leave it below its own layout
         # minimum (the window then refused to shrink to the computed target).
-        self._apply_state_stylesheet(state)
+        self._apply_state_stylesheet(shown_state)
         self._update_detail_height()
         # Errors lead with the reason and may be followed by a long transcript
         # preview, so keep the reason in view; every other state shows the end
@@ -1380,6 +1442,16 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             QLabel[queueRowKind="undelivered"] {{
                 color: #ffd98a;
+            }}
+            /* Not inserted: amber with dark text, apart from every state
+               colour (Error red, Listening green), whatever the state. */
+            QLabel#overlayNotInsertedBadge {{
+                background-color: #ffb300;
+                color: #1f1400;
+                border: 1px solid #ffe082;
+                border-radius: 4px;
+                padding: 0 6px;
+                font-weight: bold;
             }}
                 """
             )
@@ -1628,8 +1700,23 @@ class OverlayUI(QtWidgets.QWidget):
                 _MA_NOACTIVATE = 3
                 if msg.message == _WM_MOUSEACTIVATE:
                     return True, _MA_NOACTIVATE
+                if (
+                    msg.message == raw_mouse_input.WM_INPUT
+                    and self._click_watch_hwnd
+                    and raw_mouse_input.mouse_button_pressed(msg.lParam)
+                ):
+                    # `pt` is where the cursor was when the press happened.
+                    # Handled after this window procedure returns, because
+                    # moving the overlay re-enters it.
+                    QtCore.QTimer.singleShot(
+                        0,
+                        functools.partial(
+                            self._on_desktop_mouse_press, msg.pt.x, msg.pt.y
+                        ),
+                    )
             except Exception:
                 pass
+        # Not handled: DefWindowProc must still see a WM_INPUT (cleanup).
         return super().nativeEvent(event_type, message)
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
@@ -1655,6 +1742,21 @@ class OverlayUI(QtWidgets.QWidget):
                 # Qt's flag does not carry topmost here (`_base_window_flags`),
                 # so the first show, and a show after a recreation, sets it.
                 self._apply_native_z_order()
+            else:
+                # A shown window appears on top of its band, so a floating
+                # overlay is above the window being typed in again.
+                self._waiting_for_click = True
+                self._sync_click_watch()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:
+        super().hideEvent(event)
+        self._waiting_for_click = False
+        self._sync_click_watch()
+
+    def shutdown(self) -> None:
+        """Remove the mouse raw-input watch before the application quits."""
+        self._waiting_for_click = False
+        self._sync_click_watch()
 
     def _on_screen_changed(self, _screen: QtGui.QScreen | None) -> None:
         if self._compact_mode:
@@ -1678,15 +1780,12 @@ class OverlayUI(QtWidgets.QWidget):
     def _apply_native_z_order(self) -> bool:
         """Set the topmost state with SetWindowPos, never activating the overlay.
 
-        Topmost while pinned or revealed. Otherwise not HWND_NOTOPMOST alone:
-        that places the window above every non-topmost window, i.e. above the
-        editor the user is typing in. The overlay never activates, so that
-        editor stays the active window and nothing re-raises it; the owner
-        saw it stay under a floating overlay until it was re-activated
-        (minimise and restore). So the overlay goes directly behind the
-        foreground window (`_window_to_stay_behind`) instead. A window Qt has
-        not shown yet is not moved there: once shown it appears like any
-        newly shown window.
+        Topmost while pinned or revealed. Otherwise `HWND_NOTOPMOST`, which
+        puts the overlay on top of the normal band -- above the window being
+        typed in, where it stays until the user clicks into that window
+        (`_on_desktop_mouse_press`). Going straight behind the foreground
+        window instead (8a72099) made a floating overlay vanish the moment
+        Floating was clicked or a reveal ended.
         """
         if sys.platform != "win32":
             return False
@@ -1702,19 +1801,110 @@ class OverlayUI(QtWidgets.QWidget):
                 # Re-shows a window the system hid (resume, 2026-06-08).
                 flags |= _SWP_SHOWWINDOW
             if self._wants_topmost():
+                self._waiting_for_click = False
                 return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
-            # "If a topmost window is repositioned ... after any non-topmost
-            # window, it is no longer topmost" (SetWindowPos remarks), so one
-            # call both drops topmost and places the overlay.
-            behind = _window_to_stay_behind(user32, hwnd) if shown else 0
-            if behind and user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags):
-                return True
-            # Refused behind a higher-integrity window (access denied, e.g.
-            # an elevated Task Manager): without this the overlay stayed
-            # topmost while it said "Floating".
+            # A hidden overlay starts waiting in its `showEvent`.
+            self._waiting_for_click = shown
             return bool(user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags))
         except Exception:
             return False
+
+    def _sync_click_watch(self) -> None:
+        """Watch mouse presses only while a floating overlay waits for one.
+
+        The watch (`raw_mouse_input`) delivers a `WM_INPUT` for every mouse
+        event on the desktop, movements included, so it runs only between
+        the overlay landing on top of the normal band and the click that
+        sends it behind the window being typed in.
+        """
+        if sys.platform != "win32":
+            return
+        wanted = self._waiting_for_click and not self._wants_topmost()
+        hwnd = int(self.winId()) if wanted else 0
+        if hwnd == self._click_watch_hwnd:
+            return
+        if hwnd:
+            self._click_watch_hwnd = (
+                hwnd if raw_mouse_input.watch_mouse_presses(hwnd) else 0
+            )
+        else:
+            raw_mouse_input.stop_watching_mouse_presses()
+            self._click_watch_hwnd = 0
+
+    def _on_desktop_mouse_press(self, x: int, y: int) -> None:
+        """Go behind the window being typed in once the user clicks into it.
+
+        Windows raises a window when it is activated, not when the user
+        clicks into the window that is already active, so a floating overlay
+        stayed above the editor until it was minimised and restored. Every
+        other press leaves the overlay where it is: on the overlay itself; on
+        an inactive window, which its activation raises above the overlay;
+        and on a desktop, taskbar, topmost or minimised foreground window
+        (`_window_to_stay_behind`), where the overlay keeps waiting.
+        """
+        if not self._waiting_for_click or self._wants_topmost():
+            return
+        try:
+            user32 = _overlay_user32()
+            pressed = _top_level_window_at(user32, x, y)
+            if QtWidgets.QApplication.activePopupWidget() is not None:
+                # The open menu is the foreground window, and closing it
+                # re-activates and raises the editor: judged after that.
+                self._press_during_menu = pressed
+                return
+            self._follow_press(user32, pressed)
+        except Exception:
+            logger.debug(
+                "Following a click behind the foreground failed", exc_info=True
+            )
+        finally:
+            self._sync_click_watch()
+
+    def _follow_press(self, user32, pressed: int) -> None:
+        """Go behind the foreground window if `pressed` is it, below the overlay."""
+        hwnd = int(self.winId())
+        foreground = _window_to_stay_behind(user32, hwnd)
+        if not foreground or pressed != foreground:
+            return
+        if not _is_above(user32, hwnd, foreground):
+            # A window was activated above the overlay since it waits.
+            self._waiting_for_click = False
+            return
+        flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+        # Refused behind a higher-integrity window (access denied, e.g. an
+        # elevated Task Manager): the overlay stays above it, waiting.
+        if user32.SetWindowPos(hwnd, foreground, 0, 0, 0, 0, flags):
+            self._waiting_for_click = False
+
+    def _schedule_after_menu_closed(self) -> None:
+        # One event-loop turn later: the popup is gone by then.
+        QtCore.QTimer.singleShot(0, self._after_menu_closed)
+
+    def _after_menu_closed(self) -> None:
+        """Put a waiting overlay back above the editor its menu let in front.
+
+        An open menu is the foreground window; when it closes, Windows
+        re-activates the editor and raises it above the floating overlay
+        (measured 2026-10-10), although the user never clicked into it. A
+        press that closed the menu is judged now, against the editor.
+
+        `HWND_TOP`, not `HWND_NOTOPMOST`: that "has no effect if the window
+        is already a non-topmost window" (SetWindowPos docs; measured: the
+        overlay stayed below the editor).
+        """
+        pressed, self._press_during_menu = self._press_during_menu, 0
+        if not self._waiting_for_click or self._wants_topmost():
+            return
+        try:
+            user32 = _overlay_user32()
+            flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+            user32.SetWindowPos(int(self.winId()), _HWND_TOP, 0, 0, 0, 0, flags)
+            if pressed:
+                self._follow_press(user32, pressed)
+        except Exception:
+            logger.debug("Restoring the overlay after a menu failed", exc_info=True)
+        finally:
+            self._sync_click_watch()
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -1758,6 +1948,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _show_detail_context_menu(self, pos) -> None:
         menu = QtWidgets.QMenu(self)
+        menu.aboutToHide.connect(self._schedule_after_menu_closed)
         copy_action = menu.addAction("Copy text")
         clear_action = menu.addAction("Clear text from overlay")
         clear_action.setEnabled(self._clear_button.isEnabled())
@@ -2104,11 +2295,28 @@ class OverlayUI(QtWidgets.QWidget):
         queue_header = QtWidgets.QHBoxLayout(self._queue_header_widget)
         queue_header.setContentsMargins(0, 0, 0, 0)
         queue_header.setSpacing(6)
-        self._queue_title_label = QtWidgets.QLabel("")
-        self._queue_title_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
+        # Eliding: beside the badge a long title must give way, never widen
+        # the overlay (its policy lets the layout ignore its text width).
+        self._queue_title_label = ElidingLabel("")
+        # How many transcripts were not inserted and the hotkey that inserts
+        # them (owner's request 2026-10-09): amber, apart from Error red and
+        # Listening green, and here because no state change touches the
+        # queue panel, so a recording that starts cannot paint over it. Its
+        # height is the Clear queue button's (`_fit_buttons_to_font`), so
+        # showing it never changes the header row's height; only the title
+        # beside it gets narrower.
+        self._not_inserted_badge = QtWidgets.QLabel("")
+        self._not_inserted_badge.setObjectName("overlayNotInsertedBadge")
+        self._not_inserted_badge.setAlignment(QtCore.Qt.AlignCenter)
+        self._not_inserted_badge.setTextFormat(QtCore.Qt.PlainText)
+        self._not_inserted_badge.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Fixed,
         )
+        # An explicit minimum, so the layout's minimum width does not grow by
+        # the badge's text (a QLabel's minimum size hint is all of it).
+        self._not_inserted_badge.setMinimumWidth(1)
+        self._not_inserted_badge.setVisible(False)
         self._queue_clear_button = QtWidgets.QPushButton("Clear queue")
         self._queue_clear_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._queue_clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -2119,6 +2327,7 @@ class OverlayUI(QtWidgets.QWidget):
         )
         self._queue_clear_button.clicked.connect(self.queue_clear_requested.emit)
         queue_header.addWidget(self._queue_title_label, 1)
+        queue_header.addWidget(self._not_inserted_badge, 0)
         queue_header.addWidget(self._queue_clear_button, 0, QtCore.Qt.AlignRight)
         queue_layout.addWidget(self._queue_header_widget)
 
@@ -2205,7 +2414,7 @@ class OverlayUI(QtWidgets.QWidget):
         previous_scroll = scroll_bar.value() if self._queue_visible else 0
         self._clear_queue_rows()
         if entries:
-            self._queue_title_label.setText(_queue_title(entries))
+            self._sync_queue_title()
             for token, label, kind in entries:
                 row = self._build_queue_row(token, label, kind)
                 self._queue_rows_layout.addWidget(row)
@@ -2253,6 +2462,32 @@ class OverlayUI(QtWidgets.QWidget):
         # stale pending resize from the previous state, so recompute the size
         # after the event loop drains.
         QtCore.QTimer.singleShot(0, self._refresh_size_after_queue_change)
+
+    def set_not_inserted_badge(self, text: str, tooltip: str = "") -> None:
+        """Show how many transcripts were not inserted, or hide with "".
+
+        The controller writes the count and the re-paste hotkey's label
+        ("2 not inserted · Ctrl+Alt+F10"); the badge sits in the queue
+        panel's header, which the waiting rows keep visible.
+        """
+        text = str(text or "")
+        badge = self._not_inserted_badge
+        if text == badge.text() and str(tooltip) == badge.toolTip():
+            return
+        badge.setText(text)
+        badge.setToolTip(str(tooltip))
+        badge.setVisible(bool(text))
+        self._sync_queue_title()
+
+    def _sync_queue_title(self) -> None:
+        self._queue_title_label.setText(
+            _queue_title(
+                self._queue_entries,
+                badge_shown=bool(self._not_inserted_badge.text()),
+            )
+            if self._queue_entries
+            else ""
+        )
 
     def _queue_extent(self) -> int:
         if not self._queue_visible:

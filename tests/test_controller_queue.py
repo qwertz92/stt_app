@@ -3741,3 +3741,147 @@ def test_f10_on_a_held_shown_transcript_says_so_in_the_tray(monkeypatch, tmp_pat
     finally:
         controller.shutdown()
     _ = app
+
+
+class _LanguageRecordingTranscriber:
+    """A cached-runtime stand-in that answers with the language it was set to."""
+
+    instances: list = []
+
+    def __init__(self, settings):
+        self.language_mode = settings.language_mode
+        self.seen_languages: list[str] = []
+        type(self).instances.append(self)
+
+    def set_language_mode(self, mode):
+        self.language_mode = mode
+
+    def transcribe_batch(self, _audio):
+        self.seen_languages.append(self.language_mode)
+        return f"text in {self.language_mode}"
+
+    def close(self):
+        pass
+
+
+def test_each_queued_recording_is_transcribed_in_the_language_it_was_recorded_in(
+    monkeypatch, tmp_path
+):
+    """Recording 1 in English, then German: both wait, each keeps its own."""
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    _LanguageRecordingTranscriber.instances = []
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda settings, **_kw: _LanguageRecordingTranscriber(settings),
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.set_language_mode("de")
+    token_b = _record_and_stop(controller)
+    controller.set_language_mode("fr")
+
+    assert controller._jobs[token_a].settings.language_mode == "en"
+    assert controller._jobs[token_b].settings.language_mode == "de"
+
+    for fn, args, _kwargs in list(controller._executor.calls):
+        fn(*args)
+    app.processEvents()
+
+    assert len(_LanguageRecordingTranscriber.instances) == 1
+    assert _LanguageRecordingTranscriber.instances[0].seen_languages == ["en", "de"]
+    assert [e.text for e in history.load()] == ["text in en", "text in de"]
+    controller.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("model_size", "keep_loaded", "runtimes"),
+    [
+        # A cached runtime serves both jobs; the language is applied per job.
+        ("small", False, 1),
+        # The Cohere Node runtime is built per job unless it is kept loaded.
+        ("cohere-transcribe-03-2026", False, 2),
+        ("cohere-transcribe-03-2026", True, 1),
+    ],
+)
+def test_a_language_switch_never_changes_or_reloads_queued_work(
+    monkeypatch, tmp_path, model_size, keep_loaded, runtimes
+):
+    """The switch lands while job 1 runs: it keeps English, job 2 gets German."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._settings = replace(
+        controller.settings, model_size=model_size, keep_onnx_model_loaded=keep_loaded
+    )
+    _LanguageRecordingTranscriber.instances = []
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda settings, **_kw: _LanguageRecordingTranscriber(settings),
+    )
+    token_a = _record_and_stop(controller)
+    controller.set_language_mode("de")
+    token_b = _record_and_stop(controller)
+
+    first_run = _LanguageRecordingTranscriber.transcribe_batch
+
+    def switch_while_running(self, audio):
+        # The user picks another language in the overlay while this job runs.
+        controller.set_language_mode("fr")
+        return first_run(self, audio)
+
+    monkeypatch.setattr(
+        _LanguageRecordingTranscriber, "transcribe_batch", switch_while_running
+    )
+    (fn_a, args_a, _), (fn_b, args_b, _) = controller._executor.calls
+    fn_a(*args_a)
+    monkeypatch.setattr(_LanguageRecordingTranscriber, "transcribe_batch", first_run)
+    fn_b(*args_b)
+    app.processEvents()
+
+    seen = [
+        language
+        for runtime in _LanguageRecordingTranscriber.instances
+        for language in runtime.seen_languages
+    ]
+    assert seen == ["en", "de"]
+    assert len(_LanguageRecordingTranscriber.instances) == runtimes
+    assert not controller._pending_transcriber_cache_reset
+    assert token_a not in controller._jobs
+    assert token_b not in controller._jobs
+    controller.shutdown()
+
+
+def test_retry_uses_the_language_selected_now(monkeypatch, tmp_path):
+    """Retry means "again with what is selected now", so a wrong language can
+    be fixed by switching and retrying; only queued first attempts are pinned."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller.set_language_mode("de")
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+def test_queue_rows_name_the_language_each_recording_was_made_in(monkeypatch, tmp_path):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    _record_and_stop(controller)
+    controller.set_language_mode("de")
+    _record_and_stop(controller)
+    controller.set_language_mode("auto")
+    _record_and_stop(controller)
+
+    labels = [label for _token, label in overlay.queue_updates[-1]]
+    assert [label.split(" · ")[-3] for label in labels] == ["EN", "DE", "Auto"]
+    controller.shutdown()
+    _ = app

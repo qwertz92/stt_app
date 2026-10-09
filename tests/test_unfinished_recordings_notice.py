@@ -126,6 +126,28 @@ def test_a_recording_already_in_history_is_not_offered(app, stores, tmp_path):
     assert gap.path.exists()
 
 
+def test_a_file_a_history_entry_points_at_is_not_deleted(app, stores, tmp_path):
+    """A transcribed recording whose move to the recordings folder failed
+    stays in the unfinished folder with its entry pointing at it; the next
+    start must not delete the audio that entry links to."""
+    import os
+
+    _last, history, unfinished = stores
+    linked = _keep(unfinished, "linked1")
+    entry = TranscriptHistoryEntry.new(
+        text="all there",
+        engine="local",
+        model="small",
+        mode="import",
+        source_recording_id="linked1",
+        source_audio_path=os.path.abspath(linked.path),
+    )
+    history.add_entry(entry, max_items=20)
+
+    assert _offer(stores, tmp_path) is None
+    assert linked.path.exists()
+
+
 def test_nothing_unfinished_shows_nothing(app, stores, tmp_path):
     assert _offer(stores, tmp_path) is None
 

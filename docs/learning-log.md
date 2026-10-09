@@ -3,6 +3,77 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-10 (overlay: "Starting" is no longer green)
+
+- **Owner: "the overlay was already green" while the first ~10 s were not
+  recorded (work PC under 100% CPU).** The wait before the microphone opens
+  was painted as Listening, so its colour invited speech that was lost. It
+  now reads "Starting" in the Idle slate; green comes with "Speak now". The
+  capture side of the same report (starved callback thread) is its own entry.
+
+## 2026-10-09 (a queued recording keeps the language it was recorded in)
+
+- **Owner's wish: switch the language between recordings while a queue waits
+  (recording 1 English, recording 2 German) and have each transcribed in its
+  own.** Checked before changing anything, because the code already looked
+  right: every batch and streaming job is registered with
+  `replace(settings)` taken when the recording *starts*, the worker receives
+  that snapshot, and `_get_or_create_transcriber` applies its `language_mode`
+  to the leased runtime (`language_mode` is not in the cache key, and the
+  Cohere Node runner takes `language` per request). A scenario test with real
+  workers run in queue order confirmed it: both jobs saw their own language
+  on one cached runtime, and a switch during a running job changed nothing
+  for it and reloaded nothing (Cohere with Keep ONNX model loaded off builds
+  a runtime per job regardless of language: 2 runtimes, languages en, de).
+  Negative control: letting the worker read `self._settings` instead of its
+  snapshot fails 4 of the 6 new tests.
+- **So no behaviour change was needed; the tests pin it, and one thing was
+  added: each queue row shows its recording's language** (`EN`, `DE`,
+  `Auto`, right after the time; one elided line, no size change). Without it
+  the owner could not tell which queued row was which language.
+- **Not changed on purpose:** Retry and re-transcription use what is selected
+  now (the way to fix a wrong language); paste mode, insert target, clipboard
+  keeping and the completion tone are read at delivery. There is no tray
+  language menu; the language is changed in the overlay or the Settings
+  dialog. Detail: `docs/agents/controller-and-jobs.md`.
+
+## 2026-10-10 (overlay: a floating overlay stays above the editor until it is clicked)
+
+- **"Directly behind the foreground window" overshot.** The 2026-10-09 fix
+  below placed a floating overlay behind the foreground window whenever
+  topmost was dropped, so with Floating it was gone at once -- after the
+  Floating click and ~1.8 s after every recording start. The owner's rule
+  (2026-10-09): on top of the normal band, as before, until he clicks
+  another window, including the one that is already active. Measured
+  before the change (real overlay, foreign-process EDIT window, SendInput):
+  directly below the editor right after the Floating click and after a
+  reveal ended.
+- **Nothing reports a click into the active window.** A WinEvent probe saw
+  no event at all for a click into an active plain window, and only
+  `EVENT_SYSTEM_CAPTURESTART` (the control's own `SetCapture`) for an EDIT
+  control. A `WH_MOUSE_LL` hook would see it but runs a Python callback in
+  every click's path. Mouse raw input with `RIDEV_INPUTSINK` delivers a
+  posted `WM_INPUT` copy of every mouse event to the overlay's window, which
+  `nativeEvent` already receives; the watch exists only while the overlay
+  waits. After the change: directly above the editor after the Floating
+  click and a reveal, still above after a click on the overlay, directly
+  below after a left or right click into the active editor, ~6 ms after the
+  press; no `WM_INPUT` once it went behind.
+- A test of the raw-input parser writes the bytes at the SDK offsets: the
+  first draft spelled the `ulButtons` union as two USHORTs, which put
+  `usButtonFlags` at offset 26 instead of 28 (the union's ULONG aligns it).
+- **The overlay's own menus let the editor in front** (review of the
+  change above). The Language menu popup becomes the foreground window; when
+  it closed (Esc, an item, a click on its button) the editor was re-activated
+  and raised, and the overlay sat below it while still waiting -- measured on
+  the desktop, already at `aboutToHide`. A zero-timer after `aboutToHide`
+  puts it back; a press during the popup is judged after it, so a click into
+  the editor that closes the menu still counts. The first version used
+  `HWND_NOTOPMOST`, which the desktop showed doing nothing: it "has no effect
+  if the window is already a non-topmost window"; `HWND_TOP` works. A test that
+  patched `QMenu.exec` on the class ran the real modal popup and hung the
+  run; replacing `QtWidgets.QMenu` with a subclass reaches the call.
+
 ## 2026-10-09 (overlay: the Pinned/Floating blink and a floating overlay that stayed in front)
 
 - **Toggling Pinned/Floating recreated the native window.** `_apply_window_flags`
@@ -9518,6 +9589,53 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   the insert that painted it); Edit needs it to be the shown entry, and an
   edit moves the offer only when it edits that entry -- which also lets a
   history edit of the delivered dictation reach its offer.
+
+## 2026-10-09: owner requests from a test on a slow work PC (not-inserted results, quit, unfinished recordings)
+
+- **A recording started during the quit's "Wait and insert" calls the quit
+  off** (owner decision). The wait refused every new recording until "Don't
+  quit" was chosen, so on a slow machine the hotkey was dead for as long as
+  the queue took. `start_recording` now clears `_quit_hold` before the
+  recording starts -- the quit window polls `hold_for_quit` every 250 ms, and
+  a hold left standing would stop the new recording on the next poll --,
+  emits `quit_canceled_by_recording` (the window closes as for "Don't quit")
+  and tells the tray "Quit canceled".
+- **A transcribed unfinished recording follows the recording settings**
+  (owner's report). `transcribe_unfinished_recording` deleted the file once
+  the transcript was in history, even with "Keep last recording after
+  successful transcription" or "Archive every recording" on. It now joins
+  the archive (archive name, retention count applied, its mtime set to now
+  -- with the quit's own mtime a full archive pruned the file it had just
+  moved, under the entry pointing at it) or, with only "Keep last", moves
+  to the recordings folder under its own name. The startup cleanup no longer
+  deletes a file a history entry links to, so a failed move keeps its audio.
+- **A transcript from the startup notice waits for the re-paste** (owner's
+  idea). The notice saved transcripts to history only; now each also
+  becomes a "Not inserted" row, so F10 pastes it at the current caret when
+  the user wants it, and the not-inserted count and the quit window count
+  it. The notice transcribes on a worker thread, so the row is recorded on
+  the controller's thread through a queued signal
+  (`unfinished_transcript_saved`); a test checks the thread.
+- **The re-paste works during a streaming dictation** (owner's request; his
+  old build refused it during any recording -- a batch capture has allowed
+  it since 2026-10-01). Into another window it goes out at once: the stream
+  writes only into its own window and a focus change suspends its live
+  inserts; the stream's next live insert then waits for that paste's
+  restore window, which only the stream's first live insert did before.
+  Into the stream's own window, where a paste would land inside the
+  streamed words or in front of the finalize's tail, it is held and the
+  tray says so; the stream's end starts the pace timer, which runs it.
+  Holding was chosen over refusing because a refusal made the user press
+  the hotkey again after the stream, and over pasting at once because the
+  order rule (one window, recording order) would break.
+- **Transcripts that were not inserted are counted on an amber badge**
+  (owner's request: on his slow PC several pastes of a long queue failed,
+  and the one Insert offer was painted over by the next recording). The
+  waiting rows already outlived a new recording in the queue panel, but
+  in a white title and light-yellow row text on the state colour -- easy
+  to miss on Listening green. The badge ("2 not inserted · Ctrl+Alt+F10")
+  sits in the queue header, amber with dark text, as tall as Clear queue,
+  so it moves nothing; measured at 9, 11.25 and 13.5 pt.
 
 ## 2026-10-10: audio lost at the start on a starved machine
 

@@ -2357,6 +2357,9 @@ DEFAULT_OVERLAY_CORNER = "top-right"
 OVERLAY_STATE_COLORS = {
     "Idle": "#2f3a4a",
     "Listening": "#1b5e20",
+    # The wait before "Speak now": not the Listening green, because nothing is
+    # recorded until the microphone is open (owner, 2026-10-09).
+    "Starting": "#2f3a4a",
     "Processing": "#0d47a1",
     "Done": "#4e342e",
     "Error": "#b71c1c",

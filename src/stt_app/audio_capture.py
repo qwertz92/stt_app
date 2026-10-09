@@ -1012,10 +1012,11 @@ class AudioCapture:
             # audio flows from the very next callback block. A callback thread
             # stalled at this moment delivers the audio since its last block
             # in that first burst, the part before the attach included: kept,
-            # because the overlay was already green ("Starting dictation")
-            # while it was spoken, and PortAudio's timestamps cannot tell the
-            # parts apart (MME reports 0, WASAPI times in the future,
-            # measured 2026-10-10). The gap is logged instead.
+            # because cutting at the attach would also cut what was said
+            # between the hotkey and the attach (seconds under a stall), and
+            # PortAudio's timestamps cannot tell the parts apart (MME reports
+            # 0, WASAPI times in the future, measured 2026-10-10). The gap is
+            # logged instead.
             gap = warm.seconds_since_last_callback()
             with self._lock:
                 if generation == self._capture_generation:

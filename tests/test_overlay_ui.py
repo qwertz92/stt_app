@@ -14,6 +14,7 @@ from stt_app.config import (
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
+    OVERLAY_STATE_COLORS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
@@ -525,7 +526,7 @@ def test_overlay_show_makes_a_pinned_overlay_topmost_natively(monkeypatch):
 
 
 class _FakeZOrderUser32:
-    """The user32 calls `_apply_native_z_order` makes, recorded."""
+    """The user32 calls the overlay's z-order code makes, recorded."""
 
     def __init__(
         self,
@@ -543,6 +544,11 @@ class _FakeZOrderUser32:
         # Insert-after handles SetWindowPos refuses, as it does with
         # ERROR_ACCESS_DENIED behind an elevated window (Task Manager).
         self.refused: set[int] = set()
+        # Top to bottom, for GetWindow(GW_HWNDPREV).
+        self.z_order: list[int] = []
+        # The window under a press, and the top-level window of each child.
+        self.window_at = 0
+        self.roots: dict[int, int] = {}
 
     def SetWindowPos(self, _hwnd, insert_after, _x, _y, _cx, _cy, flags):
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE on every call: the overlay
@@ -572,18 +578,37 @@ class _FakeZOrderUser32:
         buffer.value = self.foreground_class
         return len(self.foreground_class)
 
+    def GetWindow(self, hwnd, command):
+        assert command == 3  # GW_HWNDPREV: the window above
+        if hwnd not in self.z_order:
+            return 0
+        index = self.z_order.index(hwnd)
+        return self.z_order[index - 1] if index else 0
 
+    def WindowFromPoint(self, _point):
+        return self.window_at
+
+    def GetAncestor(self, hwnd, flags):
+        assert flags == 2  # GA_ROOT
+        return self.roots.get(hwnd, hwnd)
+
+
+_HWND_TOP = 0
 _HWND_TOPMOST = -1
 _HWND_NOTOPMOST = -2
 _EDITOR_HWND = 0x5150
+_EDITOR_CHILD_HWND = 0x5152
+_OTHER_HWND = 0x6160
+_RIDEV_INPUTSINK = 0x00000100
+_RIDEV_REMOVE = 0x00000001
 
 
-def test_dropping_topmost_puts_the_overlay_directly_behind_the_foreground_window(
+def test_dropping_topmost_keeps_a_floating_overlay_on_top_of_the_normal_band(
     monkeypatch,
 ):
-    # HWND_NOTOPMOST alone places the overlay at the top of the non-topmost
-    # band -- above the editor the user is typing in, which then could not
-    # come back above it without being re-activated (minimise and restore).
+    # Directly behind the foreground window (8a72099), a floating overlay was
+    # gone the moment Floating was clicked or a reveal ended; the owner wants
+    # it above normal windows until the next click (2026-10-09).
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
     overlay = OverlayUI()
@@ -593,75 +618,269 @@ def test_dropping_topmost_puts_the_overlay_directly_behind_the_foreground_window
     monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
 
     overlay.set_always_on_top(False)
-    assert user32.positions == [_EDITOR_HWND]
+    assert user32.positions == [_HWND_NOTOPMOST]
 
     user32.positions.clear()
     overlay.reveal_temporarily(duration_ms=20)
     assert user32.positions == [_HWND_TOPMOST]
     QtTest.QTest.qWait(60)
     app.processEvents()
-    assert user32.positions == [_HWND_TOPMOST, _EDITOR_HWND]
+    assert user32.positions == [_HWND_TOPMOST, _HWND_NOTOPMOST]
     overlay.hide()
 
 
-def test_a_refused_place_behind_an_elevated_window_still_drops_topmost(monkeypatch):
-    # Behind a higher-integrity window SetWindowPos fails (access denied);
-    # with no second call the overlay kept WS_EX_TOPMOST while saying
-    # "Floating" (review of 8a72099, measured against Task Manager).
+def _floating_overlay_above_the_editor(monkeypatch, user32):
+    """A shown overlay switched to Floating, above the foreground editor."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
     overlay = OverlayUI()
     overlay.show()
     app.processEvents()
-    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
-    user32.refused.add(_EDITOR_HWND)
     monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
-
     overlay.set_always_on_top(False)
+    hwnd = int(overlay.winId())
+    user32.z_order = [hwnd, _EDITOR_HWND, _OTHER_HWND]
+    user32.roots = {_EDITOR_CHILD_HWND: _EDITOR_HWND}
+    user32.positions.clear()
+    return overlay, hwnd
 
-    assert user32.positions == [_EDITOR_HWND, _HWND_NOTOPMOST]
+
+def test_a_click_into_the_active_window_puts_the_floating_overlay_behind_it(
+    monkeypatch, raw_mouse_input_calls
+):
+    # Clicking into the window that is already active does not raise it
+    # (Windows raises only on activation): the editor stayed under the
+    # overlay until it was minimised and restored.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    assert raw_mouse_input_calls.registrations == [(_RIDEV_INPUTSINK, hwnd)]
+    user32.window_at = _EDITOR_CHILD_HWND
+
+    overlay._on_desktop_mouse_press(40, 50)
+
+    assert user32.positions == [_EDITOR_HWND]
+    assert raw_mouse_input_calls.registrations[-1] == (_RIDEV_REMOVE, None)
     overlay.hide()
 
 
 @pytest.mark.parametrize(
-    ("foreground", "fake_kwargs"),
+    ("pressed", "fake_kwargs", "overlay_below_editor", "moved_to", "watching"),
     [
-        # Nothing in the foreground.
-        (0, {}),
-        # Behind a topmost window the overlay would itself become topmost.
-        (_EDITOR_HWND, {"foreground_exstyle": 0x00000008}),
+        # The overlay's own buttons: it must stay where the user is looking.
+        ("overlay", {}, False, [], True),
+        # An inactive window: activating it raises it above the overlay.
+        ("other", {}, False, [], True),
         # Behind the desktop the overlay would be invisible.
-        (_EDITOR_HWND, {"foreground_class": "Progman"}),
-        (_EDITOR_HWND, {"foreground_class": "WorkerW"}),
-        # A minimised window's slot is not where the user is looking.
-        (_EDITOR_HWND, {"foreground_iconic": True}),
-        # The overlay itself (its own handle is filled in below).
-        (None, {}),
+        ("editor", {"foreground_class": "Progman"}, False, [], True),
+        # Behind a topmost window the overlay would join the topmost band.
+        ("editor", {"foreground_exstyle": 0x00000008}, False, [], True),
+        ("editor", {"foreground_iconic": True}, False, [], True),
+        # Something already came above the overlay: nothing left to wait for.
+        ("editor", {}, True, [], False),
+        # Refused behind an elevated window: it stays above it, waiting.
+        ("editor", {"refused": True}, False, [_EDITOR_HWND], True),
     ],
-    ids=["none", "topmost", "desktop", "wallpaper", "minimised", "self"],
+    ids=[
+        "overlay",
+        "inactive-window",
+        "desktop",
+        "topmost",
+        "minimised",
+        "already-below",
+        "refused",
+    ],
 )
-def test_dropping_topmost_stays_on_top_of_the_normal_band_without_a_window_to_stay_behind(
-    monkeypatch, foreground, fake_kwargs
+def test_a_click_moves_the_overlay_only_from_above_the_foreground_window_clicked(
+    monkeypatch,
+    raw_mouse_input_calls,
+    pressed,
+    fake_kwargs,
+    overlay_below_editor,
+    moved_to,
+    watching,
 ):
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
-    overlay = OverlayUI()
-    overlay.show()
-    app.processEvents()
-    if foreground is None:
-        foreground = int(overlay.winId())
-    user32 = _FakeZOrderUser32(foreground=foreground, **fake_kwargs)
-    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+    refused = fake_kwargs.pop("refused", False)
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND, **fake_kwargs)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    if refused:
+        user32.refused.add(_EDITOR_HWND)
+    if overlay_below_editor:
+        user32.z_order = [_EDITOR_HWND, hwnd, _OTHER_HWND]
+    user32.window_at = {
+        "overlay": hwnd,
+        "other": _OTHER_HWND,
+        "editor": _EDITOR_CHILD_HWND,
+    }[pressed]
 
-    overlay.set_always_on_top(False)
+    overlay._on_desktop_mouse_press(40, 50)
 
-    assert user32.positions == [_HWND_NOTOPMOST]
+    assert user32.positions == moved_to
+    last = raw_mouse_input_calls.registrations[-1]
+    assert last == ((_RIDEV_INPUTSINK, hwnd) if watching else (_RIDEV_REMOVE, None))
     overlay.hide()
 
 
-def test_a_hidden_overlay_is_not_moved_behind_the_foreground_window(monkeypatch):
-    # Startup applies a saved "Floating" before the first show; behind the
-    # window that launched the app, the overlay would never be seen.
+def test_presses_are_watched_only_while_a_floating_overlay_waits_above(
+    monkeypatch, raw_mouse_input_calls
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+    overlay = OverlayUI()
+    calls = raw_mouse_input_calls.registrations
+    watch = (_RIDEV_INPUTSINK, int(overlay.winId()))
+    remove = (_RIDEV_REMOVE, None)
+
+    overlay.show()
+    app.processEvents()
+    assert calls == []  # pinned
+    overlay.set_always_on_top(False)
+    assert calls == [watch]
+    overlay.reveal_temporarily(duration_ms=20)
+    assert calls == [watch, remove]  # topmost while revealed
+    QtTest.QTest.qWait(60)
+    app.processEvents()
+    assert calls == [watch, remove, watch]
+    overlay.hide()
+    assert calls == [watch, remove, watch, remove]
+    # A floating overlay shown again appears on top of the normal band.
+    overlay.show()
+    app.processEvents()
+    assert calls == [watch, remove, watch, remove, watch]
+    overlay.set_always_on_top(True)
+    assert calls == [watch, remove, watch, remove, watch, remove]
+    overlay.hide()
+    overlay.shutdown()
+    assert calls[-1] == remove
+
+
+def test_a_raw_mouse_press_reaches_the_click_handler_with_its_cursor_position(
+    monkeypatch,
+):
+    import ctypes.wintypes
+
+    from shiboken6 import VoidPtr
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    presses: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        overlay, "_on_desktop_mouse_press", lambda x, y: presses.append((x, y))
+    )
+    button_down = [True]
+    monkeypatch.setattr(
+        overlay_ui_module.raw_mouse_input,
+        "mouse_button_pressed",
+        lambda _lparam: button_down[0],
+    )
+    msg = ctypes.wintypes.MSG()
+    msg.hWnd = hwnd
+    msg.message = 0x00FF  # WM_INPUT
+    msg.lParam = 0x77
+    msg.pt = ctypes.wintypes.POINT(321, 654)
+
+    overlay.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+    button_down[0] = False  # a movement
+    overlay.nativeEvent(b"windows_generic_MSG", VoidPtr(ctypes.addressof(msg)))
+    app.processEvents()
+
+    assert presses == [(321, 654)]
+    overlay.hide()
+
+
+_POPUP_HWND = 0x7070
+
+
+def _close_menu(overlay, menu_name):
+    """Close one of the overlay's menus the way Qt does: `aboutToHide`."""
+    if menu_name == "detail":
+        # Built and run inside `_show_detail_context_menu`; `exec` returns
+        # once the popup has hidden. Patching `QMenu.exec` itself does not
+        # reach the call (the real modal popup ran), a subclass does.
+        class _ClosingMenu(QtWidgets.QMenu):
+            def exec(self, *_args):
+                self.aboutToHide.emit()
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(overlay_ui_module.QtWidgets, "QMenu", _ClosingMenu)
+            overlay._show_detail_context_menu(QtCore.QPoint(1, 1))
+    else:
+        getattr(overlay, menu_name).aboutToHide.emit()
+    QtWidgets.QApplication.instance().processEvents()
+
+
+@pytest.mark.parametrize("menu_name", ["_language_menu", "_microphone_menu", "detail"])
+def test_a_closed_menu_puts_the_waiting_overlay_back_above_the_editor(
+    monkeypatch, raw_mouse_input_calls, menu_name
+):
+    # The popup is activated; when it closes, Windows re-activates the editor
+    # and raises it above the floating overlay (measured 2026-10-10), which
+    # then sat below the editor although nobody clicked into it.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+
+    _close_menu(overlay, menu_name)
+
+    # HWND_NOTOPMOST does nothing to a window that is not topmost already.
+    assert user32.positions == [_HWND_TOP]
+    assert raw_mouse_input_calls.registrations[-1] == (_RIDEV_INPUTSINK, hwnd)
+    overlay.hide()
+
+
+def test_a_closed_menu_leaves_an_overlay_alone_that_no_longer_waits(monkeypatch):
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, _hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    user32.window_at = _EDITOR_CHILD_HWND
+    overlay._on_desktop_mouse_press(40, 50)  # behind the editor now
+    user32.positions.clear()
+
+    _close_menu(overlay, "_language_menu")
+
+    assert user32.positions == []
+    overlay.hide()
+
+
+@pytest.mark.parametrize(
+    ("pressed", "moved_to"),
+    [
+        # The press that closed the menu landed in the editor: it goes behind.
+        ("editor", [_HWND_TOP, _EDITOR_HWND]),
+        # A menu item: the overlay stays above the editor.
+        ("popup", [_HWND_TOP]),
+    ],
+)
+def test_a_press_while_a_menu_is_open_is_judged_after_the_menu_closed(
+    monkeypatch, raw_mouse_input_calls, pressed, moved_to
+):
+    # While the popup is open it is the foreground window, and the editor is
+    # raised only when the popup closes; judged at once, a press into the
+    # editor would be dropped and the overlay put back above the editor.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    popup = object()
+    monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: popup)
+    user32.window_at = {"editor": _EDITOR_CHILD_HWND, "popup": _POPUP_HWND}[pressed]
+
+    overlay._on_desktop_mouse_press(40, 50)
+    assert user32.positions == []
+
+    monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: None)
+    user32.window_at = 0  # the popup is gone from under the press point
+    _close_menu(overlay, "_language_menu")
+
+    assert user32.positions == moved_to
+    still_waiting = pressed == "popup"
+    last = raw_mouse_input_calls.registrations[-1]
+    assert last == (
+        (_RIDEV_INPUTSINK, hwnd) if still_waiting else (_RIDEV_REMOVE, None)
+    )
+    overlay.hide()
+
+
+def test_a_hidden_overlay_does_not_wait_for_a_click(monkeypatch, raw_mouse_input_calls):
+    # Startup applies a saved "Floating" before the first show.
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
     overlay = OverlayUI()
@@ -671,6 +890,7 @@ def test_a_hidden_overlay_is_not_moved_behind_the_foreground_window(monkeypatch)
     overlay.set_always_on_top(False)
 
     assert user32.positions == [_HWND_NOTOPMOST]
+    assert raw_mouse_input_calls.registrations == []
     assert overlay.isVisible() is False
 
 
@@ -2930,6 +3150,7 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
             model=model,
             created_at=datetime(2026, 10, 1, 12, 0, second, tzinfo=UTC),
             insertion_deferred=True,
+            settings=SimpleNamespace(language_mode="de"),
         )
         for second, model in (
             (0, "nemotron-3.5-asr-streaming-0.6b-int4"),
@@ -2957,4 +3178,131 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
     assert "Pending insert" in painted[0], painted
     assert "Pending insert" in painted[1], painted
     assert painted[2].startswith("Possibly inserted"), painted
+    overlay.close()
+
+
+_BADGE_TEXT = "12 not inserted · Ctrl+Alt+Shift+F10"
+
+
+def _badge_fill(overlay) -> QtGui.QColor:
+    """The badge's painted background, read inside its padding."""
+    badge = overlay._not_inserted_badge
+    image = badge.grab().toImage()
+    return image.pixelColor(3, image.height() // 2)
+
+
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5])
+def test_the_not_inserted_badge_holds_through_every_state_without_moving(point_scale):
+    """Owner's request 2026-10-09: transcripts that were not inserted must be
+    unmistakable while the next recording starts and runs. The badge sits in
+    the queue panel's header, which no state change touches, so Listening
+    cannot paint over it; it shows the whole count and hotkey at 9, 11.25
+    and 13.5 pt; and showing it moves nothing -- not the overlay's size, not
+    the header row's height, not the Clear queue button."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            _shown_offscreen(overlay)
+            overlay.set_state("Error", "The transcript could not be inserted.")
+            rows = [
+                (-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED),
+                (-2, 'Not inserted · 12:00:05 · "two"', QUEUE_ROW_KIND_UNDELIVERED),
+            ]
+            overlay.set_transcription_queue(rows)
+            QtWidgets.QApplication.processEvents()
+            size = overlay.size()
+            header_height = overlay._queue_header_widget.height()
+            clear = overlay._queue_clear_button.geometry()
+
+            overlay.set_not_inserted_badge(_BADGE_TEXT, "Press it to insert them.")
+            QtWidgets.QApplication.processEvents()
+
+            badge = overlay._not_inserted_badge
+            assert badge.isVisible()
+            assert badge.text() == _BADGE_TEXT
+            assert badge.toolTip() == "Press it to insert them."
+            assert overlay.size() == size
+            assert overlay._queue_header_widget.height() == header_height
+            assert overlay._queue_clear_button.geometry() == clear
+            assert badge.width() >= badge.sizeHint().width(), "the badge is cut off"
+            assert badge.height() <= header_height
+            shown = badge.geometry()
+            for state in ("Listening", "Processing", "Done", "Error", "Idle"):
+                overlay.set_state(state, "Recording...")
+                QtWidgets.QApplication.processEvents()
+                assert badge.isVisible(), state
+                assert badge.geometry() == shown, state
+                assert overlay.width() == size.width(), state
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
+
+
+def test_the_not_inserted_badge_is_amber_not_error_red_or_listening_green():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_transcription_queue(
+        [(-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    for state in ("Listening", "Error"):
+        overlay.set_state(state, "x")
+        QtWidgets.QApplication.processEvents()
+        fill = _badge_fill(overlay)
+        assert fill.red() > 200 and 120 < fill.green() < 220 and fill.blue() < 80, (
+            state,
+            fill.name(),
+        )
+        assert fill.name() != OVERLAY_STATE_COLORS[state].lower(), state
+    overlay.close()
+
+
+def test_the_queue_title_leaves_the_count_to_the_badge():
+    """With the badge on, the title does not count the same rows a second
+    time; without it (only "possibly inserted" rows) it still does."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_transcription_queue([(1, "a"), (-1, "x", QUEUE_ROW_KIND_UNDELIVERED)])
+    assert (
+        overlay._queue_title_label.text() == "Transcribing 1 recording · 1 not inserted"
+    )
+
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    assert overlay._queue_title_label.text() == "Transcribing 1 recording"
+
+    overlay.set_not_inserted_badge("")
+    assert overlay._not_inserted_badge.isHidden()
+    assert (
+        overlay._queue_title_label.text() == "Transcribing 1 recording · 1 not inserted"
+    )
+    overlay.deleteLater()
+
+
+def test_a_starting_dictation_is_not_painted_in_the_listening_green():
+    """Until the microphone is open nothing is recorded, so the wait before
+    "Speak now" must not look like Listening (owner, 2026-10-09: the overlay
+    was green and the first seconds were missing). The state stays Listening
+    for every control; only the label and the colour say "Starting"."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Listening", "Starting dictation.", compact=True, starting=True)
+    QtWidgets.QApplication.processEvents()
+    width = overlay.width()
+    assert overlay._state_label.text() == "Starting"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Starting"]
+    assert OVERLAY_STATE_COLORS["Starting"] != OVERLAY_STATE_COLORS["Listening"]
+    assert overlay.state == "Listening"
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    QtWidgets.QApplication.processEvents()
+    assert overlay._state_label.text() == "Listening"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
+    assert overlay.width() == width
     overlay.close()

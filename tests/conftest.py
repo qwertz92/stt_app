@@ -216,6 +216,8 @@ class FakeOverlay:
         self.queue_kinds = []
         # Mirrors `OverlayUI.detail_is_being_read`; a test sets it.
         self.detail_is_being_read = False
+        # `(text, tooltip)` per `set_not_inserted_badge`; "" hides the badge.
+        self.badges = []
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
@@ -246,6 +248,14 @@ class FakeOverlay:
         self.queue_kinds.append(
             [str(row[2]) if len(row) > 2 else "transcription" for row in rows]
         )
+
+    def set_not_inserted_badge(self, text, tooltip=""):
+        self.badges.append((str(text), str(tooltip)))
+
+    @property
+    def badge(self) -> str:
+        """The badge text the real overlay would show now."""
+        return self.badges[-1][0] if self.badges else ""
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))
@@ -768,6 +778,39 @@ def real_silero(monkeypatch):
     silero_vad.reset_silero_for_tests()
     yield
     silero_vad.reset_silero_for_tests()
+
+
+class FakeRawInputUser32:
+    """Records mouse raw-input registrations instead of making them."""
+
+    def __init__(self) -> None:
+        # (dwFlags, hwndTarget) per RegisterRawInputDevices call.
+        self.registrations: list[tuple[int, int | None]] = []
+
+    def RegisterRawInputDevices(self, devices, _count, _size):
+        device = devices._obj  # the structure behind `ctypes.byref`
+        self.registrations.append((int(device.dwFlags), device.hwndTarget))
+        return 1
+
+    def GetRawInputData(self, *_args):
+        return 0xFFFFFFFF
+
+
+@pytest.fixture(autouse=True)
+def raw_mouse_input_calls(monkeypatch):
+    """No test registers real raw mouse input; a test may read the recorder.
+
+    A floating overlay that is shown watches mouse presses through a
+    process-wide `RIDEV_INPUTSINK` registration (`stt_app.raw_mouse_input`).
+    Made for real, every movement of the developer's mouse during the run
+    would reach whichever overlay a test left behind and could move it. A
+    test about the module itself replaces `_user32` again with its own fake.
+    """
+    from stt_app import raw_mouse_input
+
+    fake = FakeRawInputUser32()
+    monkeypatch.setattr(raw_mouse_input, "_user32", lambda: fake)
+    return fake
 
 
 class RealTranscriberRefused(BaseException):
