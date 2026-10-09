@@ -877,6 +877,10 @@ class DictationController(QtCore.QObject):
         # True once the first timeout found a stream PortAudio still runs and
         # re-armed for the hard limit (`_on_audio_callback_watchdog_timeout`).
         self._audio_callback_watchdog_extended = False
+        # The capture `stop_recording` is stopping: its stop may wait for the
+        # backlog of a starved callback thread, and those blocks must still
+        # reach the streaming transcriber (`_on_stream_audio_chunk`).
+        self._stopping_capture: AudioCapture | None = None
         self._audio_device_change_timer = QtCore.QTimer(self)
         self._audio_device_change_timer.setSingleShot(True)
         self._audio_device_change_timer.setInterval(AUDIO_DEVICE_CHANGE_SETTLE_MS)
@@ -2858,6 +2862,10 @@ class DictationController(QtCore.QObject):
             self._cancel_audio_callback_watchdog(capture)
             self._audio_capture = None
             warm_stream, callback_count = self._audio_capture_runtime_context(capture)
+            # Review F4: cleared above, `_audio_capture` made
+            # `_on_stream_audio_chunk` drop every block the stop then waited
+            # for. Only the PortAudio thread runs while this waits.
+            self._stopping_capture = capture
             try:
                 wav_bytes = capture.stop()
             except Exception as exc:
@@ -2879,6 +2887,8 @@ class DictationController(QtCore.QObject):
                 else:
                     self._overlay.set_state("Error", detail)
                 return
+            finally:
+                self._stopping_capture = None
             persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
             # The job's recording is the one this persist wrote, under the
@@ -6056,7 +6066,7 @@ class DictationController(QtCore.QObject):
         main thread; we intentionally avoid Win32 API calls here because
         the PortAudio real-time thread must not block on system calls.
         """
-        if self._audio_capture is None:
+        if self._audio_capture is None and self._stopping_capture is None:
             return
         if self._stream_abort_requested or self._stream_chunk_error_reported:
             return

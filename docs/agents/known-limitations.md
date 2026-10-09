@@ -396,3 +396,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     before the first block of a running stream up to the watchdog's 12 s
     hard limit. Not waiting loses the recording; not blocking would need a
     two-phase stop in the controller (~4-6 h with its re-entrancy cases).
+  - Unverified (review F5): Deepgram closes a streaming socket that gets
+    no audio for about 10 s, and the app sends no KeepAlive. A start stall
+    that the watchdog now holds for up to 12 s may therefore lose the
+    Deepgram session before the burst arrives. Not reproduced; sending
+    `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
+    (~1-2 h with tests).

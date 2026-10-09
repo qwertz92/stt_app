@@ -192,7 +192,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   audio owed includes `warm_attach_gap` (`_CaptureTiming.pre_attach_s`): the
   burst of a stall spanning hotkey and stop carries the seconds before the
   attach too, and a cutoff counted from the attach refused the last ones
-  before the stop (review F3: 4.0 of 5.0 s kept). A healthy stream is behind
+  before the stop (review F3: 4.0 of 5.0 s kept). The blocks the wait
+  collects in streaming reach the transcriber: `stop_recording` keeps the
+  capture in `_stopping_capture` across `capture.stop()`, which
+  `_on_stream_audio_chunk` accepts (review F4: with `_audio_capture` already
+  cleared they were dropped while the Qt thread waited). A healthy stream is behind
   by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
   never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
 - **`audio_capture_stats`, one line per recording** (logged by

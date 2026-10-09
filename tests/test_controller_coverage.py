@@ -1447,6 +1447,37 @@ def test_a_streaming_stop_without_any_audio_is_an_error_not_no_speech(monkeypatc
     _ = app
 
 
+def test_blocks_a_streaming_stop_waits_for_reach_the_transcriber(monkeypatch):
+    """Review F4: `stop_recording` cleared `_audio_capture` before
+    `capture.stop()`, so the blocks the stop waits for -- the backlog of a
+    starved callback thread -- were dropped by `_on_stream_audio_chunk`
+    while the Qt thread sat waiting for them."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    transcriber = FakeStreamingTranscriber()
+
+    class _DrainingCapture(FakeCapture):
+        def stop(self):
+            self.chunk_callback(b"late block")
+            return super().stop()
+
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _DrainingCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+    monkeypatch.setattr(controller, "_submit_stream_finalize", lambda **kw: None)
+    controller.start_recording()
+
+    controller.stop_recording()
+
+    assert transcriber.chunks == [b"late block"]
+    assert controller._stopping_capture is None
+    controller.shutdown()
+    _ = app
+
+
 def test_a_first_callback_timeout_on_a_stopped_stream_aborts_at_once(monkeypatch):
     """PortAudio reporting the stream inactive is a dead stream: no reason to
     make the user talk into it for the hard limit."""
