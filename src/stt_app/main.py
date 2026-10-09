@@ -356,6 +356,8 @@ def run() -> int:
     app.aboutToQuit.connect(request_download_shutdown)
     app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
+    # A floating overlay's mouse raw-input watch (docs/agents/overlay.md).
+    app.aboutToQuit.connect(overlay.shutdown)
     signal_timer = _install_signal_handlers(app)
 
     app._tts_refs = {
