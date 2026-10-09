@@ -3,6 +3,14 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-10 (overlay: "Starting" is no longer green)
+
+- **Owner: "the overlay was already green" while the first ~10 s were not
+  recorded (work PC under 100% CPU).** The wait before the microphone opens
+  was painted as Listening, so its colour invited speech that was lost. It
+  now reads "Starting" in the Idle slate; green comes with "Speak now". The
+  capture side of the same report (starved callback thread) is its own entry.
+
 ## 2026-10-09 (a queued recording keeps the language it was recorded in)
 
 - **Owner's wish: switch the language between recordings while a queue waits

@@ -1747,7 +1747,8 @@ class DictationController(QtCore.QObject):
             # take seconds on a locked-down machine, and audio spoken before
             # ``capture.start()`` completes is irretrievably lost.
             self._set_listening_overlay(
-                "Starting dictation. Please wait for the 'Speak now' message."
+                "Starting dictation. Please wait for the 'Speak now' message.",
+                starting=True,
             )
             QtCore.QCoreApplication.processEvents(
                 QtCore.QEventLoop.ExcludeUserInputEvents,
@@ -1789,8 +1790,8 @@ class DictationController(QtCore.QObject):
                 )
                 QtCore.QTimer.singleShot(0, self.stop_recording)
 
-    def _set_listening_overlay(self, detail: str) -> None:
-        self._overlay.set_state("Listening", detail, compact=True)
+    def _set_listening_overlay(self, detail: str, *, starting: bool = False) -> None:
+        self._overlay.set_state("Listening", detail, compact=True, starting=starting)
         self._overlay.ensure_compact_size()
 
     def _start_batch_recording(
