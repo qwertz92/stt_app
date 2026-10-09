@@ -382,3 +382,28 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   one event-loop turn after `aboutToHide`; an editor process that handles its
   re-activation later than that (a laptop at 100% CPU) raises itself above the
   overlay again although the user never clicked into it.
+- **Audio capture under a starved callback thread** (2026-10-10,
+  `docs/agents/audio-capture.md`):
+  - A stall longer than `AUDIO_INPUT_BUFFER_S` (20 s) still loses audio;
+    MME then drops the whole stall, not just the overflow (measured: 10 s
+    stall with the 0.18 s default, 10.1 s lost).
+  - A warm stream whose callback thread is stalled when the hotkey comes
+    puts the audio from its last block up to the attach into the recording
+    (up to 20 s of what was said before the hotkey). PortAudio's timestamps
+    cannot place it, and cutting by the attach time would cut words spoken
+    between the hotkey and the attach. Recognisable by
+    `warm_attach_gap_ms` in `audio_capture_stats`. Fixing it needs the
+    hotkey's own message time (`MSG.time`) carried to the capture (~2-3 h).
+  - A starved stream that never delivers waits 12 s (the hard limit), not
+    2 s, before its Error, unless PortAudio reports it inactive.
+  - A stop during a stall can hold the Qt thread for up to
+    `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives, and a stop
+    before the first block of a running stream up to the watchdog's 12 s
+    hard limit. Not waiting loses the recording; not blocking would need a
+    two-phase stop in the controller (~4-6 h with its re-entrancy cases).
+  - Unverified (review F5): Deepgram closes a streaming socket that gets
+    no audio for about 10 s, and the app sends no KeepAlive. A start stall
+    that the watchdog now holds for up to 12 s may therefore lose the
+    Deepgram session before the burst arrives. Not reproduced; sending
+    `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
+    (~1-2 h with tests).

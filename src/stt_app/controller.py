@@ -24,6 +24,7 @@ from .app_paths import resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import AudioDeviceChangeListener
 from .config import (
+    AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
     AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
@@ -877,6 +878,13 @@ class DictationController(QtCore.QObject):
             self._on_audio_callback_watchdog_timeout
         )
         self._audio_callback_watchdog_capture: AudioCapture | None = None
+        # True once the first timeout found a stream PortAudio still runs and
+        # re-armed for the hard limit (`_on_audio_callback_watchdog_timeout`).
+        self._audio_callback_watchdog_extended = False
+        # The capture `stop_recording` is stopping: its stop may wait for the
+        # backlog of a starved callback thread, and those blocks must still
+        # reach the streaming transcriber (`_on_stream_audio_chunk`).
+        self._stopping_capture: AudioCapture | None = None
         self._audio_device_change_timer = QtCore.QTimer(self)
         self._audio_device_change_timer.setSingleShot(True)
         self._audio_device_change_timer.setInterval(AUDIO_DEVICE_CHANGE_SETTLE_MS)
@@ -2435,6 +2443,7 @@ class DictationController(QtCore.QObject):
 
     def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
         self._audio_callback_watchdog_capture = capture
+        self._audio_callback_watchdog_extended = False
         self._audio_callback_watchdog_timer.start(
             AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
         )
@@ -2449,6 +2458,20 @@ class DictationController(QtCore.QObject):
         self._audio_callback_watchdog_capture = None
 
     def _on_audio_callback_watchdog_timeout(self) -> None:
+        """No first block yet: wait for a starved stream, abort a dead one.
+
+        Two stages. At `AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS` a stream
+        that PortAudio still reports active is starved rather than dead -- on
+        a machine at 100% CPU the callback thread is simply not scheduled,
+        and the device keeps capturing into the `AUDIO_INPUT_BUFFER_S` buffer
+        meanwhile -- so the stall is logged and the watchdog re-armed up to
+        `AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS`. Aborting there, as
+        this did at 2 s, threw away a recording whose audio was on its way:
+        the field report "a recording stops on its own right away and a red
+        error appears". A stream PortAudio reports stopped is aborted at
+        once, and so is anything still silent at the hard limit. The overlay
+        keeps "Speak now": the audio is buffered, so it stays true.
+        """
         capture = self._audio_callback_watchdog_capture
         self._audio_callback_watchdog_capture = None
         if (
@@ -2466,13 +2489,41 @@ class DictationController(QtCore.QObject):
         if has_received_audio:
             return
 
+        try:
+            stream_active = capture.stream_is_active()
+        except (AttributeError, RuntimeError):
+            stream_active = None
+        if not self._audio_callback_watchdog_extended and stream_active is not False:
+            self._audio_callback_watchdog_extended = True
+            self._audio_callback_watchdog_capture = capture
+            self._logger.warning(
+                "audio_capture_callback_slow mode=%s waited_ms=%d warm_stream=%s "
+                "stream_active=%s; waiting up to %d ms for the first block (a "
+                "starved callback thread delivers late, its audio is buffered)",
+                self._active_session_mode,
+                AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+                warm_stream,
+                stream_active,
+                AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
+            )
+            self._audio_callback_watchdog_timer.start(
+                AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
+                - AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+            )
+            return
+
         self._logger.error(
             "audio_capture_callback_timeout mode=%s timeout_ms=%d "
-            "warm_stream=%s callback_count=%d",
+            "warm_stream=%s callback_count=%d stream_active=%s",
             self._active_session_mode,
-            AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+            (
+                AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
+                if self._audio_callback_watchdog_extended
+                else AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+            ),
             warm_stream,
             callback_count,
+            stream_active,
         )
         detail = "Microphone capture started but did not deliver audio. Please retry."
         if warm_stream:
@@ -2825,6 +2876,10 @@ class DictationController(QtCore.QObject):
             self._cancel_audio_callback_watchdog(capture)
             self._audio_capture = None
             warm_stream, callback_count = self._audio_capture_runtime_context(capture)
+            # Review F4: cleared above, `_audio_capture` made
+            # `_on_stream_audio_chunk` drop every block the stop then waited
+            # for. Only the PortAudio thread runs while this waits.
+            self._stopping_capture = capture
             try:
                 wav_bytes = capture.stop()
             except Exception as exc:
@@ -2846,6 +2901,8 @@ class DictationController(QtCore.QObject):
                 else:
                     self._overlay.set_state("Error", detail)
                 return
+            finally:
+                self._stopping_capture = None
             persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
             # The job's recording is the one this persist wrote, under the
@@ -2870,6 +2927,28 @@ class DictationController(QtCore.QObject):
                 if self._stream_abort_requested:
                     self._abort_streaming_session(
                         "Streaming aborted.",
+                        beep=False,
+                        finalize_stream=False,
+                    )
+                    return
+                if not wav_bytes and not self._current_streaming_partial_text().strip():
+                    # The microphone delivered nothing by the stop -- a
+                    # starved callback thread whose backlog did not come in
+                    # time. Finalized, the empty stream ended as "No speech
+                    # detected", a success that hid the loss of everything
+                    # said; batch reports the same case as an error. (The
+                    # capture records every block it streams, so no bytes
+                    # means nothing was streamed; the partial check only
+                    # keeps a stream that did show text on its own road.)
+                    self._logger.error(
+                        "audio_capture_empty mode=streaming warm_stream=%s "
+                        "callback_count=%d",
+                        warm_stream,
+                        callback_count,
+                    )
+                    self._abort_streaming_session(
+                        "No audio captured: the microphone delivered nothing "
+                        "before the stop.",
                         beep=False,
                         finalize_stream=False,
                     )
@@ -6035,7 +6114,7 @@ class DictationController(QtCore.QObject):
         main thread; we intentionally avoid Win32 API calls here because
         the PortAudio real-time thread must not block on system calls.
         """
-        if self._audio_capture is None:
+        if self._audio_capture is None and self._stopping_capture is None:
             return
         if self._stream_abort_requested or self._stream_chunk_error_reported:
             return

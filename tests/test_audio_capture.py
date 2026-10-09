@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 import wave
@@ -5,7 +6,9 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+import sounddevice as sd
 
+from stt_app import audio_capture as audio_capture_module
 from stt_app import audio_devices
 from stt_app.audio_capture import (
     AudioCapture,
@@ -16,6 +19,7 @@ from stt_app.audio_devices import (
     SYSTEM_DEFAULT_INPUT_DEVICE,
     InputDeviceNotFoundError,
 )
+from stt_app.config import AUDIO_INPUT_BUFFER_S
 from stt_app.vad import VadDecision
 
 
@@ -1581,3 +1585,439 @@ def test_warm_close_gives_up_on_a_helper_close_that_never_finishes(monkeypatch):
         assert time.perf_counter() - started < 2.0
     finally:
         first.release.set()
+
+
+# ---------------------------------------------------------------------------
+# A starved callback thread (100% CPU, an endpoint scanner, the GIL held
+# elsewhere): audio piles up in PortAudio's buffer and arrives late, in a burst.
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    """Stands in for `audio_capture._clock`; tests move it by hand."""
+
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _block(frames: int = 1600, value: float = 0.1) -> np.ndarray:
+    return np.full((frames, 1), value, dtype=np.float32)
+
+
+def _wav_frames(wav_bytes: bytes) -> int:
+    if not wav_bytes:
+        return 0
+    with wave.open(BytesIO(wav_bytes), "rb") as wav_file:
+        return wav_file.getnframes()
+
+
+class _Overflow:
+    """The part of sounddevice's `CallbackFlags` the capture reads."""
+
+    input_overflow = True
+
+    def __bool__(self) -> bool:
+        return True
+
+    def __str__(self) -> str:
+        return "input overflow"
+
+
+def _cold_capture(monkeypatch, clock: _Clock, **kwargs):
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    capture = AudioCapture(sample_rate=16000, channels=1, **kwargs)
+    capture.start()
+    return capture, FakeInputStream.instances[-1].kwargs["callback"]
+
+
+def test_every_input_stream_asks_for_a_buffer_that_outlasts_a_stall(monkeypatch):
+    """Both opens -- the cold capture's and the warm stream's -- request
+    `AUDIO_INPUT_BUFFER_S` as PortAudio's suggested latency.
+
+    Without it PortAudio takes the device's "high" default: 0.18 s on MME
+    (the system-default path), 0.01 s on WASAPI. Measured on HomeBase
+    (2026-10-10) with the callback blocked for 10 s, that lost 10.1 s (MME)
+    and 9.9 s (WASAPI) of a 13 s recording -- WASAPI without setting the
+    overflow flag -- while a 12 s buffer lost nothing, and an unstalled run
+    delivered the same frames with the same first-callback delay at every
+    size."""
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    cold = AudioCapture(sample_rate=16000, channels=1)
+    cold.start()
+    try:
+        assert [s.kwargs.get("latency") for s in FakeInputStream.instances] == [
+            AUDIO_INPUT_BUFFER_S,
+            AUDIO_INPUT_BUFFER_S,
+        ]
+    finally:
+        cold.stop()
+        warm.close()
+
+
+def test_a_device_that_refuses_the_large_buffer_still_records(monkeypatch, caplog):
+    """A driver that rejects the requested buffer must not turn every
+    recording into an error: the open is retried with the device default,
+    and the log says so."""
+    opens: list[dict] = []
+
+    def _factory(**kwargs):
+        opens.append(kwargs)
+        if "latency" in kwargs:
+            raise sd.PortAudioError("Invalid buffer size")
+        return FakeInputStream(**kwargs)
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    FakeInputStream.instances = []
+    logger = logging.getLogger("test.audio_capture.buffer")
+    capture = AudioCapture(sample_rate=16000, channels=1, logger=logger)
+    with caplog.at_level(logging.WARNING, logger=logger.name):
+        capture.start()
+    try:
+        assert capture.is_recording
+        assert [("latency" in kwargs) for kwargs in opens] == [True, False]
+        assert "audio_input_buffer_refused" in caplog.text
+    finally:
+        capture.stop()
+
+
+def test_stop_collects_the_backlog_a_stalled_callback_delivers_late(monkeypatch):
+    """The user stops while the callback thread is stalled: the seconds
+    since the stall sit in PortAudio's buffer, and `stream.stop()` discards
+    them (measured on HomeBase: stop requested 2.0 s in, during a 3 s stall,
+    kept 1.1 s; waiting for the backlog first kept 4.1-4.3 s). So `stop`
+    waits, bounded, for audio up to the moment it was called -- and not
+    beyond it: the burst below carries more than that, and the recording
+    must end where the user stopped it, give or take one block."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    clock.now += 0.1
+    callback(_block(), 1600, None, None)
+    clock.now += 5.0  # the callback thread is stalled; the user stops here
+
+    def _burst():
+        time.sleep(0.2)
+        for _ in range(80):
+            callback(_block(), 1600, None, None)
+
+    burst = threading.Thread(target=_burst, daemon=True)
+    burst.start()
+    wav_bytes = capture.stop()
+    burst.join(timeout=5)
+
+    frames = _wav_frames(wav_bytes)
+    # 5.1 s were due at the stop; the wait ends within one block of that, and
+    # nothing past the block that crosses it is kept.
+    assert frames >= int(5.1 * 16000) - 1600, f"only {frames / 16000:.2f}s kept"
+    assert frames <= int(5.1 * 16000) + 1600, f"{frames / 16000:.2f}s kept"
+
+
+def test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio(monkeypatch):
+    """Blocks arriving on time leave no backlog, so `stop` returns at once
+    with exactly the frames that arrived: the stall handling must not move a
+    healthy machine's stop by a millisecond."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 31):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.08
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 30 * 1600
+
+
+def test_stop_gives_up_on_a_backlog_that_never_arrives(monkeypatch):
+    """Audio lost before it reached the buffer never arrives: the wait ends
+    at `AUDIO_STOP_DRAIN_MAX_S` (it runs on the Qt thread), and the
+    recording keeps what it has."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    clock.now += 0.1
+    callback(_block(), 1600, None, None)
+    clock.now += 5.0
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert 0.25 <= time.perf_counter() - started < 1.0
+    assert _wav_frames(wav_bytes) == 1600
+
+
+class _StoppedStream(FakeInputStream):
+    """PortAudio reports the stream no longer active (its device went away)."""
+
+    active = False
+
+
+def test_stop_does_not_wait_for_a_stream_portaudio_reports_stopped(monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _StoppedStream)
+    capture = AudioCapture(sample_rate=16000, channels=1)
+    capture.start()
+    callback = FakeInputStream.instances[-1].kwargs["callback"]
+    clock.now += 0.1
+    callback(_block(), 1600, None, None)
+    clock.now += 5.0
+
+    started = time.perf_counter()
+    assert _wav_frames(capture.stop()) == 1600
+    assert time.perf_counter() - started < 0.1
+
+
+def test_stop_after_a_permanent_loss_neither_waits_nor_keeps_later_audio(
+    monkeypatch,
+):
+    """Review F2: audio lost for good (a stall longer than the buffer, a
+    driver that refused it) leaves the audio behind the wall clock for the
+    rest of the recording, while the stream itself is back to real time.
+    The frame-count cutoff then read the gap as a backlog: every stop held
+    the Qt thread the full 3 s and kept about 3 s spoken after it (measured
+    on the real MME microphone with a 0.01 s buffer and a 5 s stall). A
+    stream delivering at real-time pace at the stop owes nothing."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    for index in range(61, 71):  # five seconds are gone for good
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.05
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 20 * 1600
+
+
+def test_the_backlog_wait_refuses_audio_captured_after_the_stop(monkeypatch):
+    """The stop lands in a stall after a loss: the burst is old audio and is
+    kept, but once blocks arrive at real-time pace again, a block arriving a
+    block's length after the stop was captured after it -- refused, and the
+    wait ends. With the frame-count cutoff alone the lost seconds were
+    filled up with what was said after the stop."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 103.0  # the stop, during a stall
+
+    def _deliver():
+        time.sleep(0.2)
+        for _ in range(5):  # the burst, back to back
+            callback(_block(), 1600, None, None)
+        for index in range(1, 31):  # then real-time pace
+            clock.now = 103.0 + index / 10
+            callback(_block(), 1600, None, None)
+            time.sleep(0.002)
+
+    deliverer = threading.Thread(target=_deliver, daemon=True)
+    deliverer.start()
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+    waited = time.perf_counter() - started
+    deliverer.join(timeout=5)
+
+    frames = _wav_frames(wav_bytes)
+    assert frames <= 16 * 1600, f"{frames / 16000:.2f}s kept, 1.5 s arrived by the stop"
+    assert frames >= 15 * 1600
+    assert waited < 1.0
+
+
+class _RunningStream(FakeInputStream):
+    """PortAudio reports the stream active: starved, not dead."""
+
+    active = True
+
+
+def _running_capture(monkeypatch, clock: _Clock, **kwargs):
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _RunningStream)
+    FakeInputStream.instances = []
+    capture = AudioCapture(sample_rate=16000, channels=1, **kwargs)
+    capture.start()
+    return capture, FakeInputStream.instances[-1].kwargs["callback"]
+
+
+def test_stop_waits_for_the_first_burst_of_a_starved_running_stream(monkeypatch):
+    """Review F1: the callback thread is starved from the start, the user
+    speaks 3.5 s and stops before the first block came. The watchdog keeps
+    such a stream (PortAudio says it runs) for its hard limit, so zero
+    blocks at the stop is a backlog, not a dead stream: the stop waits for
+    the burst and keeps the 3.5 s up to the stop. Treating zero blocks as
+    dead kept 0.00 s ("No audio captured", or a streaming "No speech
+    detected" success)."""
+    clock = _Clock()
+    capture, callback = _running_capture(monkeypatch, clock)
+    clock.now += 3.5
+
+    def _burst():
+        time.sleep(0.3)
+        for _ in range(45):
+            callback(_block(), 1600, None, None)
+
+    burst = threading.Thread(target=_burst, daemon=True)
+    burst.start()
+    wav_bytes = capture.stop()
+    burst.join(timeout=5)
+
+    frames = _wav_frames(wav_bytes)
+    assert frames >= int(3.5 * 16000) - 1600, f"only {frames / 16000:.2f}s kept"
+    assert frames <= int(3.5 * 16000) + 1600, f"{frames / 16000:.2f}s kept"
+
+
+def test_a_warm_stall_across_hotkey_and_stop_keeps_the_seconds_before_the_stop(
+    monkeypatch,
+):
+    """Review F3: the warm stream's callback thread stalls a second before
+    the hotkey and stays stalled past the stop. Its burst carries that
+    second before the attach too, so a cutoff counted from the attach was
+    reached a second early and the last second before the stop was refused
+    (kept 4.0 of the 5.0 s after the attach). The pre-attach part -- the
+    gap at attach -- counts towards the cutoff."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _RunningStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)  # the last block before the stall
+    clock.now += 1.0
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+    clock.now += 5.0  # the stop, still stalled
+
+    def _burst():
+        time.sleep(0.2)
+        for _ in range(65):  # 1 s before the attach, 5 s after it, then later
+            warm._dispatch(_block(), 1600, None, None)
+
+    burst = threading.Thread(target=_burst, daemon=True)
+    burst.start()
+    wav_bytes = capture.stop()
+    burst.join(timeout=5)
+    warm.close()
+
+    frames = _wav_frames(wav_bytes)
+    assert frames >= 59 * 1600, f"only {frames / 16000:.2f}s of 6.0 s kept"
+    assert frames <= 61 * 1600, f"{frames / 16000:.2f}s kept"
+
+
+@pytest.mark.parametrize(
+    ("stream_class", "elapsed_s"),
+    [(FakeInputStream, 3.0), (_StoppedStream, 3.0), (_RunningStream, 12.5)],
+    ids=["cannot say", "reported stopped", "past the watchdog's hard limit"],
+)
+def test_stop_does_not_wait_for_a_dead_stream(monkeypatch, stream_class, elapsed_s):
+    """Zero blocks wait only for a stream PortAudio says runs, and only within
+    the first-callback watchdog's hard limit -- past it the watchdog calls
+    the stream dead, and its abort stops exactly such a capture."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", stream_class)
+    capture = AudioCapture(sample_rate=16000, channels=1)
+    capture.start()
+    clock.now += elapsed_s
+
+    started = time.perf_counter()
+    assert capture.stop() == b""
+    assert time.perf_counter() - started < 0.1
+
+
+def test_stop_logs_what_a_starved_callback_looked_like(monkeypatch, caplog):
+    """One line per recording lets dictation.log tell a starved callback
+    from a silent user: first-callback delay, the longest gap, overflow
+    flags, captured audio against wall-clock time, and how much audio had
+    arrived 1, 2 and 3 s in. The per-block status warning is written once
+    per recording -- it runs on the PortAudio thread, and a log write per
+    block slows exactly the thread that is already behind."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.05)
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.stats")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        clock.now += 0.1
+        callback(_block(), 1600, None, None)
+        clock.now += 0.1
+        callback(_block(), 1600, None, None)
+        clock.now += 3.0  # stalled
+        callback(_block(), 1600, None, _Overflow())
+        callback(_block(), 1600, None, _Overflow())
+        clock.now += 0.1
+        capture.stop()
+
+    stats = [r for r in caplog.records if "audio_capture_stats" in r.getMessage()]
+    assert len(stats) == 1
+    line = stats[0].getMessage()
+    assert stats[0].levelno == logging.WARNING
+    for part in (
+        "warm=False",
+        "first_callback_ms=100",
+        "callbacks=4",
+        "audio_s=0.40",
+        "wall_s=3.30",
+        "max_gap_ms=3000",
+        "overflows=2",
+        "audio_by_1s_2s_3s=0.20/0.20/0.20",
+    ):
+        assert part in line, f"{part!r} missing from {line!r}"
+    assert caplog.text.count("Audio stream status") == 1
+
+
+def test_a_healthy_recording_logs_its_stats_at_info(monkeypatch, caplog):
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.stats_ok")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        for index in range(1, 16):
+            # Assigned, not accumulated: ten additions of 0.1 stop short of 1.0.
+            clock.now = 100.0 + index / 10
+            callback(_block(), 1600, None, None)
+        capture.stop()
+
+    stats = [r for r in caplog.records if "audio_capture_stats" in r.getMessage()]
+    assert len(stats) == 1 and stats[0].levelno == logging.INFO
+    assert "audio_by_1s_2s_3s=0.90/-/-" in stats[0].getMessage()
+
+
+def test_a_warm_attach_logs_how_long_the_stream_had_been_silent(monkeypatch, caplog):
+    """A warm stream whose callback thread is stalled when the hotkey comes
+    delivers the seconds before the attach in the first burst -- they are
+    kept (they may hold words spoken while the overlay said "Starting"),
+    and the gap at attach goes to the log so the case can be recognised."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)
+    clock.now += 4.0
+    logger = logging.getLogger("test.audio_capture.attach")
+    capture = AudioCapture(
+        sample_rate=16000, channels=1, warm_stream=warm, logger=logger
+    )
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture.start()
+        clock.now += 0.1
+        for _ in range(42):
+            warm._dispatch(_block(), 1600, None, None)
+        wav_bytes = capture.stop()
+    warm.close()
+
+    assert _wav_frames(wav_bytes) == 42 * 1600
+    assert "warm_attach_gap_ms=4000" in caplog.text

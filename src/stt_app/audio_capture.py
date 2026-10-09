@@ -21,9 +21,28 @@ from .audio_devices import (
     register_live_stream,
     unregister_live_stream,
 )
-from .config import AUDIO_BLOCK_DURATION_MS, AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+from .config import (
+    AUDIO_BACKLOG_DRIFT_PER_S,
+    AUDIO_BACKLOG_TOLERANCE_S,
+    AUDIO_BLOCK_DURATION_MS,
+    AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
+    AUDIO_CHANNELS,
+    AUDIO_INPUT_BUFFER_S,
+    AUDIO_SAMPLE_RATE,
+    AUDIO_STOP_DRAIN_MAX_S,
+)
 from .persistence import atomic_write_bytes
 from .vad import EnergyVad
+
+# The clock every capture timing is measured with; tests replace it.
+_clock = time.perf_counter
+# Wall-clock marks at which `audio_capture_stats` reports how much audio had
+# arrived: a starved callback thread shows as 0.00 where a healthy one shows
+# about 0.9, 1.9 and 2.9 s.
+_EARLY_AUDIO_MARKS_S = (1.0, 2.0, 3.0)
+# While `stop` waits for a backlog, how often it asks PortAudio whether the
+# stream still runs: a stream that stopped owes nothing.
+_DRAIN_ACTIVE_CHECK_S = 0.25
 
 
 class AudioCaptureError(RuntimeError):
@@ -67,6 +86,179 @@ def _close_input_stream(
     # The stream object is abandoned either way; keeping a failed close
     # registered would block device re-enumeration forever.
     unregister_live_stream(stream)
+
+
+def _open_input_stream(
+    *,
+    sample_rate: int,
+    channels: int,
+    block_size: int,
+    device_index: int | None,
+    callback: Callable,
+    logger: logging.Logger | None,
+):
+    """Construct (not start) a microphone stream with a stall-sized buffer.
+
+    The one place both opens -- `AudioCapture`'s cold stream and the warm
+    stream -- get their parameters from. ``latency`` is PortAudio's input
+    buffer (see `AUDIO_INPUT_BUFFER_S`): the device default holds about
+    0.1-0.2 s, so a callback thread that is not scheduled for longer loses
+    everything said meanwhile. A driver that refuses the large buffer is opened with its
+    default rather than not at all, and the log says so.
+    """
+    settings = {
+        "samplerate": sample_rate,
+        "channels": channels,
+        "dtype": "float32",
+        "blocksize": block_size,
+        "device": device_index,
+        "extra_settings": input_stream_extra_settings(device_index),
+        "callback": callback,
+    }
+    try:
+        return sd.InputStream(latency=AUDIO_INPUT_BUFFER_S, **settings)
+    except sd.PortAudioError as exc:
+        if logger is not None:
+            logger.warning(
+                "audio_input_buffer_refused buffer_s=%.0f error=%s; opening with "
+                "the device's default buffer, which a CPU stall overflows",
+                AUDIO_INPUT_BUFFER_S,
+                exc,
+            )
+        return sd.InputStream(**settings)
+
+
+def _stream_is_active(stream) -> bool | None:
+    """PortAudio's answer whether ``stream`` still runs; None when unknown."""
+    if stream is None:
+        return None
+    try:
+        return bool(stream.active)
+    except Exception:
+        return None
+
+
+class _CaptureTiming:
+    """How one capture's blocks arrived, against the wall clock.
+
+    Owned by `AudioCapture` and touched only under its lock. A starved
+    callback thread and a silent user look the same in the audio; they do
+    not here: the first block comes late, the gaps between blocks grow, and
+    the audio falls behind the wall clock until the burst catches up.
+    """
+
+    def __init__(self, sample_rate: int) -> None:
+        self.sample_rate = sample_rate
+        # When audio for this capture began to count: just before the warm
+        # attach, or once a cold stream's `start()` returned.
+        self.anchor: float | None = None
+        self.first_block_at: float | None = None
+        self.last_block_at: float | None = None
+        # The gap before the latest block; None until the second block.
+        self.last_gap_s: float | None = None
+        self.max_gap_s = 0.0
+        self.blocks = 0
+        self.frames = 0
+        self.status_flags = 0
+        self.overflows = 0
+        self.early_audio_s: list[float | None] = [None] * len(_EARLY_AUDIO_MARKS_S)
+        # Seconds since the warm stream's previous callback when this capture
+        # attached; None for a cold stream, inf for a warm one that never ran.
+        self.warm_attach_gap_s: float | None = None
+        self.drain_s = 0.0
+        self.drain_frames = 0
+        self.reported = False
+
+    def record_block(self, now: float, frames: int, status) -> None:
+        elapsed = 0.0 if self.anchor is None else now - self.anchor
+        for index, mark in enumerate(_EARLY_AUDIO_MARKS_S):
+            if self.early_audio_s[index] is None and elapsed >= mark:
+                self.early_audio_s[index] = self.frames / self.sample_rate
+        if self.first_block_at is None:
+            self.first_block_at = now
+        if self.last_block_at is not None:
+            self.last_gap_s = now - self.last_block_at
+            self.max_gap_s = max(self.max_gap_s, self.last_gap_s)
+        self.last_block_at = now
+        self.blocks += 1
+        self.frames += frames
+        if status:
+            self.status_flags += 1
+            if getattr(status, "input_overflow", False):
+                self.overflows += 1
+
+    def close_marks(self, wall_s: float) -> None:
+        """At the stop: a mark the recording outlasted with no block after it
+        gets all the audio that had arrived by then."""
+        for index, mark in enumerate(_EARLY_AUDIO_MARKS_S):
+            if self.early_audio_s[index] is None and wall_s >= mark:
+                self.early_audio_s[index] = self.audio_s()
+
+    def audio_s(self) -> float:
+        return self.frames / self.sample_rate
+
+    def pre_attach_s(self) -> float:
+        """Audio from before a warm attach that the first burst carries.
+
+        The warm stream's silence at the attach, which a stalled callback
+        thread delivers with the rest (one block or less when healthy); 0
+        for a cold stream and for a warm one that never called back.
+        """
+        gap = self.warm_attach_gap_s
+        if gap is None or gap == float("inf"):
+            return 0.0
+        return min(gap, AUDIO_INPUT_BUFFER_S)
+
+    def backlog_tolerance_s(self, wall_s: float) -> float:
+        return AUDIO_BACKLOG_TOLERANCE_S + AUDIO_BACKLOG_DRIFT_PER_S * wall_s
+
+    def log(self, logger: logging.Logger, *, warm: bool, wall_s: float) -> None:
+        deficit_s = wall_s - self.audio_s()
+        first_ms = (
+            "none"
+            if self.first_block_at is None or self.anchor is None
+            # A block delivered inside a cold `start()` precedes the anchor.
+            else str(max(0, round((self.first_block_at - self.anchor) * 1000)))
+        )
+        early = "/".join(
+            "-" if value is None else f"{value:.2f}" for value in self.early_audio_s
+        )
+        if self.warm_attach_gap_s is None:
+            attach_gap = "n/a"
+        elif self.warm_attach_gap_s == float("inf"):
+            attach_gap = "never"
+        else:
+            attach_gap = str(round(self.warm_attach_gap_s * 1000))
+        starved = (
+            deficit_s > self.backlog_tolerance_s(wall_s)
+            or self.max_gap_s > AUDIO_BACKLOG_TOLERANCE_S
+            or self.overflows > 0
+        )
+        (logger.warning if starved else logger.info)(
+            "audio_capture_stats warm=%s first_callback_ms=%s callbacks=%d "
+            "audio_s=%.2f wall_s=%.2f deficit_s=%.2f max_gap_ms=%d overflows=%d "
+            "status_flags=%d audio_by_1s_2s_3s=%s warm_attach_gap_ms=%s "
+            "stop_drain_ms=%d stop_drain_recovered_s=%.2f%s",
+            warm,
+            first_ms,
+            self.blocks,
+            self.audio_s(),
+            wall_s,
+            deficit_s,
+            round(self.max_gap_s * 1000),
+            self.overflows,
+            self.status_flags,
+            early,
+            attach_gap,
+            round(self.drain_s * 1000),
+            self.drain_frames / self.sample_rate,
+            (
+                " (audio arrived late or not at all: PortAudio's callback "
+                "thread did not run on time, typically CPU load or a scanner)"
+                if starved
+                else ""
+            ),
+        )
 
 
 class WarmMicrophoneStream:
@@ -132,6 +324,9 @@ class WarmMicrophoneStream:
         self._retiring: list = []
         self._closes_in_flight = 0
         self._idle = threading.Condition(self._lock)
+        # `_clock()` at the last callback, consumer or not; written by the
+        # PortAudio thread alone (one float store), read at attach.
+        self._last_callback_at: float | None = None
 
     @property
     def is_running(self) -> bool:
@@ -253,14 +448,13 @@ class WarmMicrophoneStream:
                     opened_key, device_index = self._device_provider()
                 with self._lock:
                     self._opening_device_key = opened_key
-                stream = sd.InputStream(
-                    samplerate=self.sample_rate,
+                stream = _open_input_stream(
+                    sample_rate=self.sample_rate,
                     channels=self.channels,
-                    dtype="float32",
-                    blocksize=self.block_size,
-                    device=device_index,
-                    extra_settings=input_stream_extra_settings(device_index),
+                    block_size=self.block_size,
+                    device_index=device_index,
                     callback=self._dispatch,
+                    logger=self._logger,
                 )
                 try:
                     stream.start()
@@ -347,16 +541,39 @@ class WarmMicrophoneStream:
         only while the stream is idle.
         """
         with self._lock:
-            if (
-                self._stream is None
-                or self._consumer is not None
-                or self._pending_close
-                or self._pending_restart
-                or self._opened_device_key != expected_device_key
-            ):
-                return False
-            self._consumer = consumer
-            return True
+            if self._stream is None:
+                refusal = "opening" if self._starting else "not_running"
+            elif self._consumer is not None:
+                refusal = "in_use"
+            elif self._pending_close:
+                refusal = "closing"
+            elif self._pending_restart:
+                refusal = "restarting"
+            elif self._opened_device_key != expected_device_key:
+                refusal = "other_device"
+            else:
+                self._consumer = consumer
+                return True
+        # The recording now cold-opens, which on the stacks this stream exists
+        # for takes seconds; the log says why the warm stream did not serve it.
+        if self._logger is not None:
+            self._logger.info("warm_microphone_attach_refused reason=%s", refusal)
+        return False
+
+    def seconds_since_last_callback(self) -> float | None:
+        """How long PortAudio has not called back; None if it never did.
+
+        Read at attach: a warm stream whose callback thread is stalled at the
+        hotkey delivers the audio from before the attach in its first burst.
+        """
+        last = self._last_callback_at
+        return None if last is None else _clock() - last
+
+    def stream_is_active(self) -> bool | None:
+        """PortAudio's answer whether the running stream still runs."""
+        with self._lock:
+            stream = self._stream
+        return _stream_is_active(stream)
 
     def detach(self, consumer: Callable) -> None:
         action = None
@@ -680,6 +897,7 @@ class WarmMicrophoneStream:
         threading.Thread(target=target, name=name, daemon=True).start()
 
     def _dispatch(self, indata, frames, time_info, status) -> None:
+        self._last_callback_at = _clock()
         consumer = self._consumer
         if consumer is None:
             return
@@ -725,6 +943,18 @@ class AudioCapture:
         self._accepting_audio = False
         self._active_callback: Callable | None = None
         self._callback_count = 0
+        # Notified for every block taken; `stop` waits on it for a backlog.
+        self._audio_arrived = threading.Condition(self._lock)
+        self._timing = _CaptureTiming(sample_rate)
+        # Set only while `stop` waits for a backlog: blocks past this many
+        # frames were captured after the stop and are not kept, and neither
+        # is a block arriving at real-time pace a block length after
+        # `_drain_stop_at` (it sets `_drain_done`).
+        self._drain_cutoff_frames: int | None = None
+        self._drain_stop_at: float | None = None
+        self._drain_done = False
+        self._block_s = self.block_size / sample_rate
+        self._status_logged = False
 
     @property
     def is_recording(self) -> bool:
@@ -743,6 +973,17 @@ class AudioCapture:
     def uses_warm_stream(self) -> bool:
         return self._warm_attached
 
+    def stream_is_active(self) -> bool | None:
+        """PortAudio's answer whether this capture's stream still runs.
+
+        None when it cannot say (no stream, or a stream without the flag).
+        The first-callback watchdog aborts at once only on False: a stream
+        PortAudio still runs is starved, not dead, and its audio is buffered.
+        """
+        if self._warm_attached and self._warm_stream is not None:
+            return self._warm_stream.stream_is_active()
+        return _stream_is_active(self._stream)
+
     def start(self) -> None:
         if self._stream is not None or self._warm_attached:
             return
@@ -756,6 +997,9 @@ class AudioCapture:
             self._callback_count = 0
             # Once per capture, not once per object.
             self._callback_failed = False
+            self._status_logged = False
+            self._drain_cutoff_frames = None
+            self._timing = _CaptureTiming(self.sample_rate)
 
         def session_callback(indata, frames, time_info, status) -> None:
             self._on_audio_for_generation(
@@ -771,6 +1015,9 @@ class AudioCapture:
             self.vad.reset()
 
         warm = self._warm_stream
+        # Taken before the attach: a block can arrive between the attach and
+        # any statement after it.
+        attach_at = _clock()
         if (
             warm is not None
             and warm.sample_rate == self.sample_rate
@@ -783,7 +1030,21 @@ class AudioCapture:
             and warm.attach(session_callback, self._device_key)
         ):
             # The shared stream is already running; attaching is instant and
-            # audio flows from the very next callback block.
+            # audio flows from the very next callback block. A callback thread
+            # stalled at this moment delivers the audio since its last block
+            # in that first burst, the part before the attach included: kept,
+            # because cutting at the attach would also cut what was said
+            # between the hotkey and the attach (seconds under a stall), and
+            # PortAudio's timestamps cannot tell the parts apart (MME reports
+            # 0, WASAPI times in the future, measured 2026-10-10). The gap is
+            # logged instead.
+            gap = warm.seconds_since_last_callback()
+            with self._lock:
+                if generation == self._capture_generation:
+                    self._timing.anchor = attach_at
+                    self._timing.warm_attach_gap_s = (
+                        float("inf") if gap is None else gap
+                    )
             self._warm_attached = True
             return
 
@@ -802,14 +1063,13 @@ class AudioCapture:
                 device_index: int | None = None
                 if self._device_resolver is not None:
                     device_index = self._device_resolver()
-                stream = sd.InputStream(
-                    samplerate=self.sample_rate,
+                stream = _open_input_stream(
+                    sample_rate=self.sample_rate,
                     channels=self.channels,
-                    dtype="float32",
-                    blocksize=self.block_size,
-                    device=device_index,
-                    extra_settings=input_stream_extra_settings(device_index),
+                    block_size=self.block_size,
+                    device_index=device_index,
                     callback=session_callback,
+                    logger=self._logger,
                 )
                 try:
                     stream.start()
@@ -825,6 +1085,13 @@ class AudioCapture:
                     )
                     raise
                 register_live_stream(stream)
+            # After `start()` returned, which on a hooked audio stack takes
+            # seconds that were never captured: anchored before it, a slow
+            # start would read as a backlog `stop` then waits for in vain.
+            started_at = _clock()
+            with self._lock:
+                if generation == self._capture_generation:
+                    self._timing.anchor = started_at
             self._stream = stream
         except (
             AudioSystemUnavailableError,
@@ -850,10 +1117,21 @@ class AudioCapture:
 
     def stop(self) -> bytes:
         with self._lock:
+            timing = self._timing
+            wall_s = None
+            if timing.anchor is not None and not timing.reported:
+                # Reported once per started capture, not again by a second stop.
+                timing.reported = True
+                wall_s = _clock() - timing.anchor
+                timing.close_marks(wall_s)
+                if self._accepting_audio:
+                    self._drain_backlog_locked(wall_s)
             self._accepting_audio = False
             self._capture_generation += 1
             active_callback = self._active_callback
             self._active_callback = None
+        if wall_s is not None and self._logger is not None:
+            timing.log(self._logger, warm=self._warm_attached, wall_s=wall_s)
         stream = self._stream
         self._stream = None
         if self._warm_attached:
@@ -877,6 +1155,94 @@ class AudioCapture:
             self._chunks = []
 
         return self._to_wav_bytes(audio)
+
+    def _drain_backlog_locked(self, wall_s: float) -> None:
+        """Wait for audio a starved callback thread still owes; holds `_lock`.
+
+        Stopping the stream discards what PortAudio has buffered but not yet
+        delivered -- measured on HomeBase (2026-10-10): a stop requested 2 s
+        into a recording, during a 3 s stall of the callback, kept 1.1 s;
+        waiting for the backlog first kept 4.1-4.3 s. So when the audio is
+        behind the wall clock by more than a healthy stream ever is (see
+        `AUDIO_BACKLOG_TOLERANCE_S`), this waits until the audio reaches the
+        moment of the stop within one block, at most `AUDIO_STOP_DRAIN_MAX_S`.
+        (Waiting only until it is back within the tolerance left 0.47 s of a
+        real 4 s stall uncollected.) Blocks past that moment were spoken
+        after the stop and are refused (`_drain_cutoff_frames`), give or
+        take the block that crosses it.
+        There is no "nothing arrived for a while" exit: a starved thread
+        delivers nothing for seconds and then everything (the 4 s stall in
+        the measurement above), so silence says nothing until PortAudio says
+        the stream stopped.
+
+        A capture that received nothing yet is waited for only while the
+        first-callback watchdog would still wait -- PortAudio reports the
+        stream running and the hard limit has not passed -- and then until
+        that limit, because a stall at the start can outlast the 3 s
+        (review F1: a 4-10 s start stall and a 3.5 s dictation kept nothing,
+        the burst came after the stream was closed). A stream that cannot say
+        it runs, or is past the hard limit, is dead, and the watchdog's abort
+        stops exactly those. Never on a stream PortAudio reports stopped, nor
+        on a healthy stream, whose stop is therefore unchanged.
+
+        The frame count alone cannot place the stop moment once audio was
+        lost for good (a stall longer than the buffer, a driver that refused
+        it, WASAPI dropping without a flag): the audio then stays behind the
+        wall clock while the stream runs in real time again, and the count
+        let every stop wait the full 3 s and keep about 3 s said after it
+        (review F2, measured on the real MME microphone). Arrival pace places
+        it instead: a burst comes back to back, a caught-up stream one block
+        per block length (`_at_real_time_pace`). A stream at that pace at the
+        stop owes nothing, and during the wait a block arriving at that pace
+        a block length after the stop was captured after it -- refused, and
+        the wait ends (`_drain_done`).
+        """
+        timing = self._timing
+        stop_at = _clock()
+        # Review F3: a warm burst also carries the audio from before the
+        # attach, so the audio owed up to the stop includes it; counted from
+        # the attach alone, the last seconds before the stop were refused.
+        owed_s = wall_s + timing.pre_attach_s()
+        if timing.blocks == 0:
+            hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
+            if wall_s >= hard_limit_s or self.stream_is_active() is not True:
+                return
+            budget_s = hard_limit_s - wall_s
+        elif owed_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s) or (
+            self._at_real_time_pace(timing.last_gap_s)
+            and timing.last_block_at is not None
+            and stop_at - timing.last_block_at <= 1.5 * self._block_s
+        ):
+            return
+        else:
+            budget_s = AUDIO_STOP_DRAIN_MAX_S
+        frames_before = timing.frames
+        cutoff = int(owed_s * self.sample_rate)
+        self._drain_cutoff_frames = cutoff
+        self._drain_stop_at = stop_at
+        self._drain_done = False
+        started = time.monotonic()
+        deadline = started + budget_s
+        try:
+            while not self._drain_done and timing.frames < cutoff - self.block_size:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or self.stream_is_active() is False:
+                    break
+                self._audio_arrived.wait(min(remaining, _DRAIN_ACTIVE_CHECK_S))
+        finally:
+            self._drain_cutoff_frames = None
+            self._drain_stop_at = None
+            timing.drain_s = time.monotonic() - started
+            timing.drain_frames = timing.frames - frames_before
+
+    def _at_real_time_pace(self, gap_s: float | None) -> bool:
+        """Whether a block came one block length after the previous one.
+
+        Within half to one and a half block lengths: a burst delivers its
+        blocks back to back (milliseconds apart), and the first block after
+        a stall comes after the whole stall -- both are old audio.
+        """
+        return gap_s is not None and 0.5 <= gap_s / self._block_s <= 1.5
 
     def save_wav(self, output_path: Path, wav_bytes: bytes) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -917,9 +1283,7 @@ class AudioCapture:
     def _process_audio_unguarded(
         self, indata, frames, status, *, generation: int | None
     ) -> None:
-        if status and self._logger is not None:
-            self._logger.warning("Audio stream status: %s", status)
-
+        now = _clock()
         data = np.asarray(indata, dtype=np.float32)
         if data.ndim == 2 and data.shape[1] > 1:
             mono = np.mean(data, axis=1)
@@ -931,8 +1295,35 @@ class AudioCapture:
                 not self._accepting_audio or generation != self._capture_generation
             ):
                 return
+            cutoff = self._drain_cutoff_frames
+            if cutoff is not None and self._timing.frames >= cutoff:
+                return
+            stop_at = self._drain_stop_at
+            last = self._timing.last_block_at
+            if (
+                stop_at is not None
+                and last is not None
+                and now >= stop_at + self._block_s
+                and self._at_real_time_pace(now - last)
+            ):
+                # Caught up again, and captured after the stop.
+                self._drain_done = True
+                self._audio_arrived.notify_all()
+                return
+            # The first flag of a recording is logged; the rest are counted
+            # in `audio_capture_stats`. A log write per block runs on the
+            # PortAudio thread, which an overflow says is behind already.
+            if status and not self._status_logged and self._logger is not None:
+                self._status_logged = True
+                self._logger.warning(
+                    "Audio stream status: %s (later flags of this recording "
+                    "are counted in the stop's capture stats)",
+                    status,
+                )
+            self._timing.record_block(now, mono.size, status)
             self._chunks.append(np.copy(mono))
             self._callback_count += 1
+            self._audio_arrived.notify_all()
             if self.chunk_callback is not None:
                 try:
                     self.chunk_callback(self._to_pcm16_bytes(mono))

@@ -81,7 +81,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `config.py` | All tunables/constants; `MODEL_REPO_MAP` (single source of truth) |
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
-| `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach |
+| `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach; a stall-sized input buffer, the stop's backlog wait and the per-recording `audio_capture_stats` line |
 | `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); the microphone picker choices both pickers offer; PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `local_runtime_support.py` | Which local runtimes this environment can run (`unavailable_reason(model)`): on Windows ARM64 CTranslate2 is absent, so faster-whisper models are marked, never downloaded and refuse to transcribe with the reason |
