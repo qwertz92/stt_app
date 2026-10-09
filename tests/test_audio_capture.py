@@ -2086,6 +2086,39 @@ def test_a_warm_stall_across_hotkey_and_stop_keeps_the_seconds_before_the_stop(
     assert frames <= 61 * 1600, f"{frames / 16000:.2f}s kept"
 
 
+def test_a_reopened_warm_stream_does_not_inherit_the_old_streams_silence(
+    monkeypatch,
+):
+    """Review round 2 P3: the time of the warm stream's last callback
+    outlived the stream. Reopened a minute later (a device change, an idle
+    close) and attached before the new stream's first callback, the capture
+    read a 60 s gap, counted 20 s of pre-attach audio (the buffer's length)
+    towards the stop moment, and a stop during a stall then kept 20 s spoken
+    after it."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _RunningStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)
+    assert warm.close_if_idle() is True
+    clock.now += 60.0
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+    clock.now += 3.0  # the stop, the new stream's callback thread stalled
+
+    def _burst():
+        time.sleep(0.2)
+        for _ in range(60):
+            warm._dispatch(_block(), 1600, None, None)
+
+    frames, _waited = _stop_during_a_stall(capture, _burst)
+    warm.close()
+
+    assert frames <= 31 * 1600, f"{frames / 16000:.2f}s kept of a 3.0 s recording"
+
+
 @pytest.mark.parametrize(
     ("stream_class", "elapsed_s"),
     [(FakeInputStream, 3.0), (_StoppedStream, 3.0), (_RunningStream, 12.5)],

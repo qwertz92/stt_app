@@ -375,8 +375,12 @@ class WarmMicrophoneStream:
         self._retiring: list = []
         self._closes_in_flight = 0
         self._idle = threading.Condition(self._lock)
-        # `_clock()` at the last callback, consumer or not; written by the
-        # PortAudio thread alone (one float store), read at attach.
+        # `_clock()` at the current stream's last callback, consumer or not;
+        # written by the PortAudio thread (one float store), read at attach,
+        # and cleared under `_lock` whenever a stream is retired or accepted:
+        # kept across a reopen, an attach before the new stream's first
+        # callback read the old stream's silence as a stall (review round 2
+        # P3: a 60 s gap, counted as 20 s of pre-attach audio at the stop).
         self._last_callback_at: float | None = None
 
     @property
@@ -537,6 +541,7 @@ class WarmMicrophoneStream:
                     if accepted:
                         self._stream = stream
                         self._opened_device_key = opened_key
+                        self._last_callback_at = None
                     elif stream is not None:
                         # Superseded by a bump during the open. Retired under
                         # the lock so that a `close_if_idle` waiting on this
@@ -693,6 +698,7 @@ class WarmMicrophoneStream:
         stream = self._stream
         self._stream = None
         self._opened_device_key = None
+        self._last_callback_at = None
         if self._starting:
             # The in-flight open observes the generation bump, discards
             # its stream, and retries via the pending flag.
@@ -825,6 +831,7 @@ class WarmMicrophoneStream:
                 stream = self._stream
                 self._stream = None
                 self._opened_device_key = None
+                self._last_callback_at = None
                 if stream is not None:
                     self._retiring.append(stream)
                 if not self._retiring:
@@ -866,6 +873,7 @@ class WarmMicrophoneStream:
             self._stream = None
             self._consumer = None
             self._opened_device_key = None
+            self._last_callback_at = None
             self._pending_restart = False
             self._pending_close = False
             if stream is not None:

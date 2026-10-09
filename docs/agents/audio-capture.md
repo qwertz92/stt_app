@@ -236,7 +236,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   hotkey therefore delivers the seconds since its last block, the part before
   the attach included; they are kept (cutting at the attach would also cut
   what was said between the hotkey and the attach) and `warm_attach_gap_ms` records
-  it (`docs/agents/known-limitations.md`). A deliberate pre-roll is not
+  it (`docs/agents/known-limitations.md`). The gap is the current stream's:
+  `_last_callback_at` is cleared when a warm stream is retired or accepted
+  (review round 2 P3: kept across a reopen, an attach before the new
+  stream's first callback read a 60 s gap, counted 20 s of pre-attach audio
+  towards the stop moment and kept up to 20 s said after the stop). A deliberate pre-roll is not
   added: on a healthy stream the warm path loses only the short "Starting"
   phase (a 25 ms event drain, plus the start tone when it is on), and a
   pre-roll would record that tone, which plays right before the attach.
