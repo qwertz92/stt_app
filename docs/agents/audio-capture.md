@@ -172,8 +172,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   within one block, at most `AUDIO_STOP_DRAIN_MAX_S` (3 s, on the Qt thread),
   or until PortAudio reports the stream stopped; blocks past the stop moment
   are refused (`_drain_cutoff_frames`). No "silent for a while" exit: a
-  starved thread delivers nothing for seconds, then everything. Never for a
-  capture with zero blocks (the watchdog's case). A healthy stream is behind
+  starved thread delivers nothing for seconds, then everything. A capture
+  with zero blocks is waited for only while the first-callback watchdog would
+  wait -- PortAudio reports the stream active and the 12 s hard limit has not
+  passed -- and then until that limit (review F1: a 4-10 s start stall and a
+  3.5 s dictation kept nothing, and streaming then finalized an empty stream
+  as "No speech detected"). A streaming stop with no audio and no live text
+  is now an Error ("No audio captured"), never a finalize. A healthy stream is behind
   by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
   never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
 - **`audio_capture_stats`, one line per recording** (logged by

@@ -1777,12 +1777,63 @@ def test_stop_does_not_wait_for_a_stream_portaudio_reports_stopped(monkeypatch):
     assert time.perf_counter() - started < 0.1
 
 
-def test_stop_does_not_wait_for_a_stream_that_never_delivered(monkeypatch):
-    """Zero blocks is a dead stream, not a backlog (the first-callback
-    watchdog's abort stops exactly such a capture): no wait at all."""
+class _RunningStream(FakeInputStream):
+    """PortAudio reports the stream active: starved, not dead."""
+
+    active = True
+
+
+def _running_capture(monkeypatch, clock: _Clock, **kwargs):
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _RunningStream)
+    FakeInputStream.instances = []
+    capture = AudioCapture(sample_rate=16000, channels=1, **kwargs)
+    capture.start()
+    return capture, FakeInputStream.instances[-1].kwargs["callback"]
+
+
+def test_stop_waits_for_the_first_burst_of_a_starved_running_stream(monkeypatch):
+    """Review F1: the callback thread is starved from the start, the user
+    speaks 3.5 s and stops before the first block came. The watchdog keeps
+    such a stream (PortAudio says it runs) for its hard limit, so zero
+    blocks at the stop is a backlog, not a dead stream: the stop waits for
+    the burst and keeps the 3.5 s up to the stop. Treating zero blocks as
+    dead kept 0.00 s ("No audio captured", or a streaming "No speech
+    detected" success)."""
     clock = _Clock()
-    capture, _callback = _cold_capture(monkeypatch, clock)
-    clock.now += 10.0
+    capture, callback = _running_capture(monkeypatch, clock)
+    clock.now += 3.5
+
+    def _burst():
+        time.sleep(0.3)
+        for _ in range(45):
+            callback(_block(), 1600, None, None)
+
+    burst = threading.Thread(target=_burst, daemon=True)
+    burst.start()
+    wav_bytes = capture.stop()
+    burst.join(timeout=5)
+
+    frames = _wav_frames(wav_bytes)
+    assert frames >= int(3.5 * 16000) - 1600, f"only {frames / 16000:.2f}s kept"
+    assert frames <= int(3.5 * 16000) + 1600, f"{frames / 16000:.2f}s kept"
+
+
+@pytest.mark.parametrize(
+    ("stream_class", "elapsed_s"),
+    [(FakeInputStream, 3.0), (_StoppedStream, 3.0), (_RunningStream, 12.5)],
+    ids=["cannot say", "reported stopped", "past the watchdog's hard limit"],
+)
+def test_stop_does_not_wait_for_a_dead_stream(monkeypatch, stream_class, elapsed_s):
+    """Zero blocks wait only for a stream PortAudio says runs, and only within
+    the first-callback watchdog's hard limit -- past it the watchdog calls
+    the stream dead, and its abort stops exactly such a capture."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", stream_class)
+    capture = AudioCapture(sample_rate=16000, channels=1)
+    capture.start()
+    clock.now += elapsed_s
 
     started = time.perf_counter()
     assert capture.stop() == b""

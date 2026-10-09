@@ -392,4 +392,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   - A starved stream that never delivers waits 12 s (the hard limit), not
     2 s, before its Error, unless PortAudio reports it inactive.
   - A stop during a stall can hold the Qt thread for up to
-    `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives.
+    `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives, and a stop
+    before the first block of a running stream up to the watchdog's 12 s
+    hard limit. Not waiting loses the recording; not blocking would need a
+    two-phase stop in the controller (~4-6 h with its re-entrancy cases).

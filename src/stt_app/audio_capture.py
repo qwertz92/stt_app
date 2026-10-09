@@ -25,6 +25,7 @@ from .config import (
     AUDIO_BACKLOG_DRIFT_PER_S,
     AUDIO_BACKLOG_TOLERANCE_S,
     AUDIO_BLOCK_DURATION_MS,
+    AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CHANNELS,
     AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
@@ -1154,21 +1155,31 @@ class AudioCapture:
         the measurement above), so silence says nothing until PortAudio says
         the stream stopped.
 
-        Never waits for a capture that received nothing -- a dead stream is
-        not a backlog, and the first-callback watchdog stops exactly those --
-        nor for a stream PortAudio reports stopped, nor on a healthy stream,
-        whose stop is therefore unchanged.
+        A capture that received nothing yet is waited for only while the
+        first-callback watchdog would still wait -- PortAudio reports the
+        stream running and the hard limit has not passed -- and then until
+        that limit, because a stall at the start can outlast the 3 s
+        (review F1: a 4-10 s start stall and a 3.5 s dictation kept nothing,
+        the burst came after the stream was closed). A stream that cannot say
+        it runs, or is past the hard limit, is dead, and the watchdog's abort
+        stops exactly those. Never on a stream PortAudio reports stopped, nor
+        on a healthy stream, whose stop is therefore unchanged.
         """
         timing = self._timing
         if timing.blocks == 0:
+            hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
+            if wall_s >= hard_limit_s or self.stream_is_active() is not True:
+                return
+            budget_s = hard_limit_s - wall_s
+        elif wall_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s):
             return
-        if wall_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s):
-            return
+        else:
+            budget_s = AUDIO_STOP_DRAIN_MAX_S
         frames_before = timing.frames
         cutoff = int(wall_s * self.sample_rate)
         self._drain_cutoff_frames = cutoff
         started = time.monotonic()
-        deadline = started + AUDIO_STOP_DRAIN_MAX_S
+        deadline = started + budget_s
         try:
             while timing.frames < cutoff - self.block_size:
                 remaining = deadline - time.monotonic()

@@ -2907,6 +2907,28 @@ class DictationController(QtCore.QObject):
                         finalize_stream=False,
                     )
                     return
+                if not wav_bytes and not self._current_streaming_partial_text().strip():
+                    # The microphone delivered nothing by the stop -- a
+                    # starved callback thread whose backlog did not come in
+                    # time. Finalized, the empty stream ended as "No speech
+                    # detected", a success that hid the loss of everything
+                    # said; batch reports the same case as an error. (The
+                    # capture records every block it streams, so no bytes
+                    # means nothing was streamed; the partial check only
+                    # keeps a stream that did show text on its own road.)
+                    self._logger.error(
+                        "audio_capture_empty mode=streaming warm_stream=%s "
+                        "callback_count=%d",
+                        warm_stream,
+                        callback_count,
+                    )
+                    self._abort_streaming_session(
+                        "No audio captured: the microphone delivered nothing "
+                        "before the stop.",
+                        beep=False,
+                        finalize_stream=False,
+                    )
+                    return
                 self._overlay.set_state(
                     "Processing", "Finalizing streaming transcript..."
                 )

@@ -1411,6 +1411,42 @@ def test_a_starved_first_callback_waits_for_the_hard_limit_instead_of_aborting(
     _ = app
 
 
+def test_a_streaming_stop_without_any_audio_is_an_error_not_no_speech(monkeypatch):
+    """Review F1: a streaming capture that delivered nothing by its stop --
+    a starved callback whose burst did not come in time -- was finalized
+    like any other, and the empty stream ended as "Done / No speech
+    detected": a silent loss of everything said. Without audio there is
+    nothing to finalize; the stop reports it as batch does."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    submitted: list[object] = []
+    monkeypatch.setattr(
+        controller, "_submit_stream_finalize", lambda **kw: submitted.append(kw)
+    )
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = b""
+
+    controller.stop_recording()
+
+    assert submitted == []
+    assert overlay.states[-1][0] == "Error"
+    assert "no audio" in overlay.states[-1][1].lower()
+    assert transcriber.aborted is True
+    controller.shutdown()
+    _ = app
+
+
 def test_a_first_callback_timeout_on_a_stopped_stream_aborts_at_once(monkeypatch):
     """PortAudio reporting the stream inactive is a dead stream: no reason to
     make the user talk into it for the hard limit."""
