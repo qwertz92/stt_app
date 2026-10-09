@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import queue
 import threading
 import time
@@ -21,6 +22,8 @@ import urllib.request
 from pathlib import Path
 
 from ..config import (
+    AUDIO_BLOCK_DURATION_MS,
+    AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
     DEEPGRAM_API_HOSTS,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -46,7 +49,16 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _STREAM_SEND_SENTINEL = object()
-_STREAM_AUDIO_QUEUE_MAX_CHUNKS = 32
+# The microphone hands over one block per callback, and a callback thread that
+# was starved delivers everything PortAudio buffered meanwhile -- up to
+# AUDIO_INPUT_BUFFER_S -- as one burst of `put_nowait` calls, far faster than
+# the sender thread is scheduled. So the queue holds that buffer plus the
+# 32 blocks (3.2 s) it held before the buffer grew; it stays bounded, which is
+# all it is for: a socket that stops taking audio fails the stream once this
+# much is waiting, about 23 s of audio (about 740 kB) instead of 3.2 s.
+_STREAM_AUDIO_QUEUE_MAX_CHUNKS = (
+    math.ceil(AUDIO_INPUT_BUFFER_S * 1000 / AUDIO_BLOCK_DURATION_MS) + 32
+)
 _STREAM_SENDER_DRAIN_TIMEOUT_S = 2.0
 _STREAM_FINALIZE_QUIET_PERIOD_S = 0.25
 _STREAM_FINALIZE_MAX_WAIT_S = 1.25
@@ -616,8 +628,9 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         `block_timeout_s` is `None` on the PortAudio callback, which keeps the
         original nonblocking `put_nowait` contract. A number is a caller that
         may wait -- the controller's preconnect flush, which hands over every
-        block recorded during the handshake at once: 32 chunks is 3.2 s of
-        audio against a buffer that may hold 62.5 s, and the burst was fast
+        block recorded during the handshake at once: the queue held 32
+        chunks (3.2 s; now `_STREAM_AUDIO_QUEUE_MAX_CHUNKS`, about 23 s)
+        against a buffer that may hold 62.5 s, and the burst was fast
         enough (about 45 us for 33 pushes) that the sender thread never got
         scheduled, so the overflow was rejected on a healthy socket. Waiting is
         what lets the sender drain; the wait is bounded, and running out of it

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import threading
 import time
 import urllib.error
@@ -11,6 +12,7 @@ from unittest.mock import patch
 
 import pytest
 
+from stt_app.config import AUDIO_BLOCK_DURATION_MS, AUDIO_INPUT_BUFFER_S
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import (
     DEFAULT_DEEPGRAM_MODEL,
@@ -851,6 +853,35 @@ class TestDeepgramStreaming:
             with pytest.raises(TranscriptionError, match="queue is full"):
                 t.push_audio_chunk(b"third")
             assert time.monotonic() - started < 0.1
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
+    def test_a_capture_buffers_worth_of_burst_fits_the_queue(self, monkeypatch):
+        """A callback thread that was starved delivers what PortAudio buffered
+        meanwhile -- up to `AUDIO_INPUT_BUFFER_S` -- as one burst of
+        `put_nowait` calls on the PortAudio thread, far too fast for the
+        sender to be scheduled (the preconnect flush measured 45 us for 33
+        pushes). A queue smaller than that burst failed a healthy stream
+        exactly when the audio it was about to send had just been saved."""
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        burst = math.ceil(AUDIO_INPUT_BUFFER_S * 1000 / AUDIO_BLOCK_DURATION_MS)
+
+        try:
+            t.start_stream()
+            t.push_audio_chunk(b"first")
+            assert send_started.wait(timeout=1.0)  # the sender is busy from here
+            for index in range(burst):
+                t.push_audio_chunk(b"block %d" % index)
         finally:
             release_send.set()
             t.abort_stream()

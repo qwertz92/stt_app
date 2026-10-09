@@ -61,7 +61,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   before touching state; starting/retiring are explicit states. Deepgram's
   sender queue is bounded: on the callback only `put_nowait` (saturation
   fails the stream); only a caller passing `block_timeout_s` (the preconnect
-  flush) waits, with `_stream_lock` released (F09). Stop drains audio
+  flush) waits, with `_stream_lock` released (F09). The bound
+  (`_STREAM_AUDIO_QUEUE_MAX_CHUNKS`, 2026-10-10) is the capture's
+  `AUDIO_INPUT_BUFFER_S` in blocks plus 32: a starved callback thread
+  delivers that whole buffer as one `put_nowait` burst, which the old 32
+  rejected on a healthy socket (`docs/agents/audio-capture.md`). Stop drains audio
   through a sender barrier, sends `Finalize`, waits best-effort for
   `from_finalize`, sends `CloseStream`; all bounded, and a failed path
   closes the socket without control frames overtaking audio.
@@ -208,7 +212,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   Overlay: "Connecting to the speech service. You can speak now." Start
   failures arrive via a queued signal.
   - Each flush push waits up to `STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S`
-    (5 s; F09): Deepgram's queue holds 32 chunks and a burst of
+    (5 s; F09): Deepgram's queue held 32 chunks (now about 23 s, still
+    less than the 62.5 s buffer) and a burst of
     `put_nowait` never let the sender run. The flush re-checks the
     generation between chunks.
   - The finalize joins the connect thread for at most

@@ -4753,11 +4753,14 @@ def _streaming_controller_with_a_blocked_handshake(
 
 
 def test_a_six_second_preconnect_buffer_reaches_deepgram_intact(monkeypatch):
-    """Six seconds of buffered speech, at Deepgram's real 32-chunk bound.
+    """Six seconds of buffered speech against a smaller send queue.
 
     `STREAMING_PRECONNECT_BUFFER_MAX_BYTES` is sized at 62.5 s of audio
     because Deepgram's handshake may take up to 8 s, but the provider's send
-    queue holds 32 chunks -- 3.2 s. `_flush_preconnect_buffer` handed the
+    queue held 32 chunks -- 3.2 s -- when this was found; it now holds a
+    capture buffer's worth (about 23 s), which is still less than the 62.5 s,
+    so the bound is pinned at 32 here to keep the flush's wait under test.
+    `_flush_preconnect_buffer` handed the
     buffer over in a bare loop of `put_nowait` calls: measured, 33 pushes
     complete in about 45 us, roughly a hundredth of CPython's 5 ms thread
     switch interval, so the sender thread is not slow, it is never scheduled
@@ -4793,6 +4796,9 @@ def test_a_six_second_preconnect_buffer_reaches_deepgram_intact(monkeypatch):
         ABNF = _FakeABNF
         WebSocketApp = _SlowConnectWebSocket
 
+    monkeypatch.setattr(
+        "stt_app.transcriber.deepgram_provider._STREAM_AUDIO_QUEUE_MAX_CHUNKS", 32
+    )
     transcriber = DeepgramTranscriber(api_key="key")
     monkeypatch.setattr(
         transcriber, "_get_websocket_module", lambda: _SlowConnectModule
