@@ -264,7 +264,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   part of the old entry is resolved, `docs/agents/text-insertion.md`). A
   finalize whose dictation already inserted live text pastes its tail at
   once, even inside the restore window of a paste the finalize's own flush
-  just made for another window's queued result; a late reader of that paste
+  just made for another window's queued result, or of a re-paste the user
+  sent into another window during the stream (2026-10-09; the stream's live
+  inserts wait for that one, the tail does not); a late reader of that paste
   can then read the tail. For the stream's own window no earlier result can
   be waiting at that point (it would have held the first live insert), so
   order is not affected. Kept (cost vs effect): pacing the tail means

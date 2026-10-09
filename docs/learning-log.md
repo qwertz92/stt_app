@@ -9545,3 +9545,15 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   it. The notice transcribes on a worker thread, so the row is recorded on
   the controller's thread through a queued signal
   (`unfinished_transcript_saved`); a test checks the thread.
+- **The re-paste works during a streaming dictation** (owner's request; his
+  old build refused it during any recording -- a batch capture has allowed
+  it since 2026-10-01). Into another window it goes out at once: the stream
+  writes only into its own window and a focus change suspends its live
+  inserts; the stream's next live insert then waits for that paste's
+  restore window, which only the stream's first live insert did before.
+  Into the stream's own window, where a paste would land inside the
+  streamed words or in front of the finalize's tail, it is held and the
+  tray says so; the stream's end starts the pace timer, which runs it.
+  Holding was chosen over refusing because a refusal made the user press
+  the hotkey again after the stream, and over pasting at once because the
+  order rule (one window, recording order) would break.

@@ -4175,69 +4175,6 @@ def test_repaste_last_transcript_without_transcript_shows_error():
     _ = app
 
 
-def test_repaste_last_transcript_blocked_while_streaming():
-    """Refused while a streaming recording inserts live at the caret.
-
-    The refusal reaches the tray; the overlay the recording owns is
-    untouched. Painted, a refusal replaced "Listening" while the microphone
-    was still open (wave 12, `show_overlay_error`'s session guard). A batch
-    capture allows the re-paste since 2026-10-01 (the owner's decision).
-    """
-    overlay = FakeOverlay()
-    inserter = FakeTextInserter()
-    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
-    controller._last_transcript = "hello again"
-    controller._audio_capture = FakeCapture()
-    controller._streaming_recording = True
-    tray: list[str] = []
-    controller.busy_overlay_error.connect(tray.append)
-    painted_before = list(overlay.states)
-
-    controller.repaste_last_transcript()
-
-    assert inserter.calls == []
-    assert overlay.states == painted_before
-    assert tray == [
-        "Finish the streaming recording before inserting the last transcript again."
-    ]
-    controller._streaming_recording = False
-    controller._audio_capture = None
-    controller.shutdown()
-    _ = app
-
-
-def test_repaste_waits_for_a_pending_streaming_finalize():
-    """A streaming finalize still inserts its own tail when it lands.
-
-    The session is no longer recording, but the tail past `committed_text`
-    is inserted by the finalize itself; a re-paste in between would put the
-    previous dictation into the document in front of it. The refusal names
-    the thing to wait for, not a recording that has already stopped.
-    """
-    overlay = FakeOverlay()
-    inserter = FakeTextInserter()
-    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
-    controller._last_transcript = "hello again"
-    controller._streaming_recording = True
-    tray: list[str] = []
-    controller.busy_overlay_error.connect(tray.append)
-    painted_before = list(overlay.states)
-
-    controller.repaste_last_transcript()
-
-    assert inserter.calls == []
-    assert overlay.states == painted_before
-    assert tray == [
-        (
-            "Wait for the streaming transcript to finish before inserting the "
-            "last transcript again."
-        )
-    ]
-    controller._streaming_recording = False
-    controller.shutdown()
-    _ = app
-
-
 @pytest.mark.parametrize(
     "flag", ["_recording_start_in_progress", "_recording_stop_in_progress"]
 )

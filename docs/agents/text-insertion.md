@@ -521,11 +521,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   overlay. It also runs during an open batch capture (owner's decision,
   2026-10-01): through the pace, into the current focus with its own target,
   leaving the recording's target snapshot and its overlay session alone, and
-  reporting through the tray. Refused with the reason during a recording
-  start or stop (the start or stop takes the target snapshot, and a paste
-  then races it), during a streaming recording (live inserts write at the
-  caret) and during a streaming finalize, whose tail would land behind the
-  paste. A failed or doubtful insert still shows briefly in the tray and
+  reporting through the tray. Refused with the reason only during a
+  recording start or stop (the start or stop takes the target snapshot, and
+  a paste then races it; a fraction of a second). During a streaming
+  recording or its pending finalize (owner's request 2026-10-09; it was
+  refused, and the user had to press it again afterwards) the paste's
+  window decides (`_streaming_window_has_focus`, top-level window as the
+  order rule counts it; unknown counts as the stream's window, and with
+  `current_window` insertion every window is): into another window it goes
+  out at once -- the stream writes only into its own window, a focus change
+  suspends its live inserts --, and the stream's next live insert then
+  waits for that paste's restore window (`_stream_waits_for_paste_pace`);
+  into the stream's own window, where live inserts write at the caret and
+  the finalize still pastes its tail, it is held as a `_PendingRepaste`
+  with `after_stream` (a later request replaces it), the tray says it will
+  be inserted when the stream has finished, a pace tick during the stream
+  leaves it held, and `_reset_streaming_state` starts the pace timer, so it
+  runs after the stream's end, rebuilt from its rows like any held
+  re-paste, at whatever has the focus then. A failed or doubtful insert still shows briefly in the tray and
   stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly
   inserted, never pasted again. The `_last_transcript` fallback

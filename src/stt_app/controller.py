@@ -406,6 +406,9 @@ class _PendingRepaste:
     display_entry: object
     undelivered: tuple[_UndeliveredInsert, ...]
     offer_rows: tuple[_UndeliveredInsert, ...] = ()
+    # Held until the streaming dictation into the paste's window has ended
+    # (`_repaste`), not by the pace; `_reset_streaming_state` lets it go.
+    after_stream: bool = False
 
 
 class _TranscriberRuntimeLease:
@@ -846,6 +849,9 @@ class DictationController(QtCore.QObject):
         # True while live insertion waits for an earlier result for the same
         # window (`_stream_live_insert_held`); kept to log each change once.
         self._stream_insert_held = False
+        # A re-paste went into another window during the stream: its next
+        # live insert waits for that paste's restore window.
+        self._stream_waits_for_paste_pace = False
         # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
@@ -3307,6 +3313,18 @@ class DictationController(QtCore.QObject):
         self._streaming_recording = False
         self._target_window_handle = None
         self._target_focus_signature = None
+        self._stream_waits_for_paste_pace = False
+        pending = self._pending_repaste
+        if (
+            pending is not None
+            and pending.after_stream
+            and not self._paste_pace_timer.isActive()
+        ):
+            # The stream that held a re-paste is over: the pace timer runs it
+            # on the next turn of the event loop, after whatever the stream's
+            # end still paints and pastes, and after the restore window of
+            # the stream's own last paste.
+            self._paste_pace_timer.start(_pace_ms(self._paste_pace_wait_s()))
 
     @property
     def _stream_committed_text(self) -> str:
@@ -6527,6 +6545,10 @@ class DictationController(QtCore.QObject):
         pending = self._pending_repaste
         if pending is None:
             return
+        if pending.after_stream and self._streaming_recording:
+            # The pace timer ran for another paste; this one waits for the
+            # stream's end (`_reset_streaming_state` lets it go).
+            return
         self._pending_repaste = None
         text = pending.text
         display_entry = pending.display_entry
@@ -6567,6 +6589,7 @@ class DictationController(QtCore.QObject):
             display_entry=display_entry,
             undelivered=undelivered,
             offer_rows=offer_rows,
+            announce_hold=not pending.after_stream,
         )
 
     def _handle_background_transcription_ready(
@@ -6721,6 +6744,21 @@ class DictationController(QtCore.QObject):
         """
         return self._insert_target_is_current_window() or handle == other
 
+    def _streaming_window_has_focus(self) -> bool:
+        """Whether a re-paste now would go into the streaming dictation's
+        window, by the top-level window as the order rule counts it.
+
+        An unknown answer -- no foreground, no stream target -- counts as
+        yes: holding a paste until the stream ends costs a moment, landing it
+        inside the streamed words costs the user a cleanup.
+        """
+        signature = self._current_focus_signature()
+        current = signature[0] if signature else None
+        stream_window = self._target_window_handle
+        if not current or not stream_window:
+            return True
+        return self._same_order_window(current, stream_window)
+
     def _earlier_result_waits_for(
         self, handle: int | None, *, before: int | None = None
     ) -> bool:
@@ -6763,8 +6801,13 @@ class DictationController(QtCore.QObject):
         handle = self._target_window_handle
         if self._deferred_background_results and self._earlier_result_waits_for(handle):
             self._flush_deferred_background_results()
+        if self._stream_waits_for_paste_pace and self._paste_pace_wait_s() <= 0.0:
+            self._stream_waits_for_paste_pace = False
         held = self._earlier_result_waits_for(handle) or (
-            not self._stream_text_state.committed_text
+            (
+                not self._stream_text_state.committed_text
+                or self._stream_waits_for_paste_pace
+            )
             and self._paste_pace_wait_s() > 0.0
         )
         if held != self._stream_insert_held:
@@ -8370,10 +8413,11 @@ class DictationController(QtCore.QObject):
         wave-13 refusal left the hotkey dead for as long as anything was
         transcribing, which on a slow machine with a queue was minutes).
         Allowed during an open batch capture too (owner's decision,
-        2026-10-01). Refused, with the reason on the tray or the overlay,
-        while a recording starts or stops, during a streaming recording, and
-        while a streaming finalize is pending, whose own tail is still to be
-        inserted.
+        2026-10-01). During a streaming recording or its pending finalize
+        (owner's request 2026-10-09): into another window at once, into the
+        stream's own window held until the stream has ended, and the tray
+        says so. Refused, with the reason on the tray or the overlay, only
+        while a recording starts or stops.
         """
         waiting = self._repaste_rows()
         if waiting:
@@ -8459,6 +8503,7 @@ class DictationController(QtCore.QObject):
         display_entry=_KEEP_DISPLAY,
         undelivered: Sequence[_UndeliveredInsert] = (),
         offer_rows: Sequence[_UndeliveredInsert] = (),
+        announce_hold: bool = True,
     ) -> None:
         """Paste ``text`` into the focused window on the user's request.
 
@@ -8471,7 +8516,8 @@ class DictationController(QtCore.QObject):
         like them, without making this a queued paste (its failure still
         copies the text, as the Insert always did). A failure that paints the
         offer again hands it all of these rows, so its next Insert retires
-        them too.
+        them too. ``announce_hold`` False: a held request run again, whose
+        hold the user was told about already.
         """
         if not text.strip():
             self.show_overlay_error("No transcript available to insert yet.")
@@ -8496,22 +8542,31 @@ class DictationController(QtCore.QObject):
                 message = f"{message} {hint}"
             self.show_overlay_error(message)
             return
-        if self._streaming_recording and self._audio_capture is not None:
-            # Live inserts write at the caret while the microphone is open;
-            # a paste in between would land inside the streamed text.
-            message = f"Finish the streaming recording before inserting {what}."
-            hint = self._undelivered_hint()
-            if hint:
-                message = f"{message} {hint}"
-            self.show_overlay_error(message)
-            return
-        if self._streaming_recording:
-            # The microphone is closed, but the finalize still inserts its
-            # tail past the text already in the document; a paste in between
-            # would land in front of it.
-            self.show_overlay_error(
-                f"Wait for the streaming transcript to finish before inserting {what}."
+        if self._streaming_recording and self._streaming_window_has_focus():
+            # Live inserts write at that caret while the microphone is open,
+            # and a pending finalize still inserts its tail past the text
+            # already there: a paste now would land inside the streamed
+            # words or in front of the tail. Held until the stream has ended
+            # (owner's request 2026-10-09: it was refused, and the user had
+            # to press it again), then pasted at whatever has the focus.
+            self._pending_repaste = _PendingRepaste(
+                text=text,
+                display_entry=display_entry,
+                undelivered=tuple(undelivered),
+                offer_rows=tuple(offer_rows),
+                after_stream=True,
             )
+            self._logger.info("repaste_held reason=streaming rows=%d", len(undelivered))
+            if announce_hold:
+                held = (
+                    "The transcripts that were not inserted will be inserted"
+                    if undelivered
+                    else "The last transcript will be inserted again"
+                )
+                self.show_overlay_error(
+                    f"{held} when the streaming dictation into this window has "
+                    "finished."
+                )
             return
         wait_s = self._paste_pace_wait_s()
         if wait_s > 0.0:
@@ -8635,6 +8690,11 @@ class DictationController(QtCore.QObject):
         if _join_transcripts([part for _entry, part in row_parts]) != text.strip():
             row_parts = ()
         pasted_at = datetime.now().astimezone()
+        if self._streaming_recording:
+            # Into another window: the stream's next live insert would
+            # overwrite the clipboard that window may still read from
+            # (`_stream_live_insert_held`).
+            self._stream_waits_for_paste_pace = True
         if session:
             if display_entry is not self._KEEP_DISPLAY:
                 self._delivered_after_shown = (text, display_entry)
