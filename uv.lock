@@ -2,6 +2,9 @@ version = 1
 revision = 3
 requires-python = "==3.12.*"
 
+[manifest]
+overrides = [{ name = "ctranslate2", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'", specifier = ">=4.0" }]
+
 [[package]]
 name = "altgraph"
 version = "0.17.5"
@@ -223,7 +226,7 @@ version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "av" },
-    { name = "ctranslate2" },
+    { name = "ctranslate2", marker = "platform_machine != 'ARM64' or sys_platform != 'win32'" },
     { name = "huggingface-hub" },
     { name = "onnxruntime" },
     { name = "tokenizers" },
