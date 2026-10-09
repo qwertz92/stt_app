@@ -185,29 +185,46 @@ def test_a_quit_keeps_the_failures_waiting_for_retry_once_each(monkeypatch, tmp_
     _ = app
 
 
-def test_waiting_to_quit_stops_the_open_recording_and_refuses_a_new_one(
-    monkeypatch, tmp_path
-):
+def test_waiting_to_quit_stops_the_open_recording(monkeypatch, tmp_path):
     controller, app, _overlay, _unfinished, _history = _controller(
         monkeypatch, tmp_path
     )
-    tray_messages = []
-    controller.busy_overlay_error.connect(tray_messages.append)
     controller.start_recording()
 
     controller.hold_for_quit()
 
     assert controller._audio_capture is None, "the open recording was not stopped"
     assert controller.quit_pending_work().transcribing == 1
-    starts = len(FakeCapture.instances)
-    controller.start_recording()
-    assert len(FakeCapture.instances) == starts, "a recording started while quitting"
-    # The transcription owns the overlay, so the refusal goes to the tray.
-    assert any("Don't quit" in message for message in tray_messages)
+    controller.shutdown()
+    _ = app
 
-    controller.release_quit_hold()
+
+def test_a_new_recording_during_the_wait_calls_the_quit_off(monkeypatch, tmp_path):
+    """Owner decision 2026-10-09: the wait used to refuse a new recording
+    until "Don't quit" was chosen. Dictating again now releases the hold,
+    tells the quit window to close and records as usual."""
+    controller, app, _overlay, _unfinished, _history = _controller(
+        monkeypatch, tmp_path
+    )
+    tray_messages = []
+    canceled = []
+    controller.busy_overlay_error.connect(tray_messages.append)
+    controller.quit_canceled_by_recording.connect(lambda: canceled.append(True))
+    controller.hold_for_quit()
+    starts = len(FakeCapture.instances)
+
     controller.start_recording()
-    assert len(FakeCapture.instances) == starts + 1
+
+    assert len(FakeCapture.instances) == starts + 1, "the recording was refused"
+    assert controller._audio_capture is not None
+    assert canceled == [True]
+    assert any("Quit canceled" in message for message in tray_messages)
+    # The hold is gone: a stray hold-free poll path must not stop it, and a
+    # second start emits nothing more.
+    assert controller._quit_hold is False
+    controller.stop_recording()
+    controller.start_recording()
+    assert canceled == [True]
     controller.shutdown()
     _ = app
 

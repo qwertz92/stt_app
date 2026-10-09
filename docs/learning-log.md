@@ -9518,3 +9518,14 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   the insert that painted it); Edit needs it to be the shown entry, and an
   edit moves the offer only when it edits that entry -- which also lets a
   history edit of the delivered dictation reach its offer.
+
+## 2026-10-09: owner requests from a test on a slow work PC (not-inserted results, quit, unfinished recordings)
+
+- **A recording started during the quit's "Wait and insert" calls the quit
+  off** (owner decision). The wait refused every new recording until "Don't
+  quit" was chosen, so on a slow machine the hotkey was dead for as long as
+  the queue took. `start_recording` now clears `_quit_hold` before the
+  recording starts -- the quit window polls `hold_for_quit` every 250 ms, and
+  a hold left standing would stop the new recording on the next poll --,
+  emits `quit_canceled_by_recording` (the window closes as for "Don't quit")
+  and tells the tray "Quit canceled".

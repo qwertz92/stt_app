@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from stt_app.controller import PendingQuitWork
 from stt_app.quit_dialog import QuitCoordinator, QuitDialog
@@ -112,6 +112,52 @@ def test_dont_quit_calls_the_quit_off_and_lets_dictation_resume(app):
     assert quits == []
     assert controller.releases == 1
     assert coordinator.dialog is None
+    coordinator.request()
+    assert coordinator.dialog is not None, "the next Quit must ask again"
+    coordinator.dialog.close_for_quit()
+
+
+class _SignallingController(QtCore.QObject):
+    """A fake controller with the real signal a new recording emits."""
+
+    quit_canceled_by_recording = QtCore.Signal()
+
+    def __init__(self, work: PendingQuitWork):
+        super().__init__()
+        self.work = work
+        self.holds = 0
+
+    def quit_pending_work(self):
+        return self.work
+
+    def hold_for_quit(self):
+        self.holds += 1
+
+    def release_quit_hold(self):
+        pass
+
+
+def test_a_recording_started_during_the_wait_closes_the_window_without_quitting(
+    app,
+):
+    """Owner decision 2026-10-09: dictating again calls the quit off. The
+    window goes, the wait stops holding (a held poll would stop the new
+    recording), and nothing quits."""
+    controller = _SignallingController(_BUSY)
+    quits = []
+    coordinator = QuitCoordinator(controller, lambda: quits.append(True))
+    coordinator.request()
+    dialog = coordinator.dialog
+    dialog.wait_button.click()
+    holds = controller.holds
+
+    controller.quit_canceled_by_recording.emit()
+
+    assert quits == []
+    assert coordinator.dialog is None
+    assert dialog.isVisible() is False
+    coordinator._poll()
+    assert controller.holds == holds, "a poll after the cancel stopped the recording"
     coordinator.request()
     assert coordinator.dialog is not None, "the next Quit must ask again"
     coordinator.dialog.close_for_quit()

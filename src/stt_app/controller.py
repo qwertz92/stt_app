@@ -605,6 +605,10 @@ class DictationController(QtCore.QObject):
     # Emitted from the device-refresh worker once PortAudio re-enumerated, so
     # the overlay's microphone caption names the current default device.
     audio_devices_refreshed = QtCore.Signal()
+    # A recording started while the quit window waited ("Wait and insert"):
+    # the quit is called off (owner decision 2026-10-09), and the quit window
+    # (`quit_dialog.QuitCoordinator`) closes.
+    quit_canceled_by_recording = QtCore.Signal()
 
     def __init__(
         self,
@@ -1144,11 +1148,13 @@ class DictationController(QtCore.QObject):
         )
 
     def hold_for_quit(self) -> None:
-        """Let the pending work finish for a quit: refuse new recordings and
-        stop the open one, which is then transcribed and inserted as usual.
+        """Let the pending work finish for a quit: stop the open recording,
+        which is then transcribed and inserted as usual.
 
         Idempotent; the quit window calls it on every poll, so a capture
-        that finished opening after the first call is stopped too.
+        that finished opening after the first call is stopped too. A new
+        recording started while the hold stands calls the quit off
+        (`start_recording`, `quit_canceled_by_recording`).
         """
         self._quit_hold = True
         if (
@@ -1525,14 +1531,6 @@ class DictationController(QtCore.QObject):
         if self._recording_start_in_progress:
             self._logger.info("Ignored nested start_recording while start is active.")
             return
-        if self._quit_hold:
-            # The quit window waits for the pending work to end; a new
-            # recording would keep it waiting.
-            self.show_overlay_error(
-                'Quitting after the pending transcriptions. Choose "Don\'t quit" '
-                "in the quit window to dictate again."
-            )
-            return
         if self._audio_capture is not None:
             # A recording is already active. This can happen when a queued
             # ``singleShot(0, self.start_recording)`` (from a prior stop's
@@ -1552,6 +1550,21 @@ class DictationController(QtCore.QObject):
                 "Streaming transcript is still finalizing. Please wait.",
             )
             return
+        if self._quit_hold:
+            # The quit window waits for the pending work to end ("Wait and
+            # insert"). Dictating again calls the quit off (owner decision
+            # 2026-10-09; it used to be refused until "Don't quit"): the hold
+            # goes first, so the window's next poll cannot stop this
+            # recording, and the window closes on the signal. The note goes to
+            # the tray, since this recording takes the overlay. A start
+            # refused further down leaves the quit called off all the same.
+            self._quit_hold = False
+            self._logger.info("quit_canceled reason=recording_started")
+            self.quit_canceled_by_recording.emit()
+            self.busy_overlay_error.emit(
+                "Quit canceled: a new recording started. The app keeps "
+                "running; choose Quit in the tray again to quit."
+            )
         self._recording_start_in_progress = True
         try:
             start_target_handle = self._window_focus_helper.capture_target_window()
