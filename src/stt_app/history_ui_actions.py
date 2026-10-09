@@ -1,6 +1,6 @@
 """Shared transcript-history UI flows for the History dialog and Settings History tab.
 
-Both surfaces expose the same export/import/clear actions against a
+Both surfaces expose the same export/import/clear/edit actions against a
 ``TranscriptHistoryStore`` but differ in how they present success feedback and how
 they track/persist the active history limit. This module holds the flow logic exactly
 once; each caller only supplies the small bits that differ (feedback presentation,
@@ -16,9 +16,26 @@ from pathlib import Path
 from PySide6 import QtWidgets
 
 from .transcript_history import (
+    TranscriptHistoryEntry,
     TranscriptHistoryStore,
+    edited_entry,
     select_newest_entries,
 )
+
+
+def notify_history_edit(
+    controller: object | None, entry: TranscriptHistoryEntry, text: str
+) -> None:
+    """Tell the controller that a history editor saved ``text`` into ``entry``.
+
+    A result that was not inserted -- a waiting-insert row, the overlay's
+    Insert offer, a result still in the paste queue -- then pastes the
+    edited text (owner's rule 2026-10-09). Both editors write the store
+    themselves; without this the controller kept pasting the old text.
+    """
+    notify = getattr(controller, "on_history_entry_edited", None)
+    if callable(notify):
+        notify(entry, edited_entry(entry, text))
 
 
 def format_history_count_label(total: int, limit: int) -> str:

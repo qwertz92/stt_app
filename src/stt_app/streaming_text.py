@@ -105,6 +105,56 @@ def stream_insertion_text(committed: str, tail: str) -> str:
     return f" {new_part}"
 
 
+def tail_prefix(whole: str, tail: str) -> str | None:
+    """The words of ``whole`` in front of ``tail``, when ``tail`` ends it.
+
+    Whitespace is folded on both sides: a streaming tail is inserted with a
+    leading space the transcript does not carry. "" when the two are the
+    same text; None when ``tail`` is not the end of ``whole`` at a word
+    boundary -- "Wochenende" does not end with the tail " ende", while
+    "hallo welt." ends with the punctuation tail ".".
+    """
+    folded_whole = normalize_stream_text(whole)
+    folded_tail = normalize_stream_text(tail)
+    if not folded_tail or not folded_whole.endswith(folded_tail):
+        return None
+    prefix = folded_whole[: len(folded_whole) - len(folded_tail)]
+    if not prefix:
+        return ""
+    if prefix.endswith(" "):
+        return prefix.rstrip()
+    if folded_tail[0] in _NO_SPACE_BEFORE:
+        return prefix
+    return None
+
+
+def retarget_tail(old_whole: str, new_whole: str, tail: str) -> str | None:
+    """The tail an edit of ``old_whole`` into ``new_whole`` leaves to insert.
+
+    For a transcript whose last part, ``tail``, never reached its window:
+    the words in front of it are in the document and stay as they are, so
+    an edit can only change what follows them. Returns the new tail, spaced
+    like a streaming insertion behind those words; the whole edit, exactly
+    as typed, when ``tail`` was the whole transcript; "" when the edit
+    removed the tail; None when ``tail`` was not the end of ``old_whole`` or
+    the edit changed the words already in the document.
+    """
+    prefix = tail_prefix(old_whole, tail)
+    if prefix is None:
+        return None
+    if not prefix:
+        return new_whole.strip()
+    folded_new = normalize_stream_text(new_whole)
+    if folded_new == prefix:
+        return ""
+    if not folded_new.startswith(prefix):
+        return None
+    rest = folded_new[len(prefix) :]
+    if not rest.startswith(" ") and rest[0] not in _NO_SPACE_BEFORE:
+        return None
+    return stream_insertion_text(prefix, rest)
+
+
 def stream_join_text(committed: str, tail: str) -> str:
     base = normalize_stream_text(committed)
     insertion = stream_insertion_text(base, tail)

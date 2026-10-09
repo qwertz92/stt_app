@@ -9,7 +9,9 @@ from stt_app.streaming_text import (
     merge_rolling_window,
     merge_rolling_window_transcript,
     normalize_stream_text,
+    retarget_tail,
     stream_insertion_text,
+    tail_prefix,
 )
 
 
@@ -700,3 +702,51 @@ def test_the_floor_splice_accepts_a_two_word_seam_inside_the_boundary_bound():
     assert result.text.count("das ist") == 1, (
         f"the floor's tail was emitted twice: {result.text}"
     )
+
+
+@pytest.mark.parametrize(
+    ("whole", "tail", "expected"),
+    [
+        # The streaming tail carries a leading space the transcript does not.
+        ("erster teil zweiter teil", " zweiter teil", "erster teil"),
+        ("erster  teil\nzweiter teil", "zweiter teil", "erster teil"),
+        # The offer is the whole text: nothing of it is in the document.
+        ("Hallo Welt.", "Hallo  Welt. ", ""),
+        # A punctuation tail is inserted without a space.
+        ("hallo welt.", ".", "hallo welt"),
+        # Not at a word boundary: "Wochenende" does not end with " ende".
+        ("schoenes Wochenende", " ende", None),
+        ("erster teil", " zweiter teil", None),
+        ("erster teil", "", None),
+    ],
+)
+def test_tail_prefix_names_the_words_in_front_of_the_tail(whole, tail, expected):
+    assert tail_prefix(whole, tail) == expected
+
+
+@pytest.mark.parametrize(
+    ("old_whole", "new_whole", "tail", "expected"),
+    [
+        # An edit of the part that never reached the window moves the tail.
+        (
+            "erster teil zweiter teil",
+            "erster teil dritter teil",
+            " zweiter teil",
+            " dritter teil",
+        ),
+        ("erster teil zweiter teil", "erster teil.", " zweiter teil", "."),
+        # The edit removed the missing part: nothing is left to insert.
+        ("erster teil zweiter teil", "erster teil", " zweiter teil", ""),
+        # The edit changed words already in the document: no new tail.
+        ("erster teil zweiter teil", "Erster Teil zweiter", " zweiter teil", None),
+        ("erster teil zweiter teil", "erster teilchen", " zweiter teil", None),
+        # The offer was the whole text: the whole edit, exactly as typed.
+        ("Hallo Welt.", "Hallo\nliebe Welt.", "Hallo Welt.", "Hallo\nliebe Welt."),
+        # The offer was not the end of the transcript at all.
+        ("erster teil", "erster satz", " anderes", None),
+    ],
+)
+def test_retarget_tail_follows_an_edit_of_the_missing_part(
+    old_whole, new_whole, tail, expected
+):
+    assert retarget_tail(old_whole, new_whole, tail) == expected

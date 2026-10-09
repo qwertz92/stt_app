@@ -240,6 +240,27 @@ def test_overlay_clear_button_enabled_for_done_text_only():
     assert overlay._edit_button.isEnabled() is True
 
 
+def test_overlay_edit_is_enabled_on_an_offer_the_controller_marks_editable():
+    """The Insert offer of a transcript that was not inserted is an Error;
+    an edit there is what Insert then pastes (owner's rule 2026-10-09), so
+    the controller enables Edit on it. Any other Error keeps it disabled."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state("Error", "Recording failed.")
+    assert overlay._edit_button.isEnabled() is False
+
+    overlay.set_state(
+        "Error",
+        "Could not insert.\n\nthe transcript",
+        copy_text="the transcript",
+        error_action=OVERLAY_ERROR_ACTION_INSERT,
+        editable=True,
+    )
+    assert overlay._edit_button.isEnabled() is True
+    assert overlay.copy_text == "the transcript"
+
+
 def test_overlay_edit_button_emits_request():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

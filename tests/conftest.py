@@ -223,6 +223,11 @@ class FakeOverlay:
         """
         return self.states[-1][1] if self.states else OVERLAY_INITIAL_DETAIL
 
+    @property
+    def copy_text(self) -> str | None:
+        """What the overlay's Copy yields beyond the detail, like the real one."""
+        return self.state_kwargs[-1].get("copy_text") if self.state_kwargs else None
+
     def set_transcription_queue(self, items):
         rows = [tuple(item) for item in items]
         self.queue_updates.append([(int(row[0]), str(row[1])) for row in rows])

@@ -18,6 +18,7 @@ from .history_audio import resolve_history_audio_path, reveal_path_in_file_manag
 from .history_ui_actions import (
     format_history_count_label,
     history_import_dialog_dir,
+    notify_history_edit,
     prompt_import_overflow,
     run_history_clear,
     run_history_export,
@@ -699,6 +700,7 @@ class _HistoryTabMixin:
                 "Selected history entry was not found.", error=True
             )
             return
+        notify_history_edit(self._controller, entry, next_text)
         self._set_history_status("")
         self._refresh_history_list(force=True)
 

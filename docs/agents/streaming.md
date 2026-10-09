@@ -125,6 +125,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   a test with no tick, 2026-10-03). What remains is the few milliseconds
   between that check and the keystroke, where the inserter's own foreground
   re-read (`docs/agents/text-insertion.md`) stands guard.
+- **Live insertion waits for an earlier result for its own window**
+  (2026-10-09, owner's rule: results for one window in recording order).
+  `_stream_live_insert_held`, checked before each live insert like the
+  focus suspension: while `_earlier_result_waits_for` the stream's window
+  (a batch job recorded before it that will still paste), and for the
+  first live insert while the previous paste's restore window is open.
+  Such a result that is done pastes during the capture as long as nothing
+  of the stream is in the document and its window is in front; the partial
+  handler retries that flush. `live_text` stays current, so nothing is
+  lost: the next allowed insert or the finalize carries it. A finalize with
+  nothing inserted (`committed_text` empty) is an ordinary paste and goes
+  through the paste queue when an earlier result for its window waits or
+  the pace is open (`_deliver_foreground_through_paste_queue(shown=)`); a
+  finalize with live text keeps the exempt direct tail -- then no earlier
+  result for its window can be waiting, since one would have held the
+  first live insert. Detail and the cases that already held:
+  `docs/agents/text-insertion.md`.
 - **The post-pause speech measurement buckets at 20 ms**
   (`STREAMING_SPEECH_RUN_WINDOW_MS`, a required keyword of
   `measure_longest_speech_run_s`, never defaulted to

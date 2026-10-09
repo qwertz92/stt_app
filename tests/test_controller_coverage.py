@@ -8998,7 +8998,10 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
         assert controller._last_history_entry is not None
         controller._history_store.update_entry_text = lambda entry, text: 1
         assert controller.edit_last_transcript(None) is True
-        assert overlay.states[-1][1].startswith("korrigierter text")
+        # The edit rewrote words already in the window, so the tail it
+        # leaves cannot be told: the offer keeps its text and says why.
+        assert controller._last_transcript == "korrigierter text"
+        assert overlay.states[-1][1].startswith("Transcript edited in history.")
 
     state, detail = overlay.states[-1]
     assert state == "Error"

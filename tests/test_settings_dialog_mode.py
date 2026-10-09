@@ -1124,6 +1124,38 @@ def test_settings_history_edit_updates_item_without_rebuilding_others(
     _ = app
 
 
+def test_settings_history_edit_tells_the_controller(monkeypatch, tmp_path):
+    """A result that was not inserted pastes the edited text, which the
+    controller only knows when the editor tells it (owner's rule 2026-10-09)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("first")])
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: "first edited",
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    edits = []
+
+    class _Listener:
+        def on_history_entry_edited(self, original, updated):
+            edits.append((original.text, updated.text))
+
+    dialog._controller = _Listener()
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog.history_list.item(0).setSelected(True)
+
+    dialog._edit_selected_history()
+
+    assert edits == [("first", "first edited")]
+    _ = app
+
+
 def test_settings_history_edit_reports_a_store_it_cannot_read(
     monkeypatch, tmp_path, files_no_read_gets_past
 ):

@@ -223,13 +223,43 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   target (`hold_key`) or goes through the queue while the window is open
   (`_deliver_foreground_through_paste_queue`: Done, history and the
   last-recording mark at once, the paste after). Streaming live inserts and
-  the finalize tail are exempt. Never sleep on the Qt thread for it.
+  the finalize tail are exempt, except the first live insert of a dictation,
+  which waits for the window (`_stream_live_insert_held`), and a streaming
+  result none of which was inserted live, which is pasted like a batch
+  result (2026-10-09; order entry below). Never sleep on the Qt thread for
+  it.
   A result only the pace holds (`pace_held`) is not listed in the queue
   panel and Clear queue or Cancel cannot drop it: it is pasted within the
   delay, and listed it flashed the panel open and shut while the overlay
   already showed it as Done. A recording or a window that defers it again
   lists it as "Pending insert" as before. Re-paste and the overlay's Insert
   go through the pace too (below).
+- **Results for one window are inserted in recording order** (owner's rule
+  2026-10-09; for different windows order does not matter, and nothing for
+  another window waits). "Recording order" is submission (token) order:
+  recordings never overlap, and a retry is ordered as the new submission
+  it is -- its recording failed, which released everything behind it.
+  "One window" is the top-level handle (`_same_order_window`), every
+  result with `insert_target=current_window`. Changed: a streaming
+  dictation held its live inserts for nothing, so an earlier batch result
+  for its window still transcribing or held by a recording landed after or
+  inside the streamed words (the finalize's flush, or the pace holding it
+  while the tail pasted at once). Now the stream's live inserts wait while
+  `_earlier_result_waits_for` its window; such a result that is done may
+  paste during the capture while nothing of the stream is in the document
+  and its window is in front (`_stream_lets_earlier_result_go_first`; the
+  partial handler retries the flush); the first live insert waits for that
+  paste's restore window; and a stream with nothing inserted goes through
+  the paste queue at its finalize, behind a held earlier result. Already
+  held, unchanged: the deferred queue (token-ordered, coalesced per target,
+  one deferral answer for every result of a window; a group held by the
+  pace holds the later groups too), the single FIFO executor for batch and
+  local finalizes, the remote finalize lane's `_has_undelivered_older_job`,
+  a foreground result joining its window's deferred group (`hold_key`),
+  and F10's join of failed rows, which are recorded in failure order and
+  so in token order per window. An F10 or Insert on a failed row may land
+  after a later result for that window: the failure released the order,
+  and the re-paste is a new request at the current caret.
 - **`immediate_background_insert` (default off)**: a finished queued result
   inserts into its captured window at once, even during another
   transcription or a **batch** recording (safe because of the
@@ -396,15 +426,43 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     cancel.", the "Transcription canceled." writers, the preload's lines,
     `show_overlay_notice`, Edit/Retry/re-paste refusals and the Edit
     confirmation. Session states stay plain. While an offer is pending Copy
-    yields it and Edit is disabled -- intended.
+    yields it; Edit is enabled on it when it edits the offer (next entry).
+  - **An edit reaches a result that was not inserted** (owner's rule
+    2026-10-09). A result is normally inserted right after it is
+    transcribed; only while it was not -- the Insert offer, a waiting-insert
+    row, a result still held in the paste queue -- can an edit change what
+    is pasted, and then it does: `_follow_transcript_edit` rewrites the
+    rows whose `parts` hold the edited entry (a coalesced row keeps one
+    `(entry, text)` part per result and rejoins them), the queued result's
+    text, `_delivered_after_shown`, the shown pair (Copy, Edit, the
+    re-paste fallback) and the offer -- rejoined from its rows, or for a
+    row-less offer (a streaming tail, or the whole shown transcript)
+    `streaming_text.retarget_tail`: the words in front of the tail are in
+    the document, so an edit can only move the tail; an edit that removes
+    it retires the offer, one that changes those words keeps the offer and
+    says so. Entries match by value, as `update_entry` does. Both entry
+    points: the overlay's Edit (`edit_last_transcript`), enabled on an
+    Error when `_edit_reaches` its text (the shown pair has an entry and
+    the text is it or its tail; `OverlayUI.set_state(editable=)`), and the
+    two history editors through `history_ui_actions.notify_history_edit`
+    -> `on_history_entry_edited`, which repaints only an overlay that still
+    shows the old offer or transcript and never a session. Nothing pastes
+    because of an edit: a "possibly inserted" row takes the edited text for
+    its label and stays unpastable, and the pair is written past the
+    `_last_transcript` setter, which forgot `_shown_transcript_row` and
+    `_shown_transcript_token` -- with Edit enabled on a possibly-inserted
+    result, the re-paste fallback would then paste it a second time (a test
+    calling Edit there measured it). A paced
+    re-paste rebuilds its text from its rows when it runs.
   - **The offer carries its own action**: after a post-keystroke failure (six
     `TextMayHaveBeenPastedError` raise sites in `text_inserter.py`, two via
     the `combined_error` alias and `_ClipboardContentionAfterPaste`) Insert
     is withheld, decided by the offer's own `_insert_offer_may_have_pasted`,
     never the per-attempt `_last_insert_may_have_pasted` a later paste in the
     same flush resets.
-  - **A paste that carries the offer marks it** (`_paste_carried_the_offer`:
-    whitespace-folded equal, or ends with it at a word boundary; asked only
+  - **A paste that carries the offer marks it** (`_paste_carried_the_offer`
+    = `streaming_text.tail_prefix`: whitespace-folded equal, or ends with it
+    at a word boundary, a punctuation tail included; asked only
     by `_repaste` via `may_carry_offer` -- a substring test marked
     "Wochenende" for " ende"). A re-paste retires only an offer it carried.
   - **Clear retires the offer it dismissed** (`OverlayUI.detail_cleared` ->
