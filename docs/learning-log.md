@@ -9673,3 +9673,12 @@ on and the overlay green, the first ~10 s were not captured.
   reports `inputBufferAdcTime` 0 and WASAPI reports times in the future, so
   audio from before a warm attach cannot be cut out
   (`docs/agents/known-limitations.md`).
+- **Review of the fix (two P2, two P3).** The stop's wait called zero blocks
+  a dead stream while the new watchdog keeps a running one for 12 s, so a
+  stop during a starved start kept nothing (and streaming reported "No
+  speech detected"); and a frame-count cutoff cannot place the stop moment
+  after a permanent loss -- every stop then waited 3 s and kept audio said
+  after it. Lesson: once one path (the watchdog) changes what "dead" means,
+  every other path that decides it (the stop) must follow; and an audio
+  position derived from counting frames is only as good as the assumption
+  that nothing was lost -- arrival pace was the evidence that holds.
