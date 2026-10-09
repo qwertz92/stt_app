@@ -41,6 +41,8 @@ from test_deepgram_provider import (
 from stt_app import controller as controller_module
 from stt_app.audio_capture import AudioCaptureError
 from stt_app.config import (
+    AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
+    AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
     DEFAULT_ENGINE,
     DEFAULT_MODEL_SIZE,
     FALLBACK_HOTKEY,
@@ -1345,6 +1347,87 @@ def test_stop_recording_no_audio_shows_error(monkeypatch):
     _ = app
 
 
+def _expire_first_callback_watchdog(controller) -> None:
+    """Run the first-callback watchdog to its hard limit: the first timeout
+    only re-arms it for a stream that is not reported stopped (a fake
+    capture has no `stream_is_active`, which counts as not stopped)."""
+    controller._on_audio_callback_watchdog_timeout()
+    if controller._audio_callback_watchdog_extended:
+        assert controller._audio_callback_watchdog_timer.isActive()
+        controller._on_audio_callback_watchdog_timeout()
+
+
+def test_a_starved_first_callback_waits_for_the_hard_limit_instead_of_aborting(
+    monkeypatch, caplog
+):
+    """Field report (slow corporate laptop at 100% CPU): a recording that
+    had just started stopped on its own with a red error. The watchdog
+    aborted 2 s after the start when no block had come -- but a stream
+    PortAudio still runs is starved, not dead: its audio is buffered and
+    arrives late. So the first timeout logs and re-arms for the hard limit,
+    the recording and its overlay stay as they are, and a block that comes
+    in the meantime settles it."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+    capture.has_received_audio = False
+    capture.stream_is_active = lambda: True
+    listening = overlay.states[-1]
+
+    with caplog.at_level(logging.WARNING, logger="test.controller"):
+        controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is False
+    assert controller._audio_capture is capture
+    assert overlay.states[-1] == listening
+    assert "audio_capture_callback_slow mode=batch" in caplog.text
+    timer = controller._audio_callback_watchdog_timer
+    assert timer.isActive()
+    assert timer.interval() == (
+        AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
+        - AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+    )
+
+    capture.has_received_audio = True  # the burst arrived
+    controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is False
+    assert controller._audio_capture is capture
+    controller.shutdown()
+    _ = app
+
+
+def test_a_first_callback_timeout_on_a_stopped_stream_aborts_at_once(monkeypatch):
+    """PortAudio reporting the stream inactive is a dead stream: no reason to
+    make the user talk into it for the hard limit."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+    capture.stream_is_active = lambda: False
+
+    controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is True
+    assert controller._audio_capture is None
+    assert overlay.states[-1][0] == "Error"
+    controller.shutdown()
+    _ = app
+
+
 def test_audio_callback_watchdog_aborts_batch_without_transcribing_late_audio(
     monkeypatch,
     caplog,
@@ -1364,7 +1447,7 @@ def test_audio_callback_watchdog_aborts_batch_without_transcribing_late_audio(
         # callback-count check but before capture.stop() snapshots the buffer.
         capture._wav_bytes = b"late audio"
 
-        controller._on_audio_callback_watchdog_timeout()
+        _expire_first_callback_watchdog(controller)
 
     assert capture.stopped is True
     assert controller._audio_capture is None
@@ -1456,7 +1539,7 @@ def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
     with caplog.at_level(logging.ERROR, logger="test.controller"):
         controller.start_recording()
         capture = FakeCapture.instances[-1]
-        controller._on_audio_callback_watchdog_timeout()
+        _expire_first_callback_watchdog(controller)
 
     assert capture.stopped is True
     assert transcriber.aborted is True
@@ -2351,7 +2434,7 @@ def test_the_watchdog_abort_retains_the_stalled_recordings_own_id(
     controller.start_recording()
     FakeCapture.instances[-1]._wav_bytes = b"late audio"
 
-    controller._on_audio_callback_watchdog_timeout()
+    _expire_first_callback_watchdog(controller)
 
     assert controller._last_failed_wav_bytes == b"late audio"
     assert controller._last_failed_recording_id == ("saved-1" if persisted else "")
@@ -2384,7 +2467,7 @@ def test_the_watchdog_abort_keeps_an_older_failure_when_nothing_arrived_late(
     controller._last_failed_recording_id = "rec-older"
     FakeCapture.instances[-1]._wav_bytes = late_bytes
 
-    controller._on_audio_callback_watchdog_timeout()
+    _expire_first_callback_watchdog(controller)
 
     assert overlay.state == "Error"
     if late_bytes:
