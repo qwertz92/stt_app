@@ -23,6 +23,7 @@ from .settings_dialog_helpers import (
     _emit_background_signal,
     exception_reason,
 )
+from .ui_feedback import reserve_button_width_for_texts
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 
 TranscribeRecording = Callable[
@@ -44,6 +45,8 @@ _MOVED = "moved"
 _ACTIONABLE = (_PENDING, _FAILED)
 
 _COLUMNS = ("Recorded", "Length", "Size", "Status")
+_LATER_TEXT = "Ask again next start"
+_CLOSE_TEXT = "Close"
 
 
 def format_duration(seconds: float | None) -> str:
@@ -178,7 +181,10 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.reveal_button = QtWidgets.QPushButton("Show in folder", self)
         self.delete_button = QtWidgets.QPushButton("Delete selected...", self)
         self.keep_button = QtWidgets.QPushButton("Keep files and close", self)
-        self.later_button = QtWidgets.QPushButton("Ask again next start", self)
+        self.later_button = QtWidgets.QPushButton(_LATER_TEXT, self)
+        # "Close" once nothing is left to ask about; the width stays that of
+        # the wider label.
+        reserve_button_width_for_texts(self.later_button, (_LATER_TEXT, _CLOSE_TEXT))
         self.transcribe_selected_button.clicked.connect(self._transcribe_selected)
         self.transcribe_all_button.clicked.connect(self._transcribe_all)
         self.reveal_button.clicked.connect(self._reveal_rows)
@@ -267,6 +273,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.transcribe_selected_button.setEnabled(idle and bool(selected))
         self.delete_button.setEnabled(idle and bool(selected))
         self.keep_button.setEnabled(idle and bool(remaining))
+        self.later_button.setText(_LATER_TEXT if remaining else _CLOSE_TEXT)
         self.reveal_button.setEnabled(
             any(item.path.is_file() for item in self._selected() or self._recordings)
         )

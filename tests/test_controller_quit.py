@@ -278,3 +278,24 @@ def test_a_failed_transcription_keeps_the_recording(monkeypatch, tmp_path):
     assert history.load() == []
     controller.shutdown()
     _ = app
+
+
+def test_the_wait_lasts_until_the_last_paste_has_settled(monkeypatch, tmp_path):
+    """Quitting inside the restore window flushes the clipboard restore at
+    once, and a target that reads the clipboard late then pastes the user's
+    old clipboard instead of the transcript (review of 3ee1e23). A settling
+    paste alone is no reason to ask, though."""
+    controller, app, _overlay, _unfinished, _history = _controller(
+        monkeypatch, tmp_path
+    )
+    remaining = [1.2]
+    controller._text_inserter.paste_pace_remaining_s = lambda: remaining[0]
+
+    pending = controller.quit_pending_work()
+
+    assert pending.can_wait is True
+    assert pending.asks_before_quit is False
+    remaining[0] = 0.0
+    assert controller.quit_pending_work().can_wait is False
+    controller.shutdown()
+    _ = app

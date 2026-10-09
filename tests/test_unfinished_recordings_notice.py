@@ -43,7 +43,7 @@ def _history_entry(text, recording_id):
         text=text,
         engine="local",
         model="small",
-        mode="batch",
+        mode="import",
         source_recording_id=recording_id,
     )
 
@@ -278,4 +278,71 @@ def test_the_notice_keeps_one_size_while_rows_change(app, stores, tmp_path):
 
     assert dialog.size() == size
     assert dialog.keep_button.geometry() == keep_geometry
+    dialog.close()
+
+
+def test_a_partial_streaming_transcript_does_not_count_as_transcribed(
+    app, stores, tmp_path
+):
+    """A dying stream writes what it heard so far to history under the
+    recording's id and keeps the whole audio for Retry. That entry is not the
+    transcript: the review of 3ee1e23 measured the kept file deleted unseen."""
+    _last, history, unfinished = stores
+    kept = _keep(unfinished, "stream1")
+    history.add_entry(
+        TranscriptHistoryEntry.new(
+            text="the first thirty seconds",
+            engine="assemblyai",
+            model="universal",
+            mode="streaming",
+            source_recording_id="stream1",
+        ),
+        max_items=20,
+    )
+
+    dialog = _offer(stores, tmp_path)
+
+    assert dialog is not None and dialog.table.rowCount() == 1
+    assert kept.path.exists()
+    dialog.close()
+
+
+def test_the_last_recording_of_a_dying_stream_is_offered(app, stores, tmp_path):
+    last, history, unfinished = stores
+    state = last.save_recording(b"RIFF-whole", keep_after_success=False)
+    last.mark_failed("socket closed")
+    history.add_entry(
+        TranscriptHistoryEntry.new(
+            text="the first thirty seconds",
+            engine="assemblyai",
+            model="universal",
+            mode="streaming",
+            source_recording_id=state.recording_id,
+        ),
+        max_items=20,
+    )
+
+    dialog = _offer(stores, tmp_path)
+
+    assert dialog is not None
+    assert unfinished.find(state.recording_id).path.read_bytes() == b"RIFF-whole"
+    dialog.close()
+
+
+def test_with_nothing_left_the_closing_button_no_longer_promises_to_ask(
+    app, stores, tmp_path
+):
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    dialog = _dialog(tmp_path, unfinished)
+    dialog.show()
+    app.processEvents()
+    geometry = dialog.later_button.geometry()
+
+    dialog.table.selectRow(0)
+    dialog.delete_button.click()
+    app.processEvents()
+
+    assert dialog.later_button.text() == "Close"
+    assert dialog.later_button.geometry() == geometry
     dialog.close()

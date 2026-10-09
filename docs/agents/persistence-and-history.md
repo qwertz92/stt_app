@@ -120,7 +120,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   adopts a recoverable managed last recording not yet in history: copy,
   then `mark_completed` keyed by its id (a slot without a readable state
   gets `orphan-<mtime_ns>`, so a slot that cannot be marked is not copied
-  twice). A kept recording whose id has a history entry is not offered and
+  twice). Only an import's history entry (mode "import") says a kept
+  recording was transcribed, and the slot check ignores mode "streaming"
+  entries (`main._is_partial_transcript`): a dying stream writes its partial
+  text under the recording's id and keeps the whole audio for Retry, and
+  reading that entry as "transcribed" deleted the only complete audio
+  (review of 3ee1e23). A kept recording whose import entry exists is not
+  offered and
   its file is deleted, unless that transcript has a gap marker (kept, the
   entry points at it); an unreadable history offers everything and deletes
   nothing. `transcribe_unfinished_recording` writes history first and

@@ -923,8 +923,13 @@ def _without_transcribed_recordings(
     `transcribe_unfinished_recording` deletes a file once its transcript is
     in history; a delete that failed is finished here. A transcript with a
     gap marker keeps its file on purpose (the entry points at it), so it is
-    left on disk and not offered again. An unreadable history answers no
-    entries, and every recording is offered: nothing is deleted on a guess.
+    left on disk and not offered again. Only an import's entry counts
+    (`transcribe_unfinished_recording` and the Import tab write mode
+    "import"): a dictation entry under the same id can be a partial
+    transcript (`_is_partial_transcript`), and offering a recording twice
+    costs a second transcript, deleting it costs the recording. An
+    unreadable history answers no entries, and every recording is offered:
+    nothing is deleted on a guess.
     """
     try:
         entries = history_store.load() if history_store is not None else []
@@ -933,7 +938,7 @@ def _without_transcribed_recordings(
     texts_by_id: dict[str, list[str]] = {}
     for entry in entries:
         recording_id = str(getattr(entry, "source_recording_id", "") or "").strip()
-        if recording_id:
+        if recording_id and str(getattr(entry, "mode", "") or "") == "import":
             texts_by_id.setdefault(recording_id, []).append(str(entry.text or ""))
     offered = []
     for recording in recordings:
@@ -968,7 +973,11 @@ def _last_recording_already_transcribed(
         getattr(current_state, "recording_id", "")
         or getattr(current_state, "created_at", "")
     ).strip()
-    recent_entries = history_store.recent_entries(limit=50)
+    recent_entries = [
+        entry
+        for entry in history_store.recent_entries(limit=50)
+        if not _is_partial_transcript(entry)
+    ]
     if recording_id:
         for entry in recent_entries:
             if str(getattr(entry, "source_recording_id", "")).strip() != recording_id:
@@ -995,6 +1004,19 @@ def _last_recording_already_transcribed(
         if history_ts < audio_mtime:
             break
     return False
+
+
+def _is_partial_transcript(entry) -> bool:
+    """A history entry that may hold only part of its recording.
+
+    A streaming dictation that dies writes what it heard so far under the
+    recording's id (mode "streaming") and keeps the whole audio for Retry;
+    so does a finalize that returned nothing. Such an entry does not mean
+    the recording was transcribed, and taking it for one deleted the only
+    complete audio (review of 3ee1e23). A streaming dictation that finished
+    marks its recording completed, so it never reaches these checks.
+    """
+    return str(getattr(entry, "mode", "") or "").strip() == "streaming"
 
 
 def _complete_unless_gap(last_recording_store: LastRecordingStore, entry) -> None:

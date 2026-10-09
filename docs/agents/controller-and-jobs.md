@@ -274,7 +274,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   poll: it stops the open recording (transcribed and inserted as usual) and
   refuses new ones (`start_recording` sends the refusal to the tray while a
   transcription owns the overlay). The coordinator quits once `can_wait` is
-  false, unless a paste or a transcription failed during the wait -- then
+  false -- which includes `paste_settling`: the last paste's restore window
+  (`_paste_pace_wait_s`) and its target check must be over, or the quit
+  flushes the restore under a late-reading target (review of 3ee1e23); a
+  settling paste alone does not make Quit ask -- unless a paste or a transcription failed during the wait -- then
   it says so and waits for Quit or Don't quit. Don't quit, Esc and the
   title bar's close call `release_quit_hold()`. A tool window, because
   `window_focus` never picks one of ours as a paste target: a wait's paste

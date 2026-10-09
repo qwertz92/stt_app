@@ -186,6 +186,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   missing call: rows keep stripped text and a tail's leading space is what
   separates it from the streamed words, and F10 would have to order a tail
   row against failed batch rows (~4 h once decided).
+- **Rare gaps of the quit window** (2026-10-09, review of 3ee1e23, P3/P4):
+  a finished result held for its paste whose history write was refused (an
+  unreadable history) exists only in memory, so Quit now drops it although
+  the window says every finished transcript is in History; a recording the
+  quit fails to write to the unfinished store (disk full, locked folder) is
+  only logged (`unfinished_recordings_kept ... failed=N`), because nothing
+  is left on screen to report it; the failure count behind "N
+  transcriptions failed" is the Retry slot plus at most two older failures,
+  so a failure that pushes out the oldest is not named in the wait's last
+  message (the tray still reports it, the audio is kept); the quit after
+  launching an update installer (`update_ui.py`) skips the window. A
+  transcript with a gap marker leaves its file in the unfinished folder,
+  linked from its history entry, and nothing lists or cleans those files.
+  Kept: each needs a store or history failure, or is cosmetic.
 - **A crash keeps only the newest unfinished recording** (2026-10-09): the
   quit writes every queued recording to the unfinished store, but a crash
   or a killed process runs no `shutdown`, so only the managed last

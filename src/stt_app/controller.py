@@ -287,15 +287,26 @@ class PendingQuitWork:
     not_inserted: int = 0
     # Failed recordings held for Retry. Quitting keeps their audio.
     failed: int = 0
+    # The last paste's clipboard-restore window is still open, or its target
+    # check still runs. Quitting now flushes the restore at once, and a
+    # target that reads the clipboard late pastes the old clipboard instead.
+    paste_settling: bool = False
 
     @property
     def can_wait(self) -> bool:
-        """Whether waiting would still deliver something."""
-        return self.recording or self.transcribing > 0 or self.waiting_to_insert > 0
+        """Whether a wait is not over yet."""
+        return self._delivers_something or self.paste_settling
 
     @property
     def asks_before_quit(self) -> bool:
-        return self.can_wait or self.not_inserted > 0
+        # Not for a settling paste alone: that ends within
+        # `CLIPBOARD_RESTORE_DELAY_S`, and quitting right after a dictation
+        # is the ordinary way to end one.
+        return self._delivers_something or self.not_inserted > 0
+
+    @property
+    def _delivers_something(self) -> bool:
+        return self.recording or self.transcribing > 0 or self.waiting_to_insert > 0
 
 
 @dataclass(slots=True)
@@ -1100,6 +1111,7 @@ class DictationController(QtCore.QObject):
             waiting_to_insert=waiting + (self._pending_repaste is not None),
             not_inserted=len(self._undelivered_inserts),
             failed=bool(self._last_failed_wav_bytes) + len(self._older_failed_audio),
+            paste_settling=self._paste_pace_wait_s() > 0.0 or bool(self._paste_checks),
         )
 
     def hold_for_quit(self) -> None:

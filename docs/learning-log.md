@@ -9295,3 +9295,13 @@ recording an earlier session did not transcribe in one notice.
   (shutdown keeping nothing, no refusal while waiting, the wait quitting at
   once, no slot adoption, no history filter, a gap transcript deleting its
   file) failed 12 tests.
+- **Review round 1 (Sonnet, read-only) found one P2**: the startup filter
+  read any history entry under a recording's id as "transcribed", but a
+  dying stream writes its partial text under that id and keeps the whole
+  audio for Retry; the kept file was deleted unseen (the reviewer measured
+  it). Only import entries count now, and the managed-slot check ignores
+  streaming entries, which also closes the same pre-existing hole in the
+  old startup check. Two P3 fixed with it: the wait now lasts until the last
+  paste's restore window and target check are over, and the notice's last
+  button reads "Close" once nothing is left. The reviewer also drove
+  `SHOpenFolderAndSelectItems` for real: two files selected.
