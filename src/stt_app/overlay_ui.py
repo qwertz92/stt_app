@@ -1695,8 +1695,12 @@ class OverlayUI(QtWidgets.QWidget):
             # window, it is no longer topmost" (SetWindowPos remarks), so one
             # call both drops topmost and places the overlay.
             behind = _window_to_stay_behind(user32, hwnd) if shown else 0
-            insert_after = behind or _HWND_NOTOPMOST
-            return bool(user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags))
+            if behind and user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags):
+                return True
+            # Refused behind a higher-integrity window (access denied, e.g.
+            # an elevated Task Manager): without this the overlay stayed
+            # topmost while it said "Floating".
+            return bool(user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags))
         except Exception:
             return False
 

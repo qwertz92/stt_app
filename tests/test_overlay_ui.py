@@ -519,13 +519,16 @@ class _FakeZOrderUser32:
         self.foreground_exstyle = foreground_exstyle
         self.foreground_iconic = foreground_iconic
         self.positions: list[int] = []
+        # Insert-after handles SetWindowPos refuses, as it does with
+        # ERROR_ACCESS_DENIED behind an elevated window (Task Manager).
+        self.refused: set[int] = set()
 
     def SetWindowPos(self, _hwnd, insert_after, _x, _y, _cx, _cy, flags):
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE on every call: the overlay
         # never takes the focus from the window being dictated into.
         assert flags & 0x0013 == 0x0013
         self.positions.append(int(insert_after))
-        return 1
+        return 0 if int(insert_after) in self.refused else 1
 
     def GetForegroundWindow(self):
         return self.foreground
@@ -577,6 +580,25 @@ def test_dropping_topmost_puts_the_overlay_directly_behind_the_foreground_window
     QtTest.QTest.qWait(60)
     app.processEvents()
     assert user32.positions == [_HWND_TOPMOST, _EDITOR_HWND]
+    overlay.hide()
+
+
+def test_a_refused_place_behind_an_elevated_window_still_drops_topmost(monkeypatch):
+    # Behind a higher-integrity window SetWindowPos fails (access denied);
+    # with no second call the overlay kept WS_EX_TOPMOST while saying
+    # "Floating" (review of 8a72099, measured against Task Manager).
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    user32.refused.add(_EDITOR_HWND)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+
+    overlay.set_always_on_top(False)
+
+    assert user32.positions == [_EDITOR_HWND, _HWND_NOTOPMOST]
     overlay.hide()
 
 
