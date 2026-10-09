@@ -35,7 +35,7 @@ from stt_app.paste_target_check import (
 )
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
-from stt_app.transcript_history import TranscriptHistoryStore
+from stt_app.transcript_history import TranscriptHistoryStore, edited_entry
 
 
 class FakePasteTargetCheck:
@@ -783,5 +783,37 @@ def test_an_edit_while_the_check_runs_reaches_the_doubtful_row(monkeypatch, tmp_
     assert row.history_entry is not None and row.history_entry.text == "hello there"
     controller.repaste_last_transcript()
     assert inserter.calls[-1][0] == "hello there"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_doubtful_joined_re_paste_keeps_each_results_entry(monkeypatch, tmp_path):
+    """F10 pastes two failed rows as one paste and the check answers "not a
+    text field". The row it lists keeps one part per result, so a history
+    edit of one of them reaches it; before, the re-paste's check carried no
+    parts and the row held `(None, joined text)`, which no edit reached."""
+    check = FakePasteTargetCheck()
+    inserter = FakeTextInserter(should_fail=True)
+    controller, app, _overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, inserter=inserter
+    )
+    controller._on_transcription_ready("alpha.")
+    controller._on_transcription_ready("beta.")
+    assert [row.text for row in controller._undelivered_inserts] == ["alpha.", "beta."]
+    inserter.should_fail = False
+    controller.repaste_last_transcript()
+    assert inserter.calls[-1][0] == "alpha. beta."
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    [row] = controller._undelivered_inserts
+    assert row.text == "alpha. beta."
+    history = controller._history_store
+    entry_alpha = next(entry for entry in history.load() if entry.text == "alpha.")
+    assert history.update_entry_text(entry_alpha, "alpha, edited.") == 1
+    controller.on_history_entry_edited(
+        entry_alpha, edited_entry(entry_alpha, "alpha, edited.")
+    )
+
+    assert row.text == "alpha, edited. beta."
     controller.shutdown()
     _ = app

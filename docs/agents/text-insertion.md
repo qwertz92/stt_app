@@ -463,7 +463,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     Insert of a row-less offer keeps its text: Known limitations). A paste
     whose target check still runs (`_paste_checks`) takes the edit as well, so a
     "not a text field" verdict lists the edited text (2026-10-09 review;
-    built from the check's copy, that row kept the old text for good).
+    built from the check's copy, that row kept the old text for good); a
+    re-paste's check keeps each pasted row's `(entry, text)` parts, so the
+    row a joined F10 leaves behind is reachable too.
   - **The offer carries its own action**: after a post-keystroke failure (six
     `TextMayHaveBeenPastedError` raise sites in `text_inserter.py`, two via
     the `combined_error` alias and `_ClipboardContentionAfterPaste`) Insert

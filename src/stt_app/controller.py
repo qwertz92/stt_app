@@ -8456,6 +8456,14 @@ class DictationController(QtCore.QObject):
         else:
             # The offer's text (a streaming tail) has no entry of its own.
             entry_of_text = None
+        # Each pasted row's results with their entries, for a doubtful row
+        # (`_UndeliveredInsert.parts`): without them a joined F10 that the
+        # check reports listed `(None, joined text)`, which no edit reached.
+        # Only when they make up the pasted text -- an Insert's rows
+        # dismissed meanwhile are pasted but no longer listed.
+        row_parts = tuple(part for row in rows for part in row.parts)
+        if _join_transcripts([part for _entry, part in row_parts]) != text.strip():
+            row_parts = ()
         pasted_at = datetime.now().astimezone()
         if session:
             if display_entry is not self._KEEP_DISPLAY:
@@ -8468,6 +8476,7 @@ class DictationController(QtCore.QObject):
                     identity="The transcript was",
                     background=True,
                     takes_shown_pair=False,
+                    parts=row_parts,
                 ),
                 tone_if_refused=False,
             )
@@ -8493,6 +8502,7 @@ class DictationController(QtCore.QObject):
                 identity="The transcript was",
                 background=False,
                 takes_shown_pair=False,
+                parts=row_parts,
             ),
             tone_if_refused=False,
         )

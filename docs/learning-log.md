@@ -9505,3 +9505,7 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   within the window left the offer (now the edit) pending, and its next
   Insert put the edit into the document as well. The known-limitations
   entry claimed the opposite and is corrected.
+- **A re-paste's target check keeps its rows' parts** (second review, P3):
+  `_repaste` built its `_PasteCheck` without `parts`, so a joined F10 that
+  the check reported as "not a text field" listed `(None, joined text)`,
+  which no edit reached.
