@@ -105,6 +105,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   `settings_dialog_helpers.model_choices_for_engine`, `local_model_label`,
   `settings_store.apply_engine_model_selection`. Settings > History >
   Retranscribe... prefills Import Audio instead. Both write a new entry.
+  `reveal_paths_in_file_manager` selects several files at once through
+  `SHOpenFolderAndSelectItems` on a short-lived thread (Explorer's
+  `/select,` takes one file), opening the folder when that fails; the test
+  guard in `conftest.py` blocks that call and `os.startfile`.
+- **Unfinished recordings are a directory of WAV files, not an index**
+  (2026-10-09; `unfinished_recordings.py`,
+  `%APPDATA%\stt_app\unfinished_recordings`). The name
+  `unfinished_<local YYYYmmdd_HHMMSS>_<recording id>.wav` carries time and
+  id; length and size come from the file. No index means no unreadable or
+  stale index; a save writes a new file and skips an id already kept; a
+  folder that exists but cannot be listed raises instead of answering
+  empty. The startup notice (`main._offer_unfinished_recordings`) first
+  adopts a recoverable managed last recording not yet in history: copy,
+  then `mark_completed` keyed by its id (a slot without a readable state
+  gets `orphan-<mtime_ns>`, so a slot that cannot be marked is not copied
+  twice). Only an import's history entry (mode "import") says a kept
+  recording was transcribed, and the slot check ignores mode "streaming"
+  entries (`main._is_partial_transcript`): a dying stream writes its partial
+  text under the recording's id and keeps the whole audio for Retry, and
+  reading that entry as "transcribed" deleted the only complete audio
+  (review of 3ee1e23). A kept recording whose import entry exists is not
+  offered and
+  its file is deleted, unless that transcript has a gap marker (kept, the
+  entry points at it); an unreadable history offers everything and deletes
+  nothing. `transcribe_unfinished_recording` writes history first and
+  deletes the file only after the entry exists. "Keep files and close"
+  moves files to the recordings folder under their own name, which the
+  archive prune (`recording_<stamp>.wav` only) never deletes; a move never
+  replaces an existing file. The notice is 680x500 at 96 dpi in every state.
 - **Ctrl+C in either history view copies the whole selection** (explicit
   `QKeySequence.Copy` shortcut; the default copies one cell).
 - **Nothing that only reads may call `appdata_root`** (it creates the folder

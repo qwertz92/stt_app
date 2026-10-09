@@ -9420,3 +9420,41 @@ Two owner decisions, both resolving accepted limitations.
 - Lesson: a rule stated per window needs one definition of "window": the
   coalescing key includes focus and caret, the order rule uses the
   top-level handle (`_same_order_window`).
+
+
+## 2026-10-09: quitting with work pending, and the recordings it leaves
+
+Owner decision: the tray's Quit asks when work is pending (Wait and insert /
+Quit now, keep the recordings / Don't quit), and the next start offers every
+recording an earlier session did not transcribe in one notice.
+- **What existed before**: one managed slot (`last_recording.wav`) that
+  every recording overwrites, and a startup question that offered that one
+  recording through Settings -> Import Audio. A quit with two queued
+  recordings lost the older one's audio (it lived only in the job's request
+  audio), and the open capture and older Retry failures went the same way.
+- **The store has no index on purpose**: time and id are in the file name,
+  length and size in the file. The persistence rule "a store that cannot be
+  read is never written over" then holds by construction: nothing is ever
+  rewritten, a save only adds a file.
+- **The watchdog question answered itself by order**: it is armed on
+  `aboutToQuit`, and the quit window runs before `app.quit`, so a wait is
+  never under the watchdog; only the real quit is.
+- **A width reservation measured on an unparented button is wrong**: the
+  quit window's buttons were reserved before they had the dialog's
+  stylesheet, and "Waiting..." shrank the first button from 105 to 95 px
+  (caught by the geometry test). Buttons are now parented at construction.
+- Measured at 96 dpi: quit window 480x278 and startup notice 680x500 in
+  every state, button geometry unchanged across states. A negative control
+  (shutdown keeping nothing, no refusal while waiting, the wait quitting at
+  once, no slot adoption, no history filter, a gap transcript deleting its
+  file) failed 12 tests.
+- **Review round 1 (Sonnet, read-only) found one P2**: the startup filter
+  read any history entry under a recording's id as "transcribed", but a
+  dying stream writes its partial text under that id and keeps the whole
+  audio for Retry; the kept file was deleted unseen (the reviewer measured
+  it). Only import entries count now, and the managed-slot check ignores
+  streaming entries, which also closes the same pre-existing hole in the
+  old startup check. Two P3 fixed with it: the wait now lasts until the last
+  paste's restore window and target check are over, and the notice's last
+  button reads "Close" once nothing is left. The reviewer also drove
+  `SHOpenFolderAndSelectItems` for real: two files selected.

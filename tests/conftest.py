@@ -106,6 +106,18 @@ def _forbid_handing_paths_to_the_desktop_shell(monkeypatch):
         raising=False,
     )
 
+    def _blocked_shell_call(*args, **kwargs):
+        raise AssertionError(
+            "A shell call that opens Explorer was made in a test. Patch it "
+            f"(and assert on the call) instead. Args: {args!r}"
+        )
+
+    # Selecting several files goes through the shell, not QProcess.
+    monkeypatch.setattr(
+        "stt_app.history_audio.select_items_in_folder", _blocked_shell_call
+    )
+    monkeypatch.setattr(os, "startfile", _blocked_shell_call, raising=False)
+
 
 @pytest.fixture(autouse=True)
 def _forbid_blocking_modal_dialogs(monkeypatch):

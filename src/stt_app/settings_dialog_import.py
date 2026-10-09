@@ -342,12 +342,6 @@ class _ImportTabMixin:
         self.import_result_label.setStyleSheet("color: #555;")
         return True
 
-    def prepare_last_recording_import(self) -> bool:
-        import_index = self.tabs.indexOf(self._import_tab)
-        if import_index >= 0:
-            self.tabs.setCurrentIndex(import_index)
-        return self._select_last_recording_file()
-
     def _transcribe_selected_import_file(self) -> None:
         path = self._selected_import_file_path
         if not path:

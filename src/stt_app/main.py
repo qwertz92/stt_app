@@ -1,16 +1,18 @@
 from __future__ import annotations
 
 import faulthandler
+import logging
 import signal
 import sys
 import threading
-from datetime import datetime
+from datetime import UTC, datetime
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import __version__
 from .app_icon import load_app_icon
-from .app_paths import appdata_root
+from .app_paths import appdata_root, resolve_recordings_dir
 from .config import (
     APP_DISPLAY_NAME,
     APP_LOGGER_NAME,
@@ -34,6 +36,7 @@ from .logger import AppLogger
 from .model_download_coordinator import request_download_shutdown
 from .overlay_ui import OverlayUI
 from .paste_target_check import PasteTargetCheck
+from .quit_dialog import QuitCoordinator
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
@@ -41,6 +44,8 @@ from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcriber.base import transcript_has_gap
 from .transcript_history import TranscriptHistoryStore
+from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
+from .unfinished_recordings_dialog import UnfinishedRecordingsDialog
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .win_tray_icon import create_tray_icon
@@ -217,6 +222,7 @@ def run() -> int:
     secret_store = KeyringSecretStore()
     history_store = TranscriptHistoryStore()
     last_recording_store = LastRecordingStore()
+    unfinished_recording_store = UnfinishedRecordingStore()
     local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
     _schedule_startup_local_model_inventory_refresh(
@@ -251,6 +257,7 @@ def run() -> int:
         show_overlay_hotkey_manager=show_overlay_hotkey_manager,
         repaste_hotkey_manager=repaste_hotkey_manager,
         paste_target_check=PasteTargetCheck(),
+        unfinished_recording_store=unfinished_recording_store,
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
@@ -315,15 +322,18 @@ def run() -> int:
     )
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
-    QtCore.QTimer.singleShot(
-        0,
-        lambda: _prompt_recoverable_last_recording(
-            last_recording_store,
-            tray_icon._open_settings_dialog,
-            history_store,
-            parent=overlay,
-        ),
-    )
+
+    def _show_unfinished_recordings() -> None:
+        # Kept on the tray icon: the notice has no parent to keep it alive.
+        tray_icon._unfinished_recordings_dialog = _offer_unfinished_recordings(
+            last_recording_store=last_recording_store,
+            history_store=history_store,
+            unfinished_store=unfinished_recording_store,
+            transcribe=controller.transcribe_unfinished_recording,
+            keep_dir=resolve_recordings_dir(controller.settings.recordings_dir),
+        )
+
+    QtCore.QTimer.singleShot(0, _show_unfinished_recordings)
 
     # Before any shutdown work, so that a step that hangs is still bounded.
     quit_watchdog_streams = []
@@ -412,7 +422,11 @@ def _create_tray_icon(
     menu.addSeparator()
 
     quit_action = menu.addAction("Quit")
-    quit_action.triggered.connect(app.quit)
+    # Asks first when work is pending, and may wait for it; `app.quit` -- and
+    # with it the watchdog armed on `aboutToQuit` -- runs only once the app
+    # really quits.
+    quit_coordinator = QuitCoordinator(controller, app.quit, parent=menu)
+    quit_action.triggered.connect(quit_coordinator.request)
 
     _active_settings_dialog: SettingsDialog | None = None
 
@@ -532,6 +546,7 @@ def _create_tray_icon(
     tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
     tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
+    tray_icon._quit_coordinator = quit_coordinator
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
     return tray_icon
 
@@ -774,52 +789,171 @@ def _refresh_local_model_inventory_in_background(
     ).start()
 
 
-def _prompt_recoverable_last_recording(
-    last_recording_store: LastRecordingStore,
-    open_settings_dialog,
-    history_store: TranscriptHistoryStore | None = None,
+def _offer_unfinished_recordings(
     *,
-    parent: QtWidgets.QWidget | None = None,
-) -> None:
+    last_recording_store: LastRecordingStore,
+    history_store: TranscriptHistoryStore | None,
+    unfinished_store: UnfinishedRecordingStore,
+    transcribe,
+    keep_dir: Path,
+) -> UnfinishedRecordingsDialog | None:
+    """Show the recordings an earlier session did not transcribe, if any.
+
+    One notice for all of them: the managed last recording, when it is
+    still recoverable and not in history yet, joins the recordings the last
+    quit kept (`_adopt_recoverable_last_recording`). A recording whose
+    transcript is already in history is not offered
+    (`_without_transcribed_recordings`). Returns the open notice, which the
+    caller keeps a reference to.
+    """
+    problems = []
+    adoption_problem = _adopt_recoverable_last_recording(
+        last_recording_store, history_store, unfinished_store
+    )
+    if adoption_problem:
+        problems.append(adoption_problem)
+    try:
+        listed = unfinished_store.list_recordings()
+    except OSError as exc:
+        problems.append(
+            f"The folder {unfinished_store.directory} could not be read: {exc}"
+        )
+        listed = []
+    recordings = _without_transcribed_recordings(
+        listed, history_store, unfinished_store
+    )
+    if not recordings:
+        if problems:
+            styled_message_box(
+                icon=QtWidgets.QMessageBox.Warning,
+                title="Unfinished recordings",
+                text="\n\n".join(problems),
+                buttons=QtWidgets.QMessageBox.Ok,
+                default_button=QtWidgets.QMessageBox.Ok,
+            ).exec()
+        return None
+    dialog = UnfinishedRecordingsDialog(
+        recordings=recordings,
+        store=unfinished_store,
+        transcribe=transcribe,
+        keep_dir=keep_dir,
+    )
+    if problems:
+        dialog.show_problem(" ".join(problems))
+    _present_dialog(dialog)
+    return dialog
+
+
+def _adopt_recoverable_last_recording(
+    last_recording_store: LastRecordingStore,
+    history_store: TranscriptHistoryStore | None,
+    unfinished_store: UnfinishedRecordingStore,
+) -> str:
+    """Move a recoverable managed last recording into the unfinished store.
+
+    The notice then lists it like every other one. The copy comes first; the
+    slot is marked completed only once the copy exists, which deletes its
+    audio when "Keep last recording after successful transcription" is off.
+    A recording without a state (or with one that cannot be read) gets an id
+    from the file's modification time, so a slot that cannot be marked is
+    not copied a second time at the next start. Returns a problem to show,
+    or "".
+    """
     if not last_recording_store.has_recoverable_recording():
-        return
-
-    if last_recording_store.selectable_path() is None:
-        return
-
+        return ""
     state = last_recording_store.load()
     if _last_recording_already_transcribed(
-        last_recording_store,
-        history_store,
-        state=state,
+        last_recording_store, history_store, state=state
     ):
-        return
-
-    description = "A previous recording is still available."
-    if state is not None and state.created_at:
-        description = (
-            f"A previous recording from {state.created_at} is still available."
+        return ""
+    audio_path = last_recording_store.audio_path
+    try:
+        audio = audio_path.read_bytes()
+        modified_ns = audio_path.stat().st_mtime_ns
+    except OSError as exc:
+        return f"The last recording could not be read ({exc}); it is at {audio_path}."
+    state_id = str(getattr(state, "recording_id", "") or "").strip()
+    recorded_at = _local_time(str(getattr(state, "created_at", "") or ""))
+    if recorded_at is None:
+        recorded_at = (
+            datetime.fromtimestamp(modified_ns / 1e9, UTC)
+            .astimezone()
+            .replace(tzinfo=None)
         )
-    if state is not None and state.status == "failed" and state.error:
-        description = f"{description}\n\nLast error: {state.error}"
+    try:
+        unfinished_store.save(
+            audio,
+            recording_id=state_id or f"orphan-{modified_ns}",
+            recorded_at=recorded_at,
+        )
+    except (OSError, ValueError) as exc:
+        return (
+            f"The last recording could not be added to this list ({exc}); it is "
+            f"at {audio_path}."
+        )
+    try:
+        last_recording_store.mark_completed(expected_recording_id=state_id or None)
+    except Exception:
+        # The copy is kept under the same id, so the next start does not add
+        # it twice; the slot stays recoverable until it can be marked.
+        logging.getLogger(APP_LOGGER_NAME).exception(
+            "Failed to mark the adopted last recording"
+        )
+    return ""
 
-    answer = styled_message_box(
-        icon=QtWidgets.QMessageBox.Question,
-        title="Recover last recording",
-        text=(
-            f"{description}\n\n"
-            "Open Settings -> Import Audio and load it for transcription now?"
-        ),
-        buttons=QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-        default_button=QtWidgets.QMessageBox.Yes,
-        parent=parent,
-    ).exec()
-    if answer != QtWidgets.QMessageBox.Yes:
-        return
 
-    dialog = open_settings_dialog()
-    if dialog is not None:
-        dialog.prepare_last_recording_import()
+def _local_time(created_at: str) -> datetime | None:
+    """A stored UTC timestamp as the user's wall clock, for display."""
+    try:
+        moment = datetime.fromisoformat(created_at)
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        return None
+    return moment.astimezone().replace(tzinfo=None)
+
+
+def _without_transcribed_recordings(
+    recordings: list[UnfinishedRecording],
+    history_store: TranscriptHistoryStore | None,
+    unfinished_store: UnfinishedRecordingStore,
+) -> list[UnfinishedRecording]:
+    """Leave out every recording whose transcript is already in history.
+
+    `transcribe_unfinished_recording` deletes a file once its transcript is
+    in history; a delete that failed is finished here. A transcript with a
+    gap marker keeps its file on purpose (the entry points at it), so it is
+    left on disk and not offered again. Only an import's entry counts
+    (`transcribe_unfinished_recording` and the Import tab write mode
+    "import"): a dictation entry under the same id can be a partial
+    transcript (`_is_partial_transcript`), and offering a recording twice
+    costs a second transcript, deleting it costs the recording. An
+    unreadable history answers no entries, and every recording is offered:
+    nothing is deleted on a guess.
+    """
+    try:
+        entries = history_store.load() if history_store is not None else []
+    except Exception:
+        entries = []
+    texts_by_id: dict[str, list[str]] = {}
+    for entry in entries:
+        recording_id = str(getattr(entry, "source_recording_id", "") or "").strip()
+        if recording_id and str(getattr(entry, "mode", "") or "") == "import":
+            texts_by_id.setdefault(recording_id, []).append(str(entry.text or ""))
+    offered = []
+    for recording in recordings:
+        texts = texts_by_id.get(recording.recording_id)
+        if texts is None:
+            offered.append(recording)
+            continue
+        if not any(transcript_has_gap(text) for text in texts):
+            try:
+                unfinished_store.discard(recording)
+            except OSError:
+                logging.getLogger(APP_LOGGER_NAME).exception(
+                    "Failed to delete a transcribed recording"
+                )
+    return offered
 
 
 def _last_recording_already_transcribed(
@@ -839,7 +973,11 @@ def _last_recording_already_transcribed(
         getattr(current_state, "recording_id", "")
         or getattr(current_state, "created_at", "")
     ).strip()
-    recent_entries = history_store.recent_entries(limit=50)
+    recent_entries = [
+        entry
+        for entry in history_store.recent_entries(limit=50)
+        if not _is_partial_transcript(entry)
+    ]
     if recording_id:
         for entry in recent_entries:
             if str(getattr(entry, "source_recording_id", "")).strip() != recording_id:
@@ -866,6 +1004,20 @@ def _last_recording_already_transcribed(
         if history_ts < audio_mtime:
             break
     return False
+
+
+def _is_partial_transcript(entry) -> bool:
+    """A history entry that may hold only part of its recording.
+
+    A streaming dictation that dies writes what it heard so far under the
+    recording's id (mode "streaming") and keeps the whole audio for Retry.
+    Such an entry does not mean the recording was transcribed, and taking it
+    for one deleted the only complete audio (review of 3ee1e23). A streaming
+    dictation that finished marks its recording completed right after its
+    entry, so only a crash between the two reaches these checks; its
+    recording is then offered once more, which costs a second transcript.
+    """
+    return str(getattr(entry, "mode", "") or "").strip() == "streaming"
 
 
 def _complete_unless_gap(last_recording_store: LastRecordingStore, entry) -> None:
