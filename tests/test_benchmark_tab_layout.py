@@ -7,6 +7,11 @@ from PySide6 import QtCore, QtTest, QtWidgets
 from test_benchmark_results_ux import _dialog, _measured_case, _settle_table
 from test_settings_dialog_general_ux import _AppFont
 
+from stt_app.benchmark_history import (
+    BenchmarkHistoryEntry,
+    BenchmarkHistoryStore,
+    BenchmarkOptions,
+)
 from stt_app.settings_dialog_helpers import _DEFAULT_SETTINGS_DIALOG_SIZE
 
 # A 1366x768 screen at 100% with a 40 px taskbar leaves 728 px, and the dialog
@@ -274,3 +279,145 @@ def test_a_short_dialog_scrolls_the_benchmark_tab_instead_of_squeezing_it(
     assert horizontal == (False, 0)
     assert row_bottom <= viewport.height()
     assert row_right <= viewport.width()
+
+
+def _run_over(models: list[str], *, status: str, day: int, selected=None):
+    """A stored run that measured *models*; *selected* is what it started with."""
+    entry = BenchmarkHistoryEntry.new(
+        status=status,
+        summary=f"run on day {day}",
+        options=BenchmarkOptions(
+            audio_path="C:/sample.wav",
+            audio_name="sample.wav",
+            model_names=list(selected if selected is not None else models),
+            device="auto",
+            compute_type="int8",
+            webgpu_devices=["auto"],
+            runs=1,
+            beam_size=5,
+            language="auto",
+            vad_filter=False,
+            warmup=True,
+            threads=0,
+        ),
+        cases=[_measured_case(model, 0.05) for model in models],
+    )
+    entry.created_at = f"2026-10-{day:02d}T10:00:00+00:00"
+    return entry
+
+
+_TWELVE_MODELS = [
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+    "large-v3-turbo",
+    "distil-large-v3.5",
+    "parakeet-tdt-0.6b-v3",
+    "canary-1b-v2",
+    "cohere-transcribe-03-2026",
+    "granite-speech-5.0-470m-turboctc",
+    "nemotron-3.5-asr-0.6b",
+]
+
+
+def test_the_history_models_cell_counts_the_models_the_run_measured(tmp_path):
+    """The column listed `options.model_names` whole (1006 px of text for
+    twelve models, cut at 189 px with nothing to say how many there were), and
+    a canceled run named the models it never reached. The cell now leads with
+    the count of models that have a stored case; the tooltip lists them."""
+    canceled = _run_over(
+        ["tiny", "base"],
+        status="canceled",
+        day=3,
+        selected=["tiny", "base", "small", "medium"],
+    )
+    one = _run_over(["tiny"], status="completed", day=2)
+    twelve = _run_over(_TWELVE_MODELS, status="completed", day=1)
+    dialog, app = _dialog()
+    dialog._benchmark_history_store = BenchmarkHistoryStore(
+        path=tmp_path / "benchmark_history.json"
+    )
+    for entry in (twelve, one, canceled):
+        dialog._benchmark_history_store.add_entry(entry)
+    dialog._refresh_benchmark_history_list()
+    table = dialog.benchmark_history_list
+
+    assert table.item(0, 2).text() == "2 models: tiny, base"
+    assert table.item(1, 2).text() == "1 model: tiny"
+    assert table.item(2, 2).text() == "12 models: " + ", ".join(_TWELVE_MODELS)
+    assert table.item(2, 2).toolTip() == "12 models:\n" + "\n".join(_TWELVE_MODELS)
+    assert table.textElideMode() == QtCore.Qt.ElideRight
+    _ = app
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp_path):
+    """Recorded, Runs, Best RTF and Status were sized to their contents, so
+    the first "Completed with errors" took 59 px from the Audio and Models
+    columns (9 pt) and the next date, 20 px more; and the vertical bar that
+    came with the row that outgrew the list took 12 px. Measured at the
+    dialog's minimum width with five very different runs and then 20 rows."""
+    with _AppFont(point_size) as app:
+        dialog, _ = _dialog()
+        dialog._benchmark_history_store = BenchmarkHistoryStore(
+            path=tmp_path / "benchmark_history.json"
+        )
+        dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+        dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+        dialog.show()
+        QtTest.QTest.qWait(50)
+        app.processEvents()
+        dialog.resize(dialog.minimumWidth(), 760)
+        QtTest.QTest.qWait(50)
+        app.processEvents()
+        table = dialog.benchmark_history_list
+        header = table.horizontalHeader()
+
+        def widths() -> list[int]:
+            QtTest.QTest.qWait(30)
+            app.processEvents()
+            return [header.sectionSize(c) for c in range(table.columnCount())]
+
+        empty = widths()
+        seen = [empty]
+        for day, (status, models) in enumerate(
+            (
+                ("completed", ["tiny"]),
+                ("completed", _TWELVE_MODELS[:3]),
+                ("completed_with_errors", _TWELVE_MODELS),
+                ("canceled", _TWELVE_MODELS[:2]),
+                ("failed", _TWELVE_MODELS),
+            ),
+            start=1,
+        ):
+            dialog._benchmark_history_store.add_entry(
+                _run_over(models, status=status, day=day)
+            )
+            dialog._refresh_benchmark_history_list()
+            seen.append(widths())
+        for day in range(6, 26):
+            dialog._benchmark_history_store.add_entry(
+                _run_over(["tiny"], status="completed", day=day)
+            )
+        dialog._refresh_benchmark_history_list()
+        seen.append(widths())
+        metrics = table.fontMetrics()
+        margin = 2 * (
+            table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+        )
+        status_need = metrics.horizontalAdvance("Completed with errors") + margin
+        recorded_need = metrics.horizontalAdvance("2026-10-30 23:59") + margin
+        header_needs = [
+            header.sectionSizeFromContents(c).width()
+            for c in range(table.columnCount())
+        ]
+        dialog.hide()
+
+    assert all(sizes == empty for sizes in seen), seen
+    assert empty[5] >= status_need
+    assert empty[0] >= recorded_need
+    for column in (0, 3, 4, 5):
+        assert empty[column] >= header_needs[column], column

@@ -494,6 +494,7 @@ class SettingsDialog(
             if isinstance(button, QtWidgets.QPushButton):
                 reserve_button_width_for_texts(button, texts)
         self._pin_benchmark_header_row_height()
+        self._pin_benchmark_history_columns()
 
     def _pin_content_minimum_width(self) -> None:
         """Never let the dialog be narrower than its widest content.

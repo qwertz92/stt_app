@@ -791,15 +791,19 @@ def _set_transcriber_progress_callback(
         setter(callback)
 
 
+BENCHMARK_STATUS_LABELS = {
+    "running": "Running",
+    "completed": "Completed",
+    "completed_with_errors": "Completed with errors",
+    "canceled": "Canceled",
+    "failed": "Failed",
+}
+
+
 def _benchmark_status_text(status: str) -> str:
-    labels = {
-        "running": "Running",
-        "completed": "Completed",
-        "completed_with_errors": "Completed with errors",
-        "canceled": "Canceled",
-        "failed": "Failed",
-    }
-    return labels.get(str(status or "").strip().lower(), str(status or ""))
+    return BENCHMARK_STATUS_LABELS.get(
+        str(status or "").strip().lower(), str(status or "")
+    )
 
 
 def _benchmark_history_label(entry: BenchmarkHistoryEntry) -> str:

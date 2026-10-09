@@ -300,6 +300,28 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   in Benchmark History...". The History row lost a button, so the page's
   minimum width fell (dialog hint 611 -> 508 px); the tab bar still sets
   the dialog's minimum.
+- **The History list's Models cell counts the models the run measured, and
+  no column changes width when a row arrives** (2026-10-09). The column
+  already existed and joined `options.model_names` whole (1006 px of text for
+  twelve models in a 189 px cell, no count). `_benchmark_models_label` now
+  writes "12 models: tiny, base, ..." from the distinct models of the stored
+  cases in run order (a canceled run does not claim the models it never
+  reached; no stored case falls back to the selected names, none is "-"); the
+  cell is elided on the right by the table, so the count stays in view, and
+  its tooltip lists one model per line. Widths: Recorded, Runs, Best RTF and
+  Status were `ResizeToContents`, so the first "Completed with errors" took
+  59 px (9 pt) from Audio and Models and the next date 20 px more.
+  `_pin_benchmark_history_columns` (called from
+  `_reserve_feedback_button_widths`, after polish, because the header padding
+  comes from the stylesheet) makes each `Fixed` at the larger of its header
+  and its widest possible value: the widest digit in a date, four digits, a
+  three-digit RTF, the longest of `BENCHMARK_STATUS_LABELS`. Audio is
+  `Interactive` at 24 average characters, Models the one `Stretch` column.
+  The vertical bar is `AlwaysOn`: appearing with the row that outgrew the
+  list it took 12 px (9 pt) from Models. Measured at the minimum dialog
+  width, columns 94 / 150 / Models / 48 / 70 / 124 px at 9 pt, unchanged from
+  the empty list through five different runs and twenty rows, at 9, 11.25 and
+  13.5 pt.
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
   height decides how short a dialog still shows the whole tab without

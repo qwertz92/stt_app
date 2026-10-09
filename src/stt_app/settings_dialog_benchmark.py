@@ -43,6 +43,7 @@ from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
     _THREAD_START_ERRORS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
+    BENCHMARK_STATUS_LABELS,
     ElidingLabel,
     _benchmark_status_text,
     _emit_background_signal,
@@ -158,6 +159,21 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
         border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
     }}
 """
+
+# The History list's columns. Recorded, Runs, Best RTF and Status never change
+# width (`_pin_benchmark_history_columns`); Audio keeps a width of its own and
+# Models takes whatever is left, which is where the long text is.
+_BENCHMARK_HISTORY_COLUMNS = (
+    "Recorded",
+    "Audio",
+    "Models",
+    "Runs",
+    "Best RTF",
+    "Status",
+)
+_BENCHMARK_HISTORY_AUDIO_COLUMN = 1
+_BENCHMARK_HISTORY_MODELS_COLUMN = 2
+_BENCHMARK_HISTORY_AUDIO_CHARACTERS = 24
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
 _BENCHMARK_DETAILS_MINIMUM_HEIGHT_PX = 120
@@ -327,6 +343,23 @@ def _benchmark_plan_sequence(
     return tuple(
         (case.model, case.device_target, case.display_compute_type) for case in planned
     )
+
+
+def _benchmark_models_label(entry: BenchmarkHistoryEntry) -> tuple[str, str]:
+    """The History row's Models cell and its tooltip.
+
+    The models the run measured, once each in run order ("12 models: tiny,
+    base, ..."), so a canceled run does not claim the models it never reached;
+    a run with no stored case falls back to the models it was started with.
+    The cell shows the whole sentence and the table elides it at the column's
+    width, which keeps the count in view; the tooltip lists one model per line.
+    """
+    names = list(dict.fromkeys(case.model for case in entry.cases if case.model))
+    names = names or [name for name in entry.options.model_names if name]
+    if not names:
+        return "-", "-"
+    count = f"{len(names)} model{'' if len(names) == 1 else 's'}"
+    return f"{count}: {', '.join(names)}", f"{count}:\n" + "\n".join(names)
 
 
 def _benchmark_created_label(value: str) -> str:
@@ -1139,9 +1172,11 @@ class _BenchmarkMixin:
         self._style_note_label(self.benchmark_history_note_label)
         history_layout.addWidget(self.benchmark_history_note_label)
 
-        self.benchmark_history_list = _BenchmarkHistoryTable(0, 6)
+        self.benchmark_history_list = _BenchmarkHistoryTable(
+            0, len(_BENCHMARK_HISTORY_COLUMNS)
+        )
         self.benchmark_history_list.setHorizontalHeaderLabels(
-            ["Recorded", "Audio", "Models", "Runs", "Best RTF", "Status"]
+            list(_BENCHMARK_HISTORY_COLUMNS)
         )
         self.benchmark_history_list.setMinimumHeight(90)
         # Tab leaves the table: with cell-by-cell navigation a keyboard user
@@ -1167,14 +1202,18 @@ class _BenchmarkMixin:
         self.benchmark_history_list.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
+        # The vertical bar is always there (disabled while everything fits):
+        # it appeared with the row that outgrew the list and took 12 px (9 pt)
+        # from the Models column, the one width a new row could still change.
+        self.benchmark_history_list.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAlwaysOn
+        )
+        # Widths come from `_pin_benchmark_history_columns`, which needs the
+        # polished table; Models is the one stretching column.
         history_header = self.benchmark_history_list.horizontalHeader()
-        history_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
-        history_header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
-        history_header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
-        for column in (3, 4, 5):
-            history_header.setSectionResizeMode(
-                column, QtWidgets.QHeaderView.ResizeToContents
-            )
+        history_header.setSectionResizeMode(
+            _BENCHMARK_HISTORY_MODELS_COLUMN, QtWidgets.QHeaderView.Stretch
+        )
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._on_benchmark_history_selection_changed
         )
@@ -1768,6 +1807,56 @@ class _BenchmarkMixin:
                 _BENCHMARK_PLAN_STATUS_RUNNING
             ):
                 self._mark_benchmark_plan_case(row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED)
+
+    def _pin_benchmark_history_columns(self) -> None:
+        """Give the History list columns whose width no row can change.
+
+        Recorded, Runs, Best RTF and Status were `ResizeToContents`, so the
+        first "Completed with errors" took 59 px (9 pt) from the Audio and
+        Models columns and a first two-digit date shift took 20 px more: the
+        list moved whenever a run arrived. Each is now as wide as the larger of
+        its header and the widest value it can hold (the widest digit in a
+        date, four digits, a three-digit RTF, the longest status label).
+        Audio gets a width of its own (a user can still drag it); Models
+        stretches over the rest. Called from
+        `SettingsDialog._reserve_feedback_button_widths`, after the table is a
+        polished child of the styled dialog: its header padding comes from the
+        stylesheet, and measured earlier the widths come out too small.
+        """
+        table = getattr(self, "benchmark_history_list", None)
+        if table is None:
+            return
+        table.ensurePolished()
+        header = table.horizontalHeader()
+        header.ensurePolished()
+        metrics = table.fontMetrics()
+        text_margin = 2 * (
+            table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+        )
+        digit = max("0123456789", key=metrics.horizontalAdvance)
+        widest_values = {
+            0: f"{digit * 4}-{digit * 2}-{digit * 2} {digit * 2}:{digit * 2}",
+            3: digit * 4,
+            4: f"{digit * 3}.{digit * 3}",
+            5: max(BENCHMARK_STATUS_LABELS.values(), key=metrics.horizontalAdvance),
+        }
+        for column, sample in widest_values.items():
+            header.setSectionResizeMode(column, QtWidgets.QHeaderView.Fixed)
+            header.resizeSection(
+                column,
+                max(
+                    header.sectionSizeFromContents(column).width(),
+                    metrics.horizontalAdvance(sample) + text_margin,
+                ),
+            )
+        header.setSectionResizeMode(
+            _BENCHMARK_HISTORY_AUDIO_COLUMN, QtWidgets.QHeaderView.Interactive
+        )
+        header.resizeSection(
+            _BENCHMARK_HISTORY_AUDIO_COLUMN,
+            _BENCHMARK_HISTORY_AUDIO_CHARACTERS * metrics.averageCharWidth()
+            + text_margin,
+        )
 
     def _pin_benchmark_header_row_height(self) -> None:
         """Match the status label and the bar to the button as it renders.
@@ -2839,17 +2928,22 @@ class _BenchmarkMixin:
                 default=float("nan"),
             )
             actual_runs = sum(len(case.runs) for case in entry.cases)
+            models_label, models_tooltip = _benchmark_models_label(entry)
             values = [
                 _benchmark_created_label(entry.created_at),
                 entry.options.audio_name or Path(entry.options.audio_path).name or "-",
-                ", ".join(entry.options.model_names) or "-",
+                models_label,
                 str(actual_runs),
                 _format_number(best_rtf),
                 _benchmark_status_text(entry.status),
             ]
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                item.setToolTip(value)
+                item.setToolTip(
+                    models_tooltip
+                    if column == _BENCHMARK_HISTORY_MODELS_COLUMN
+                    else value
+                )
                 if column == 0:
                     item.setData(QtCore.Qt.UserRole, entry)
                 self.benchmark_history_list.setItem(row, column, item)

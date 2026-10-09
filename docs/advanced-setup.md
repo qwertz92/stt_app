@@ -760,7 +760,9 @@ the running window back without stopping the run. When a run has finished with
 results, **Show Results** at the right end of that window's footer closes the
 window and shows the run on the Benchmark tab.
 
-Benchmark History is a real column-based table rather than a text summary.
+Benchmark History is a real column-based table rather than a text summary;
+its **Models** column reads like "12 models: tiny, base, ..." (the models the
+run measured, shortened to the column's width, with the full list as a tooltip).
 Selecting a History row shows that run under **Results**; open the
 **Transcripts** result tab to compare the complete output from every model,
 device target, and measured run. Selecting a row there shows the full
