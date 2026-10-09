@@ -1010,11 +1010,12 @@ def _is_partial_transcript(entry) -> bool:
     """A history entry that may hold only part of its recording.
 
     A streaming dictation that dies writes what it heard so far under the
-    recording's id (mode "streaming") and keeps the whole audio for Retry;
-    so does a finalize that returned nothing. Such an entry does not mean
-    the recording was transcribed, and taking it for one deleted the only
-    complete audio (review of 3ee1e23). A streaming dictation that finished
-    marks its recording completed, so it never reaches these checks.
+    recording's id (mode "streaming") and keeps the whole audio for Retry.
+    Such an entry does not mean the recording was transcribed, and taking it
+    for one deleted the only complete audio (review of 3ee1e23). A streaming
+    dictation that finished marks its recording completed right after its
+    entry, so only a crash between the two reaches these checks; its
+    recording is then offered once more, which costs a second transcript.
     """
     return str(getattr(entry, "mode", "") or "").strip() == "streaming"
 

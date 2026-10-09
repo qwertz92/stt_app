@@ -43,6 +43,8 @@ _DELETED = "deleted"
 _MOVED = "moved"
 # Rows an action can still take: not yet handled, or handled and failed.
 _ACTIONABLE = (_PENDING, _FAILED)
+# Rows nothing will be asked about again.
+_RESOLVED = (_DONE, _DELETED, _MOVED)
 
 _COLUMNS = ("Recorded", "Length", "Size", "Status")
 _LATER_TEXT = "Ask again next start"
@@ -273,7 +275,8 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.transcribe_selected_button.setEnabled(idle and bool(selected))
         self.delete_button.setEnabled(idle and bool(selected))
         self.keep_button.setEnabled(idle and bool(remaining))
-        self.later_button.setText(_LATER_TEXT if remaining else _CLOSE_TEXT)
+        unresolved = any(state not in _RESOLVED for state in self._states.values())
+        self.later_button.setText(_LATER_TEXT if unresolved else _CLOSE_TEXT)
         self.reveal_button.setEnabled(
             any(item.path.is_file() for item in self._selected() or self._recordings)
         )
