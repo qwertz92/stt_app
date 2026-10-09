@@ -130,6 +130,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
     two-line status (2026-10-03): inside it, "Show Run Options" pushed Run
     295 px down out of the 812 px viewport, a 13th model moved it 20 px,
     and with twelve models it needed a scroll at the default size.
+  - **"Show Results" sits at the footer's far end** (2026-10-09), disabled
+    until a run finished with results and again from the next start or while
+    one runs (`_last_finished_benchmark_entry`, set in `_on_benchmark_finished`
+    beside `_current_benchmark_entry`, cleared in `_run_local_benchmark`). The
+    finish already shows the run and selects its row, but the Run window is an
+    owned top-level and Windows keeps it above its owner, so it can cover the
+    result; and the user may have changed tab or row since. The click
+    (`_show_last_benchmark_results`) raises the dialog on the Benchmark tab,
+    selects that run's row if another run is shown (no unsaved-result question
+    can arise: an unsaved run is only ever the last finished one, which is the
+    one shown) and hides this window ("Run Benchmark..." reopens it with its
+    state). A run that left History says "That run is no longer available."
+    and disables the button. The caption is fixed, so the footer never moves
+    (a test at the 680 px minimum window and 9 / 11.25 / 13.5 pt).
   - The audio line is derived from the field on every edit
     (`_update_benchmark_audio_status`: none / "File not found" / "Selected"),
     read through `_benchmark_audio_path`, which strips the double quotes of

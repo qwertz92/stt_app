@@ -247,6 +247,9 @@ class SettingsDialog(
         self._benchmark_cancel_event: threading.Event | None = None
         self._current_benchmark_cases: list[BenchmarkCase] = []
         self._current_benchmark_entry: BenchmarkHistoryEntry | None = None
+        # The run the Run Benchmark window's "Show Results" button shows: the
+        # last one that finished with results, None from the next start.
+        self._last_finished_benchmark_entry: BenchmarkHistoryEntry | None = None
         self._current_benchmark_options: BenchmarkOptions | None = None
         self._current_benchmark_environment: BenchmarkEnvironment | None = None
         # Stored runs opened in a window of their own, keyed by

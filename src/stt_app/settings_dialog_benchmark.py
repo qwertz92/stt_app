@@ -1580,9 +1580,19 @@ class _BenchmarkMixin:
         self.cancel_benchmark_button = QtWidgets.QPushButton("Cancel Benchmark")
         self.cancel_benchmark_button.setEnabled(False)
         self.cancel_benchmark_button.clicked.connect(self._cancel_local_benchmark)
+        self.show_benchmark_results_button = QtWidgets.QPushButton("Show Results")
+        self.show_benchmark_results_button.setEnabled(False)
+        self.show_benchmark_results_button.setToolTip(
+            "Close this window and show the run that just finished on the "
+            "Benchmark tab."
+        )
+        self.show_benchmark_results_button.clicked.connect(
+            self._show_last_benchmark_results
+        )
         benchmark_actions.addWidget(self.run_benchmark_button)
         benchmark_actions.addWidget(self.cancel_benchmark_button)
         benchmark_actions.addStretch(1)
+        benchmark_actions.addWidget(self.show_benchmark_results_button)
         outer_layout.addLayout(benchmark_actions)
 
         self._refresh_benchmark_plan_from_widgets()
@@ -1790,6 +1800,59 @@ class _BenchmarkMixin:
         bar.setMaximum(total)
         bar.setValue(max(0, min(int(done), total)))
         bar.show()
+
+    def _show_last_benchmark_results(self) -> None:
+        """Show Results: the Benchmark tab with the run that just finished.
+
+        The finish already shows that run (and selects its row) on the tab, but
+        the Run Benchmark window sits above its owner on Windows and may be
+        covering it, and the user may have gone to another tab or another row
+        since. So this raises the dialog on the Benchmark tab, shows the run
+        again if another one replaced it, and closes this window (the "Run
+        Benchmark..." button brings it back with its state).
+        """
+        entry = self._last_finished_benchmark_entry
+        if entry is None or self._active_benchmark_thread is not None:
+            return
+        if self.isMinimized():
+            self.showNormal()
+        else:
+            self.show()
+        self.raise_()
+        self.activateWindow()
+        self.tabs.setCurrentIndex(self._benchmark_tab_index)
+        key = entry.identity_key()
+        if not self._benchmark_run_is_shown(key):
+            row = self._benchmark_history_row_of(key)
+            if row is None:
+                # Deleted from History, or an unsaved run the user discarded.
+                self._last_finished_benchmark_entry = None
+                self._set_benchmark_status(
+                    "That run is no longer available.", "#b26a00"
+                )
+                self._update_benchmark_actions()
+                return
+            # The selection loads the run. It never asks about an unsaved
+            # shown run here: that can only be the last finished one, which
+            # is the run being shown.
+            self.benchmark_history_list.setCurrentRow(row)
+        self.benchmark_window.hide()
+
+    def _benchmark_run_is_shown(self, key: tuple[str, str, str]) -> bool:
+        shown = self._current_benchmark_entry
+        return shown is not None and shown.identity_key() == key
+
+    def _benchmark_history_row_of(self, key: tuple[str, str, str]) -> int | None:
+        table = self.benchmark_history_list
+        for row in range(table.rowCount()):
+            item = table.item(row, 0)
+            candidate = item.data(QtCore.Qt.UserRole) if item is not None else None
+            if (
+                isinstance(candidate, BenchmarkHistoryEntry)
+                and candidate.identity_key() == key
+            ):
+                return row
+        return None
 
     def _open_benchmark_window(self) -> None:
         """Show the benchmark window, raising the existing one if already open."""
@@ -2032,6 +2095,9 @@ class _BenchmarkMixin:
             and self._benchmark_cancel_event is not None
             and not self._benchmark_cancel_event.is_set()
         )
+        self.show_benchmark_results_button.setEnabled(
+            (not busy) and self._last_finished_benchmark_entry is not None
+        )
         self._update_benchmark_action_row()
 
     def _benchmark_result_is_shown(self) -> bool:
@@ -2237,6 +2303,7 @@ class _BenchmarkMixin:
         self._deselect_benchmark_history()
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
+        self._last_finished_benchmark_entry = None
         self._benchmark_shown_entry_unsaved = False
         self._current_benchmark_options = options
         self._current_benchmark_environment = None
@@ -2538,6 +2605,7 @@ class _BenchmarkMixin:
                 environment=self._current_benchmark_environment,
             )
             self._current_benchmark_entry = entry
+            self._last_finished_benchmark_entry = entry
             self.benchmark_results_panel.show_entry(entry)
             try:
                 self._benchmark_history_store.add_entry(entry)

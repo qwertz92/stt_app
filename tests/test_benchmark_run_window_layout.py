@@ -10,8 +10,10 @@ default size, so the window's one primary action needed a scroll to reach.
 
 from __future__ import annotations
 
+import pytest
 from PySide6 import QtCore, QtWidgets
 from test_benchmark_run_progress import _dialog
+from test_settings_dialog_general_ux import _AppFont
 
 _MANY_MODELS = [
     "tiny",
@@ -159,3 +161,41 @@ def test_a_quoted_path_from_explorer_is_accepted_and_used_unquoted(
 
     assert seen.get("audio_path") == str(present)
     _ = app
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_show_results_fits_the_footer_at_the_minimum_window_and_never_moves(
+    point_size: float, tmp_path
+):
+    """The footer holds Run, Cancel and, at the far end, Show Results. At the
+    window's minimum size no caption may be cut or overlap a neighbour, and
+    enabling the button after a run must move none of the three."""
+    with _AppFont(point_size) as app:
+        dialog, _ = _dialog(tmp_path, ["small", "tiny"])
+        window = dialog.benchmark_window
+        window.resize(window.minimumSize())
+        window.show()
+        _settle(app)
+        buttons = (
+            dialog.run_benchmark_button,
+            dialog.cancel_benchmark_button,
+            dialog.show_benchmark_results_button,
+        )
+
+        def geometry():
+            _settle(app)
+            return [_rect_in(window, button) for button in buttons]
+
+        before = geometry()
+        dialog._last_finished_benchmark_entry = object()
+        dialog._update_benchmark_actions()
+        after = geometry()
+        dialog._last_finished_benchmark_entry = None
+        window.hide()
+
+    assert before == after
+    for rect, button in zip(after, buttons, strict=True):
+        assert rect.width() >= button.sizeHint().width(), button.text()
+        assert window.rect().contains(rect), button.text()
+    assert after[0].right() < after[1].left() < after[1].right() < after[2].left()

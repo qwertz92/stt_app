@@ -756,7 +756,9 @@ case's elapsed time) and then to its measured status; after a cancel or a failur
 everything that never delivered a result reads *Skipped*. While a run is active
 the Benchmark tab shows a progress bar next to its status line, and the button
 beside it changes from **Run Benchmark...** to **Show Progress...**, which brings
-the running window back without stopping the run.
+the running window back without stopping the run. When a run has finished with
+results, **Show Results** at the right end of that window's footer closes the
+window and shows the run on the Benchmark tab.
 
 Benchmark History is a real column-based table rather than a text summary.
 Selecting a History row shows that run under **Results**; open the
