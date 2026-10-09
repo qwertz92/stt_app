@@ -9529,3 +9529,12 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   a hold left standing would stop the new recording on the next poll --,
   emits `quit_canceled_by_recording` (the window closes as for "Don't quit")
   and tells the tray "Quit canceled".
+- **A transcribed unfinished recording follows the recording settings**
+  (owner's report). `transcribe_unfinished_recording` deleted the file once
+  the transcript was in history, even with "Keep last recording after
+  successful transcription" or "Archive every recording" on. It now joins
+  the archive (archive name, retention count applied, its mtime set to now
+  -- with the quit's own mtime a full archive pruned the file it had just
+  moved, under the entry pointing at it) or, with only "Keep last", moves
+  to the recordings folder under its own name. The startup cleanup no longer
+  deletes a file a history entry links to, so a failed move keeps its audio.

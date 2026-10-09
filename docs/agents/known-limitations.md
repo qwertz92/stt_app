@@ -223,7 +223,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   message (the tray still reports it, the audio is kept); the quit after
   launching an update installer (`update_ui.py`) skips the window. A
   transcript with a gap marker leaves its file in the unfinished folder,
-  linked from its history entry, and nothing lists or cleans those files.
+  linked from its history entry, and nothing lists or cleans those files;
+  the same holds for a transcribed unfinished recording whose move to the
+  recordings folder failed, and the `unfinished_*.wav` files "Keep last
+  recording after successful transcription" moves to the recordings folder
+  are never pruned (2026-10-09; the archive's count deletes only
+  `recording_*.wav`, and these are a few files per quit with pending work).
   Kept: each needs a store or history failure, or is cosmetic.
 - **A crash keeps only the newest unfinished recording** (2026-10-09): the
   quit writes every queued recording to the unfinished store, but a crash

@@ -127,10 +127,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   reading that entry as "transcribed" deleted the only complete audio
   (review of 3ee1e23). A kept recording whose import entry exists is not
   offered and
-  its file is deleted, unless that transcript has a gap marker (kept, the
-  entry points at it); an unreadable history offers everything and deletes
-  nothing. `transcribe_unfinished_recording` writes history first and
-  deletes the file only after the entry exists. "Keep files and close"
+  its file is deleted, unless that transcript has a gap marker or the entry
+  links to that very file (`source_audio_path`; kept, the only audio); an
+  unreadable history offers everything and deletes nothing.
+  `transcribe_unfinished_recording` keeps the file as the recording settings
+  keep a dictation's audio (owner's request 2026-10-09; it was always
+  deleted): with "Archive every recording" it is moved into the archive as
+  `recording_<recorded stamp>_<NNNNNN>.wav`, its mtime set to now so the
+  retention count (`_prune_recordings`, run right after) counts it as the
+  newest file and does not delete it under its new entry; with only "Keep
+  last recording after successful transcription" it is moved to the
+  recordings folder under its own name (the managed slot holds the newest
+  dictation and is never overwritten by an older recording); otherwise it
+  is deleted, only after the entry exists. The entry points at the kept
+  file. A gap transcript's file stays in the unfinished folder, never in
+  the pruned archive. A failed move leaves the file in place with the entry
+  pointing at it; a history write that fails moves it back, so the next
+  start offers it again. "Keep files and close"
   moves files to the recordings folder under their own name, which the
   archive prune (`recording_<stamp>.wav` only) never deletes; a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.

@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -1204,21 +1205,30 @@ class DictationController(QtCore.QObject):
             return False, str(exc) or type(exc).__name__
         if not text:
             return False, _EMPTY_MODEL_TRANSCRIPT_MESSAGE
-        keep_file = transcript_has_gap(text)
+        gap = transcript_has_gap(text)
+        # Where the audio stays, decided before the entry is written so the
+        # entry can point at it. A gap transcript's file stays where it is,
+        # out of reach of the archive's retention count.
+        kept_path = (
+            os.path.abspath(path) if gap else self._retain_unfinished_audio(recording)
+        )
         entry = self._append_transcript_history(
             text,
             settings,
             "import",
             source_recording_id=recording.recording_id,
-            source_audio_path=os.path.abspath(path) if keep_file else "",
+            source_audio_path=kept_path,
             track_for_edit=False,
         )
         if entry is None:
+            if kept_path and kept_path != os.path.abspath(path):
+                # Back where the next start offers it again.
+                self._return_unfinished_audio(kept_path, path)
             return False, (
                 "The transcript could not be saved to history (see the log); "
                 f"the recording was kept. Transcript: {text}"
             )
-        if not keep_file:
+        if not kept_path:
             try:
                 self._unfinished_recording_store.discard(recording)
             except OSError:
@@ -1228,9 +1238,71 @@ class DictationController(QtCore.QObject):
             "unfinished_recording_transcribed recording_id=%s chars=%d kept=%s",
             recording.recording_id,
             len(text),
-            keep_file,
+            kept_path or "no",
         )
         return True, text
+
+    def _retain_unfinished_audio(self, recording: UnfinishedRecording) -> str:
+        """Keep a transcribed unfinished recording as the settings keep any
+        recording; the path it went to, or "" when nothing keeps it.
+
+        Like a dictation's audio (owner's request 2026-10-09; it was always
+        deleted): with "Archive every recording" it joins the archive under
+        the archive's name, counts as its newest file and the retention
+        count applies (`_prune_recordings`); with only "Keep last recording
+        after successful transcription" it goes to the recordings folder
+        under its own name, which no count prunes -- the managed last
+        recording is one slot that holds the newest dictation and must not be
+        overwritten by an older recording. A move that fails leaves the file
+        where it was and answers that path (logged): the entry points at it,
+        and the next start deletes no file an entry points at.
+        """
+        if self._settings.save_all_recordings:
+            target_dir = os.path.abspath(self._resolve_recordings_dir())
+            try:
+                os.makedirs(target_dir, exist_ok=True)
+                recorded_at = recording.recorded_at or datetime.fromtimestamp(  # noqa: DTZ006 (local time on purpose, like the archive's names)
+                    os.path.getmtime(recording.path)
+                )
+                stamp = recorded_at.strftime("%Y%m%d_%H%M%S")
+                counter = 0
+                target = os.path.join(target_dir, f"recording_{stamp}_000000.wav")
+                while os.path.exists(target):
+                    counter += 1
+                    target = os.path.join(
+                        target_dir, f"recording_{stamp}_{counter:06d}.wav"
+                    )
+                shutil.move(str(recording.path), target)
+                # The newest archived file now: the prune goes by age, and
+                # the file's own age (the quit that kept it) could make it
+                # the one deleted, under the entry pointing at it.
+                os.utime(target)
+            except OSError:
+                self._logger.exception("Failed to archive a transcribed recording")
+                return os.path.abspath(recording.path)
+            self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            return target
+        if self._settings.save_last_wav:
+            try:
+                return os.path.abspath(
+                    self._unfinished_recording_store.move_to(
+                        recording, Path(self._resolve_recordings_dir())
+                    )
+                )
+            except OSError:
+                self._logger.exception("Failed to keep a transcribed recording")
+                return os.path.abspath(recording.path)
+        return ""
+
+    def _return_unfinished_audio(self, kept_path: str, original: str) -> None:
+        """Undo `_retain_unfinished_audio` when the transcript was not saved."""
+        try:
+            shutil.move(kept_path, original)
+        except OSError:
+            self._logger.exception(
+                "Failed to return a recording to the unfinished folder. path=%s",
+                kept_path,
+            )
 
     def _flush_pending_clipboard_restore(self) -> None:
         """Put the user's clipboard back before the process goes away.
