@@ -506,6 +506,46 @@ def test_history_dialog_edit_updates_row_without_rebuilding_other_rows(
     _ = app
 
 
+class _EditListener:
+    """Stands in for the controller: records `on_history_entry_edited`."""
+
+    def __init__(self):
+        self.edits = []
+
+    def on_history_entry_edited(self, original, updated):
+        self.edits.append((original, updated))
+
+
+def test_history_dialog_edit_tells_the_controller(monkeypatch, tmp_path):
+    """A result that was not inserted pastes the edited text, which the
+    controller only knows when the editor tells it (owner's rule 2026-10-09)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    beta = _entry("beta")
+    history_store.save([beta])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    monkeypatch.setattr(
+        "stt_app.history_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: " beta edited ",
+    )
+    listener = _EditListener()
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+        controller=listener,
+    )
+    dialog._table.selectRow(0)
+
+    dialog._edit_button.click()
+
+    assert [(old.text, new.text) for old, new in listener.edits] == [
+        ("beta", "beta edited")
+    ]
+    assert listener.edits[0][1] == history_store.load()[0]
+    _ = app
+
+
 def test_history_dialog_uses_vertical_splitter(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")

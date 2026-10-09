@@ -1006,6 +1006,7 @@ class OverlayUI(QtWidgets.QWidget):
         compact: bool | None = None,
         copy_text: str | None = None,
         error_action: str | None = None,
+        editable: bool = False,
     ) -> None:
         """Render an overlay state.
 
@@ -1017,6 +1018,11 @@ class OverlayUI(QtWidgets.QWidget):
         ``error_action`` selects the follow-up action offered in the Error
         state: ``OVERLAY_ERROR_ACTION_INSERT`` when the transcription itself
         succeeded and only the insertion failed, otherwise Retry.
+
+        ``editable`` enables Edit on a state other than Done: the Error of a
+        transcript that was not inserted, whose edit is what Insert and the
+        re-paste then paste (the controller decides; owner's rule
+        2026-10-09).
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
@@ -1031,7 +1037,7 @@ class OverlayUI(QtWidgets.QWidget):
         else:
             self._compact_mode = compact
         self._copy_button.setEnabled(has_detail or bool(copy_text))
-        self._edit_button.setEnabled(has_detail and state == "Done")
+        self._edit_button.setEnabled(has_detail and (state == "Done" or editable))
         self._clear_button.setEnabled(has_detail and state in {"Done", "Error"})
         self._sync_record_button(state)
         self._sync_action_slot(state, error_action)
@@ -1109,6 +1115,12 @@ class OverlayUI(QtWidgets.QWidget):
     def detail(self) -> str:
         """The detail text last passed to `set_state`."""
         return self._detail
+
+    @property
+    def copy_text(self) -> str | None:
+        """The ``copy_text`` last passed to `set_state`: what Copy yields
+        instead of the detail, the transcript of an Insert offer."""
+        return self._copy_text
 
     @property
     def detail_is_being_read(self) -> bool:

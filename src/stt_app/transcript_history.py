@@ -85,6 +85,12 @@ class TranscriptHistoryEntry:
         )
 
 
+def edited_entry(entry: TranscriptHistoryEntry, text: str) -> TranscriptHistoryEntry:
+    """``entry`` with the edited ``text``, exactly as `update_entry_text`
+    stores it, so a caller can tell the controller what the entry is now."""
+    return replace(entry, text=str(text or "").strip())
+
+
 _UNDATED_SORTS_OLDEST = datetime.min.replace(tzinfo=UTC)
 
 
@@ -222,10 +228,10 @@ class TranscriptHistoryStore:
             return removed
 
     def update_entry_text(self, entry: TranscriptHistoryEntry, text: str) -> int:
-        next_text = str(text or "").strip()
-        if not next_text:
+        updated = edited_entry(entry, text)
+        if not updated.text:
             return 0
-        return self.update_entry(entry, replace(entry, text=next_text))
+        return self.update_entry(entry, updated)
 
     def update_entry(
         self,

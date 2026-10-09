@@ -16,6 +16,7 @@ from .history_audio import (
 from .history_ui_actions import (
     format_history_count_label,
     history_import_dialog_dir,
+    notify_history_edit,
     prompt_import_overflow,
     run_history_clear,
     run_history_export,
@@ -655,6 +656,7 @@ class HistoryDialog(QtWidgets.QDialog):
                 "The selected history entry could not be updated.",
             )
             return
+        notify_history_edit(self._controller, entry, next_text)
         self.reload(force=True)
         if row < self._table.rowCount():
             self._table.selectRow(row)
