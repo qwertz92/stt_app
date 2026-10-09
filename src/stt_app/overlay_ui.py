@@ -613,7 +613,7 @@ class OverlayUI(QtWidgets.QWidget):
         _state_fm = QtGui.QFontMetrics(state_font)
         _max_state_w = max(
             _state_fm.horizontalAdvance(s)
-            for s in ("Idle", "Listening", "Processing", "Done", "Error")
+            for s in ("Idle", "Starting", "Listening", "Processing", "Done", "Error")
         )
         self._state_label.setMinimumWidth(_max_state_w)
 
@@ -1146,6 +1146,7 @@ class OverlayUI(QtWidgets.QWidget):
         copy_text: str | None = None,
         error_action: str | None = None,
         editable: bool = False,
+        starting: bool = False,
     ) -> None:
         """Render an overlay state.
 
@@ -1162,10 +1163,16 @@ class OverlayUI(QtWidgets.QWidget):
         transcript that was not inserted, whose edit is what Insert and the
         re-paste then paste (the controller decides; owner's rule
         2026-10-09).
+
+        ``starting`` paints a Listening state as "Starting" in its own colour:
+        the dictation has begun but the microphone is not open yet, so nothing
+        is recorded and the Listening green would invite speech too early.
+        Every control still behaves as in Listening.
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
-        self._state_label.setText(state)
+        shown_state = "Starting" if starting and state == "Listening" else state
+        self._state_label.setText(shown_state)
         self._detail_label.setText(detail)
         self._state = state
         self._detail = detail
@@ -1194,7 +1201,7 @@ class OverlayUI(QtWidgets.QWidget):
         # part of its contents margins, so measuring first would size the
         # window for an unstyled container and leave it below its own layout
         # minimum (the window then refused to shrink to the computed target).
-        self._apply_state_stylesheet(state)
+        self._apply_state_stylesheet(shown_state)
         self._update_detail_height()
         # Errors lead with the reason and may be followed by a long transcript
         # preview, so keep the reason in view; every other state shows the end

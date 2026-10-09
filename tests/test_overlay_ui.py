@@ -3283,3 +3283,26 @@ def test_the_queue_title_leaves_the_count_to_the_badge():
         overlay._queue_title_label.text() == "Transcribing 1 recording · 1 not inserted"
     )
     overlay.deleteLater()
+
+
+def test_a_starting_dictation_is_not_painted_in_the_listening_green():
+    """Until the microphone is open nothing is recorded, so the wait before
+    "Speak now" must not look like Listening (owner, 2026-10-09: the overlay
+    was green and the first seconds were missing). The state stays Listening
+    for every control; only the label and the colour say "Starting"."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Listening", "Starting dictation.", compact=True, starting=True)
+    QtWidgets.QApplication.processEvents()
+    width = overlay.width()
+    assert overlay._state_label.text() == "Starting"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Starting"]
+    assert OVERLAY_STATE_COLORS["Starting"] != OVERLAY_STATE_COLORS["Listening"]
+    assert overlay.state == "Listening"
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    QtWidgets.QApplication.processEvents()
+    assert overlay._state_label.text() == "Listening"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
+    assert overlay.width() == width
+    overlay.close()

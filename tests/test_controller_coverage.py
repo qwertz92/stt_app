@@ -609,6 +609,13 @@ def test_start_recording_waits_to_invite_speech_until_capture_started(monkeypatc
     ]
     assert overlay.states[0][0] == "Listening"
     assert overlay.state_kwargs[0].get("compact") is True
+    # Not green yet: the owner saw the Listening colour while nothing was
+    # recorded (2026-10-09), so the wait is painted as "Starting".
+    assert overlay.state_kwargs[0].get("starting") is True
+    speak_now = overlay.states.index(
+        ("Listening", "Speak now. Press hotkey again to stop.")
+    )
+    assert not overlay.state_kwargs[speak_now].get("starting")
     assert [state for state in overlay.states if state[0] == "Listening"] == [
         (
             "Listening",

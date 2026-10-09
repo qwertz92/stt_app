@@ -27,6 +27,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   minimum and a short state kept the tall height. Size computations add
   `_container_frame_margins()`, and `set_state` applies the stylesheet before
   measuring, or `OVERLAY_MAX_HEIGHT` does not hold.
+- **The wait before "Speak now" is painted "Starting", not in the Listening
+  green** (`set_state(..., starting=True)`, colour `OVERLAY_STATE_COLORS
+  ["Starting"]`): nothing is recorded until the microphone is open, and the
+  owner saw a green overlay while his first seconds were missing (2026-10-09).
+  The state stays "Listening" for every control and check; only label and
+  colour differ. "Speak now" and the remote "You can speak now" are green.
 - **Record button**: header starts with Record/Stop (`record_toggle_requested`
   -> `controller.toggle_recording`); fixed-width captions and a stylesheet
   property keep the layout still. Its indicator is a generated icon
