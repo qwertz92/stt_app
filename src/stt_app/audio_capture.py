@@ -154,6 +154,8 @@ class _CaptureTiming:
         self.anchor: float | None = None
         self.first_block_at: float | None = None
         self.last_block_at: float | None = None
+        # The gap before the latest block; None until the second block.
+        self.last_gap_s: float | None = None
         self.max_gap_s = 0.0
         self.blocks = 0
         self.frames = 0
@@ -175,7 +177,8 @@ class _CaptureTiming:
         if self.first_block_at is None:
             self.first_block_at = now
         if self.last_block_at is not None:
-            self.max_gap_s = max(self.max_gap_s, now - self.last_block_at)
+            self.last_gap_s = now - self.last_block_at
+            self.max_gap_s = max(self.max_gap_s, self.last_gap_s)
         self.last_block_at = now
         self.blocks += 1
         self.frames += frames
@@ -932,8 +935,13 @@ class AudioCapture:
         self._audio_arrived = threading.Condition(self._lock)
         self._timing = _CaptureTiming(sample_rate)
         # Set only while `stop` waits for a backlog: blocks past this many
-        # frames were captured after the stop and are not kept.
+        # frames were captured after the stop and are not kept, and neither
+        # is a block arriving at real-time pace a block length after
+        # `_drain_stop_at` (it sets `_drain_done`).
         self._drain_cutoff_frames: int | None = None
+        self._drain_stop_at: float | None = None
+        self._drain_done = False
+        self._block_s = self.block_size / sample_rate
         self._status_logged = False
 
     @property
@@ -1164,32 +1172,61 @@ class AudioCapture:
         it runs, or is past the hard limit, is dead, and the watchdog's abort
         stops exactly those. Never on a stream PortAudio reports stopped, nor
         on a healthy stream, whose stop is therefore unchanged.
+
+        The frame count alone cannot place the stop moment once audio was
+        lost for good (a stall longer than the buffer, a driver that refused
+        it, WASAPI dropping without a flag): the audio then stays behind the
+        wall clock while the stream runs in real time again, and the count
+        let every stop wait the full 3 s and keep about 3 s said after it
+        (review F2, measured on the real MME microphone). Arrival pace places
+        it instead: a burst comes back to back, a caught-up stream one block
+        per block length (`_at_real_time_pace`). A stream at that pace at the
+        stop owes nothing, and during the wait a block arriving at that pace
+        a block length after the stop was captured after it -- refused, and
+        the wait ends (`_drain_done`).
         """
         timing = self._timing
+        stop_at = _clock()
         if timing.blocks == 0:
             hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
             if wall_s >= hard_limit_s or self.stream_is_active() is not True:
                 return
             budget_s = hard_limit_s - wall_s
-        elif wall_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s):
+        elif wall_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s) or (
+            self._at_real_time_pace(timing.last_gap_s)
+            and timing.last_block_at is not None
+            and stop_at - timing.last_block_at <= 1.5 * self._block_s
+        ):
             return
         else:
             budget_s = AUDIO_STOP_DRAIN_MAX_S
         frames_before = timing.frames
         cutoff = int(wall_s * self.sample_rate)
         self._drain_cutoff_frames = cutoff
+        self._drain_stop_at = stop_at
+        self._drain_done = False
         started = time.monotonic()
         deadline = started + budget_s
         try:
-            while timing.frames < cutoff - self.block_size:
+            while not self._drain_done and timing.frames < cutoff - self.block_size:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or self.stream_is_active() is False:
                     break
                 self._audio_arrived.wait(min(remaining, _DRAIN_ACTIVE_CHECK_S))
         finally:
             self._drain_cutoff_frames = None
+            self._drain_stop_at = None
             timing.drain_s = time.monotonic() - started
             timing.drain_frames = timing.frames - frames_before
+
+    def _at_real_time_pace(self, gap_s: float | None) -> bool:
+        """Whether a block came one block length after the previous one.
+
+        Within half to one and a half block lengths: a burst delivers its
+        blocks back to back (milliseconds apart), and the first block after
+        a stall comes after the whole stall -- both are old audio.
+        """
+        return gap_s is not None and 0.5 <= gap_s / self._block_s <= 1.5
 
     def save_wav(self, output_path: Path, wav_bytes: bytes) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1244,6 +1281,18 @@ class AudioCapture:
                 return
             cutoff = self._drain_cutoff_frames
             if cutoff is not None and self._timing.frames >= cutoff:
+                return
+            stop_at = self._drain_stop_at
+            last = self._timing.last_block_at
+            if (
+                stop_at is not None
+                and last is not None
+                and now >= stop_at + self._block_s
+                and self._at_real_time_pace(now - last)
+            ):
+                # Caught up again, and captured after the stop.
+                self._drain_done = True
+                self._audio_arrived.notify_all()
                 return
             # The first flag of a recording is logged; the rest are counted
             # in `audio_capture_stats`. A log write per block runs on the

@@ -178,7 +178,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   passed -- and then until that limit (review F1: a 4-10 s start stall and a
   3.5 s dictation kept nothing, and streaming then finalized an empty stream
   as "No speech detected"). A streaming stop with no audio and no live text
-  is now an Error ("No audio captured"), never a finalize. A healthy stream is behind
+  is now an Error ("No audio captured"), never a finalize. The frame count
+  cannot place the stop moment after a permanent loss (stall longer than the
+  buffer, a refused buffer, WASAPI's silent drop): the audio stays behind
+  while the stream is back to real time, and every stop waited 3 s and kept
+  ~3 s said after it (review F2, real MME microphone, 0.01 s buffer, 5 s
+  stall). Arrival pace decides instead (`_at_real_time_pace`: a gap of
+  0.5-1.5 block lengths; a burst is back to back, the block after a stall
+  comes after the whole stall): a stream at pace at the stop is not waited
+  for (measured on the same microphone afterwards: 72 ms, nothing after the
+  stop kept), and during the wait a block at pace a block length after the
+  stop is refused and ends it (`_drain_done`). A healthy stream is behind
   by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
   never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
 - **`audio_capture_stats`, one line per recording** (logged by

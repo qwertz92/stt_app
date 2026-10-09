@@ -1777,6 +1777,68 @@ def test_stop_does_not_wait_for_a_stream_portaudio_reports_stopped(monkeypatch):
     assert time.perf_counter() - started < 0.1
 
 
+def test_stop_after_a_permanent_loss_neither_waits_nor_keeps_later_audio(
+    monkeypatch,
+):
+    """Review F2: audio lost for good (a stall longer than the buffer, a
+    driver that refused it) leaves the audio behind the wall clock for the
+    rest of the recording, while the stream itself is back to real time.
+    The frame-count cutoff then read the gap as a backlog: every stop held
+    the Qt thread the full 3 s and kept about 3 s spoken after it (measured
+    on the real MME microphone with a 0.01 s buffer and a 5 s stall). A
+    stream delivering at real-time pace at the stop owes nothing."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    for index in range(61, 71):  # five seconds are gone for good
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.05
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 20 * 1600
+
+
+def test_the_backlog_wait_refuses_audio_captured_after_the_stop(monkeypatch):
+    """The stop lands in a stall after a loss: the burst is old audio and is
+    kept, but once blocks arrive at real-time pace again, a block arriving a
+    block's length after the stop was captured after it -- refused, and the
+    wait ends. With the frame-count cutoff alone the lost seconds were
+    filled up with what was said after the stop."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 103.0  # the stop, during a stall
+
+    def _deliver():
+        time.sleep(0.2)
+        for _ in range(5):  # the burst, back to back
+            callback(_block(), 1600, None, None)
+        for index in range(1, 31):  # then real-time pace
+            clock.now = 103.0 + index / 10
+            callback(_block(), 1600, None, None)
+            time.sleep(0.002)
+
+    deliverer = threading.Thread(target=_deliver, daemon=True)
+    deliverer.start()
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+    waited = time.perf_counter() - started
+    deliverer.join(timeout=5)
+
+    frames = _wav_frames(wav_bytes)
+    assert frames <= 16 * 1600, f"{frames / 16000:.2f}s kept, 1.5 s arrived by the stop"
+    assert frames >= 15 * 1600
+    assert waited < 1.0
+
+
 class _RunningStream(FakeInputStream):
     """PortAudio reports the stream active: starved, not dead."""
 
