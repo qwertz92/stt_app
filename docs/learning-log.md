@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-09 (overlay: the Pinned/Floating blink and a floating overlay that stayed in front)
+
+- **Toggling Pinned/Floating recreated the native window.** `_apply_window_flags`
+  switched `WindowStaysOnTopHint` with `setWindowFlags`, which destroys and
+  recreates the window: measured with a real overlay, one click produced
+  `Hide`, two `WinIdChange` and `Show`. Qt 6.11 touches the topmost bit only
+  when it creates a window (`WindowCreationData::initialize`; `raise_sys` is
+  `HWND_TOP`), so on Windows the Qt flag set is now constant and topmost is
+  SetWindowPos alone; `showEvent` sets it for a pinned overlay. After the fix:
+  no events on either click, and topmost survived hide/show, `raise_()`, state
+  changes, a move and a stylesheet re-apply.
+- **A floating overlay sat above the window the user was typing in.** Dropping
+  topmost used `HWND_NOTOPMOST`, which "places the window above all
+  non-topmost windows" (SetWindowPos docs) -- above the foreground editor --
+  and the overlay never activates, so the editor stayed active and nothing
+  raised it again until minimise/restore re-activated it. Measured against a
+  foreground window in another process: after the Floating click and after a
+  reveal ended, the overlay was 4 and 7 windows *above* it (the ones between
+  were invisible helper windows). The overlay now goes
+  directly behind the foreground window (one SetWindowPos with that window as
+  `hWndInsertAfter`, which also clears topmost); measured: directly below it,
+  not topmost. Not when that window is topmost, minimised, the desktop or the
+  taskbar, or the overlay is not shown yet -- then `HWND_NOTOPMOST` as before.
+  The click into the editor itself was not reproduced (no input was sent to
+  the desktop); the z-order was read with `GetWindow(GW_HWNDNEXT/PREV)`.
+
 ## 2026-08-30 (rounds thirteen to sixteen)
 
 Everything below was re-verified by running it, not by reading an agent's

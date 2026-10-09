@@ -56,14 +56,38 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   the overflow so `ensure_compact_size()` still holds.
 - **Never re-wrap or blink**: the label wraps at a width from the target
   window width (never the live viewport), pre-measuring the scrollbar;
-  `_apply_window_flags` calls `setWindowFlags` only when pinning flags change
-  (it recreates the window); reveals use `_apply_native_z_order`
-  (`HWND_TOPMOST` / `HWND_NOTOPMOST`), falling back to a temporary
-  `WindowStaysOnTopHint`; a recording start confirms `ensure_compact_size()`
+  pinning and reveals never call `setWindowFlags` on Windows (next bullet);
+  a recording start confirms `ensure_compact_size()`
   before and after its event drain. The Language button owns its `QMenu`
   popup and a centred chevron; never `QPushButton.setMenu()` (misaligned
   indicator; a pixel test checks the chevron). The Transcription-tab model
   runtime note reserves three lines (gray note for faster-whisper).
+- **On Windows topmost is SetWindowPos alone; the Qt flag set never changes**
+  (2026-10-09). `setWindowFlags` destroys and recreates the native window:
+  every Pinned/Floating click measured `Hide`, 2x `WinIdChange`, `Show` -- the
+  blink. `_base_window_flags` carries `WindowStaysOnTopHint` on Windows only
+  while `_topmost_uses_window_flag` (SetWindowPos failed); `showEvent` sets
+  topmost for a pinned overlay, because Qt sets it only at window creation
+  (Qt 6.11 `WindowCreationData::initialize`; `raise_sys` is `HWND_TOP`).
+  Measured after the change: no events on either click; topmost survives
+  hide/show, `raise_()`, state changes, moves and a stylesheet re-apply.
+  Other platforms keep the flag (`_always_on_top`).
+- **Dropping topmost puts the overlay directly behind the foreground window**
+  (`_apply_native_z_order`, `_window_to_stay_behind`; 2026-10-09). Plain
+  `HWND_NOTOPMOST` places it above every non-topmost window, i.e. above the
+  editor being dictated into; the overlay never activates, so that editor
+  stayed active and stayed underneath until minimise/restore (owner report;
+  measured 4 and 7 windows below the overlay after a Floating click and after
+  a reveal ended). One SetWindowPos with the foreground window as
+  `hWndInsertAfter` both clears topmost and places it (measured: directly
+  below, not topmost, also for another process's window). Never behind a
+  topmost window (the overlay would join the topmost band), a minimised one,
+  a shell surface (`window_focus.is_shell_surface_window`: behind the desktop
+  it is invisible), itself, or while Qt has not shown it yet (startup applies
+  a saved Floating before the first show) -- then `HWND_NOTOPMOST`. So a
+  floating overlay revealed for a recording or result goes behind the
+  editor when the reveal ends. `SWP_SHOWWINDOW` is passed only once the
+  `QWindow` is visible: `showEvent` runs before Qt shows the native window.
 - **The Language and microphone menus are `_RebuildableMenu`s, rebuilt only
   while hidden** (2026-10-03). `QMenu.clear()` deletes the actions under an
   open popup -- and one the user has chosen whose `triggered` has not run

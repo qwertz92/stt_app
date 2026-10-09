@@ -292,7 +292,8 @@ def test_overlay_restore_visibility_reasserts_foreground_mode(monkeypatch):
 
     assert overlay.isVisible() is True
     assert overlay._temporary_foreground_active is True
-    assert z_order_calls == [True]
+    # `showEvent` and the reveal both set it; every call asks for topmost.
+    assert z_order_calls and all(z_order_calls)
     assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 
@@ -416,7 +417,6 @@ def test_overlay_always_on_top_toggle_updates_state_and_signal():
     overlay.always_on_top_changed.connect(emitted.append)
 
     assert overlay.always_on_top is True
-    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
     overlay._always_on_top_button.click()
     app.processEvents()
@@ -424,7 +424,211 @@ def test_overlay_always_on_top_toggle_updates_state_and_signal():
     assert overlay.always_on_top is False
     assert emitted == [False]
     assert overlay._always_on_top_button.text() == "Floating"
-    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+
+
+class _WindowLifecycleEvents(QtCore.QObject):
+    """Counts the events a destroyed-and-recreated native window produces."""
+
+    _KINDS = {
+        QtCore.QEvent.Hide: "Hide",
+        QtCore.QEvent.Show: "Show",
+        QtCore.QEvent.WinIdChange: "WinIdChange",
+    }
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[str] = []
+
+    def eventFilter(self, _watched, event):
+        kind = self._KINDS.get(event.type())
+        if kind is not None:
+            self.seen.append(kind)
+        return False
+
+
+def test_overlay_pin_toggle_never_recreates_the_native_window_on_windows(monkeypatch):
+    # `setWindowFlags` destroys and recreates the native window: the overlay
+    # disappeared and reappeared on every Pinned/Floating click. On Windows
+    # topmost is switched by SetWindowPos alone.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    topmost_requests: list[bool] = []
+    monkeypatch.setattr(
+        overlay,
+        "_apply_native_z_order",
+        lambda: topmost_requests.append(overlay._wants_topmost()) or True,
+    )
+    events = _WindowLifecycleEvents()
+    overlay.installEventFilter(events)
+
+    overlay._always_on_top_button.click()
+    app.processEvents()
+    overlay._always_on_top_button.click()
+    app.processEvents()
+
+    assert events.seen == []
+    assert topmost_requests == [False, True]
+    assert overlay.always_on_top is True
+
+
+def test_overlay_show_makes_a_pinned_overlay_topmost_natively(monkeypatch):
+    # Qt's flag no longer carries topmost on Windows, so the first show (and
+    # any later one) must set it.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    pinned = OverlayUI()
+    floating = OverlayUI()
+    floating.set_always_on_top(False)
+    calls: dict[str, int] = {"pinned": 0, "floating": 0}
+    monkeypatch.setattr(
+        pinned,
+        "_apply_native_z_order",
+        lambda: calls.__setitem__("pinned", calls["pinned"] + 1) or True,
+    )
+    monkeypatch.setattr(
+        floating,
+        "_apply_native_z_order",
+        lambda: calls.__setitem__("floating", calls["floating"] + 1) or True,
+    )
+
+    pinned.show()
+    floating.show()
+    app.processEvents()
+
+    assert calls == {"pinned": 1, "floating": 0}
+    pinned.hide()
+    floating.hide()
+
+
+class _FakeZOrderUser32:
+    """The user32 calls `_apply_native_z_order` makes, recorded."""
+
+    def __init__(
+        self,
+        *,
+        foreground: int = 0,
+        foreground_class: str = "Chrome_WidgetWin_1",
+        foreground_exstyle: int = 0,
+        foreground_iconic: bool = False,
+    ) -> None:
+        self.foreground = foreground
+        self.foreground_class = foreground_class
+        self.foreground_exstyle = foreground_exstyle
+        self.foreground_iconic = foreground_iconic
+        self.positions: list[int] = []
+
+    def SetWindowPos(self, _hwnd, insert_after, _x, _y, _cx, _cy, flags):
+        # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE on every call: the overlay
+        # never takes the focus from the window being dictated into.
+        assert flags & 0x0013 == 0x0013
+        self.positions.append(int(insert_after))
+        return 1
+
+    def GetForegroundWindow(self):
+        return self.foreground
+
+    def GetWindowLongW(self, hwnd, _index):
+        return self.foreground_exstyle if hwnd == self.foreground else 0
+
+    def SetWindowLongW(self, _hwnd, _index, _style):
+        return 1
+
+    def IsWindowVisible(self, _hwnd):
+        return 1
+
+    def IsIconic(self, hwnd):
+        return int(self.foreground_iconic and hwnd == self.foreground)
+
+    def GetClassNameW(self, hwnd, buffer, _size):
+        if hwnd != self.foreground:
+            return 0
+        buffer.value = self.foreground_class
+        return len(self.foreground_class)
+
+
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+_EDITOR_HWND = 0x5150
+
+
+def test_dropping_topmost_puts_the_overlay_directly_behind_the_foreground_window(
+    monkeypatch,
+):
+    # HWND_NOTOPMOST alone places the overlay at the top of the non-topmost
+    # band -- above the editor the user is typing in, which then could not
+    # come back above it without being re-activated (minimise and restore).
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+
+    overlay.set_always_on_top(False)
+    assert user32.positions == [_EDITOR_HWND]
+
+    user32.positions.clear()
+    overlay.reveal_temporarily(duration_ms=20)
+    assert user32.positions == [_HWND_TOPMOST]
+    QtTest.QTest.qWait(60)
+    app.processEvents()
+    assert user32.positions == [_HWND_TOPMOST, _EDITOR_HWND]
+    overlay.hide()
+
+
+@pytest.mark.parametrize(
+    ("foreground", "fake_kwargs"),
+    [
+        # Nothing in the foreground.
+        (0, {}),
+        # Behind a topmost window the overlay would itself become topmost.
+        (_EDITOR_HWND, {"foreground_exstyle": 0x00000008}),
+        # Behind the desktop the overlay would be invisible.
+        (_EDITOR_HWND, {"foreground_class": "Progman"}),
+        (_EDITOR_HWND, {"foreground_class": "WorkerW"}),
+        # A minimised window's slot is not where the user is looking.
+        (_EDITOR_HWND, {"foreground_iconic": True}),
+        # The overlay itself (its own handle is filled in below).
+        (None, {}),
+    ],
+    ids=["none", "topmost", "desktop", "wallpaper", "minimised", "self"],
+)
+def test_dropping_topmost_stays_on_top_of_the_normal_band_without_a_window_to_stay_behind(
+    monkeypatch, foreground, fake_kwargs
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    if foreground is None:
+        foreground = int(overlay.winId())
+    user32 = _FakeZOrderUser32(foreground=foreground, **fake_kwargs)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+
+    overlay.set_always_on_top(False)
+
+    assert user32.positions == [_HWND_NOTOPMOST]
+    overlay.hide()
+
+
+def test_a_hidden_overlay_is_not_moved_behind_the_foreground_window(monkeypatch):
+    # Startup applies a saved "Floating" before the first show; behind the
+    # window that launched the app, the overlay would never be seen.
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+
+    overlay.set_always_on_top(False)
+
+    assert user32.positions == [_HWND_NOTOPMOST]
+    assert overlay.isVisible() is False
 
 
 def test_overlay_initial_window_flags_are_not_reapplied(monkeypatch):
@@ -461,7 +665,10 @@ def test_overlay_reveal_temporarily_does_not_rebuild_non_pinned_window(monkeypat
     assert rebuilt_flags == []
 
 
-def test_overlay_reveal_falls_back_to_temporary_topmost_flag(monkeypatch):
+@pytest.mark.parametrize("make_topmost", ["reveal", "pin"])
+def test_overlay_falls_back_to_the_qt_topmost_flag_when_set_window_pos_fails(
+    monkeypatch, make_topmost
+):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     overlay.show()
@@ -470,14 +677,21 @@ def test_overlay_reveal_falls_back_to_temporary_topmost_flag(monkeypatch):
     monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
     monkeypatch.setattr(overlay, "_apply_native_z_order", lambda: False)
 
-    overlay.reveal_temporarily(duration_ms=50)
+    if make_topmost == "reveal":
+        overlay.reveal_temporarily(duration_ms=50)
+    else:
+        overlay.set_always_on_top(True)
 
-    assert overlay._temporary_foreground_uses_window_flag is True
+    assert overlay._topmost_uses_window_flag is True
     assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
-    QtTest.QTest.qWait(80)
-    app.processEvents()
-    assert overlay._temporary_foreground_uses_window_flag is False
+    if make_topmost == "reveal":
+        QtTest.QTest.qWait(80)
+        app.processEvents()
+    else:
+        overlay.set_always_on_top(False)
+    assert overlay._topmost_uses_window_flag is False
     assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+    overlay.hide()
 
 
 def test_overlay_shrinks_after_long_transcription():
