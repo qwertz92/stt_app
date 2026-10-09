@@ -9557,3 +9557,11 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   Holding was chosen over refusing because a refusal made the user press
   the hotkey again after the stream, and over pasting at once because the
   order rule (one window, recording order) would break.
+- **Transcripts that were not inserted are counted on an amber badge**
+  (owner's request: on his slow PC several pastes of a long queue failed,
+  and the one Insert offer was painted over by the next recording). The
+  waiting rows already outlived a new recording in the queue panel, but
+  in a white title and light-yellow row text on the state colour -- easy
+  to miss on Listening green. The badge ("2 not inserted · Ctrl+Alt+F10")
+  sits in the queue header, amber with dark text, as tall as Clear queue,
+  so it moves nothing; measured at 9, 11.25 and 13.5 pt.

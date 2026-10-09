@@ -138,6 +138,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   (`_queue_title`: "Transcribing N recordings" -- it said "files" until
   2026-10-03 (UX review item 6g), though the user handled no file --, "N
   transcripts not inserted", or both joined by " · "). Both buttons emit `queue_cancel_requested`.
+- **The not-inserted badge sits in the queue header** (owner's request
+  2026-10-09): `set_not_inserted_badge(text, tooltip)`, "" hides it. The
+  controller writes "N not inserted · <re-paste hotkey>" ("· tray menu"
+  while no hotkey is registered) and the how-to as its tooltip. Amber
+  (`#ffb300`, dark bold text), apart from every state colour, and in the
+  queue panel because no `set_state` touches that panel: the next
+  recording's Listening cannot paint over it, while its waiting rows keep
+  the panel visible. Layout: [title (eliding, the stretch)][badge][Clear
+  queue]; the badge is exactly as tall as Clear queue
+  (`_fit_buttons_to_font`) and its minimum width is pinned to 1 px, so
+  showing it changes neither the header's height nor the overlay's width --
+  only the title gets narrower (it may elide at 11.25 pt and up). With the
+  badge shown the title leaves the waiting count out (`_queue_title(...,
+  badge_shown=True)`). Measured with real widgets, Listening, one
+  transcription and two waiting rows, badge "2 not inserted · Ctrl+Alt+F10":
+  9 pt overlay 470x234 and header 20 px with and without it, badge 173x20;
+  11.25 pt 503x242, header 22, badge 218x22; 13.5 pt 560x268, header 26,
+  badge 258x26.
 - **A dragged overlay is clamped from where the user put it**, not from
   `self.pos()` (a tall result pushed it up for good). The remembered position
   and `_manual_positioned` have one writer, `_claim_manual_position`. A

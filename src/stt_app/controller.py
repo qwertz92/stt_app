@@ -1470,6 +1470,8 @@ class DictationController(QtCore.QObject):
             self._show_overlay_hotkey_notice = None
             self._repaste_hotkey_registration_ok = True
             self._repaste_hotkey_notice = None
+        # The badge names the re-paste hotkey, which this reload may change.
+        self._update_not_inserted_badge()
 
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
@@ -4103,6 +4105,37 @@ class DictationController(QtCore.QObject):
             for entry in self._undelivered_inserts
         )
         setter(items)
+        self._update_not_inserted_badge()
+
+    def _update_not_inserted_badge(self) -> None:
+        """Count what waits to be inserted on the overlay's amber badge.
+
+        Owner's request 2026-10-09: with a long queue several pastes can
+        fail, and the Insert offer of one of them is painted over by the
+        next recording's Listening. The badge counts every insertable row --
+        failed, "not in a text field", from the startup notice -- and names
+        the re-paste hotkey while it is registered (the tray menu
+        otherwise). A "possibly inserted" row is not counted: nothing pastes
+        it again. It lives in the queue panel, which no state change
+        touches, so it stays through the next recording.
+        """
+        setter = getattr(self._overlay, "set_not_inserted_badge", None)
+        if not callable(setter):
+            return
+        count = len(self._insertable_undelivered())
+        if not count:
+            setter("", "")
+            return
+        how = self._registered_repaste_hotkey() or "tray menu"
+        noun, them = (
+            ("transcript was", "it") if count == 1 else ("transcripts were", "them")
+        )
+        setter(
+            f"{count} not inserted · {how}",
+            f"{count} {noun} not inserted: {self._repaste_how()} to insert "
+            f"{them} at the caret, or Dismiss a row. Every transcript is in "
+            "History.",
+        )
 
     # -- Transcripts that did not reach their window --------------------------
 
@@ -4243,20 +4276,32 @@ class DictationController(QtCore.QObject):
             self._update_queue_overlay()
         return bool(dismissed)
 
+    def _registered_repaste_hotkey(self) -> str:
+        """The re-paste hotkey's label while it is registered, else "".
+
+        Named only while registered: a combination another program holds
+        does nothing when pressed.
+        """
+        hotkey = str(getattr(self._settings, "repaste_hotkey", "") or "").strip()
+        return hotkey if hotkey and self._repaste_hotkey_registration_ok else ""
+
+    def _repaste_how(self) -> str:
+        """How the user inserts waiting transcripts, as a phrase."""
+        how = f'choose "{TRAY_REPASTE_ACTION_LABEL}" in the tray menu'
+        hotkey = self._registered_repaste_hotkey()
+        return f"press {hotkey} or {how}" if hotkey else how
+
     def _undelivered_hint(self) -> str:
         """How many transcripts wait, and how to insert them; "" for none."""
         count = len(self._repaste_rows())
         if not count:
             return ""
-        hotkey = str(getattr(self._settings, "repaste_hotkey", "") or "").strip()
-        how = f'choose "{TRAY_REPASTE_ACTION_LABEL}" in the tray menu'
-        # Named only while it is registered: a combination another program
-        # holds does nothing when pressed.
-        if hotkey and self._repaste_hotkey_registration_ok:
-            how = f"press {hotkey} or {how}"
         noun = "transcript is" if count == 1 else "transcripts are"
         them = "it" if count == 1 else "them"
-        return f"{count} {noun} waiting to be inserted: {how} to insert {them}."
+        return (
+            f"{count} {noun} waiting to be inserted: {self._repaste_how()} "
+            f"to insert {them}."
+        )
 
     def _mark_job_recording_canceled(
         self, job: _TranscriptionJob, *, foreground: bool

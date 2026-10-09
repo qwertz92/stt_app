@@ -206,7 +206,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that skips the window (SIGINT/SIGTERM, Windows ending the session -- the
   latter not checked) drops held pastes as before; unfinished recordings
   are still kept by `shutdown`. A streaming finalize tail whose insert
-  fails gets an Insert offer but no row. Kept: a row store is ~4 h and the
+  fails gets an Insert offer but no row, so the overlay's not-inserted
+  badge does not count it either, and the next recording retires that
+  offer (2026-10-09). Kept: a row store is ~4 h and the
   owner chose the quit window (2026-10-09). The tail row is not just a
   missing call: rows keep stripped text and a tail's leading space is what
   separates it from the streamed words, and F10 would have to order a tail

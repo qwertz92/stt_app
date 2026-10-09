@@ -229,15 +229,19 @@ def _queue_entry(item) -> tuple[int, str, str]:
     return int(token), str(label), kind
 
 
-def _queue_title(entries) -> str:
+def _queue_title(entries, *, badge_shown: bool = False) -> str:
     """Count running transcriptions and waiting inserts apart.
 
     A queued job is a dictation recording, which the tray's messages call
     "Recording HH:MM:SS"; "file" named something the user never handled.
+    With the not-inserted badge shown, the badge carries the waiting count
+    and the title leaves it out rather than count the same rows twice.
     """
     waiting = sum(1 for _t, _l, kind in entries if kind == QUEUE_ROW_KIND_UNDELIVERED)
     running = len(entries) - waiting
     transcribing = f"Transcribing {running} recording" + ("" if running == 1 else "s")
+    if badge_shown:
+        return transcribing if running else ""
     if not waiting:
         return transcribing
     if not running:
@@ -878,6 +882,11 @@ class OverlayUI(QtWidgets.QWidget):
             _QUEUE_CLEAR_BUTTON_HEIGHT,
             "Clear queue",
         )
+        # The badge beside it is exactly as tall, so showing or hiding it
+        # never changes the queue header's height.
+        self._not_inserted_badge.setFixedHeight(
+            self._queue_clear_button.maximumHeight()
+        )
         # Balanced last, because it widens the narrower group from the sizes
         # set above. The stretching state label between the two groups is
         # centred on the header -- and so on the overlay, whose horizontal
@@ -1380,6 +1389,16 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             QLabel[queueRowKind="undelivered"] {{
                 color: #ffd98a;
+            }}
+            /* Not inserted: amber with dark text, apart from every state
+               colour (Error red, Listening green), whatever the state. */
+            QLabel#overlayNotInsertedBadge {{
+                background-color: #ffb300;
+                color: #1f1400;
+                border: 1px solid #ffe082;
+                border-radius: 4px;
+                padding: 0 6px;
+                font-weight: bold;
             }}
                 """
             )
@@ -2104,11 +2123,28 @@ class OverlayUI(QtWidgets.QWidget):
         queue_header = QtWidgets.QHBoxLayout(self._queue_header_widget)
         queue_header.setContentsMargins(0, 0, 0, 0)
         queue_header.setSpacing(6)
-        self._queue_title_label = QtWidgets.QLabel("")
-        self._queue_title_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
+        # Eliding: beside the badge a long title must give way, never widen
+        # the overlay (its policy lets the layout ignore its text width).
+        self._queue_title_label = ElidingLabel("")
+        # How many transcripts were not inserted and the hotkey that inserts
+        # them (owner's request 2026-10-09): amber, apart from Error red and
+        # Listening green, and here because no state change touches the
+        # queue panel, so a recording that starts cannot paint over it. Its
+        # height is the Clear queue button's (`_fit_buttons_to_font`), so
+        # showing it never changes the header row's height; only the title
+        # beside it gets narrower.
+        self._not_inserted_badge = QtWidgets.QLabel("")
+        self._not_inserted_badge.setObjectName("overlayNotInsertedBadge")
+        self._not_inserted_badge.setAlignment(QtCore.Qt.AlignCenter)
+        self._not_inserted_badge.setTextFormat(QtCore.Qt.PlainText)
+        self._not_inserted_badge.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Fixed,
         )
+        # An explicit minimum, so the layout's minimum width does not grow by
+        # the badge's text (a QLabel's minimum size hint is all of it).
+        self._not_inserted_badge.setMinimumWidth(1)
+        self._not_inserted_badge.setVisible(False)
         self._queue_clear_button = QtWidgets.QPushButton("Clear queue")
         self._queue_clear_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._queue_clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -2119,6 +2155,7 @@ class OverlayUI(QtWidgets.QWidget):
         )
         self._queue_clear_button.clicked.connect(self.queue_clear_requested.emit)
         queue_header.addWidget(self._queue_title_label, 1)
+        queue_header.addWidget(self._not_inserted_badge, 0)
         queue_header.addWidget(self._queue_clear_button, 0, QtCore.Qt.AlignRight)
         queue_layout.addWidget(self._queue_header_widget)
 
@@ -2205,7 +2242,7 @@ class OverlayUI(QtWidgets.QWidget):
         previous_scroll = scroll_bar.value() if self._queue_visible else 0
         self._clear_queue_rows()
         if entries:
-            self._queue_title_label.setText(_queue_title(entries))
+            self._sync_queue_title()
             for token, label, kind in entries:
                 row = self._build_queue_row(token, label, kind)
                 self._queue_rows_layout.addWidget(row)
@@ -2253,6 +2290,32 @@ class OverlayUI(QtWidgets.QWidget):
         # stale pending resize from the previous state, so recompute the size
         # after the event loop drains.
         QtCore.QTimer.singleShot(0, self._refresh_size_after_queue_change)
+
+    def set_not_inserted_badge(self, text: str, tooltip: str = "") -> None:
+        """Show how many transcripts were not inserted, or hide with "".
+
+        The controller writes the count and the re-paste hotkey's label
+        ("2 not inserted · Ctrl+Alt+F10"); the badge sits in the queue
+        panel's header, which the waiting rows keep visible.
+        """
+        text = str(text or "")
+        badge = self._not_inserted_badge
+        if text == badge.text() and str(tooltip) == badge.toolTip():
+            return
+        badge.setText(text)
+        badge.setToolTip(str(tooltip))
+        badge.setVisible(bool(text))
+        self._sync_queue_title()
+
+    def _sync_queue_title(self) -> None:
+        self._queue_title_label.setText(
+            _queue_title(
+                self._queue_entries,
+                badge_shown=bool(self._not_inserted_badge.text()),
+            )
+            if self._queue_entries
+            else ""
+        )
 
     def _queue_extent(self) -> int:
         if not self._queue_visible:
