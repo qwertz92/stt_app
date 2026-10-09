@@ -576,3 +576,32 @@ def test_a_boolean_is_not_a_count():
         {"logical_cpus": True, "physical_cores": True}
     )
     assert (environment.logical_cpus, environment.physical_cores) == (0, 0)
+
+
+_CHILD_WITH_LINGERING_GRANDCHILD = """
+import subprocess, sys
+# Hands its own pipes to a program that outlives it, as a wrapper script does
+# with the tool it starts, then prints its answer and exits 0.
+subprocess.Popen(
+    [sys.executable, "-c", "import time; time.sleep(20)"],
+    stdout=sys.stdout,
+    stderr=sys.stderr,
+)
+print("answer", flush=True)
+"""
+
+
+def test_a_command_whose_grandchild_holds_the_pipe_is_still_bounded():
+    """`subprocess.run` reads the pipes to the end, so the lingering program
+    held the query open for its whole life and its answer was thrown away."""
+    import sys
+    import time
+
+    started = time.monotonic()
+    lines = benchmark_environment._command_lines(
+        [sys.executable, "-c", _CHILD_WITH_LINGERING_GRANDCHILD], timeout=3.0
+    )
+    elapsed = time.monotonic() - started
+
+    assert lines == ["answer"]
+    assert elapsed < 3.0, f"the 3 s budget took {elapsed:.1f} s"

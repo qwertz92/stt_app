@@ -229,8 +229,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   rows is a behaviour choice that also enables Edit in the offer state in the
   overlay; ~2 h. The case needs a result delivered while the Edit dialog is
   open.
-- **The benchmark's 6 s environment query can be outlived by a grandchild**
-  holding stdout; `Get-CimInstance` spawns none, so unreachable at HEAD.
 - **Two benchmark runs saved within one second share
   `BenchmarkHistoryEntry.identity_key()`** (`created_at` has second
   resolution) and open one pop-out. Only with equal status and summary too,
@@ -265,9 +263,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   recording has an id); fixing needs an id in the schema. Left on cost
   versus effect (2026-10-03, about 4 hours: schema field, migration of the
   stored file, every dialog and store call): two entries equal in every field
-  are indistinguishable on screen, so acting on the first instead of the
-  second changes at most which of the two rows shows the edit (not
-  measured: the history list's order for equal timestamps was not checked).
+  are indistinguishable on screen. Read from the code on 2026-10-09: a delete
+  of either (or both) leaves the same list, so only an Edit of the second row
+  differs -- the edited text lands at the first one's position.
 - **The readiness probe cannot see a browser renderer's delay**: for
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;

@@ -171,7 +171,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
     `_payload_entries` also accepts a bare object.
   - Best-effort: timeout 6 s, failure or non-Windows leaves fields empty; CPU
     name falls back to `platform.processor()` and `/proc/cpuinfo`; old
-    entries load via tolerant `from_dict`.
+    entries load via tolerant `from_dict`. Every query goes through
+    `process_tree.run_bounded` (`_command_lines`), so the timeout holds
+    even when a descendant keeps the child's pipes open.
   - Clock label says "nominal" (`MaxClockSpeed` is base clock).
   - Bandwidth is "per channel" (`MT/s * 8 bytes / 1000`), never multiplied.
     The "rated N, running at M" clause rarely fires (with XMP off SMBIOS
