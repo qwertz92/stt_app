@@ -85,6 +85,14 @@ def window_class_name(user32, hwnd: int) -> str:
     return buffer.value if copied else ""
 
 
+def is_shell_surface_window(user32, hwnd: int) -> bool:
+    """Is `hwnd` the taskbar, the desktop or another shell surface?
+
+    Read with the caller's own `user32` handle (see `window_class_name`).
+    """
+    return window_class_name(user32, hwnd) in _SHELL_SURFACE_CLASSES
+
+
 def _declare_user32(user32) -> None:
     """Declare every signature this module calls.
 
@@ -200,7 +208,7 @@ class Win32WindowFocusHelper:
         )
 
     def _is_shell_surface(self, hwnd: int) -> bool:
-        return window_class_name(self._user32, hwnd) in _SHELL_SURFACE_CLASSES
+        return is_shell_surface_window(self._user32, hwnd)
 
     def _is_own_non_target_window(self, hwnd: int) -> bool:
         process_id = ctypes.wintypes.DWORD()

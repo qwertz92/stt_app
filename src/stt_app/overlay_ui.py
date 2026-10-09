@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import logging
 import sys
 from collections.abc import Callable
@@ -30,6 +31,7 @@ from .config import (
 )
 from .settings_dialog_helpers import ElidingLabel
 from .ui_feedback import restore_vertical_scrollbar
+from .window_focus import is_shell_surface_window
 
 RECORD_BUTTON_START_TEXT = "Record"
 logger = logging.getLogger(__name__)
@@ -45,6 +47,74 @@ CLEAR_BUTTON_TEXT = "Clear"
 RECORD_BUTTON_CAPTIONS = (RECORD_BUTTON_START_TEXT, RECORD_BUTTON_STOP_TEXT)
 PIN_BUTTON_CAPTIONS = (PIN_BUTTON_PINNED_TEXT, PIN_BUTTON_FLOATING_TEXT)
 COPY_BUTTON_CAPTIONS = (COPY_BUTTON_TEXT, COPY_BUTTON_COPIED_TEXT)
+
+# Native z-order on Windows (`OverlayUI._apply_native_z_order`).
+_GWL_EXSTYLE = -20
+_WS_EX_TOPMOST = 0x00000008
+_WS_EX_NOACTIVATE = 0x08000000
+_HWND_TOPMOST = -1
+_HWND_NOTOPMOST = -2
+_SWP_NOSIZE = 0x0001
+_SWP_NOMOVE = 0x0002
+_SWP_NOACTIVATE = 0x0010
+_SWP_SHOWWINDOW = 0x0040
+
+
+@functools.cache
+def _overlay_user32():
+    """The overlay's own `user32` handle with every signature it calls declared.
+
+    Its own `WinDLL`, never the process-wide `ctypes.windll.user32`, so the
+    declarations cannot change other callers (docs/agents/windows-platform.md).
+    """
+    import ctypes
+    import ctypes.wintypes as wt
+
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    signatures = {
+        "SetWindowPos": (
+            (
+                wt.HWND,
+                wt.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                wt.UINT,
+            ),
+            wt.BOOL,
+        ),
+        "GetForegroundWindow": ((), wt.HWND),
+        "GetWindowLongW": ((wt.HWND, ctypes.c_int), wt.LONG),
+        "SetWindowLongW": ((wt.HWND, ctypes.c_int, wt.LONG), wt.LONG),
+        "IsWindowVisible": ((wt.HWND,), wt.BOOL),
+        "IsIconic": ((wt.HWND,), wt.BOOL),
+    }
+    for name, (argtypes, restype) in signatures.items():
+        function = getattr(user32, name)
+        function.argtypes = argtypes
+        function.restype = restype
+    return user32
+
+
+def _window_to_stay_behind(user32, overlay_hwnd: int) -> int:
+    """The window a floating overlay goes directly behind, or 0 for none.
+
+    That is the foreground window, unless going behind it would hide the
+    overlay where nobody looks (the desktop, a minimised window) or make it
+    topmost after all (behind a topmost window it joins the topmost band).
+    """
+    foreground = int(user32.GetForegroundWindow() or 0)
+    if not foreground or foreground == overlay_hwnd:
+        return 0
+    if not user32.IsWindowVisible(foreground) or user32.IsIconic(foreground):
+        return 0
+    if int(user32.GetWindowLongW(foreground, _GWL_EXSTYLE) or 0) & _WS_EX_TOPMOST:
+        return 0
+    if is_shell_surface_window(user32, foreground):
+        return 0
+    return foreground
+
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
 # the left and 26 px on the right for the chevron, plus a 1 px border per side
@@ -436,7 +506,9 @@ class OverlayUI(QtWidgets.QWidget):
 
         self._always_on_top = True
         self._temporary_foreground_active = False
-        self._temporary_foreground_uses_window_flag = False
+        # Windows only: SetWindowPos failed, so Qt's WindowStaysOnTopHint
+        # carries topmost (recreating the window) until topmost is dropped.
+        self._topmost_uses_window_flag = False
         initial_flags = self._base_window_flags()
         self.setWindowFlags(initial_flags)
         self._applied_window_flags = initial_flags
@@ -910,9 +982,20 @@ class OverlayUI(QtWidgets.QWidget):
     def always_on_top(self) -> bool:
         return self._always_on_top
 
+    def _wants_topmost(self) -> bool:
+        return self._always_on_top or self._temporary_foreground_active
+
     def _base_window_flags(self) -> QtCore.Qt.WindowType:
         flags = QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint
-        if self._always_on_top or self._temporary_foreground_uses_window_flag:
+        if sys.platform == "win32":
+            # Topmost is switched natively (`_apply_native_z_order`). Changing
+            # this flag means `setWindowFlags`, which destroys and recreates
+            # the native window: the overlay vanished and reappeared on every
+            # Pinned/Floating click. Only a failed SetWindowPos falls back.
+            stays_on_top = self._topmost_uses_window_flag
+        else:
+            stays_on_top = self._always_on_top
+        if stays_on_top:
             flags |= QtCore.Qt.WindowStaysOnTopHint
         if hasattr(QtCore.Qt, "WindowDoesNotAcceptFocus"):
             flags |= QtCore.Qt.WindowDoesNotAcceptFocus
@@ -930,25 +1013,35 @@ class OverlayUI(QtWidgets.QWidget):
             else "Allow the overlay to stay behind other windows."
         )
 
-    def _apply_window_flags(self, *, raise_window: bool = False) -> bool | None:
+    def _apply_window_flags(self, *, raise_window: bool = False) -> None:
+        """Apply the topmost state; `raise_window` also shows the overlay."""
+        if not self._wants_topmost():
+            self._topmost_uses_window_flag = False
+        self._sync_qt_window_flags(show=raise_window)
+        if raise_window:
+            self.raise_()
+        if sys.platform != "win32":
+            return
+        self._apply_noactivate_style()
+        if self._apply_native_z_order():
+            return
+        if self._wants_topmost() and not self._topmost_uses_window_flag:
+            self._topmost_uses_window_flag = True
+            self._sync_qt_window_flags(show=raise_window)
+
+    def _sync_qt_window_flags(self, *, show: bool) -> None:
         desired_flags = self._base_window_flags()
-        if getattr(self, "_applied_window_flags", None) != desired_flags:
+        if self._applied_window_flags != desired_flags:
             # ``setWindowFlags`` destroys and recreates the native window,
-            # which shows as a visible blink. Reveals fire on every hotkey
-            # press, so only pay that cost when the flags actually change.
+            # which shows as a visible blink. On Windows the flags change only
+            # when SetWindowPos fails (`_base_window_flags`).
             was_visible = self.isVisible()
             self.setWindowFlags(desired_flags)
             self._applied_window_flags = desired_flags
-            if was_visible or raise_window:
+            if was_visible or show:
                 self.show()
-        elif raise_window and not self.isVisible():
+        elif show and not self.isVisible():
             self.show()
-        if raise_window:
-            self.raise_()
-        if sys.platform == "win32":
-            self._apply_noactivate_style()
-            return self._apply_native_z_order()
-        return None
 
     def _on_always_on_top_clicked(self, checked: bool) -> None:
         self.set_always_on_top(checked, emit_signal=True)
@@ -966,7 +1059,6 @@ class OverlayUI(QtWidgets.QWidget):
         self._always_on_top = normalized
         if normalized:
             self._temporary_foreground_active = False
-            self._temporary_foreground_uses_window_flag = False
             self._temporary_foreground_timer.stop()
         self._sync_always_on_top_button()
         self._apply_window_flags(raise_window=normalized)
@@ -977,14 +1069,7 @@ class OverlayUI(QtWidgets.QWidget):
         if not self._always_on_top:
             self._temporary_foreground_active = True
             self._temporary_foreground_timer.start(max(1, int(duration_ms)))
-        native_z_order_applied = self._apply_window_flags(raise_window=True)
-        if (
-            not self._always_on_top
-            and sys.platform == "win32"
-            and native_z_order_applied is False
-        ):
-            self._temporary_foreground_uses_window_flag = True
-            self._apply_window_flags(raise_window=True)
+        self._apply_window_flags(raise_window=True)
         self._reposition_within_current_screen()
 
     def restore_visibility(self) -> None:
@@ -995,7 +1080,6 @@ class OverlayUI(QtWidgets.QWidget):
         if self._always_on_top or not self._temporary_foreground_active:
             return
         self._temporary_foreground_active = False
-        self._temporary_foreground_uses_window_flag = False
         self._apply_window_flags()
 
     def set_state(
@@ -1555,6 +1639,10 @@ class OverlayUI(QtWidgets.QWidget):
             self._update_detail_height()
         if sys.platform == "win32":
             self._apply_noactivate_style()
+            if self._wants_topmost():
+                # Qt's flag does not carry topmost here (`_base_window_flags`),
+                # so the first show, and a show after a recreation, sets it.
+                self._apply_native_z_order()
 
     def _on_screen_changed(self, _screen: QtGui.QScreen | None) -> None:
         if self._compact_mode:
@@ -1568,53 +1656,47 @@ class OverlayUI(QtWidgets.QWidget):
     def _apply_noactivate_style(self) -> None:
         """Set ``WS_EX_NOACTIVATE`` on the native window handle."""
         try:
-            import ctypes
-
+            user32 = _overlay_user32()
             hwnd = int(self.winId())
-            _GWL_EXSTYLE = -20
-            _WS_EX_NOACTIVATE = 0x08000000
-            style = ctypes.windll.user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
-            ctypes.windll.user32.SetWindowLongW(
-                hwnd, _GWL_EXSTYLE, style | _WS_EX_NOACTIVATE
-            )
+            style = int(user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) or 0)
+            user32.SetWindowLongW(hwnd, _GWL_EXSTYLE, style | _WS_EX_NOACTIVATE)
         except Exception:
             pass
 
     def _apply_native_z_order(self) -> bool:
-        """Reassert topmost state without activating the overlay on Windows."""
+        """Set the topmost state with SetWindowPos, never activating the overlay.
+
+        Topmost while pinned or revealed. Otherwise not HWND_NOTOPMOST alone:
+        that places the window above every non-topmost window, i.e. above the
+        editor the user is typing in. The overlay never activates, so that
+        editor stays the active window and nothing re-raises it; the owner
+        saw it stay under a floating overlay until it was re-activated
+        (minimise and restore). So the overlay goes directly behind the
+        foreground window (`_window_to_stay_behind`) instead. A window Qt has
+        not shown yet is not moved there: once shown it appears like any
+        newly shown window.
+        """
         if sys.platform != "win32":
             return False
         try:
-            import ctypes
-            import ctypes.wintypes
-
-            set_window_pos = ctypes.WinDLL("user32", use_last_error=True).SetWindowPos
-            set_window_pos.argtypes = (
-                ctypes.wintypes.HWND,
-                ctypes.wintypes.HWND,
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.c_int,
-                ctypes.wintypes.UINT,
-            )
-            set_window_pos.restype = ctypes.wintypes.BOOL
-            hwnd = ctypes.wintypes.HWND(int(self.winId()))
-            insert_after = ctypes.wintypes.HWND(
-                -1 if (self._always_on_top or self._temporary_foreground_active) else -2
-            )
-            flags = 0x0001 | 0x0002 | 0x0010 | 0x0040
-            return bool(
-                set_window_pos(
-                    hwnd,
-                    insert_after,
-                    0,
-                    0,
-                    0,
-                    0,
-                    flags,
-                )
-            )
+            user32 = _overlay_user32()
+            hwnd = int(self.winId())
+            flags = _SWP_NOSIZE | _SWP_NOMOVE | _SWP_NOACTIVATE
+            handle = self.windowHandle()
+            # False inside `showEvent`, which Qt sends before showing the
+            # native window; showing it from there would show it unpainted.
+            shown = handle is not None and handle.isVisible()
+            if shown:
+                # Re-shows a window the system hid (resume, 2026-06-08).
+                flags |= _SWP_SHOWWINDOW
+            if self._wants_topmost():
+                return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
+            # "If a topmost window is repositioned ... after any non-topmost
+            # window, it is no longer topmost" (SetWindowPos remarks), so one
+            # call both drops topmost and places the overlay.
+            behind = _window_to_stay_behind(user32, hwnd) if shown else 0
+            insert_after = behind or _HWND_NOTOPMOST
+            return bool(user32.SetWindowPos(hwnd, insert_after, 0, 0, 0, 0, flags))
         except Exception:
             return False
 
