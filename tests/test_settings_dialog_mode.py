@@ -2432,7 +2432,7 @@ def test_benchmark_tab_hosts_history_and_results_directly():
         dialog,
         QtCore.QPoint(0, dialog.benchmark_history_list.height()),
     ).y()
-    actions_top = dialog.export_benchmark_history_button.mapTo(
+    actions_top = dialog.open_benchmark_results_window_button.mapTo(
         dialog,
         QtCore.QPoint(),
     ).y()

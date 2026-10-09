@@ -737,7 +737,7 @@ loaded.
 
 The Settings benchmark window saves every run that produces at least one result
 to **Benchmark History** automatically, including partial results from a
-canceled run. **Export** is optional: it writes the loaded history entry to CSV,
+canceled run. **Export...** is optional: it writes the run shown under **Results** to CSV,
 XLSX, or Markdown for sharing or further analysis; it is not required to keep
 the result in the app.
 
@@ -773,10 +773,11 @@ each model/device case with its first measured run:
 Click a column header in the results table to sort by that column: the first
 click sorts ascending, the second descending, and the third restores the run
 order, which the leading **#** column names for every case. Cases without a
-measurement stay at the bottom in both directions. **Open in Window** opens the
-selected run in a window of its own, so two runs can be read side by side;
-several such windows can be open at once and each sorts independently. They
-close with the Settings dialog, and with the history entry they show.
+measurement stay at the bottom in both directions. **Open in Window**, in the
+one row of buttons under History and Results, opens the shown run in a window
+of its own, so two runs can be read side by side; several such windows can be
+open at once and each sorts independently. They close with the Settings dialog,
+and with the history entry they show.
 
 Local decoding is normally deterministic for a fixed model, runtime, device,
 audio file, and decoding configuration, but exact repeatability is not a safe

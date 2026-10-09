@@ -490,15 +490,14 @@ def test_a_stored_run_can_be_opened_in_a_window_while_a_benchmark_runs(tmp_path)
     dialog._current_benchmark_entry = entry
     dialog._update_benchmark_actions()
 
-    assert dialog.open_benchmark_history_window_button.isEnabled() is True
     assert dialog.open_benchmark_results_window_button.isEnabled() is True
+    assert dialog.export_benchmark_results_button.isEnabled() is True
 
     dialog._active_benchmark_thread = threading.Thread(target=lambda: None)
     dialog._update_benchmark_actions()
 
-    assert dialog.export_benchmark_history_button.isEnabled() is False
+    assert dialog.export_benchmark_results_button.isEnabled() is False
     assert dialog.delete_benchmark_history_button.isEnabled() is False
-    assert dialog.open_benchmark_history_window_button.isEnabled() is True
     assert dialog.open_benchmark_results_window_button.isEnabled() is True
 
     dialog._active_benchmark_thread = None
@@ -508,7 +507,6 @@ def test_a_stored_run_can_be_opened_in_a_window_while_a_benchmark_runs(tmp_path)
     dialog._current_benchmark_entry = None
     dialog._update_benchmark_actions()
 
-    assert dialog.open_benchmark_history_window_button.isEnabled() is False
     assert dialog.open_benchmark_results_window_button.isEnabled() is False
     _ = app
 
@@ -534,21 +532,80 @@ def _button_row_of(button: QtWidgets.QPushButton) -> list[QtWidgets.QWidget]:
     return []
 
 
-def test_open_in_window_sits_in_both_action_rows():
+def test_history_and_results_share_one_action_row():
+    """History had Export Selected, Open in Window, Delete Selected and Clear
+    History; Results had Clear Loaded, Open in Window and Export Loaded. With
+    one run selected and shown that was two Opens and two Exports for the same
+    run, so the tab has one row: what acts on the shown run, then History's
+    own two."""
     dialog, app = _dialog()
 
-    assert _button_row_of(dialog.clear_benchmark_results_button) == [
-        dialog.clear_benchmark_results_button,
+    assert _button_row_of(dialog.open_benchmark_results_window_button) == [
         dialog.open_benchmark_results_window_button,
         dialog.export_benchmark_results_button,
+        dialog.clear_benchmark_results_button,
+        dialog.delete_benchmark_history_button,
+        dialog.clear_benchmark_history_button,
     ]
-    history_row = _button_row_of(dialog.export_benchmark_history_button)
-    assert history_row[:2] == [
-        dialog.export_benchmark_history_button,
-        dialog.open_benchmark_history_window_button,
+    assert [
+        button.text()
+        for button in _button_row_of(dialog.open_benchmark_results_window_button)
+    ] == [
+        "Open in Window",
+        "Export...",
+        "Clear Loaded",
+        "Delete Selected",
+        "Clear History",
     ]
-    assert dialog.open_benchmark_results_window_button.text() == "Open in Window"
-    assert dialog.open_benchmark_history_window_button.text() == "Open in Window"
+    assert not hasattr(dialog, "export_benchmark_history_button")
+    assert not hasattr(dialog, "open_benchmark_history_window_button")
+    _ = app
+
+
+def test_open_and_export_act_on_the_shown_run_or_else_the_selected_row(tmp_path):
+    """One Open and one Export now serve the two cases the old rows split.
+
+    Idle, the selected row is the shown run. A run whose history write failed
+    is shown and in no row (Export is then the only way to keep it), and a
+    Ctrl+click deselect leaves the shown run on screen with no row selected:
+    the shown run is the target in both. While a benchmark runs nothing stored
+    is shown, so Open in Window takes the selected row and Export waits.
+    """
+    shown = _stored_entry("shown run")
+    other = _stored_entry("other run")
+    other.summary = "Benchmark summary:\nthe other run"
+    dialog, app = _history_dialog(tmp_path, [shown, other])
+    opened: list[str] = []
+    dialog._open_benchmark_results_window = lambda entry: opened.append(entry.summary)
+    exported: list[str] = []
+    dialog._export_benchmark_entry = lambda entry: exported.append(entry.summary)
+
+    dialog.benchmark_history_list.setCurrentRow(0)
+    first = dialog._current_benchmark_entry
+    dialog.open_benchmark_results_window_button.click()
+    dialog.export_benchmark_results_button.click()
+    assert opened == [first.summary] and exported == [first.summary]
+
+    # Ctrl+click deselect: shown, nothing selected.
+    dialog.benchmark_history_list.selectionModel().clearSelection()
+    dialog._update_benchmark_action_row()
+    assert dialog.open_benchmark_results_window_button.isEnabled() is True
+    assert dialog.export_benchmark_results_button.isEnabled() is True
+    assert dialog.delete_benchmark_history_button.isEnabled() is False
+    dialog.export_benchmark_results_button.click()
+    assert exported[-1] == first.summary
+
+    # A run is active: nothing stored is shown, the selected row is opened.
+    dialog._clear_benchmark_results()
+    dialog._active_benchmark_thread = threading.Thread(target=lambda: None)
+    dialog.benchmark_history_list.setCurrentRow(1)
+    chosen = dialog._selected_benchmark_history_entry()
+    assert dialog._current_benchmark_entry is None
+    assert dialog.open_benchmark_results_window_button.isEnabled() is True
+    assert dialog.export_benchmark_results_button.isEnabled() is False
+    dialog.open_benchmark_results_window_button.click()
+    assert opened[-1] == chosen.summary
+    dialog._active_benchmark_thread = None
     _ = app
 
 
@@ -656,16 +713,14 @@ def test_a_deselected_history_row_offers_no_actions(tmp_path):
     dialog, app = _history_dialog(tmp_path, [entry])
     table = dialog.benchmark_history_list
     table.setCurrentRow(0)
-    dialog._update_benchmark_history_actions()
-    assert dialog.open_benchmark_history_window_button.isEnabled() is True
+    dialog._update_benchmark_action_row()
     assert dialog.delete_benchmark_history_button.isEnabled() is True
 
     table.selectionModel().clearSelection()
-    dialog._update_benchmark_history_actions()
+    dialog._update_benchmark_action_row()
 
     assert table.currentRow() == 0
     assert dialog._selected_benchmark_history_entry() is None
-    assert dialog.open_benchmark_history_window_button.isEnabled() is False
     assert dialog.delete_benchmark_history_button.isEnabled() is False
     _ = app
 
@@ -723,8 +778,8 @@ def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
     app.processEvents()
 
     assert dialog.width() == dialog.minimumWidth()
-    row = _button_row_of(dialog.open_benchmark_history_window_button)
-    assert len(row) >= 3
+    row = _button_row_of(dialog.open_benchmark_results_window_button)
+    assert len(row) == 5
     for widget in row:
         assert widget.width() >= widget.sizeHint().width(), widget
     dialog.hide()

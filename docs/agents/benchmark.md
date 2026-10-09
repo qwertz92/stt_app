@@ -58,6 +58,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   - Open in Window and pop-out Export stay enabled during a run (they never
     touch `_current_benchmark_cases`); Export calls the dialog's one flow.
   - The action row reads the selection, not `currentRow()`.
+  - **The tab has one action row** (2026-10-09, `_build_benchmark_action_row`,
+    under the splitter, in no box): Open in Window, Export..., Clear Loaded,
+    then History's Delete Selected and Clear History. Before, History and
+    Results each had a row with their own Open in Window and Export for the
+    same run. `_benchmark_subject_entry` is what Open in Window and Export
+    act on: the shown run, else the selected row. They differ in three cases:
+    a run whose history write failed (shown, in no row; Export is the only
+    way to keep it), a Ctrl+click deselect (shown, nothing selected), and a
+    running benchmark (nothing stored is shown, so Open in Window takes the
+    selected row while Export stays disabled). `_update_benchmark_action_row`
+    is the only writer of the five buttons' states. The captions are fixed
+    (no state swaps one), so no button changes width.
   - A delete or clear that finds nothing refreshes list and action row (the
     re-read may have quarantined a damaged file).
 - **A minimise of the settings dialog is not a dismissal**: its hideEvent,

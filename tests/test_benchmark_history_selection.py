@@ -93,7 +93,8 @@ def test_a_selection_during_a_run_leaves_the_live_results_alone(tmp_path):
     assert dialog._current_benchmark_cases is live
     assert dialog._current_benchmark_entry is None
     # Open in Window still reads the selected row without touching the view.
-    assert dialog.open_benchmark_history_window_button.isEnabled() is True
+    assert dialog.open_benchmark_results_window_button.isEnabled() is True
+    assert dialog.export_benchmark_results_button.isEnabled() is False
     dialog._active_benchmark_thread = None
     _ = app
 
@@ -191,7 +192,7 @@ def test_a_selection_asks_before_replacing_a_result_that_was_not_saved(
     monkeypatch, tmp_path
 ):
     """When the history write failed at the finish, Results holds the run's
-    only copy (Export Loaded can still save it); one click on any row
+    only copy (Export can still save it); one click on any row
     replaced it silently."""
     dialog, app, _first, second = _two_runs(tmp_path)
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
