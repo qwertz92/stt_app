@@ -377,3 +377,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   overlay's click watch** (2026-10-10, unmeasured): it registers mouse raw
   input only (`raw_mouse_input`), and such taps may arrive from another device
   class, so a tap into the active editor can leave the overlay above it.
+- **A slow editor may end above the floating overlay after an overlay menu
+  closes** (2026-10-10, unmeasured): `_after_menu_closed` re-raises the overlay
+  one event-loop turn after `aboutToHide`; an editor process that handles its
+  re-activation later than that (a laptop at 100% CPU) raises itself above the
+  overlay again although the user never clicked into it.

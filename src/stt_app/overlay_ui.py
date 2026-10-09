@@ -1847,9 +1847,11 @@ class OverlayUI(QtWidgets.QWidget):
         try:
             user32 = _overlay_user32()
             pressed = _top_level_window_at(user32, x, y)
-            if QtWidgets.QApplication.activePopupWidget() is not None:
+            if self._owns_widget(QtWidgets.QApplication.activePopupWidget()):
                 # The open menu is the foreground window, and closing it
-                # re-activates and raises the editor: judged after that.
+                # re-activates and raises the editor: judged after that. Only
+                # the overlay's own menus judge it when they close
+                # (`_after_menu_closed`); kept for another popup it never was.
                 self._press_during_menu = pressed
                 return
             self._follow_press(user32, pressed)
@@ -1875,6 +1877,15 @@ class OverlayUI(QtWidgets.QWidget):
         # elevated Task Manager): the overlay stays above it, waiting.
         if user32.SetWindowPos(hwnd, foreground, 0, 0, 0, 0, flags):
             self._waiting_for_click = False
+
+    def _owns_widget(self, widget: QtWidgets.QWidget | None) -> bool:
+        """Whether ``widget`` is this overlay or parented to it, across window
+        boundaries (a menu is its own window, so `isAncestorOf` says no)."""
+        while widget is not None:
+            if widget is self:
+                return True
+            widget = widget.parentWidget()
+        return False
 
     def _schedule_after_menu_closed(self) -> None:
         # One event-loop turn later: the popup is gone by then.

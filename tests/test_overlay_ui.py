@@ -859,7 +859,7 @@ def test_a_press_while_a_menu_is_open_is_judged_after_the_menu_closed(
     # editor would be dropped and the overlay put back above the editor.
     user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
     overlay, hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
-    popup = object()
+    popup = overlay._language_menu
     monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: popup)
     user32.window_at = {"editor": _EDITOR_CHILD_HWND, "popup": _POPUP_HWND}[pressed]
 
@@ -876,6 +876,23 @@ def test_a_press_while_a_menu_is_open_is_judged_after_the_menu_closed(
     assert last == (
         (_RIDEV_INPUTSINK, hwnd) if still_waiting else (_RIDEV_REMOVE, None)
     )
+    overlay.hide()
+
+
+def test_a_press_during_a_popup_that_is_not_the_overlays_is_not_kept(monkeypatch):
+    # Only the overlay's own menus judge a stored press when they close; one
+    # kept for another popup (the QSystemTrayIcon fallback menu) was never
+    # judged and later sent the overlay behind without a click.
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    overlay, _hwnd = _floating_overlay_above_the_editor(monkeypatch, user32)
+    foreign = QtWidgets.QMenu()
+    monkeypatch.setattr(QtWidgets.QApplication, "activePopupWidget", lambda: foreign)
+    user32.window_at = _EDITOR_CHILD_HWND
+
+    overlay._on_desktop_mouse_press(40, 50)
+
+    assert overlay._press_during_menu == 0
+    foreign.deleteLater()
     overlay.hide()
 
 
