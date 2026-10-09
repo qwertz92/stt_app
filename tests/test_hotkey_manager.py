@@ -12,7 +12,9 @@ from stt_app.hotkey import (
     WM_POWERBROADCAST,
     HotkeyManager,
     HotkeyRegistrationError,
+    QtHotkeyEventFilter,
     QtPowerResumeEventFilter,
+    message_time_not_after,
     parse_hotkey,
 )
 
@@ -170,6 +172,45 @@ def test_power_resume_event_filter_calls_callback():
     assert handled is False
     assert result == 0
     assert calls == [True]
+
+
+def test_the_record_hotkey_filter_hands_over_the_presss_message_time():
+    """The controller drops record-hotkey presses that came while a stop
+    held the Qt thread; only the message's own time (`MSG.time`) says
+    when a press queued behind that wait was made."""
+    manager = HotkeyManager(api=FakeWin32HotkeyApi(), hotkey_id=42)
+    manager.register("Ctrl+Shift+Space")
+    calls = []
+    event_filter = QtHotkeyEventFilter(manager, calls.append, with_message_time=True)
+    message = ctypes.wintypes.MSG()
+    message.message = WM_HOTKEY
+    message.wParam = 42
+    message.time = 123_456
+
+    handled, _result = event_filter.nativeEventFilter(
+        b"windows_generic_MSG", ctypes.addressof(message)
+    )
+
+    assert handled is True
+    assert calls == [123_456]
+
+
+@pytest.mark.parametrize(
+    ("message_time", "limit", "expected"),
+    [
+        (100, 200, True),
+        (200, 200, True),
+        (300, 200, False),
+        (0xFFFF_FFF0, 0x10, True),  # the tick count wrapped after the press
+        (0x10, 0xFFFF_FFF0, False),  # ... and after the limit
+    ],
+)
+def test_message_times_compare_across_the_tick_counts_wrap(
+    message_time, limit, expected
+):
+    """`MSG.time` is GetTickCount's 32-bit millisecond count, which wraps
+    after 49.7 days."""
+    assert message_time_not_after(message_time, limit) is expected
 
 
 def test_no_fallback_hotkey_steals_a_key_another_program_needs():

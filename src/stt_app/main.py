@@ -261,7 +261,11 @@ def run() -> int:
         unfinished_recording_store=unfinished_recording_store,
     )
 
-    event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
+    event_filter = QtHotkeyEventFilter(
+        hotkey_manager,
+        controller.toggle_recording_from_hotkey,
+        with_message_time=True,
+    )
     cancel_event_filter = QtHotkeyEventFilter(
         cancel_hotkey_manager,
         controller.cancel_current_action,

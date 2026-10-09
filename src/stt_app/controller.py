@@ -89,7 +89,13 @@ from .config import (
     supports_custom_vocabulary,
     supports_streaming,
 )
-from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
+from .hotkey import (
+    HotkeyManager,
+    HotkeyRegistrationError,
+    message_clock_ms,
+    message_time_not_after,
+    parse_hotkey,
+)
 from .last_recording_store import LastRecordingStore
 from .local_model_download import (
     DownloadBytesSample,
@@ -868,6 +874,10 @@ class DictationController(QtCore.QObject):
         self._recording_stop_in_progress = False
         self._pending_toggle_after_start_count = 0
         self._pending_toggle_after_stop_count = 0
+        # `message_clock_ms()` when a stop that waited for the microphone's
+        # backlog returned: record-hotkey presses stamped no later were made
+        # during that wait (`toggle_recording_from_hotkey`).
+        self._stop_wait_ended_ms: int | None = None
         self._active_session_mode = "batch"
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
@@ -1633,6 +1643,29 @@ class DictationController(QtCore.QObject):
         """Start or stop dictation (hotkey, tray and overlay entry point)."""
         with self._overlay_batch():
             self._toggle_recording()
+
+    def toggle_recording_from_hotkey(self, message_time_ms: int) -> None:
+        """The record hotkey's entry point; `message_time_ms` is its `MSG.time`.
+
+        WM_HOTKEY is handled on the Qt thread, which a stop waiting for a
+        starved microphone's backlog holds for seconds: a press made then is
+        dispatched after the stop returned and would start a new recording
+        the user never meant (review round 2 P2) -- most likely a second
+        press because nothing seemed to happen. Such presses are dropped by
+        their message time; a press after the wait toggles as usual.
+        """
+        ended = self._stop_wait_ended_ms
+        if ended is not None:
+            if message_time_not_after(message_time_ms, ended):
+                self._logger.info(
+                    "hotkey_press_during_stop_wait_ignored pressed_ms_before_end=%d",
+                    (ended - message_time_ms) % (1 << 32),
+                )
+                return
+            # A later press: the wait is over for good, and the wrapping
+            # clock must not compare against a mark weeks old.
+            self._stop_wait_ended_ms = None
+        self.toggle_recording()
 
     def _toggle_recording(self) -> None:
         if self._recording_start_in_progress:
@@ -2881,6 +2914,17 @@ class DictationController(QtCore.QObject):
             # `_on_stream_audio_chunk` drop every block the stop then waited
             # for. Only the PortAudio thread runs while this waits.
             self._stopping_capture = capture
+            # Review round 2 P2: the wait holds the Qt thread for seconds,
+            # through which the overlay kept saying "Speak now". Painted
+            # directly: `processEvents` would deliver queued signals (a
+            # stream abort, a finished job) into the middle of this stop.
+            waits = capture.backlog_wait_expected()
+            if waits:
+                self._logger.info("audio_capture_stop_waits_for_backlog")
+                self._overlay.set_state(
+                    "Processing", "Collecting the microphone's delayed audio..."
+                )
+                self._overlay.paint_now()
             try:
                 wav_bytes = capture.stop()
             except Exception as exc:
@@ -2904,6 +2948,8 @@ class DictationController(QtCore.QObject):
                 return
             finally:
                 self._stopping_capture = None
+                if waits:
+                    self._stop_wait_ended_ms = message_clock_ms()
             persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
             # The job's recording is the one this persist wrote, under the

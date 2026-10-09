@@ -1807,6 +1807,29 @@ def test_a_catching_up_burst_is_waited_for_no_longer_than_the_hard_limit(
     assert 0.35 <= waited < 0.6
 
 
+def test_the_capture_tells_whether_its_stop_will_wait(monkeypatch):
+    """The controller paints "Collecting the microphone's delayed audio"
+    before a stop that will hold the Qt thread, and only then."""
+    capture, callback = _slow_burst_capture(monkeypatch)
+    assert capture.backlog_wait_expected() is True
+    capture.stop(drain=False)
+    assert capture.backlog_wait_expected() is False
+
+    clock = _Clock()
+    healthy, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.05
+    assert healthy.backlog_wait_expected() is False
+    healthy.stop()
+
+    starved, _callback = _running_capture(monkeypatch, clock)
+    clock.now += 3.0
+    assert starved.backlog_wait_expected() is True
+    starved.stop(drain=False)
+
+
 def test_a_stop_without_drain_keeps_what_arrived_at_once(monkeypatch):
     """A cancel, an abort or a quit (`drain=False`) does not wait for the
     backlog the user's stop would collect."""

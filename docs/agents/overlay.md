@@ -33,6 +33,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   owner saw a green overlay while his first seconds were missing (2026-10-09).
   The state stays "Listening" for every control and check; only label and
   colour differ. "Speak now" and the remote "You can speak now" are green.
+- **A stop that waits for the microphone's backlog paints "Processing" --
+  "Collecting the microphone's delayed audio..." first** (2026-10-10), with
+  `paint_now()`: a synchronous `repaint()` of the visible overlay, because
+  the wait holds the Qt thread and `processEvents` would deliver queued
+  signals into the stop (`docs/agents/audio-capture.md`).
 - **Record button**: header starts with Record/Stop (`record_toggle_requested`
   -> `controller.toggle_recording`); fixed-width captions and a stylesheet
   property keep the layout still. Its indicator is a generated icon

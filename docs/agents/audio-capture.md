@@ -217,6 +217,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   cleared they were dropped while the Qt thread waited). A healthy stream is behind
   by the first-callback delay plus one block (about 0.1-0.3 s), so its stop
   never waits (`test_stop_on_a_healthy_stream_neither_waits_nor_changes_the_audio`).
+  A stop that will wait (`AudioCapture.backlog_wait_expected`, the same
+  decision as the wait's) first paints "Processing" -- "Collecting the
+  microphone's delayed audio..." -- with `OverlayUI.paint_now` (a direct
+  repaint; `processEvents` would deliver queued signals such as a stream
+  abort into the stop), and record-hotkey presses made during the wait are
+  dropped (`docs/agents/windows-platform.md`; review round 2 P2: the overlay
+  said "Speak now" through the wait, and a second press started a new
+  recording once it ended).
   Only the user's stop (`stop_recording`) waits: a cancel, an abort
   (`_abort_streaming_session`, `_stop_active_capture`) and the quit call
   `stop(drain=False)` and keep what arrived -- for the canceled recording,

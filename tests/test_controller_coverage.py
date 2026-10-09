@@ -1541,6 +1541,84 @@ def test_the_users_stop_waits_for_a_starved_capture(monkeypatch):
     _ = app
 
 
+class _WaitingCapture(FakeCapture):
+    """A capture whose stop will wait for a starved callback's backlog."""
+
+    overlay = None
+
+    def backlog_wait_expected(self):
+        return True
+
+    def stop(self, *, drain=True):
+        overlay = _WaitingCapture.overlay
+        if overlay is not None:
+            self.overlay_at_stop = (list(overlay.states), overlay.paint_calls)
+        return super().stop(drain=drain)
+
+
+def _controller_after_a_stop(monkeypatch, capture_class, overlay=None):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", capture_class)
+    monkeypatch.setattr("stt_app.controller.message_clock_ms", lambda: 5_000)
+    kwargs = {"overlay": overlay} if overlay is not None else {}
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings), **kwargs
+    )
+    monkeypatch.setattr(
+        controller, "_submit_batch_transcription", lambda *a, **kw: None
+    )
+    controller.start_recording()
+    controller.stop_recording()
+    return controller, app
+
+
+def test_a_stop_that_will_wait_says_so_before_it_waits(monkeypatch):
+    """Review round 2 P2: the backlog wait holds the Qt thread for seconds,
+    and the overlay still said "Speak now" through it. The new state is
+    painted before the wait, because nothing paints during it."""
+    overlay = FakeOverlay()
+    monkeypatch.setattr(_WaitingCapture, "overlay", overlay)
+    controller, app = _controller_after_a_stop(monkeypatch, _WaitingCapture, overlay)
+
+    states, paints = FakeCapture.instances[-1].overlay_at_stop
+    assert states[-1] == ("Processing", "Collecting the microphone's delayed audio...")
+    assert paints >= 1
+    controller.shutdown()
+    _ = app
+
+
+def test_record_hotkey_presses_made_during_a_stop_wait_are_dropped(monkeypatch):
+    """Review round 2 P2: WM_HOTKEY is handled on the Qt thread, so a press
+    made while the stop waited was dispatched after it -- with the stop
+    already over -- and started a recording nobody wanted. Its message
+    time says it was made during the wait; a later press still starts."""
+    controller, app = _controller_after_a_stop(monkeypatch, _WaitingCapture)
+    captures = len(FakeCapture.instances)
+
+    controller.toggle_recording_from_hotkey(4_990)
+
+    assert len(FakeCapture.instances) == captures
+    assert controller._audio_capture is None
+
+    controller.toggle_recording_from_hotkey(5_010)
+
+    assert controller._audio_capture is not None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stop_that_did_not_wait_drops_no_hotkey_press(monkeypatch):
+    """A press right behind an ordinary stop is a new dictation, as before."""
+    controller, app = _controller_after_a_stop(monkeypatch, FakeCapture)
+
+    controller.toggle_recording_from_hotkey(4_990)
+
+    assert controller._audio_capture is not None
+    controller.shutdown()
+    _ = app
+
+
 def test_a_first_callback_timeout_on_a_stopped_stream_aborts_at_once(monkeypatch):
     """PortAudio reporting the stream inactive is a dead stream: no reason to
     make the user talk into it for the hard limit."""

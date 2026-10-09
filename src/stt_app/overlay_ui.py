@@ -1127,6 +1127,16 @@ class OverlayUI(QtWidgets.QWidget):
         self._apply_window_flags(raise_window=True)
         self._reposition_within_current_screen()
 
+    def paint_now(self) -> None:
+        """Paint the current content at once, without running the event loop.
+
+        For a caller about to hold the Qt thread (a stop waiting for the
+        microphone's backlog): `processEvents` would also deliver queued
+        signals and hotkeys into the middle of what that caller is doing.
+        """
+        if self.isVisible():
+            self.repaint()
+
     def restore_visibility(self) -> None:
         """Restore overlay visibility and native z-order after a system resume."""
         self.reveal_temporarily()

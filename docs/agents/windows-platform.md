@@ -48,6 +48,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   must be shown (Retry stays in the tray, same `_last_failed_wav_bytes`).
 - **AltGr**: reported as Ctrl+Alt; Ctrl+Alt hotkey messages are ignored while
   right Alt is down.
+- **A record-hotkey press made while a stop held the Qt thread is dropped**
+  (2026-10-10, review round 2 P2). WM_HOTKEY is handled on the Qt thread, so
+  a press made during a stop's backlog wait (up to 12 s, see
+  `docs/agents/audio-capture.md`) was dispatched after the stop and started
+  a recording nobody wanted. The record filter passes the message's own time
+  (`QtHotkeyEventFilter(..., with_message_time=True)` ->
+  `toggle_recording_from_hotkey(MSG.time)`); after a stop that waited, the
+  controller drops presses stamped no later than `message_clock_ms()` at its
+  end (`hotkey_press_during_stop_wait_ignored`). `MSG.time` is
+  `GetTickCount`'s wrapping 32-bit millisecond count, so times are compared
+  with `message_time_not_after`, and the mark is cleared by the first later
+  press. Chosen over removing WM_HOTKEY with `PeekMessage` after the wait:
+  that needs the hidden window's handle and would also eat a press made just
+  after the wait. Tray and overlay clicks carry no message time and are not
+  filtered; the cancel hotkey is not filtered either (a cancel pressed during
+  the wait cancels the transcription the stop submitted, as asked).
 - **Hotkey state follows `UnregisterHotKey` success**: on failure the manager
   stays registered and blocks a replacement; shutdown logs, disabling the
   cancel hotkey reports it.

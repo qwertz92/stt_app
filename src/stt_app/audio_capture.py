@@ -53,6 +53,12 @@ _EARLY_AUDIO_MARKS_S = (1.0, 2.0, 3.0)
 _DRAIN_ACTIVE_CHECK_S = 0.25
 
 
+def _first_callback_hard_limit_s() -> float:
+    """The first-callback watchdog's hard limit, which also bounds a stop's
+    backlog wait."""
+    return AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
+
+
 class AudioCaptureError(RuntimeError):
     """Recording could not be started.
 
@@ -1173,6 +1179,18 @@ class AudioCapture:
                 f"Failed to start microphone capture: {exc}"
             ) from exc
 
+    def backlog_wait_expected(self) -> bool:
+        """Whether `stop()` would wait for a backlog if called now.
+
+        The wait holds the caller -- the Qt thread -- for seconds, so the
+        controller says so on the overlay before it starts.
+        """
+        with self._lock:
+            timing = self._timing
+            if timing.anchor is None or timing.reported or not self._accepting_audio:
+                return False
+            return self._drain_budget_locked(_clock() - timing.anchor) is not None
+
     def stop(self, *, drain: bool = True) -> bytes:
         """End the capture and return its audio as WAV bytes.
 
@@ -1264,16 +1282,10 @@ class AudioCapture:
         When the deficit settles during the wait, the blocks the wait took
         past the new stop moment are dropped again.
         """
-        timing = self._timing
-        hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
-        if timing.blocks == 0:
-            if wall_s >= hard_limit_s or self.stream_is_active() is not True:
-                return
-            budget_s = hard_limit_s - wall_s
-        elif timing.backlog_s(wall_s) <= timing.backlog_tolerance_s(wall_s):
+        budget_s = self._drain_budget_locked(wall_s)
+        if budget_s is None:
             return
-        else:
-            budget_s = AUDIO_STOP_DRAIN_MAX_S
+        timing = self._timing
         frames_before = timing.frames
         # Review F3: a warm burst also carries the audio from before the
         # attach, so the audio owed up to the stop includes it; counted from
@@ -1282,7 +1294,7 @@ class AudioCapture:
         self._drain_cutoff_frames = self._drain_cutoff_locked()
         started = time.monotonic()
         deadline = started + budget_s
-        hard_deadline = started + hard_limit_s
+        hard_deadline = started + _first_callback_hard_limit_s()
         # (monotonic time, frames received) samples of the last second.
         progress: deque[tuple[float, int]] = deque([(started, timing.frames)])
         try:
@@ -1306,6 +1318,19 @@ class AudioCapture:
             self._keep_first_frames_locked(keep)
             timing.drain_s = time.monotonic() - started
             timing.drain_frames = min(received, timing.frames - frames_before)
+
+    def _drain_budget_locked(self, wall_s: float) -> float | None:
+        """How long a stop at `wall_s` waits for a backlog at first; None when
+        it owes none (`_drain_backlog_locked` says when). Holds `_lock`."""
+        timing = self._timing
+        hard_limit_s = _first_callback_hard_limit_s()
+        if timing.blocks == 0:
+            if wall_s >= hard_limit_s or self.stream_is_active() is not True:
+                return None
+            return hard_limit_s - wall_s
+        if timing.backlog_s(wall_s) <= timing.backlog_tolerance_s(wall_s):
+            return None
+        return AUDIO_STOP_DRAIN_MAX_S
 
     def _still_catching_up(
         self, progress: deque[tuple[float, int]], now: float

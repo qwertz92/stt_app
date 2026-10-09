@@ -218,6 +218,37 @@ def test_overlay_copy_button_survives_clipboard_error(monkeypatch):
     assert overlay._copy_button.text() == "Copy"
 
 
+class _PaintCounter(QtCore.QObject):
+    def __init__(self):
+        super().__init__()
+        self.paints = 0
+
+    def eventFilter(self, _watched, event):
+        if event.type() == QtCore.QEvent.Type.Paint:
+            self.paints += 1
+        return False
+
+
+def test_paint_now_paints_the_new_state_without_the_event_loop():
+    """The controller paints "Collecting the microphone's delayed audio"
+    right before a stop holds the Qt thread; the paint must happen inside
+    the call, since no event loop runs until the stop returns."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    QtWidgets.QApplication.processEvents()
+    counter = _PaintCounter()
+    overlay.installEventFilter(counter)
+    try:
+        overlay.set_state("Processing", "Collecting the microphone's delayed audio...")
+        overlay.paint_now()
+
+        assert counter.paints >= 1
+    finally:
+        overlay.removeEventFilter(counter)
+        overlay.close()
+
+
 def test_overlay_copy_button_disabled_when_detail_empty():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

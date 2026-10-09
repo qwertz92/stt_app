@@ -402,6 +402,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     before the first block of a running stream up to the watchdog's 12 s
     hard limit. Not waiting loses the recording; not blocking would need a
     two-phase stop in the controller (~4-6 h with its re-entrancy cases).
+  - A click on the overlay's record button or the tray during a stop's
+    backlog wait is handled after the wait and starts a new recording; only
+    record-hotkey presses carry a message time to drop them by. Fixing it
+    means comparing Qt's input-event timestamps the same way (~1-2 h).
   - A cancel, an abort (a stream runtime failure included) or a quit
     during a stall does not wait for the backlog, so the audio kept for
     the canceled recording, Retry or the unfinished store lacks the

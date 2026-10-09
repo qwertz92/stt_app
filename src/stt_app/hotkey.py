@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import functools
 
 from .config import DEFAULT_HOTKEY_ID
 
@@ -300,6 +301,42 @@ class HotkeyManager:
             return False
 
 
+_TICK_COUNT_MODULUS = 1 << 32
+
+
+@functools.cache
+def _get_tick_count():
+    """kernel32's `GetTickCount` on this module's own handle; None off Windows."""
+    try:
+        kernel32 = ctypes.WinDLL("kernel32")
+    except (AttributeError, OSError):
+        return None
+    function = kernel32.GetTickCount
+    function.argtypes = ()
+    function.restype = ctypes.wintypes.DWORD
+    return function
+
+
+def message_clock_ms() -> int | None:
+    """Now on the clock a window message's `MSG.time` is read from.
+
+    `GetTickCount`: milliseconds since boot in 32 bits, wrapping after 49.7
+    days -- compare with `message_time_not_after`. None off Windows.
+    """
+    function = _get_tick_count()
+    return None if function is None else int(function())
+
+
+def message_time_not_after(message_time: int, limit: int) -> bool:
+    """Whether a message stamped `message_time` was made at or before `limit`.
+
+    Both on `message_clock_ms`'s wrapping clock: correct while the two lie
+    within 24.8 days of each other.
+    """
+    behind = (limit - message_time) % _TICK_COUNT_MODULUS
+    return behind < _TICK_COUNT_MODULUS // 2
+
+
 def _format_register_hotkey_error(error_code: int) -> str:
     if error_code == 1409:
         return "Windows reported hotkey already registered (1409)."
@@ -317,10 +354,20 @@ except Exception:  # pragma: no cover - covered in runtime smoke test
 if QtCore is not None:
 
     class QtHotkeyEventFilter(QtCore.QAbstractNativeEventFilter):
-        def __init__(self, hotkey_manager: HotkeyManager, callback) -> None:
+        def __init__(
+            self,
+            hotkey_manager: HotkeyManager,
+            callback,
+            *,
+            with_message_time: bool = False,
+        ) -> None:
+            """`with_message_time` calls `callback(MSG.time)`: when the press
+            was made, which differs from when it is handled while something
+            holds the Qt thread (see `message_clock_ms`)."""
             super().__init__()
             self._hotkey_manager = hotkey_manager
             self._callback = callback
+            self._with_message_time = with_message_time
 
         def nativeEventFilter(self, event_type, message):
             event_name = (
@@ -337,7 +384,10 @@ if QtCore is not None:
                 return False, 0
 
             if self._hotkey_manager.matches_message(msg.message, msg.wParam):
-                self._callback()
+                if self._with_message_time:
+                    self._callback(int(msg.time))
+                else:
+                    self._callback()
                 return True, 0
 
             return False, 0
@@ -372,9 +422,16 @@ if QtCore is not None:
 else:
 
     class QtHotkeyEventFilter:  # pragma: no cover - fallback outside Qt runtime
-        def __init__(self, hotkey_manager: HotkeyManager, callback) -> None:
+        def __init__(
+            self,
+            hotkey_manager: HotkeyManager,
+            callback,
+            *,
+            with_message_time: bool = False,
+        ) -> None:
             self._hotkey_manager = hotkey_manager
             self._callback = callback
+            self._with_message_time = with_message_time
 
         def nativeEventFilter(self, event_type, message):
             return False, 0

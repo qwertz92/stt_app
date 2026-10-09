@@ -218,10 +218,14 @@ class FakeOverlay:
         self.detail_is_being_read = False
         # `(text, tooltip)` per `set_not_inserted_badge`; "" hides the badge.
         self.badges = []
+        self.paint_calls = 0
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))
+
+    def paint_now(self):
+        self.paint_calls += 1
 
     @property
     def state(self) -> str:
@@ -419,6 +423,9 @@ class FakeCapture:
 
     def start(self):
         self.started = True
+
+    def backlog_wait_expected(self):
+        return False
 
     def stop(self, *, drain=True):
         self.stopped = True
