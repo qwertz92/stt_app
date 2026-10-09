@@ -6573,15 +6573,17 @@ class DictationController(QtCore.QObject):
         Jobs older than token ``before`` -- every job during a capture,
         whose own job does not exist until it stops -- that will paste
         their result: an insert delivery that was not stopped, and not a
-        streaming finalize (its words went in live). Transcribing, or done
-        and held in the paste queue: both are still to come. One that
-        fails, is stopped or is delivered to history leaves `_jobs` or
-        stops matching, and holds nothing back any more.
+        streaming finalize (its words went in live) unless it waits in the
+        paste queue (`insertion_deferred`: nothing of it was inserted live,
+        so it is pasted like a batch result). Transcribing, or done and held
+        in the paste queue: both are still to come. One that fails, is
+        stopped or is delivered to history leaves `_jobs` or stops
+        matching, and holds nothing back any more.
         """
         return any(
             (before is None or job.token < before)
             and not job.aborting
-            and job.mode != "streaming"
+            and (job.mode != "streaming" or job.insertion_deferred)
             and job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and self._same_order_window(job.target_handle, handle)
             for job in self._jobs.values()

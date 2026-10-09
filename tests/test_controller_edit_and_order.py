@@ -537,6 +537,55 @@ def test_the_first_live_insert_waits_for_the_earlier_pastes_restore_window(
     _ = app
 
 
+def test_a_queued_stream_result_holds_the_next_streams_live_words(
+    monkeypatch, tmp_path
+):
+    """Stream S1 inserted nothing live, so its result went into the paste
+    queue behind the open restore window. Stream S2 for the same window
+    starts, and its first partial arrives after the window ended but before
+    the pace timer ran. S1's result goes first; before, the order check
+    skipped every streaming job, and S2's live words went in ahead of it."""
+    inserter = PacedTextInserter()
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", inserter=inserter
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller.stop_recording()
+    token_s1 = controller._active_request_token
+    # A paste into some window just went out.
+    inserter.last_keystroke_at = inserter.now
+    controller._on_transcription_ready("dictation S1.", request_token=token_s1)
+    assert inserter.calls == []
+
+    controller.start_recording()
+    inserter.now += CLIPBOARD_RESTORE_DELAY_S
+    _stream(controller)
+
+    pasted = [call[0] for call in inserter.calls]
+    assert pasted and pasted[0] == "dictation S1."
+    controller.shutdown()
+    _ = app
+
+
+def test_the_order_check_counts_a_stream_result_waiting_in_the_paste_queue(
+    monkeypatch, tmp_path
+):
+    """The predicate itself: a streaming job whose words went in live never
+    waits, one held in the paste queue (`insertion_deferred`) does."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    job = controller._register_transcription_job(41, controller.settings, "streaming")
+    job.target_handle = 987
+    assert controller._earlier_result_waits_for(987) is False
+    job.insertion_deferred = True
+    assert controller._earlier_result_waits_for(987) is True
+    assert controller._earlier_result_waits_for(987, before=41) is False
+    controller.shutdown()
+    _ = app
+
+
 def test_a_stream_with_nothing_inserted_queues_behind_a_held_earlier_result(
     monkeypatch, tmp_path
 ):

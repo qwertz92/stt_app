@@ -9482,3 +9482,11 @@ Follow-ups to the edit-follows and per-window-order rules, from their review
   written past the `_last_transcript` setter, which would forget that row
   and let the re-paste fallback paste a possibly-inserted text again (a
   test edits a possibly-inserted joined row and presses F10).
+- **A stream's result in the paste queue is a paste like any other.**
+  `_earlier_result_waits_for` skipped every streaming job ("its words went
+  in live"), but since the order fix a stream with nothing inserted live is
+  queued as an ordinary paste. A second stream for the same window whose
+  first partial arrived after the restore window but before the pace timer
+  ran inserted its words ahead of it (reproduced in a test with the paced
+  fake inserter; not seen in the field). Streaming jobs with
+  `insertion_deferred` now count.

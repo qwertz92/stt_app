@@ -129,7 +129,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   (2026-10-09, owner's rule: results for one window in recording order).
   `_stream_live_insert_held`, checked before each live insert like the
   focus suspension: while `_earlier_result_waits_for` the stream's window
-  (a batch job recorded before it that will still paste), and for the
+  (a batch job recorded before it that will still paste, or an earlier
+  stream's result waiting in the paste queue, `insertion_deferred`:
+  skipped as "streaming", it let the next stream's live words in ahead
+  of it when they arrived between the restore window's end and the pace
+  timer, 2026-10-09 review), and for the
   first live insert while the previous paste's restore window is open.
   Such a result that is done pastes during the capture as long as nothing
   of the stream is in the document and its window is in front; the partial

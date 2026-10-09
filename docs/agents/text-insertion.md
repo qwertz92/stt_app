@@ -245,7 +245,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   for its window still transcribing or held by a recording landed after or
   inside the streamed words (the finalize's flush, or the pace holding it
   while the tail pasted at once). Now the stream's live inserts wait while
-  `_earlier_result_waits_for` its window; such a result that is done may
+  `_earlier_result_waits_for` its window (a batch result, or an earlier
+  stream's result held in the paste queue); such a result that is done may
   paste during the capture while nothing of the stream is in the document
   and its window is in front (`_stream_lets_earlier_result_go_first`; the
   partial handler retries the flush); the first live insert waits for that
