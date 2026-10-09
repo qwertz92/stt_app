@@ -84,6 +84,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach |
 | `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); the microphone picker choices both pickers offer; PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
+| `local_runtime_support.py` | Which local runtimes this environment can run (`unavailable_reason(model)`): on Windows ARM64 CTranslate2 is absent, so faster-whisper models are marked, never downloaded and refuse to transcribe with the reason |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |

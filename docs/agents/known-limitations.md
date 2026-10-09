@@ -101,7 +101,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   16 kHz; only imports and benchmark samples reach it. Kept (2026-10-03,
   owner decision needed): the filter is an hour of work, the word-error-rate
   comparison on resampled imports that would justify it about half a day.
-- ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE). By design.
+- **Windows on ARM64 runs the app, but not the faster-whisper models.**
+  CTranslate2 has no `win_arm64` wheel in any release (and no sdist for 4.8.2),
+  so the seven Whisper models (`tiny` to `distil-large-v3.5`) cannot run in a
+  native ARM64 Python; the picker marks them `[unavailable]`, the Models tab
+  skips them in every download, and a transcription refuses with the reason
+  before fetching anything (`local_runtime_support.py`). Everything else has an
+  ARM64 build: Parakeet, Canary, Granite CTC, Nemotron, Cohere/Granite via
+  Node, the Silero speech check and every cloud engine. The earlier wording
+  "CTranslate2 requires x86 AVX/SSE" was wrong: its x86-64 wheels need SSE4.1
+  and pick AVX/AVX2/AVX512 at run time. The x64 installer already installs on
+  Windows 11 ARM64 (Inno Setup `x64compatible`) and runs the whole app,
+  Whisper included, under Prism emulation. Nothing here has run on ARM64
+  hardware (2026-10-09, none was available); see `docs/learning-log.md`
+  (2026-10-09) for what was checked and what stays unverified. No native
+  ARM64 installer is built.
 - **Clipboard restore is not lossless.** Every HGLOBAL format is restored, but
   not: GDI-handle/owner-drawn formats (`CF_BITMAP` is resynthesized from
   `CF_DIB`; `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`,

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import local_runtime_support
 from .benchmark_environment import BenchmarkEnvironment, text_or_empty
 from .config import (
     CANARY_MODEL_SIZE,
@@ -268,6 +269,12 @@ def _run_case(
     progress_callback: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
+    # The reason, not a bare "No module named 'ctranslate2'": the benchmark
+    # lists every model, and on a platform without that runtime the case row
+    # is where the user reads why the Whisper models did not run.
+    reason = local_runtime_support.unavailable_reason(model_name)
+    if reason:
+        raise RuntimeError(reason)
     from faster_whisper import WhisperModel
 
     total_steps = runs + (1 if warmup else 0)

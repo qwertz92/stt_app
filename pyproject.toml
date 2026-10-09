@@ -109,3 +109,18 @@ dev = [
     "pytest-mock==3.16.0",
     "ruff==0.16.10",
 ]
+
+[tool.uv]
+# Windows ARM64: CTranslate2, the engine under the faster-whisper models, has
+# no win_arm64 wheel in any release and no sdist for 4.8.2 (PyPI file lists,
+# checked 2026-10-09), so without this table `uv sync` on that platform stops
+# at ctranslate2 and installs nothing. The override replaces
+# faster-whisper's own `ctranslate2>=4.0` requirement with the same one minus
+# that platform. faster-whisper itself stays installed there on purpose: it
+# is pure Python, the Silero speech check reads its bundled graph
+# (`silero_vad.py`), and it carries tokenizers, av and huggingface-hub along;
+# only `import faster_whisper` fails, and `local_runtime_support.py` keeps the
+# app from ever trying it. Every other platform resolves exactly as before.
+override-dependencies = [
+    "ctranslate2>=4.0; platform_system != 'Windows' or platform_machine != 'ARM64'",
+]

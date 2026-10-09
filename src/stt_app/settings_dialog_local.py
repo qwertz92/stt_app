@@ -10,6 +10,7 @@ from typing import NamedTuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import local_runtime_support
 from .config import (
     DOC_MODELS_PATH,
     LOCAL_ENGLISH_ONLY_MODELS,
@@ -729,6 +730,9 @@ class _LocalModelsMixin:
                     status = (
                         "Downloaded" if model_name in cached_set else "Not downloaded"
                     )
+                unavailable = local_runtime_support.unavailable_reason(model_name)
+                if unavailable:
+                    status = f"{status}, cannot run on this PC"
                 if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                     status = f"{status}, English only"
                 # One rule for every ONNX runtime, read from the two shared
@@ -747,7 +751,9 @@ class _LocalModelsMixin:
                 # The list elides a row wider than its viewport, and the end
                 # of the row is the part that says what the model can do: at
                 # the dialog's default width the two longest rows lose it.
-                item.setToolTip(row_text)
+                item.setToolTip(
+                    f"{row_text}\n{unavailable}" if unavailable else row_text
+                )
                 item.setData(QtCore.Qt.UserRole, model_name)
                 item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
                 self._apply_compact_list_item_size(self.local_models_list, item)
@@ -1227,9 +1233,19 @@ class _LocalModelsMixin:
             return
         missing = self._missing_downloadable_models(selected)
         if not missing:
-            self.local_models_action_label.setStyleSheet("color: #555;")
+            unavailable = next(
+                (
+                    reason
+                    for name in selected
+                    if (reason := local_runtime_support.unavailable_reason(name))
+                ),
+                None,
+            )
+            self.local_models_action_label.setStyleSheet(
+                "color: #b71c1c;" if unavailable else "color: #555;"
+            )
             self.local_models_action_label.setText(
-                "All selected models are already downloaded or queued."
+                unavailable or "All selected models are already downloaded or queued."
             )
             return
         self._start_local_model_download(missing)
@@ -1279,6 +1295,11 @@ class _LocalModelsMixin:
             item = self.local_models_list.item(index)
             model_name = str(item.data(QtCore.Qt.UserRole) or "")
             if model_name not in wanted:
+                continue
+            # A model this environment cannot run is not missing, it is not
+            # wanted: "Download all missing" would otherwise queue the whole
+            # Whisper family, several gigabytes, for nothing.
+            if local_runtime_support.unavailable_reason(model_name):
                 continue
             if (
                 not bool(item.data(QtCore.Qt.UserRole + 1))
