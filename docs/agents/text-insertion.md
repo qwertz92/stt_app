@@ -544,8 +544,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   the finalize still pastes its tail, it is held as a `_PendingRepaste`
   with `after_stream` (a later request replaces it), the tray says it will
   be inserted when the stream has finished, a pace tick during the stream
-  leaves it held, and `_reset_streaming_state` starts the pace timer, so it
-  runs after the stream's end, rebuilt from its rows like any held
+  leaves it held, and the stream's end starts the pace timer
+  (`_release_stream_held_repaste`, from `_reset_streaming_state` and from
+  `_finish_transcription_job`): a runtime failure that leaves the finalize
+  in flight (`keep_session_text=True`, `_stream_kept_finalize_token`) is not
+  the end -- that finalize still pastes the tail, so the hold lasts until
+  its job ends (`_stream_still_delivering`). It then runs after the stream's end, rebuilt from its rows like any held
   re-paste, at whatever has the focus then. A failed or doubtful insert still shows briefly in the tray and
   stays as a row; a re-paste that inserts that row retires it.
   A failed re-paste whose keystroke went out marks its rows possibly

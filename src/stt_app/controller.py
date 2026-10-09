@@ -853,6 +853,10 @@ class DictationController(QtCore.QObject):
         # A re-paste went into another window during the stream: its next
         # live insert waits for that paste's restore window.
         self._stream_waits_for_paste_pace = False
+        # The finalize a stream's runtime failure left in flight
+        # (`_reset_streaming_state(keep_session_text=True)`): it still pastes
+        # the tail, so a re-paste held for the stream waits for it too.
+        self._stream_kept_finalize_token: int | None = None
         # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
@@ -3332,16 +3336,39 @@ class DictationController(QtCore.QObject):
         self._target_window_handle = None
         self._target_focus_signature = None
         self._stream_waits_for_paste_pace = False
+        if keep_session_text:
+            finalize = self._pending_streaming_job()
+            self._stream_kept_finalize_token = (
+                finalize.token if finalize is not None else None
+            )
+        self._release_stream_held_repaste()
+
+    def _stream_still_delivering(self) -> bool:
+        """Whether a streaming dictation may still paste into its window:
+        the stream itself, or the finalize its runtime failure left in
+        flight, whose tail is still to come."""
+        if self._streaming_recording:
+            return True
+        token = self._stream_kept_finalize_token
+        job = self._jobs.get(token) if token is not None else None
+        return job is not None and not job.aborting
+
+    def _release_stream_held_repaste(self) -> None:
+        """Let a re-paste held for a stream go once the stream is over.
+
+        The pace timer runs it on the next turn of the event loop, after
+        whatever the stream's end still paints and pastes, and after the
+        restore window of the stream's own last paste. Called when the
+        streaming state is reset and when a job ends, since a failure's
+        pending finalize ends later than the reset.
+        """
         pending = self._pending_repaste
         if (
             pending is not None
             and pending.after_stream
+            and not self._stream_still_delivering()
             and not self._paste_pace_timer.isActive()
         ):
-            # The stream that held a re-paste is over: the pace timer runs it
-            # on the next turn of the event loop, after whatever the stream's
-            # end still paints and pastes, and after the restore window of
-            # the stream's own last paste.
             self._paste_pace_timer.start(_pace_ms(self._paste_pace_wait_s()))
 
     @property
@@ -4014,6 +4041,9 @@ class DictationController(QtCore.QObject):
             self._save_stashed_streaming_partial(job)
             job.insertion_deferred = False
             self._update_queue_overlay()
+        if request_token == self._stream_kept_finalize_token:
+            self._stream_kept_finalize_token = None
+            self._release_stream_held_repaste()
 
     def _save_stashed_streaming_partial(self, job: _TranscriptionJob) -> None:
         """Keep a streaming dictation whose finalize produced nothing.
@@ -6613,7 +6643,7 @@ class DictationController(QtCore.QObject):
         pending = self._pending_repaste
         if pending is None:
             return
-        if pending.after_stream and self._streaming_recording:
+        if pending.after_stream and self._stream_still_delivering():
             # The pace timer ran for another paste; this one waits for the
             # stream's end (`_reset_streaming_state` lets it go).
             return
@@ -8610,7 +8640,7 @@ class DictationController(QtCore.QObject):
                 message = f"{message} {hint}"
             self.show_overlay_error(message)
             return
-        if self._streaming_recording and self._streaming_window_has_focus():
+        if self._stream_still_delivering() and self._streaming_window_has_focus():
             # Live inserts write at that caret while the microphone is open,
             # and a pending finalize still inserts its tail past the text
             # already there: a paste now would land inside the streamed
