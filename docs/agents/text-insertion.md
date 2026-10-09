@@ -460,11 +460,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     is withheld, decided by the offer's own `_insert_offer_may_have_pasted`,
     never the per-attempt `_last_insert_may_have_pasted` a later paste in the
     same flush resets.
-  - **A paste that carries the offer marks it** (`_paste_carried_the_offer`
-    = `streaming_text.tail_prefix`: whitespace-folded equal, or ends with it
-    at a word boundary, a punctuation tail included; asked only
-    by `_repaste` via `may_carry_offer` -- a substring test marked
-    "Wochenende" for " ende"). A re-paste retires only an offer it carried.
+  - **A paste that carries the offer marks it** (`_repaste_carries_offer`,
+    asked only by `_repaste`, before the paste, and handed to the insert as
+    `carries_offer`). Carried means the offer's own dictation was pasted: a
+    paste of waiting rows carries an offer built from rows when every one of
+    its rows still listed is among them, by identity, and never a row-less
+    offer (a streaming tail); otherwise the offer's own text
+    (whitespace-folded equal) carries it, and for a row-less offer so does
+    the tray's re-paste of the shown transcript it is the tail of
+    (`streaming_text.tail_prefix`: ends with it at a word boundary, a
+    punctuation tail included; a substring test marked "Wochenende" for
+    " ende"). A re-paste retires only an offer it carried. Why identity
+    (2026-10-09 review): matched by text, F10 on a failed "Ich komme
+    morgen." row carried a streaming tail "." or " morgen." and retired it,
+    and F10 on rows "B C" did not carry B's own offer, whose Insert then
+    pasted B a second time.
   - **Clear retires the offer it dismissed** (`OverlayUI.detail_cleared` ->
     `on_overlay_detail_cleared`), not one hidden behind a later Error.
   - **The preload progress poll** repaints only the painter's own Error

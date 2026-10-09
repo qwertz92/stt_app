@@ -9458,3 +9458,19 @@ recording an earlier session did not transcribe in one notice.
   paste's restore window and target check are over, and the notice's last
   button reads "Close" once nothing is left. The reviewer also drove
   `SHOpenFolderAndSelectItems` for real: two files selected.
+
+
+## 2026-10-09: what carries an offer, and the edit's last gaps
+
+Follow-ups to the edit-follows and per-window-order rules, from their review
+(no P1/P2 found).
+- **"Carried" is a question about the dictation, not the text.** A re-paste
+  retired the Insert offer whenever the pasted text ended with it
+  (`tail_prefix`). F10 on an unrelated failed row "Ich komme morgen."
+  therefore carried a streaming tail "." or " morgen.", and the tail was
+  offered nowhere any more. `_repaste_carries_offer` now matches a paste of
+  rows to an offer built from rows by identity and never to a row-less
+  offer; the text rule stays only for the offer's own text and the shown
+  transcript the tail belongs to. The same identity rule closed a case the
+  text rule missed the other way: F10 on rows "B C" did not carry B's own
+  offer, and its Insert pasted B a second time.

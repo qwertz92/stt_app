@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
+from datetime import datetime
 
+import pytest
 from conftest import (
     FakeOverlay,
     FakeSettingsStore,
@@ -35,6 +37,7 @@ from stt_app.config import (
     OVERLAY_ERROR_ACTION_NONE,
 )
 from stt_app.settings_store import AppSettings
+from stt_app.streaming_text import tail_prefix
 from stt_app.text_inserter import TextMayHaveBeenPastedError
 from stt_app.transcript_history import TranscriptHistoryStore, edited_entry
 
@@ -243,6 +246,116 @@ def test_an_edit_of_a_streaming_tail_offer_moves_the_tail(monkeypatch, tmp_path)
         controller.insert_failed_text()
         assert inserter.calls[-1][0] == " dritter teil"
         assert controller._insert_action_text == ""
+    finally:
+        controller.shutdown()
+
+
+class _SwitchableInserter(FakeTextInserter):
+    """Fails before the keystroke (``should_fail``) or after it (``post_paste``)."""
+
+    post_paste = False
+
+    def insert_text_with_options(
+        self, text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
+    ):
+        if self.post_paste:
+            self.calls.append((text, target_hwnd, paste_mode))
+            raise TextMayHaveBeenPastedError(
+                "The text was pasted but the clipboard could not be restored."
+            )
+        return super().insert_text_with_options(
+            text, target_hwnd, paste_mode, restore_clipboard
+        )
+
+
+@pytest.mark.parametrize(
+    ("committed", "final_text", "row_text"),
+    [
+        # A punctuation tail: every transcript ending in "." ends with it.
+        ("hallo welt", "hallo welt .", "Ich komme morgen."),
+        # A word tail that another dictation happens to end with.
+        ("bis", "bis morgen.", "Ich komme morgen."),
+    ],
+)
+def test_f10_on_another_dictations_row_never_carries_a_streaming_tail_offer(
+    tmp_path, committed, final_text, row_text
+):
+    """An earlier batch result failed and waits as a row; then a streaming
+    dictation's tail failed and is offered without a row. F10 pastes the
+    row. That paste is a different dictation, so it neither retires the
+    tail's offer nor, failing after its keystroke, marks it as possibly
+    pasted -- before, `tail_prefix(row, tail)` counted the row as carrying
+    the tail, and the tail was no longer offered anywhere."""
+    inserter = _SwitchableInserter()
+    controller, _app, overlay, _history = _controller(
+        tmp_path, inserter=inserter, mode="streaming"
+    )
+    try:
+        created = datetime.now().astimezone()
+        controller._record_undelivered_insert(
+            row_text, may_have_pasted=False, created_at=created, history_entry=None
+        )
+        controller._active_session_mode = "streaming"
+        controller._streaming_recording = True
+        controller._stream_text_state.committed_text = committed
+        controller._stream_text_state.live_text = committed
+        controller._target_window_handle = 123
+        controller._target_focus_signature = None
+        inserter.should_fail = True
+        controller._on_transcription_ready(final_text)
+        inserter.should_fail = False
+        tail = controller._insert_action_text
+        assert tail and tail_prefix(row_text, tail) is not None
+
+        inserter.post_paste = True
+        controller.repaste_last_transcript()
+        inserter.post_paste = False
+        assert inserter.calls[-1][0] == row_text
+        assert controller._insert_action_text == tail
+        assert controller._insert_offer_may_have_pasted is False
+
+        # The row is "possibly inserted" now; another dictation's row with
+        # the same words is pasted cleanly.
+        controller._record_undelivered_insert(
+            row_text, may_have_pasted=False, created_at=created, history_entry=None
+        )
+        controller.repaste_last_transcript()
+        assert inserter.calls[-1][0] == row_text
+        assert controller._insert_action_text == tail
+        assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+
+        controller.insert_failed_text()
+        assert inserter.calls[-1][0] == tail
+        assert controller._insert_action_text == ""
+    finally:
+        controller.shutdown()
+
+
+def test_f10_that_pastes_the_offers_row_inside_a_join_retires_the_offer(tmp_path):
+    """The offer is row B's; a later failure listed row C without painting
+    over it (its report went to the tray). F10 pastes "B C", B's row inside
+    the join. That paste carried the offer, so the offer goes -- matched by
+    text, "B C" does not end with B, the offer stayed, and its Insert pasted
+    B a second time."""
+    inserter = FakeTextInserter(should_fail=True)
+    controller, _app, overlay, _history = _controller(tmp_path, inserter=inserter)
+    try:
+        controller._on_transcription_ready("dictation B.")
+        _assert_offer(overlay, "dictation B.")
+        controller._record_undelivered_insert(
+            "dictation C.",
+            may_have_pasted=False,
+            created_at=datetime.now().astimezone(),
+            history_entry=None,
+        )
+        inserter.should_fail = False
+
+        controller.repaste_last_transcript()
+
+        assert inserter.calls[-1][0] == "dictation B. dictation C."
+        assert controller._undelivered_inserts == []
+        assert controller._insert_action_text == ""
+        assert overlay.states[-1] == ("Done", "dictation B. dictation C.")
     finally:
         controller.shutdown()
 
