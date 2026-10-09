@@ -1976,6 +1976,14 @@ AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS = 12_000
 AUDIO_BACKLOG_TOLERANCE_S = 0.5
 AUDIO_BACKLOG_DRIFT_PER_S = 0.002
 AUDIO_STOP_DRAIN_MAX_S = 3.0
+# Past AUDIO_STOP_DRAIN_MAX_S the wait goes on, up to the first-callback hard
+# limit, while the audio received in the last AUDIO_STOP_DRAIN_PACE_WINDOW_S
+# exceeds this many times the wall time: a burst still catching up. Under
+# contention MME drained a burst at about twice real time (review round 2,
+# 2026-10-10), so a long backlog outlasted the 3 s while it was arriving; a
+# caught-up stream delivers 1x, which the margin keeps out.
+AUDIO_STOP_DRAIN_CATCH_UP_RATE = 1.25
+AUDIO_STOP_DRAIN_PACE_WINDOW_S = 1.0
 # Audio lost for good (a stall longer than the buffer, a driver that refused
 # it) leaves the audio behind the wall clock for the rest of the recording;
 # that gap is not a backlog. It is told apart by the arrival pace: once this

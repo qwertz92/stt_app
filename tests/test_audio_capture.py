@@ -1755,6 +1755,58 @@ def test_stop_gives_up_on_a_backlog_that_never_arrives(monkeypatch):
     assert _wav_frames(wav_bytes) == 1600
 
 
+def _slow_burst_capture(monkeypatch):
+    """A second of steady audio, then a stall with the stop 3 s in."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 103.0
+    return capture, callback
+
+
+def _deliver_slowly(callback, blocks: int):
+    """A burst draining at about 3x real time: a 0.1 s block every ~30 ms."""
+
+    def _deliver():
+        time.sleep(0.05)
+        for _ in range(blocks):
+            callback(_block(), 1600, None, None)
+            time.sleep(0.03)
+
+    return _deliver
+
+
+def test_the_wait_goes_on_while_a_slow_burst_still_catches_up(monkeypatch):
+    """Review round 2 P3: under contention MME drains a burst at only about
+    twice real time, so a long backlog outlasts `AUDIO_STOP_DRAIN_MAX_S`
+    while it is still arriving faster than it was captured -- and the fixed
+    deadline cut it off. The deadline moves on while that holds."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    capture, callback = _slow_burst_capture(monkeypatch)
+
+    frames, _waited = _stop_during_a_stall(capture, _deliver_slowly(callback, 25))
+
+    assert frames >= 29 * 1600, f"only {frames / 16000:.2f}s of 3.00 s kept"
+
+
+def test_a_catching_up_burst_is_waited_for_no_longer_than_the_hard_limit(
+    monkeypatch,
+):
+    """The moving deadline still ends at the first-callback watchdog's hard
+    limit: the wait holds the Qt thread."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    monkeypatch.setattr(
+        audio_capture_module, "AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS", 400
+    )
+    capture, callback = _slow_burst_capture(monkeypatch)
+
+    _frames, waited = _stop_during_a_stall(capture, _deliver_slowly(callback, 25))
+
+    assert 0.35 <= waited < 0.6
+
+
 class _StoppedStream(FakeInputStream):
     """PortAudio reports the stream no longer active (its device went away)."""
 

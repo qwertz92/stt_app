@@ -35,7 +35,9 @@ from .config import (
     AUDIO_STEADY_PACE_GAPS,
     AUDIO_STEADY_PACE_MAX_RATIO,
     AUDIO_STEADY_PACE_MIN_RATIO,
+    AUDIO_STOP_DRAIN_CATCH_UP_RATE,
     AUDIO_STOP_DRAIN_MAX_S,
+    AUDIO_STOP_DRAIN_PACE_WINDOW_S,
 )
 from .persistence import atomic_write_bytes
 from .vad import EnergyVad
@@ -1248,8 +1250,8 @@ class AudioCapture:
         past the new stop moment are dropped again.
         """
         timing = self._timing
+        hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
         if timing.blocks == 0:
-            hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
             if wall_s >= hard_limit_s or self.stream_is_active() is not True:
                 return
             budget_s = hard_limit_s - wall_s
@@ -1265,12 +1267,22 @@ class AudioCapture:
         self._drain_cutoff_frames = self._drain_cutoff_locked()
         started = time.monotonic()
         deadline = started + budget_s
+        hard_deadline = started + hard_limit_s
+        # (monotonic time, frames received) samples of the last second.
+        progress: deque[tuple[float, int]] = deque([(started, timing.frames)])
         try:
             while timing.frames < self._drain_cutoff_frames - self.block_size:
-                remaining = deadline - time.monotonic()
+                now = time.monotonic()
+                if now >= deadline and self._still_catching_up(progress, now):
+                    # Review round 2 P3: under contention MME drains a burst
+                    # at about twice real time, so a long backlog outlasts
+                    # the budget while it still arrives.
+                    deadline = min(now + _DRAIN_ACTIVE_CHECK_S, hard_deadline)
+                remaining = deadline - now
                 if remaining <= 0 or self.stream_is_active() is False:
                     break
                 self._audio_arrived.wait(min(remaining, _DRAIN_ACTIVE_CHECK_S))
+                progress.append((time.monotonic(), timing.frames))
         finally:
             keep = max(frames_before, self._drain_cutoff_frames)
             self._drain_owed_s = None
@@ -1279,6 +1291,22 @@ class AudioCapture:
             self._keep_first_frames_locked(keep)
             timing.drain_s = time.monotonic() - started
             timing.drain_frames = min(received, timing.frames - frames_before)
+
+    def _still_catching_up(
+        self, progress: deque[tuple[float, int]], now: float
+    ) -> bool:
+        """Whether the audio of the last second arrived faster than real time.
+
+        Drops the samples older than that window from `progress`, keeping
+        the newest one before it as the window's start.
+        """
+        window_start = now - AUDIO_STOP_DRAIN_PACE_WINDOW_S
+        while len(progress) > 1 and progress[1][0] <= window_start:
+            progress.popleft()
+        since, frames_then = progress[0]
+        elapsed = now - since
+        gained_s = (self._timing.frames - frames_then) / self.sample_rate
+        return elapsed > 0 and gained_s > AUDIO_STOP_DRAIN_CATCH_UP_RATE * elapsed
 
     def _drain_cutoff_locked(self) -> int:
         """The frames that reach the stop moment, while `stop` waits."""

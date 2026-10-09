@@ -169,8 +169,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   clock (since the warm attach, or since a cold `start()` returned) by more
   than `AUDIO_BACKLOG_TOLERANCE_S` + `AUDIO_BACKLOG_DRIFT_PER_S` x length,
   `stop` waits on `_audio_arrived` until the audio reaches the stop moment
-  within one block, at most `AUDIO_STOP_DRAIN_MAX_S` (3 s, on the Qt thread),
-  or until PortAudio reports the stream stopped; blocks past the stop moment
+  within one block, at most `AUDIO_STOP_DRAIN_MAX_S` (3 s, on the Qt thread)
+  -- longer, up to the 12 s hard limit, while the last second's audio still
+  arrived at over 1.25x real time (`AUDIO_STOP_DRAIN_CATCH_UP_RATE`; review
+  round 2: under contention MME drains a burst at about 2x, so a long backlog
+  outlasted the 3 s while still arriving) -- or until PortAudio reports the
+  stream stopped; blocks past the stop moment
   are refused (`_drain_cutoff_frames`). No "silent for a while" exit: a
   starved thread delivers nothing for seconds, then everything. A capture
   with zero blocks is waited for only while the first-callback watchdog would
