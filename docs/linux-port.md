@@ -301,8 +301,11 @@ Tones: replace `winsound.Beep` by playing a short generated sine wave through `s
 | Node path (Cohere, Granite 4.x via Transformers.js) | `onnxruntime-node` 1.29.0 ships `linux/x64` and `linux/arm64` binaries **[V]** (unpkg listing). Whether WebGPU works there is **[U]**; Node code looks for `node.exe` and Program Files. Treat as CPU-only until measured; phase 4. |
 | Settings: device policies `dml`, `webgpu`, "ONNX Device" | Labels and defaults assume DirectML; Linux needs `cpu` (and `cuda` later). |
 
-Which GPU the owner's notebook has is not known to this plan; it decides whether any GPU work is
-worth it (section 8).
+The owner's notebook (answered 2026-10-09) has an Intel Core Ultra 5 225H: an Intel Arc
+integrated GPU and an Intel NPU, no discrete GPU. CUDA and ROCm are therefore out of scope; the
+candidate GPU paths are WebGPU in the Node runner over Vulkan and ONNX Runtime's OpenVINO
+execution provider (CPU, GPU, NPU). Both are **[U]** on this hardware and stay in phase 4; CPU is
+the baseline.
 
 ### 4.9 Secrets, paths, updates
 
@@ -452,9 +455,15 @@ Answered on 2026-10-03:
 - **Hyprland:** always the newest release, Lua configuration (0.55+); the hyprlang syntax needs no
   support. Sway was used before.
 
+Answered on 2026-10-09:
+
+- **GPU:** Intel Core Ultra 5 225H with Intel Arc integrated graphics and an NPU, no discrete GPU
+  (section 4.8: no CUDA/ROCm; WebGPU over Vulkan or OpenVINO are the GPU candidates).
+- **Configuration:** the NixOS configuration lives in the owner's `nixos-config` repository and is
+  not installed yet.
+
 Still open (ask when the notebook runs):
 
-- Which GPU the notebook has (decides whether CUDA/ROCm for CTranslate2 or ONNX is in scope).
 - Whether direct typing (`wtype`) is acceptable as the default insertion, or clipboard paste must be
   the default (it changes phase 1 content).
 - Whether a status bar with a `tray` module and a notification daemon are in use.
