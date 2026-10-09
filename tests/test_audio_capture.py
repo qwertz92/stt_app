@@ -1786,13 +1786,14 @@ def test_stop_after_a_permanent_loss_neither_waits_nor_keeps_later_audio(
     The frame-count cutoff then read the gap as a backlog: every stop held
     the Qt thread the full 3 s and kept about 3 s spoken after it (measured
     on the real MME microphone with a 0.01 s buffer and a 5 s stall). A
-    stream delivering at real-time pace at the stop owes nothing."""
+    deficit that stayed put while blocks arrived at real-time pace for a
+    second is settled -- lost, not owed -- and the stop owes nothing."""
     clock = _Clock()
     capture, callback = _cold_capture(monkeypatch, clock)
     for index in range(1, 11):
         clock.now = 100.0 + index / 10
         callback(_block(), 1600, None, None)
-    for index in range(61, 71):  # five seconds are gone for good
+    for index in range(61, 73):  # five seconds are gone for good
         clock.now = 100.0 + index / 10
         callback(_block(), 1600, None, None)
     clock.now += 0.05
@@ -1801,7 +1802,7 @@ def test_stop_after_a_permanent_loss_neither_waits_nor_keeps_later_audio(
     wav_bytes = capture.stop()
 
     assert time.perf_counter() - started < 0.1
-    assert _wav_frames(wav_bytes) == 20 * 1600
+    assert _wav_frames(wav_bytes) == 22 * 1600
 
 
 def test_the_backlog_wait_refuses_audio_captured_after_the_stop(monkeypatch):
@@ -1837,6 +1838,122 @@ def test_the_backlog_wait_refuses_audio_captured_after_the_stop(monkeypatch):
     assert frames <= 16 * 1600, f"{frames / 16000:.2f}s kept, 1.5 s arrived by the stop"
     assert frames >= 15 * 1600
     assert waited < 1.0
+
+
+def _stop_during_a_stall(capture, deliver) -> tuple[int, float]:
+    """Runs `deliver` on another thread while `capture.stop()` waits; returns
+    the frames kept and the seconds the stop took."""
+    deliverer = threading.Thread(target=deliver, daemon=True)
+    deliverer.start()
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+    waited = time.perf_counter() - started
+    deliverer.join(timeout=5)
+    return _wav_frames(wav_bytes), waited
+
+
+def test_a_burst_slowed_down_by_load_is_collected_up_to_the_stop(monkeypatch):
+    """Review round 2 P1: the burst after a stall comes back to back only on
+    an idle machine (MME blocks ~31 ms apart). Under CPU load, or with a
+    busy Python thread holding the GIL, its blocks came 46-130 ms apart,
+    which a single-gap pace test read as a caught-up stream: the rest of
+    the burst was refused (stall 1-5 s, stop at 3 s: 1.1-1.7 s kept of
+    3.0 s, real MME microphone). Here the blocks come 60 ms apart."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 103.0  # the stop, during a stall from 1 s to 5 s
+
+    def _deliver():
+        time.sleep(0.2)
+        for index in range(40):  # the audio from 1 s to 5 s
+            clock.now = 105.0 + index * 0.06
+            callback(_block(), 1600, None, None)
+            time.sleep(0.001)
+        for index in range(1, 21):
+            clock.now = 107.4 + index / 10
+            callback(_block(), 1600, None, None)
+
+    frames, _waited = _stop_during_a_stall(capture, _deliver)
+
+    assert 29 * 1600 <= frames <= 30 * 1600, f"{frames / 16000:.2f}s of 3.00 s kept"
+
+
+def test_a_pause_in_the_middle_of_a_burst_does_not_end_the_wait(monkeypatch):
+    """Review round 2 P1: a single block a block length after its
+    predecessor decides nothing -- the callback thread is preempted for
+    100 ms in the middle of the burst. The pace test refused the rest of
+    the burst there and kept 2.00 of 3.00 s."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 103.0
+
+    def _deliver():
+        time.sleep(0.2)
+        clock.now = 104.0
+        for _ in range(10):
+            callback(_block(), 1600, None, None)
+        clock.now = 104.1  # preempted for one block length
+        for _ in range(30):
+            callback(_block(), 1600, None, None)
+
+    frames, _waited = _stop_during_a_stall(capture, _deliver)
+
+    assert 29 * 1600 <= frames <= 30 * 1600, f"{frames / 16000:.2f}s of 3.00 s kept"
+
+
+def test_a_stall_after_a_permanent_loss_is_collected_up_to_the_stop(monkeypatch):
+    """The settled loss moves the stop moment, not just the decision to
+    wait: after five seconds lost for good and a steady second, a 2 s stall
+    with the stop in it waits for those 2 s and ends there -- the stop
+    moment is the audio owed minus the loss, not the audio owed."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    for index in range(61, 73):  # five seconds are gone for good
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 109.2  # the stop, 2 s into a stall
+
+    def _deliver():
+        time.sleep(0.2)
+        clock.now = 110.0
+        for _ in range(40):  # the stall's audio and more, back to back
+            callback(_block(), 1600, None, None)
+
+    frames, _waited = _stop_during_a_stall(capture, _deliver)
+
+    assert 41 * 1600 <= frames <= 42 * 1600, f"{frames / 16000:.2f}s of 4.20 s kept"
+
+
+def test_a_device_delivering_blocks_in_pairs_settles_a_permanent_loss(monkeypatch):
+    """Review round 2 P4: some drivers deliver two blocks at once every two
+    block lengths (gaps of ~0 and ~200 ms), which never looks like one
+    block per block length. The pace is judged over ten gaps instead of
+    one, so such a device settles a permanent loss like any other, and its
+    stop neither waits nor keeps audio said after it."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + 0.2 * ((index + 1) // 2)
+        callback(_block(), 1600, None, None)
+    for index in range(61, 73):  # five seconds are gone for good
+        clock.now = 100.0 + 0.2 * ((index + 1) // 2)
+        callback(_block(), 1600, None, None)
+    clock.now += 0.15
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 22 * 1600
 
 
 class _RunningStream(FakeInputStream):

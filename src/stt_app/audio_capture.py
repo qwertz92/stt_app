@@ -5,7 +5,9 @@ import logging
 import threading
 import time
 import wave
+from collections import deque
 from collections.abc import Callable
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +31,10 @@ from .config import (
     AUDIO_CHANNELS,
     AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
+    AUDIO_STEADY_MAX_GAP_BLOCKS,
+    AUDIO_STEADY_PACE_GAPS,
+    AUDIO_STEADY_PACE_MAX_RATIO,
+    AUDIO_STEADY_PACE_MIN_RATIO,
     AUDIO_STOP_DRAIN_MAX_S,
 )
 from .persistence import atomic_write_bytes
@@ -154,8 +160,6 @@ class _CaptureTiming:
         self.anchor: float | None = None
         self.first_block_at: float | None = None
         self.last_block_at: float | None = None
-        # The gap before the latest block; None until the second block.
-        self.last_gap_s: float | None = None
         self.max_gap_s = 0.0
         self.blocks = 0
         self.frames = 0
@@ -168,6 +172,16 @@ class _CaptureTiming:
         self.drain_s = 0.0
         self.drain_frames = 0
         self.reported = False
+        # (arrival time, frames, deficit right after it) of the latest blocks,
+        # one more than the gaps the steady-pace test looks at.
+        self._recent: deque[tuple[float, int, float]] = deque(
+            maxlen=AUDIO_STEADY_PACE_GAPS + 1
+        )
+        # The deficit (audio owed by the wall clock minus audio received) the
+        # last time blocks had arrived at a steady real-time pace: lost for
+        # good, plus the stream's own latency -- never a backlog. 0 until the
+        # first steady second.
+        self.settled_deficit_s = 0.0
 
     def record_block(self, now: float, frames: int, status) -> None:
         elapsed = 0.0 if self.anchor is None else now - self.anchor
@@ -177,11 +191,14 @@ class _CaptureTiming:
         if self.first_block_at is None:
             self.first_block_at = now
         if self.last_block_at is not None:
-            self.last_gap_s = now - self.last_block_at
-            self.max_gap_s = max(self.max_gap_s, self.last_gap_s)
+            self.max_gap_s = max(self.max_gap_s, now - self.last_block_at)
         self.last_block_at = now
         self.blocks += 1
         self.frames += frames
+        if self.anchor is not None:
+            self._recent.append((now, frames, self.deficit_s(now - self.anchor)))
+            if self._at_steady_pace():
+                self.settled_deficit_s = min(entry[2] for entry in self._recent)
         if status:
             self.status_flags += 1
             if getattr(status, "input_overflow", False):
@@ -196,6 +213,36 @@ class _CaptureTiming:
 
     def audio_s(self) -> float:
         return self.frames / self.sample_rate
+
+    def deficit_s(self, wall_s: float) -> float:
+        """Audio the wall clock says was captured, minus audio received."""
+        return wall_s + self.pre_attach_s() - self.audio_s()
+
+    def _at_steady_pace(self) -> bool:
+        """Whether the latest gaps came at the pace the audio was captured.
+
+        Over `AUDIO_STEADY_PACE_GAPS` gaps, not one: a burst slowed down by
+        load has single gaps of a block length, and a device delivering
+        blocks in pairs has none (see the constants in `config`).
+        """
+        if len(self._recent) < AUDIO_STEADY_PACE_GAPS + 1:
+            return False
+        carried_s = sum(entry[1] for entry in list(self._recent)[1:]) / self.sample_rate
+        if carried_s <= 0:
+            return False
+        times = [entry[0] for entry in self._recent]
+        block_s = carried_s / AUDIO_STEADY_PACE_GAPS
+        if max(b - a for a, b in pairwise(times)) > (
+            AUDIO_STEADY_MAX_GAP_BLOCKS * block_s
+        ):
+            return False
+        ratio = (times[-1] - times[0]) / carried_s
+        return AUDIO_STEADY_PACE_MIN_RATIO <= ratio <= AUDIO_STEADY_PACE_MAX_RATIO
+
+    def backlog_s(self, wall_s: float) -> float:
+        """Audio a starved callback thread still owes at `wall_s`: the deficit
+        beyond the settled one."""
+        return self.deficit_s(wall_s) - self.settled_deficit_s
 
     def pre_attach_s(self) -> float:
         """Audio from before a warm attach that the first burst carries.
@@ -236,7 +283,8 @@ class _CaptureTiming:
         )
         (logger.warning if starved else logger.info)(
             "audio_capture_stats warm=%s first_callback_ms=%s callbacks=%d "
-            "audio_s=%.2f wall_s=%.2f deficit_s=%.2f max_gap_ms=%d overflows=%d "
+            "audio_s=%.2f wall_s=%.2f deficit_s=%.2f settled_deficit_s=%.2f "
+            "max_gap_ms=%d overflows=%d "
             "status_flags=%d audio_by_1s_2s_3s=%s warm_attach_gap_ms=%s "
             "stop_drain_ms=%d stop_drain_recovered_s=%.2f%s",
             warm,
@@ -245,6 +293,7 @@ class _CaptureTiming:
             self.audio_s(),
             wall_s,
             deficit_s,
+            self.settled_deficit_s,
             round(self.max_gap_s * 1000),
             self.overflows,
             self.status_flags,
@@ -946,14 +995,12 @@ class AudioCapture:
         # Notified for every block taken; `stop` waits on it for a backlog.
         self._audio_arrived = threading.Condition(self._lock)
         self._timing = _CaptureTiming(sample_rate)
-        # Set only while `stop` waits for a backlog: blocks past this many
-        # frames were captured after the stop and are not kept, and neither
-        # is a block arriving at real-time pace a block length after
-        # `_drain_stop_at` (it sets `_drain_done`).
+        # Set only while `stop` waits for a backlog: the audio the wall clock
+        # owed at the stop, and the frames that reach the stop -- that minus
+        # the settled deficit, recomputed as blocks arrive. Blocks past it
+        # were captured after the stop and are not kept.
+        self._drain_owed_s: float | None = None
         self._drain_cutoff_frames: int | None = None
-        self._drain_stop_at: float | None = None
-        self._drain_done = False
-        self._block_s = self.block_size / sample_rate
         self._status_logged = False
 
     @property
@@ -998,6 +1045,7 @@ class AudioCapture:
             # Once per capture, not once per object.
             self._callback_failed = False
             self._status_logged = False
+            self._drain_owed_s = None
             self._drain_cutoff_frames = None
             self._timing = _CaptureTiming(self.sample_rate)
 
@@ -1162,14 +1210,13 @@ class AudioCapture:
         Stopping the stream discards what PortAudio has buffered but not yet
         delivered -- measured on HomeBase (2026-10-10): a stop requested 2 s
         into a recording, during a 3 s stall of the callback, kept 1.1 s;
-        waiting for the backlog first kept 4.1-4.3 s. So when the audio is
-        behind the wall clock by more than a healthy stream ever is (see
-        `AUDIO_BACKLOG_TOLERANCE_S`), this waits until the audio reaches the
-        moment of the stop within one block, at most `AUDIO_STOP_DRAIN_MAX_S`.
-        (Waiting only until it is back within the tolerance left 0.47 s of a
-        real 4 s stall uncollected.) Blocks past that moment were spoken
-        after the stop and are refused (`_drain_cutoff_frames`), give or
-        take the block that crosses it.
+        waiting for the backlog first kept 4.1-4.3 s. So when the audio owed
+        exceeds the settled deficit by more than a healthy stream ever does
+        (see `AUDIO_BACKLOG_TOLERANCE_S`), this waits until the audio reaches
+        the moment of the stop within one block, at most
+        `AUDIO_STOP_DRAIN_MAX_S`. (Waiting only until it is back within the
+        tolerance left 0.47 s of a real 4 s stall uncollected.) Blocks past
+        that moment were spoken after the stop and are not kept.
         There is no "nothing arrived for a while" exit: a starved thread
         delivers nothing for seconds and then everything (the 4 s stall in
         the measurement above), so silence says nothing until PortAudio says
@@ -1190,59 +1237,66 @@ class AudioCapture:
         it, WASAPI dropping without a flag): the audio then stays behind the
         wall clock while the stream runs in real time again, and the count
         let every stop wait the full 3 s and keep about 3 s said after it
-        (review F2, measured on the real MME microphone). Arrival pace places
-        it instead: a burst comes back to back, a caught-up stream one block
-        per block length (`_at_real_time_pace`). A stream at that pace at the
-        stop owes nothing, and during the wait a block arriving at that pace
-        a block length after the stop was captured after it -- refused, and
-        the wait ends (`_drain_done`).
+        (review F2, measured on the real MME microphone). The settled
+        deficit -- the deficit while blocks last arrived at a steady
+        real-time pace for a second (`_CaptureTiming.settled_deficit_s`) --
+        is that loss: only the deficit beyond it is waited for, and the stop
+        moment is the audio owed minus it. A single gap decides nothing:
+        deciding on one block-length gap ended the wait in the middle of a
+        burst slowed down by load (review round 2: 1.1-1.7 of 3.0 s kept).
+        When the deficit settles during the wait, the blocks the wait took
+        past the new stop moment are dropped again.
         """
         timing = self._timing
-        stop_at = _clock()
-        # Review F3: a warm burst also carries the audio from before the
-        # attach, so the audio owed up to the stop includes it; counted from
-        # the attach alone, the last seconds before the stop were refused.
-        owed_s = wall_s + timing.pre_attach_s()
         if timing.blocks == 0:
             hard_limit_s = AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS / 1000
             if wall_s >= hard_limit_s or self.stream_is_active() is not True:
                 return
             budget_s = hard_limit_s - wall_s
-        elif owed_s - timing.audio_s() <= timing.backlog_tolerance_s(wall_s) or (
-            self._at_real_time_pace(timing.last_gap_s)
-            and timing.last_block_at is not None
-            and stop_at - timing.last_block_at <= 1.5 * self._block_s
-        ):
+        elif timing.backlog_s(wall_s) <= timing.backlog_tolerance_s(wall_s):
             return
         else:
             budget_s = AUDIO_STOP_DRAIN_MAX_S
         frames_before = timing.frames
-        cutoff = int(owed_s * self.sample_rate)
-        self._drain_cutoff_frames = cutoff
-        self._drain_stop_at = stop_at
-        self._drain_done = False
+        # Review F3: a warm burst also carries the audio from before the
+        # attach, so the audio owed up to the stop includes it; counted from
+        # the attach alone, the last seconds before the stop were refused.
+        self._drain_owed_s = wall_s + timing.pre_attach_s()
+        self._drain_cutoff_frames = self._drain_cutoff_locked()
         started = time.monotonic()
         deadline = started + budget_s
         try:
-            while not self._drain_done and timing.frames < cutoff - self.block_size:
+            while timing.frames < self._drain_cutoff_frames - self.block_size:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0 or self.stream_is_active() is False:
                     break
                 self._audio_arrived.wait(min(remaining, _DRAIN_ACTIVE_CHECK_S))
         finally:
+            keep = max(frames_before, self._drain_cutoff_frames)
+            self._drain_owed_s = None
             self._drain_cutoff_frames = None
-            self._drain_stop_at = None
+            received = timing.frames - frames_before
+            self._keep_first_frames_locked(keep)
             timing.drain_s = time.monotonic() - started
-            timing.drain_frames = timing.frames - frames_before
+            timing.drain_frames = min(received, timing.frames - frames_before)
 
-    def _at_real_time_pace(self, gap_s: float | None) -> bool:
-        """Whether a block came one block length after the previous one.
+    def _drain_cutoff_locked(self) -> int:
+        """The frames that reach the stop moment, while `stop` waits."""
+        owed_s = self._drain_owed_s or 0.0
+        return int((owed_s - self._timing.settled_deficit_s) * self.sample_rate)
 
-        Within half to one and a half block lengths: a burst delivers its
-        blocks back to back (milliseconds apart), and the first block after
-        a stall comes after the whole stall -- both are old audio.
-        """
-        return gap_s is not None and 0.5 <= gap_s / self._block_s <= 1.5
+    def _keep_first_frames_locked(self, keep: int) -> None:
+        """Drops the frames past `keep`; holds `_lock`."""
+        excess = self._timing.frames - keep
+        while excess > 0 and self._chunks:
+            last = self._chunks[-1]
+            if last.size <= excess:
+                self._chunks.pop()
+                excess -= last.size
+            else:
+                self._chunks[-1] = last[: last.size - excess]
+                excess = 0
+        self._timing.frames = min(self._timing.frames, keep)
 
     def save_wav(self, output_path: Path, wav_bytes: bytes) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1298,18 +1352,6 @@ class AudioCapture:
             cutoff = self._drain_cutoff_frames
             if cutoff is not None and self._timing.frames >= cutoff:
                 return
-            stop_at = self._drain_stop_at
-            last = self._timing.last_block_at
-            if (
-                stop_at is not None
-                and last is not None
-                and now >= stop_at + self._block_s
-                and self._at_real_time_pace(now - last)
-            ):
-                # Caught up again, and captured after the stop.
-                self._drain_done = True
-                self._audio_arrived.notify_all()
-                return
             # The first flag of a recording is logged; the rest are counted
             # in `audio_capture_stats`. A log write per block runs on the
             # PortAudio thread, which an overflow says is behind already.
@@ -1321,6 +1363,9 @@ class AudioCapture:
                     status,
                 )
             self._timing.record_block(now, mono.size, status)
+            if self._drain_owed_s is not None:
+                # The deficit may have settled with this block.
+                self._drain_cutoff_frames = self._drain_cutoff_locked()
             self._chunks.append(np.copy(mono))
             self._callback_count += 1
             self._audio_arrived.notify_all()

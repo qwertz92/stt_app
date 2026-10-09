@@ -1976,6 +1976,20 @@ AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS = 12_000
 AUDIO_BACKLOG_TOLERANCE_S = 0.5
 AUDIO_BACKLOG_DRIFT_PER_S = 0.002
 AUDIO_STOP_DRAIN_MAX_S = 3.0
+# Audio lost for good (a stall longer than the buffer, a driver that refused
+# it) leaves the audio behind the wall clock for the rest of the recording;
+# that gap is not a backlog. It is told apart by the arrival pace: once this
+# many consecutive gaps between blocks span the audio they carry within the
+# ratio bounds below, no gap longer than AUDIO_STEADY_MAX_GAP_BLOCKS blocks,
+# the stream is caught up and its deficit is "settled". Ten gaps (one second)
+# and not one: under load a burst's blocks came 46-130 ms apart on the real MME
+# microphone (31 ms idle), so a single block-length gap occurs mid-burst; and a
+# device that delivers blocks in pairs (gaps of ~0 and ~200 ms) is steady over
+# ten gaps although no single gap is one block long. Measured 2026-10-10.
+AUDIO_STEADY_PACE_GAPS = 10
+AUDIO_STEADY_PACE_MIN_RATIO = 0.9
+AUDIO_STEADY_PACE_MAX_RATIO = 1.1
+AUDIO_STEADY_MAX_GAP_BLOCKS = 2.5
 # Windows raises several MMDevice notifications for one physical event (per
 # role, per endpoint); coalesce them before re-enumerating devices and
 # restarting the warm microphone stream.

@@ -183,12 +183,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   buffer, a refused buffer, WASAPI's silent drop): the audio stays behind
   while the stream is back to real time, and every stop waited 3 s and kept
   ~3 s said after it (review F2, real MME microphone, 0.01 s buffer, 5 s
-  stall). Arrival pace decides instead (`_at_real_time_pace`: a gap of
-  0.5-1.5 block lengths; a burst is back to back, the block after a stall
-  comes after the whole stall): a stream at pace at the stop is not waited
-  for (measured on the same microphone afterwards: 72 ms, nothing after the
-  stop kept), and during the wait a block at pace a block length after the
-  stop is refused and ends it (`_drain_done`). For a warm capture the
+  stall). The **settled deficit** separates loss from backlog
+  (`_CaptureTiming.settled_deficit_s`, review round 2): the deficit (audio
+  the wall clock owes minus audio received) is taken as loss -- plus the
+  stream's own latency -- only once the last `AUDIO_STEADY_PACE_GAPS` (10)
+  gaps between blocks spanned the audio they carried within 0.9-1.1, none
+  longer than 2.5 blocks. The stop waits only for the deficit beyond it,
+  and its stop moment is the audio owed minus it; when the deficit settles
+  during the wait (the stream caught up and runs on in real time), blocks
+  taken past the new stop moment are dropped again
+  (`_keep_first_frames_locked`). A single gap decides nothing: the first
+  design ended the wait on one gap of 0.5-1.5 block lengths, and under CPU
+  load or a busy Python thread a burst's blocks come 46-130 ms apart (31 ms
+  idle, real MME microphone), so it refused the rest of the burst -- stall
+  1-5 s, stop at 3 s: 1.1-1.7 s kept of 3.0 (5/5 runs); a 100 ms pause
+  mid-burst kept 2.00 of 3.00 s. Judged over ten gaps, a device delivering
+  blocks in pairs (gaps ~0 and ~200 ms, review P4) settles like any other
+  (`test_a_device_delivering_blocks_in_pairs_settles_a_permanent_loss`).
+  Cost: a stop within a second after a loss has settled waits until it
+  settles, and a burst that drains at 0.9-1.1x real time is
+  indistinguishable from loss (its rest is not waited for). For a warm capture the
   audio owed includes `warm_attach_gap` (`_CaptureTiming.pre_attach_s`): the
   burst of a stall spanning hotkey and stop carries the seconds before the
   attach too, and a cutoff counted from the attach refused the last ones

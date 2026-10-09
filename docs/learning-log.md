@@ -9682,3 +9682,13 @@ on and the overlay green, the first ~10 s were not captured.
   every other path that decides it (the stop) must follow; and an audio
   position derived from counting frames is only as good as the assumption
   that nothing was lost -- arrival pace was the evidence that holds.
+- **Second review: a single gap is not a pace (P1, reproduced on the real
+  MME microphone).** The first pace test called one gap of 0.5-1.5 block
+  lengths "caught up"; under CPU load or a busy Python thread a burst's
+  blocks come 46-130 ms apart, so the wait ended mid-burst (stall 1-5 s,
+  stop at 3 s: 1.1-1.7 of 3.0 s kept, worse than before the F2 fix). The
+  deficit now counts as loss only after ten gaps spanned their audio at
+  0.9-1.1x real time (the settled deficit). Lesson: a fix tested only with
+  back-to-back fake bursts encodes the idle machine's timing; the bug was
+  reported from a loaded one, so the regression tests now space the burst
+  as load does.
