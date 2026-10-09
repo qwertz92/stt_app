@@ -93,7 +93,7 @@ def reveal_paths_in_file_manager(paths: Sequence[str | Path]) -> bool:
             name="stt_app_reveal_files",
             daemon=True,
         ).start()
-    except RuntimeError:
+    except (RuntimeError, MemoryError):
         return open_directory(folder)
     return True
 

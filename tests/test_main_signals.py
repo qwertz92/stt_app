@@ -9,14 +9,13 @@ from PySide6 import QtCore, QtGui, QtWidgets
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
 from stt_app.config import APP_DISPLAY_NAME
-from stt_app.controller import DictationController
+from stt_app.controller import DictationController, PendingQuitWork
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _create_tray_icon,
     _HistoryDialogPresenter,
     _install_signal_handlers,
     _last_recording_already_transcribed,
-    _prompt_recoverable_last_recording,
     _refresh_local_model_inventory_in_background,
     _restore_after_system_resume,
     _restore_overlay_after_settings_save,
@@ -24,6 +23,7 @@ from stt_app.main import (
 )
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.unfinished_recordings import UnfinishedRecordingStore
 from stt_app.update_checker import UpdateCheckResult
 
 
@@ -88,9 +88,20 @@ class FakeController:
         self.microphone_picks: list[str] = []
         self.microphone_option_refreshes = 0
         self.settings = AppSettings()
+        self.pending_quit_work = PendingQuitWork()
+        self.quit_holds = 0
 
     def note_foreground_window(self):
         self.note_foreground_calls += 1
+
+    def quit_pending_work(self):
+        return self.pending_quit_work
+
+    def hold_for_quit(self):
+        self.quit_holds += 1
+
+    def release_quit_hold(self):
+        pass
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -862,80 +873,7 @@ def test_restore_after_system_resume_refreshes_hotkeys_and_overlay():
     assert overlay.restore_visibility_calls == 1
 
 
-def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path):
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = LastRecordingStore(
-        audio_path=tmp_path / "last_recording.wav",
-        state_path=tmp_path / "last_recording.json",
-    )
-    store.save_recording(b"RIFF", keep_after_success=False)
-    store.mark_failed("network")
-
-    prompts = []
-    captured = {}
-
-    class _FakeBox:
-        def __init__(self, text):
-            self._text = text
-
-        def exec(self):
-            prompts.append(self._text)
-            return QtWidgets.QMessageBox.Yes
-
-    def _fake_box(**kwargs):
-        captured.update(kwargs)
-        return _FakeBox(kwargs["text"])
-
-    monkeypatch.setattr(main_module, "styled_message_box", _fake_box)
-
-    opened = []
-
-    class _FakeDialog:
-        def prepare_last_recording_import(self):
-            opened.append(True)
-
-    _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
-
-    assert opened == [True]
-    assert "Settings -> Import Audio" in prompts[0]
-    # A recovery prompt has to be a question offering both answers, with the
-    # safe one preselected; a plain information box would lose the choice.
-    assert captured["icon"] == QtWidgets.QMessageBox.Question
-    assert captured["default_button"] == QtWidgets.QMessageBox.Yes
-    assert captured["buttons"] & QtWidgets.QMessageBox.Yes
-    assert captured["buttons"] & QtWidgets.QMessageBox.No
-    _ = app
-
-
-def test_prompt_recoverable_last_recording_respects_no(monkeypatch, tmp_path):
-    """Answering No must not open the settings dialog behind the user's back."""
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = LastRecordingStore(
-        audio_path=tmp_path / "last_recording.wav",
-        state_path=tmp_path / "last_recording.json",
-    )
-    store.save_recording(b"RIFF", keep_after_success=False)
-    store.mark_failed("network")
-
-    class _FakeBox:
-        def exec(self):
-            return QtWidgets.QMessageBox.No
-
-    monkeypatch.setattr(main_module, "styled_message_box", lambda **_k: _FakeBox())
-
-    opened = []
-
-    class _FakeDialog:
-        def prepare_last_recording_import(self):
-            opened.append(True)
-
-    _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
-
-    assert opened == []
-    _ = app
-
-
-def test_prompt_recoverable_last_recording_skips_completed_history_match(
+def test_a_last_recording_already_in_history_is_completed_not_offered(
     monkeypatch, tmp_path
 ):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -958,16 +896,18 @@ def test_prompt_recoverable_last_recording_skips_completed_history_match(
         max_items=20,
     )
 
-    asked = []
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "question",
-        lambda *args, **kwargs: asked.append(True) or QtWidgets.QMessageBox.Yes,
+    unfinished = UnfinishedRecordingStore(tmp_path / "unfinished")
+
+    dialog = main_module._offer_unfinished_recordings(
+        last_recording_store=store,
+        history_store=history_store,
+        unfinished_store=unfinished,
+        transcribe=lambda *_a: (True, ""),
+        keep_dir=tmp_path / "recordings",
     )
 
-    _prompt_recoverable_last_recording(store, lambda: None, history_store)
-
-    assert asked == []
+    assert dialog is None
+    assert unfinished.list_recordings() == []
     assert store.has_recoverable_recording() is False
     _ = app
 
@@ -1298,3 +1238,34 @@ def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
     assert file is stream
     assert any("app_quit_started" in m for m in messages)
     stream.close()
+
+
+def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
+    """The tray's Quit no longer ends the app under a running transcription;
+    `app.quit` -- which arms the quit watchdog -- waits for the user."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    quits = []
+    monkeypatch.setattr(
+        QtWidgets.QApplication, "quit", staticmethod(lambda: quits.append(True))
+    )
+    controller = FakeController()
+    controller.pending_quit_work = PendingQuitWork(transcribing=1)
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+    quit_action = next(a for a in tray._context_menu.actions() if a.text() == "Quit")
+
+    quit_action.trigger()
+
+    assert quits == []
+    dialog = tray._quit_coordinator.dialog
+    assert dialog is not None and dialog.isVisible()
+    dialog.quit_now_button.click()
+    assert quits == [True]

@@ -4483,27 +4483,6 @@ def test_select_last_recording_prefers_newest_archived_recording(monkeypatch, tm
     _ = app
 
 
-def test_prepare_last_recording_import_switches_to_import_tab(monkeypatch, tmp_path):
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    monkeypatch.setenv("APPDATA", str(tmp_path))
-    store = _FakeSettingsStore(AppSettings())
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-    path = debug_audio_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"RIFF")
-
-    opened = dialog.prepare_last_recording_import()
-
-    assert opened is True
-    assert dialog.tabs.currentIndex() == dialog.tabs.indexOf(dialog._import_tab)
-    assert str(path) in dialog.import_selected_file_label.text()
-    _ = app
-
-
 def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
