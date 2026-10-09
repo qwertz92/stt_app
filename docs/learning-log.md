@@ -9268,3 +9268,29 @@ Lang menu. Both microphone pickers now share
   of the same function; `run_bounded` adds the flag itself, and an AST test
   fails on any `subprocess` call in `src/stt_app` without `creationflags`.
 
+## 2026-10-09: known-limitations sweep
+
+Read every entry of `docs/agents/known-limitations.md` against its code
+(skipping the ones other agents owned that day: quit/paced pastes, Edit/Copy
+with an offer, the streaming-tail order, overlay pinning, ARM, the Benchmark
+tab, the two Retry entries). Every named symbol and constant still exists.
+- **One entry was fixable and is gone:** the benchmark's environment query
+  (`benchmark_environment._command_lines`) used `subprocess.run`, which
+  kills only the direct child on a timeout and then reads its pipes to the
+  end, so a descendant holding them kept the call open and discarded the
+  child's answer. The entry called it unreachable ("`Get-CimInstance`
+  spawns none") -- true for PowerShell, but the same helper runs
+  `nvidia-smi`, `nvcc` and `node`. It now uses `process_tree.run_bounded`;
+  the test (a child that prints and exits while a grandchild holds the pipe)
+  returned `[]` after 20 s before and returns the answer at once now.
+- **One entry was imprecise:** two history entries equal in every field. A
+  delete leaves the same list whichever one the code finds; only an Edit of
+  the second row lands at the first row's position. Rewritten; still kept
+  (an id in the schema is about 4 h for a position swap of identical rows).
+- **Everything else stays**, by one of four reasons: needs the owner's
+  recordings or measurements (silence/speech gates, noise floor, paste
+  target check), needs an owner decision (resampler filter, machine-wide
+  download lock, one-offer behaviour), costs hours for no user-visible gain
+  (clipboard GDI formats, Win+V exclusion race, history ids, retry-slot
+  identity), or is a deliberate trade-off recorded with its reason.
+
