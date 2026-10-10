@@ -229,11 +229,14 @@ def test_a_short_dialog_scrolls_the_benchmark_tab_instead_of_squeezing_it(
         # With every tab a scroll area the minimum width must still be the tab
         # bar's: the pane frame was once read as 61 px (the bar's hint minus
         # the stack's) instead of the 6 it is, and the dialog got 55 px wider.
+        # The screen caps it: the 1024 px CI runner fits 976 px at 13.5 pt,
+        # where the tab bar asks for 1026 (release v0.12.0 build, 2026-10-10).
         tabs = dialog.tabs
         frame = tabs.width() - tabs.currentWidget().parentWidget().width()
         margins = dialog.layout().contentsMargins()
-        assert dialog.minimumWidth() == (
-            tabs.tabBar().sizeHint().width() + frame + margins.left() + margins.right()
+        assert dialog.minimumWidth() == min(
+            tabs.tabBar().sizeHint().width() + frame + margins.left() + margins.right(),
+            dialog._available_dialog_size().width(),
         )
         content = page.widget()
         needed = content.minimumSizeHint().height()

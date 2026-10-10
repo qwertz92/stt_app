@@ -105,6 +105,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
   - a controller test that records uses `FakeCapture`;
   - a resizing test asks `screen().availableGeometry()` first, asserts the
     size the window HAS, and skips with the measured room if it cannot fit;
+  - a minimum-width assertion includes the screen cap
+    (`_available_dialog_size`): the v0.12.0 release build failed on one that
+    expected 1026 px where the runner fits 976 (2026-10-10). Check such a test
+    locally by patching `SettingsDialog._available_dialog_size` to
+    `QSize(976, 720)`;
   - a table-geometry snapshot settles first (`_settle_table`: `QTest.qWait`
     plus a stability loop) at a size where rows do not fit, so a late
     scrollbar is covered;
