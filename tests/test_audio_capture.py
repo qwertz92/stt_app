@@ -1973,6 +1973,46 @@ def test_a_stall_longer_than_the_hard_limit_ends_the_wait_there(monkeypatch):
     assert _wav_frames(wav_bytes) == 10 * 1600
 
 
+def test_a_stall_the_buffer_could_not_hold_is_evidence_of_a_loss(monkeypatch):
+    """Review round 3 F1 (real WASAPI microphone): asked for 20 s, WASAPI
+    holds about 18 s (an 18 s stall lost 0.10 s, a 24 s one 6.0 s), raises
+    no overflow flag, and reports `stream.latency` 20.1. Without evidence
+    the 6 s never settled, and every later stop waited while blocks came
+    and kept what was said after it (24 s stall, stop at 29 s: waited
+    5.99 s, 6 s spoken after the stop kept). A gap between blocks of
+    `AUDIO_BUFFER_EVIDENCE_RATIO` of the buffer or more is that evidence."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 125.0  # a 24 s stall, of which 18 s were buffered
+    for _ in range(180):
+        callback(_block(), 1600, None, None)
+    for index in range(1, 13):
+        clock.now = 125.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.05
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 202 * 1600
+
+
+def test_pre_attach_audio_is_capped_at_what_the_buffer_holds():
+    """Review round 3 F1: a warm stream silent for 19 s at the attach can
+    deliver at most what the buffer held (about 18 s on WASAPI); counting
+    19 s towards the stop moment kept audio said after the stop."""
+    timing = audio_capture_module._CaptureTiming(16000)
+    timing.warm_attach_gap_s = 19.0
+
+    assert timing.pre_attach_s() == pytest.approx(
+        AUDIO_INPUT_BUFFER_S * audio_capture_module.AUDIO_BUFFER_EVIDENCE_RATIO
+    )
+
+
 class _StoppedStream(FakeInputStream):
     """PortAudio reports the stream no longer active (its device went away)."""
 

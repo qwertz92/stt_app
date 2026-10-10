@@ -199,18 +199,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   `AUDIO_STEADY_PACE_GAPS` (10) gaps between blocks spanned the audio they
   carried within 0.9-1.1, none longer than 2.5 blocks, and taken as loss
   (plus the stream's own latency) only **with evidence** (`_settle`): a
-  lower deficit always (the stream caught up); a higher one after an
-  input-overflow flag since it last rose (MME raises one when it drops
-  audio: the 0.01 s-buffer runs had `overflows=1`), otherwise only the part
-  the buffer cannot hold (all of it when the 20 s buffer was refused --
-  `_open_input_stream` reports 0.0 -- since WASAPI drops without the flag).
+  lower deficit always (the stream caught up); a higher one after evidence
+  since it last rose -- an input-overflow flag (MME raises one when it drops
+  audio: the 0.01 s-buffer runs had `overflows=1`) or a gap between blocks
+  of at least `AUDIO_BUFFER_EVIDENCE_RATIO` (0.85) of the buffer (review
+  round 3 F1: WASAPI drops without the flag) -- otherwise only the part the
+  buffer cannot hold (all of it when the 20 s buffer was refused --
+  `_open_input_stream` reports 0.0).
   Pace alone is no evidence: on the real MME microphone under 16 CPU
   burners plus a busy Python thread, a 4 s stall was followed by 1-2 s of
   blocks at exactly real-time pace, the deficit flat at 4 s, before the
   backlog came as a burst (timeline probe, 4/4 runs); settled on pace, 4 of
   5 stops kept 1.0-1.1 of 3.0 s. PortAudio does not report the buffer it
-  gave (`stream.latency` 0.100 s for every request on MME), so the buffer
-  is what was requested. The stop waits only for the deficit beyond it,
+  gave (`stream.latency` 0.100 s for every request on MME, 20.1 on
+  WASAPI), and what it gives can be less than requested: WASAPI on the
+  real HyperX microphone held about 18 s of the 20 s request (an 18 s stall
+  lost 0.10 s, a 24 s stall 6.0 s, no flag; review round 3). So the buffer
+  is relied on for 0.85 of what was requested (`effective_buffer_s`), which
+  also caps the pre-attach audio counted towards a stop. Without the gap
+  evidence a 24 s WASAPI stall never settled, and a stop at 29 s waited
+  5.99 s and kept 6 s said after it. The stop waits only for the deficit beyond it,
   and its stop moment is the audio owed minus it; when the deficit settles
   during the wait (the stream caught up and runs on in real time), blocks
   taken past the new stop moment are dropped again

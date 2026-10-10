@@ -27,6 +27,7 @@ from .config import (
     AUDIO_BACKLOG_DRIFT_PER_S,
     AUDIO_BACKLOG_TOLERANCE_S,
     AUDIO_BLOCK_DURATION_MS,
+    AUDIO_BUFFER_EVIDENCE_RATIO,
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CHANNELS,
     AUDIO_INPUT_BUFFER_S,
@@ -197,10 +198,12 @@ class _CaptureTiming:
         # backlog. 0 until the first steady second; see `record_block`.
         self.settled_deficit_s = 0.0
         # The PortAudio buffer this capture's stream was opened with (0.0
-        # when the driver refused `AUDIO_INPUT_BUFFER_S`), and the overflow
-        # count when the settled deficit last rose.
+        # when the driver refused `AUDIO_INPUT_BUFFER_S`); the evidence of a
+        # loss seen so far (overflow flags, gaps the buffer could not hold),
+        # and that count when the settled deficit last rose.
         self.buffer_s = AUDIO_INPUT_BUFFER_S
-        self._overflows_at_settle = 0
+        self._loss_evidence = 0
+        self._loss_evidence_at_settle = 0
 
     def record_block(self, now: float, frames: int, status) -> None:
         elapsed = 0.0 if self.anchor is None else now - self.anchor
@@ -210,18 +213,25 @@ class _CaptureTiming:
         if self.first_block_at is None:
             self.first_block_at = now
         if self.last_block_at is not None:
-            self.max_gap_s = max(self.max_gap_s, now - self.last_block_at)
+            gap_s = now - self.last_block_at
+            self.max_gap_s = max(self.max_gap_s, gap_s)
+            if self.buffer_s > 0 and gap_s >= self.effective_buffer_s():
+                # Review round 3 F1: WASAPI drops what its buffer cannot
+                # hold without the overflow flag; a stall that long is the
+                # evidence instead.
+                self._loss_evidence += 1
         self.last_block_at = now
         self.blocks += 1
         self.frames += frames
-        if self.anchor is not None:
-            self._recent.append((now, frames, self.deficit_s(now - self.anchor)))
-            if self._at_steady_pace():
-                self._settle(min(entry[2] for entry in self._recent))
         if status:
             self.status_flags += 1
             if getattr(status, "input_overflow", False):
                 self.overflows += 1
+                self._loss_evidence += 1
+        if self.anchor is not None:
+            self._recent.append((now, frames, self.deficit_s(now - self.anchor)))
+            if self._at_steady_pace():
+                self._settle(min(entry[2] for entry in self._recent))
 
     def close_marks(self, wall_s: float) -> None:
         """At the stop: a mark the recording outlasted with no block after it
@@ -265,19 +275,31 @@ class _CaptureTiming:
         because a steady pace alone is none: on the real MME microphone under
         CPU load plus a busy Python thread, the stream delivered at exactly
         real-time pace for 1-2 s after a 4 s stall, the deficit flat at 4 s,
-        and only then sent the backlog as a burst (2026-10-10). The evidence
-        is an input-overflow flag since the deficit last rose -- MME raises
-        it when it drops audio -- or a deficit larger than the buffer could
-        hold, of which the excess is lost (all of it with a refused buffer,
-        `buffer_s` 0: WASAPI drops without the flag, measured).
+        and only then sent the backlog as a burst (2026-10-10). The evidence,
+        since the deficit last rose, is an input-overflow flag -- MME raises
+        it when it drops audio -- or a gap between blocks the buffer could
+        not hold (`effective_buffer_s`; WASAPI drops without the flag);
+        without either, only a deficit larger than the buffer could hold is
+        lost, by its excess (all of it with a refused buffer, `buffer_s` 0).
         """
         if deficit_s <= self.settled_deficit_s or (
-            self.overflows > self._overflows_at_settle
+            self._loss_evidence > self._loss_evidence_at_settle
         ):
             self.settled_deficit_s = deficit_s
-            self._overflows_at_settle = self.overflows
+            self._loss_evidence_at_settle = self._loss_evidence
             return
-        self.settled_deficit_s = max(self.settled_deficit_s, deficit_s - self.buffer_s)
+        self.settled_deficit_s = max(
+            self.settled_deficit_s, deficit_s - self.effective_buffer_s()
+        )
+
+    def effective_buffer_s(self) -> float:
+        """What the stream's buffer can be relied on to hold.
+
+        Less than was asked for: WASAPI held about 18 s of the 20 s request
+        (an 18 s stall lost 0.10 s, a 24 s one 6.0 s) and still reported
+        `stream.latency` 20.1 (review round 3, 2026-10-10).
+        """
+        return self.buffer_s * AUDIO_BUFFER_EVIDENCE_RATIO
 
     def backlog_s(self, wall_s: float) -> float:
         """Audio a starved callback thread still owes at `wall_s`: the deficit
@@ -294,7 +316,7 @@ class _CaptureTiming:
         gap = self.warm_attach_gap_s
         if gap is None or gap == float("inf"):
             return 0.0
-        return min(gap, AUDIO_INPUT_BUFFER_S)
+        return min(gap, self.effective_buffer_s())
 
     def backlog_tolerance_s(self, wall_s: float) -> float:
         return AUDIO_BACKLOG_TOLERANCE_S + AUDIO_BACKLOG_DRIFT_PER_S * wall_s

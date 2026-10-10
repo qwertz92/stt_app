@@ -1957,6 +1957,13 @@ AUDIO_BLOCK_DURATION_MS = 100
 # every block, the buffer only fills while nobody drains it. 20 s is twice the
 # longest stall reported from the field (about 10 s at 100% CPU).
 AUDIO_INPUT_BUFFER_S = 20.0
+# The share of AUDIO_INPUT_BUFFER_S a stream is relied on to hold. WASAPI on
+# the real HyperX microphone held about 18 s of the 20 s request (an 18 s
+# stall lost 0.10 s, a 24 s stall 6.0 s), set no overflow flag and reported
+# `stream.latency` 20.1 (review round 3, 2026-10-10). A gap between blocks
+# this long is therefore evidence of a loss, and no more pre-attach audio
+# than this counts towards a stop.
+AUDIO_BUFFER_EVIDENCE_RATIO = 0.85
 # A successfully started PortAudio input stream should deliver a callback well
 # before this. Past it the first-callback watchdog logs the stall, and aborts
 # at once only when PortAudio says the stream is no longer active: a starved

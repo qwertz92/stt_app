@@ -384,9 +384,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   overlay again although the user never clicked into it.
 - **Audio capture under a starved callback thread** (2026-10-10,
   `docs/agents/audio-capture.md`):
-  - A stall longer than `AUDIO_INPUT_BUFFER_S` (20 s) still loses audio;
-    MME then drops the whole stall, not just the overflow (measured: 10 s
-    stall with the 0.18 s default, 10.1 s lost).
+  - A stall longer than the buffer still loses audio -- on WASAPI about
+    18 s of the 20 s request, the rest (24 s stall: 6.0 s lost); MME then
+    drops the whole stall, not just the overflow (measured: 10 s stall with
+    the 0.18 s default, 10.1 s lost).
   - A warm stream whose callback thread is stalled when the hotkey comes
     puts the audio from its last block up to the attach into the recording
     (up to 20 s of what was said before the hotkey). PortAudio's timestamps
@@ -416,15 +417,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the requested buffer). A stop within that second after a permanent loss
     waits until it passes; streaming already forwarded the blocks such a
     wait drops again (at most about a second spoken after the stop).
-  - A driver that accepts the 20 s buffer request but drops audio anyway
-    without raising the overflow flag leaves a deficit that never settles:
-    a stop then waits while blocks come (up to the deficit, at most 12 s)
-    and keeps up to that much said after the stop -- the review F2 defect,
-    for such drivers only. Not seen: MME flags its drops, and WASAPI with a
-    12 s buffer lost nothing in a 10 s stall.
-  - A stall longer than the buffer with MME: the overflow flag lets the
-    deficit settle at its full size while the buffered 20 s may still be
-    on its way, so a stop in that phase cuts them off.
+  - A driver that drops audio without the overflow flag after a stall
+    shorter than 0.85 of the 20 s request (17 s) leaves a deficit that
+    never settles: a stop then waits while blocks come (up to the deficit,
+    at most 12 s) and keeps up to that much said after the stop -- the
+    review F2 defect, for such drivers only. WASAPI drops without the flag,
+    but only beyond about 18 s (measured), where the gap counts as evidence.
+  - A stall of 17-18 s on WASAPI counts as evidence of a loss although
+    WASAPI still holds nearly all of it (an 18 s stall lost 0.10 s): a stop
+    in the second after that stall, before its backlog arrives, can cut the
+    backlog off. MME drops the whole of a stall longer than its buffer
+    (measured), so nothing of it is on its way later.
   - Unverified (review F5): Deepgram closes a streaming socket that gets
     no audio for about 10 s, and the app sends no KeepAlive. A start stall
     that the watchdog now holds for up to 12 s may therefore lose the
