@@ -1634,6 +1634,23 @@ def test_presses_during_the_stops_work_after_the_wait_are_dropped_too(monkeypatc
     _ = app
 
 
+def test_a_new_recording_retires_the_stop_wait_mark(monkeypatch):
+    """Review round 3 F4: the mark was cleared only by a later hotkey press.
+    Left behind by a recording started and stopped from the tray, the
+    wrapping tick count would weeks later compare a fresh press as older
+    and drop it. Any start retires it."""
+    controller, app = _controller_after_a_stop(monkeypatch, _WaitingCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller.start_recording()  # from the tray or the overlay
+    controller.stop_recording()
+
+    controller.toggle_recording_from_hotkey(4_990)
+
+    assert controller._audio_capture is not None
+    controller.shutdown()
+    _ = app
+
+
 def test_a_stop_that_did_not_wait_drops_no_hotkey_press(monkeypatch):
     """A press right behind an ordinary stop is a new dictation, as before."""
     controller, app = _controller_after_a_stop(monkeypatch, FakeCapture)

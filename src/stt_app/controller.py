@@ -1712,6 +1712,10 @@ class DictationController(QtCore.QObject):
                 "Ignored start_recording while a capture is already active."
             )
             return
+        # Review round 3 F4: whatever started this, presses from an earlier
+        # stop's wait are long dispatched; kept, the mark would weeks later
+        # compare a fresh press as older on the wrapping tick count.
+        self._stop_wait_ended_ms = None
         if self._audio_capture is None and self._streaming_recording:
             # Surface the overlay so this feedback is visible even when the
             # overlay is floating and sitting behind other windows.

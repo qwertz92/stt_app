@@ -61,7 +61,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   (review round 3 F3) -- and logs `hotkey_press_during_stop_wait_ignored`. `MSG.time` is
   `GetTickCount`'s wrapping 32-bit millisecond count, so times are compared
   with `message_time_not_after`, and the mark is cleared by the first later
-  press. Chosen over removing WM_HOTKEY with `PeekMessage` after the wait:
+  press and by every recording start (review round 3 F4). Chosen over removing WM_HOTKEY with `PeekMessage` after the wait:
   that needs the hidden window's handle and would also eat a press made just
   after the wait. Tray and overlay clicks carry no message time and are not
   filtered; the cancel hotkey is not filtered either (a cancel pressed during
