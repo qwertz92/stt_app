@@ -2013,6 +2013,18 @@ def test_pre_attach_audio_is_capped_at_what_the_buffer_holds():
     )
 
 
+def test_without_evidence_only_what_the_buffer_could_not_hold_is_lost():
+    """Review round 4: an 18 s deficit with no overflow flag and no gap
+    settles only its excess over the ~17 s the buffer is relied on to hold
+    (WASAPI held about 18 s of 20); the whole buffer would settle nothing."""
+    timing = audio_capture_module._CaptureTiming(16000)
+
+    timing._settle(18.0)
+
+    reliable_s = AUDIO_INPUT_BUFFER_S * audio_capture_module.AUDIO_BUFFER_EVIDENCE_RATIO
+    assert timing.settled_deficit_s == pytest.approx(18.0 - reliable_s)
+
+
 class _StoppedStream(FakeInputStream):
     """PortAudio reports the stream no longer active (its device went away)."""
 
