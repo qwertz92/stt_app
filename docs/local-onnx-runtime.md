@@ -41,7 +41,7 @@ helper needs no `onnxruntime-node` dependency of its own.
 
 ### Which ONNX Runtime Node runs, and why it is 1.29.0
 
-Transformers.js 4.3.0 pins `onnxruntime-node` 1.30.0. `package.json` replaces
+Transformers.js 4.3.1 (like 4.3.0) pins `onnxruntime-node` 1.30.0. `package.json` replaces
 that copy with 1.29.0 through one npm `overrides` entry (2026-09-27), because
 1.29.0 was measured faster on WebGPU with identical transcripts. The version
 that actually runs is in

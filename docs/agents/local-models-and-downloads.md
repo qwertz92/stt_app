@@ -263,9 +263,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   `@huggingface/transformers`, marked `overridden`. A blocked `postinstall`
   (npm 12 script policy) is harmless: binaries are bundled
   (`bin/napi-v6/win32/x64`), `listSupportedBackends()` reports cpu/dml/webgpu.
-- **Transformers.js 4.3.0 (2026-09-18); the one `overrides` entry pins
-  `onnxruntime-node` 1.29.0 because it is faster** (2026-09-27). 4.3.0's own
-  `sharp: ^0.35.4` and patched `adm-zip` 0.6.1 retired the old overrides;
+- **Transformers.js 4.3.1 (2026-10-10; 4.3.0 since 2026-09-18); the one
+  `overrides` entry pins `onnxruntime-node` 1.29.0 because it is faster**
+  (2026-09-27). Its own `sharp: ^0.35.4` (locked at 0.35.5 for
+  GHSA-wq5f-xc86-pv6w, 2026-10-10) and patched `adm-zip` 0.6.1 retired the
+  old overrides;
   `npm audit --omit=dev --package-lock-only` is clean. `npm install
   --package-lock-only` keeps a lock entry that still fits a range; `npm audit
   fix --package-lock-only` moves it.
