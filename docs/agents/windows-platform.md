@@ -55,8 +55,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   a recording nobody wanted. The record filter passes the message's own time
   (`QtHotkeyEventFilter(..., with_message_time=True)` ->
   `toggle_recording_from_hotkey(MSG.time)`); after a stop that waited, the
-  controller drops presses stamped no later than `message_clock_ms()` at its
-  end (`hotkey_press_during_stop_wait_ignored`). `MSG.time` is
+  controller drops presses stamped no later than `message_clock_ms()` when
+  that whole stop returned -- not when its wait did, since the persist,
+  artifacts, silence scan and submit after it hold the Qt thread too
+  (review round 3 F3) -- and logs `hotkey_press_during_stop_wait_ignored`. `MSG.time` is
   `GetTickCount`'s wrapping 32-bit millisecond count, so times are compared
   with `message_time_not_after`, and the mark is cleared by the first later
   press. Chosen over removing WM_HOTKEY with `PeekMessage` after the wait:

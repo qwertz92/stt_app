@@ -2899,6 +2899,7 @@ class DictationController(QtCore.QObject):
             return
 
         self._recording_stop_in_progress = True
+        waits = False
         try:
             # Bring the (possibly floating/hidden) overlay forward the moment the
             # hotkey stop is pressed, so the new state (Processing / Finalizing,
@@ -2948,8 +2949,6 @@ class DictationController(QtCore.QObject):
                 return
             finally:
                 self._stopping_capture = None
-                if waits:
-                    self._stop_wait_ended_ms = message_clock_ms()
             persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
             # The job's recording is the one this persist wrote, under the
@@ -3047,6 +3046,11 @@ class DictationController(QtCore.QObject):
             self._recording_stop_in_progress = False
             self._flush_deferred_background_results()
             self._maybe_resume_pending_audio_device_refresh()
+            if waits:
+                # Taken when the whole stop has returned, not when the wait
+                # did: the persist, the artifacts, the silence scan and the
+                # submit after it hold the Qt thread too (review round 3 F3).
+                self._stop_wait_ended_ms = message_clock_ms()
             if pending_toggles % 2 == 1 and self._audio_capture is None:
                 self._logger.info(
                     "Applying queued hotkey start after recording stop completed."

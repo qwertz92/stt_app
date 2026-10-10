@@ -1608,6 +1608,32 @@ def test_record_hotkey_presses_made_during_a_stop_wait_are_dropped(monkeypatch):
     _ = app
 
 
+def test_presses_during_the_stops_work_after_the_wait_are_dropped_too(monkeypatch):
+    """Review round 3 F3: after the wait the stop still persists the WAV,
+    saves the artifacts, scans for silence and submits the job on the Qt
+    thread; a press made then was stamped after the mark and started a
+    recording. The mark is taken when the whole stop has returned."""
+    ticks = {"now": 5_000}
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _WaitingCapture)
+    monkeypatch.setattr("stt_app.controller.message_clock_ms", lambda: ticks["now"])
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+
+    def _slow_submit(*_args, **_kwargs):
+        ticks["now"] = 6_000  # the Qt thread is still busy with the stop
+
+    monkeypatch.setattr(controller, "_submit_batch_transcription", _slow_submit)
+    controller.start_recording()
+    controller.stop_recording()
+
+    controller.toggle_recording_from_hotkey(5_500)
+
+    assert controller._audio_capture is None
+    controller.shutdown()
+    _ = app
+
+
 def test_a_stop_that_did_not_wait_drops_no_hotkey_press(monkeypatch):
     """A press right behind an ordinary stop is a new dictation, as before."""
     controller, app = _controller_after_a_stop(monkeypatch, FakeCapture)
