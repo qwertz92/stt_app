@@ -322,7 +322,8 @@ class _CaptureTiming:
         return AUDIO_BACKLOG_TOLERANCE_S + AUDIO_BACKLOG_DRIFT_PER_S * wall_s
 
     def log(self, logger: logging.Logger, *, warm: bool, wall_s: float) -> None:
-        deficit_s = wall_s - self.audio_s()
+        # With the pre-attach audio a warm burst carries, as the stop counts it.
+        deficit_s = self.deficit_s(wall_s)
         first_ms = (
             "none"
             if self.first_block_at is None or self.anchor is None

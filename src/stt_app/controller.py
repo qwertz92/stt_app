@@ -90,6 +90,7 @@ from .config import (
     supports_streaming,
 )
 from .hotkey import (
+    TICK_COUNT_MODULUS,
     HotkeyManager,
     HotkeyRegistrationError,
     message_clock_ms,
@@ -1659,7 +1660,7 @@ class DictationController(QtCore.QObject):
             if message_time_not_after(message_time_ms, ended):
                 self._logger.info(
                     "hotkey_press_during_stop_wait_ignored pressed_ms_before_end=%d",
-                    (ended - message_time_ms) % (1 << 32),
+                    (ended - message_time_ms) % TICK_COUNT_MODULUS,
                 )
                 return
             # A later press: the wait is over for good, and the wrapping

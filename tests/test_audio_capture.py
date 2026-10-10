@@ -2430,3 +2430,6 @@ def test_a_warm_attach_logs_how_long_the_stream_had_been_silent(monkeypatch, cap
 
     assert _wav_frames(wav_bytes) == 42 * 1600
     assert "warm_attach_gap_ms=4000" in caplog.text
+    # Review round 3 F5: the deficit counts the pre-attach audio the burst
+    # carried (0.1 s wall + 4.0 s before the attach - 4.2 s received).
+    assert "deficit_s=-0.10" in caplog.text

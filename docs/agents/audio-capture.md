@@ -257,7 +257,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
 - **`audio_capture_stats`, one line per recording** (logged by
   `AudioCapture.stop`; WARNING when the audio fell behind, a gap exceeded
   0.5 s or an overflow flag came): first-callback delay, callbacks, audio
-  against wall seconds and the deficit, longest gap, overflow and status
+  against wall seconds and the deficit (counting a warm burst's pre-attach
+  audio, as the stop does), the settled deficit, longest gap, overflow and status
   counts, audio arrived by 1/2/3 s wall (`audio_by_1s_2s_3s`, about
   0.9/1.9/2.9 when healthy), `warm_attach_gap_ms` (time since the warm
   stream's previous callback at attach) and the stop's wait. The per-block

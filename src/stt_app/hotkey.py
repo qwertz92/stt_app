@@ -301,7 +301,7 @@ class HotkeyManager:
             return False
 
 
-_TICK_COUNT_MODULUS = 1 << 32
+TICK_COUNT_MODULUS = 1 << 32
 
 
 @functools.cache
@@ -333,8 +333,8 @@ def message_time_not_after(message_time: int, limit: int) -> bool:
     Both on `message_clock_ms`'s wrapping clock: correct while the two lie
     within 24.8 days of each other.
     """
-    behind = (limit - message_time) % _TICK_COUNT_MODULUS
-    return behind < _TICK_COUNT_MODULUS // 2
+    behind = (limit - message_time) % TICK_COUNT_MODULUS
+    return behind < TICK_COUNT_MODULUS // 2
 
 
 def _format_register_hotkey_error(error_code: int) -> str:
