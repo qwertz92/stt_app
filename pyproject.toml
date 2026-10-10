@@ -5,7 +5,7 @@ description = "Local and cloud speech-to-text dictation for Windows 11"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-    "PySide6==6.11.2",
+    "PySide6==6.12.0",
     "sounddevice==0.5.6",
     "numpy==2.5.3",
     "faster-whisper==1.2.1",
@@ -107,7 +107,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "pytest-mock==3.16.0",
-    "ruff==0.16.10",
+    "ruff==0.17.0",
 ]
 
 [tool.uv]
