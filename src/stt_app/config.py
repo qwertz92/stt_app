@@ -1977,11 +1977,12 @@ AUDIO_BACKLOG_TOLERANCE_S = 0.5
 AUDIO_BACKLOG_DRIFT_PER_S = 0.002
 AUDIO_STOP_DRAIN_MAX_S = 3.0
 # Past AUDIO_STOP_DRAIN_MAX_S the wait goes on, up to the first-callback hard
-# limit, while the audio received in the last AUDIO_STOP_DRAIN_PACE_WINDOW_S
-# exceeds this many times the wall time: a burst still catching up. Under
+# limit, while blocks keep coming: one arrived within the last
+# AUDIO_STEADY_MAX_GAP_BLOCKS block lengths, or the audio received in the last
+# AUDIO_STOP_DRAIN_PACE_WINDOW_S exceeds this many times the wall time (a
+# burst catching up, which a short pause in it does not end). Under
 # contention MME drained a burst at about twice real time (review round 2,
-# 2026-10-10), so a long backlog outlasted the 3 s while it was arriving; a
-# caught-up stream delivers 1x, which the margin keeps out.
+# 2026-10-10), so a long backlog outlasted the 3 s while it was arriving.
 AUDIO_STOP_DRAIN_CATCH_UP_RATE = 1.25
 AUDIO_STOP_DRAIN_PACE_WINDOW_S = 1.0
 # Audio lost for good (a stall longer than the buffer, a driver that refused
@@ -1989,7 +1990,8 @@ AUDIO_STOP_DRAIN_PACE_WINDOW_S = 1.0
 # that gap is not a backlog. It is told apart by the arrival pace: once this
 # many consecutive gaps between blocks span the audio they carry within the
 # ratio bounds below, no gap longer than AUDIO_STEADY_MAX_GAP_BLOCKS blocks,
-# the stream is caught up and its deficit is "settled". Ten gaps (one second)
+# the stream is caught up and its deficit can be "settled" (with evidence of a
+# loss, see `_CaptureTiming._settle`). Ten gaps (one second)
 # and not one: under load a burst's blocks came 46-130 ms apart on the real MME
 # microphone (31 ms idle), so a single block-length gap occurs mid-burst; and a
 # device that delivers blocks in pairs (gaps of ~0 and ~200 ms) is steady over

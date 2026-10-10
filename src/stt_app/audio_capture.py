@@ -110,8 +110,13 @@ def _open_input_stream(
     device_index: int | None,
     callback: Callable,
     logger: logging.Logger | None,
-):
+) -> tuple[sd.InputStream, float]:
     """Construct (not start) a microphone stream with a stall-sized buffer.
+
+    Returns the stream and the buffer it was given: `AUDIO_INPUT_BUFFER_S`,
+    or 0.0 when the driver refused it and the default (about 0.1-0.2 s, a
+    size PortAudio does not report: `stream.latency` answered 0.100 s for
+    every request on MME, measured 2026-10-10) applies.
 
     The one place both opens -- `AudioCapture`'s cold stream and the warm
     stream -- get their parameters from. ``latency`` is PortAudio's input
@@ -130,7 +135,9 @@ def _open_input_stream(
         "callback": callback,
     }
     try:
-        return sd.InputStream(latency=AUDIO_INPUT_BUFFER_S, **settings)
+        return sd.InputStream(latency=AUDIO_INPUT_BUFFER_S, **settings), (
+            AUDIO_INPUT_BUFFER_S
+        )
     except sd.PortAudioError as exc:
         if logger is not None:
             logger.warning(
@@ -139,7 +146,7 @@ def _open_input_stream(
                 AUDIO_INPUT_BUFFER_S,
                 exc,
             )
-        return sd.InputStream(**settings)
+        return sd.InputStream(**settings), 0.0
 
 
 def _stream_is_active(stream) -> bool | None:
@@ -185,11 +192,15 @@ class _CaptureTiming:
         self._recent: deque[tuple[float, int, float]] = deque(
             maxlen=AUDIO_STEADY_PACE_GAPS + 1
         )
-        # The deficit (audio owed by the wall clock minus audio received) the
-        # last time blocks had arrived at a steady real-time pace: lost for
-        # good, plus the stream's own latency -- never a backlog. 0 until the
-        # first steady second.
+        # The deficit (audio owed by the wall clock minus audio received)
+        # taken as lost for good, plus the stream's own latency -- never a
+        # backlog. 0 until the first steady second; see `record_block`.
         self.settled_deficit_s = 0.0
+        # The PortAudio buffer this capture's stream was opened with (0.0
+        # when the driver refused `AUDIO_INPUT_BUFFER_S`), and the overflow
+        # count when the settled deficit last rose.
+        self.buffer_s = AUDIO_INPUT_BUFFER_S
+        self._overflows_at_settle = 0
 
     def record_block(self, now: float, frames: int, status) -> None:
         elapsed = 0.0 if self.anchor is None else now - self.anchor
@@ -206,7 +217,7 @@ class _CaptureTiming:
         if self.anchor is not None:
             self._recent.append((now, frames, self.deficit_s(now - self.anchor)))
             if self._at_steady_pace():
-                self.settled_deficit_s = min(entry[2] for entry in self._recent)
+                self._settle(min(entry[2] for entry in self._recent))
         if status:
             self.status_flags += 1
             if getattr(status, "input_overflow", False):
@@ -246,6 +257,27 @@ class _CaptureTiming:
             return False
         ratio = (times[-1] - times[0]) / carried_s
         return AUDIO_STEADY_PACE_MIN_RATIO <= ratio <= AUDIO_STEADY_PACE_MAX_RATIO
+
+    def _settle(self, deficit_s: float) -> None:
+        """A steady second measured `deficit_s`; take what is proven lost.
+
+        Lower is always taken: the stream caught up. Higher needs evidence,
+        because a steady pace alone is none: on the real MME microphone under
+        CPU load plus a busy Python thread, the stream delivered at exactly
+        real-time pace for 1-2 s after a 4 s stall, the deficit flat at 4 s,
+        and only then sent the backlog as a burst (2026-10-10). The evidence
+        is an input-overflow flag since the deficit last rose -- MME raises
+        it when it drops audio -- or a deficit larger than the buffer could
+        hold, of which the excess is lost (all of it with a refused buffer,
+        `buffer_s` 0: WASAPI drops without the flag, measured).
+        """
+        if deficit_s <= self.settled_deficit_s or (
+            self.overflows > self._overflows_at_settle
+        ):
+            self.settled_deficit_s = deficit_s
+            self._overflows_at_settle = self.overflows
+            return
+        self.settled_deficit_s = max(self.settled_deficit_s, deficit_s - self.buffer_s)
 
     def backlog_s(self, wall_s: float) -> float:
         """Audio a starved callback thread still owes at `wall_s`: the deficit
@@ -388,6 +420,14 @@ class WarmMicrophoneStream:
         # callback read the old stream's silence as a stall (review round 2
         # P3: a 60 s gap, counted as 20 s of pre-attach audio at the stop).
         self._last_callback_at: float | None = None
+        # The buffer the running stream was opened with (`_open_input_stream`).
+        self._buffer_s = AUDIO_INPUT_BUFFER_S
+
+    @property
+    def buffer_s(self) -> float:
+        """The buffer the running stream was opened with; read at attach."""
+        with self._lock:
+            return self._buffer_s
 
     @property
     def is_running(self) -> bool:
@@ -476,6 +516,7 @@ class WarmMicrophoneStream:
         """
         stream = None
         opened_key = SYSTEM_DEFAULT_INPUT_DEVICE
+        buffer_s = AUDIO_INPUT_BUFFER_S
         # Resolved INSIDE the guard, together with the open. A PortAudio
         # index is only valid until the next re-enumeration -- which is
         # what `try_refresh_input_devices` does, under this same lock,
@@ -509,7 +550,7 @@ class WarmMicrophoneStream:
                     opened_key, device_index = self._device_provider()
                 with self._lock:
                     self._opening_device_key = opened_key
-                stream = _open_input_stream(
+                stream, buffer_s = _open_input_stream(
                     sample_rate=self.sample_rate,
                     channels=self.channels,
                     block_size=self.block_size,
@@ -548,6 +589,7 @@ class WarmMicrophoneStream:
                         self._stream = stream
                         self._opened_device_key = opened_key
                         self._last_callback_at = None
+                        self._buffer_s = buffer_s
                     elif stream is not None:
                         # Superseded by a bump during the open. Retired under
                         # the lock so that a `close_if_idle` waiting on this
@@ -1103,9 +1145,11 @@ class AudioCapture:
             # 0, WASAPI times in the future, measured 2026-10-10). The gap is
             # logged instead.
             gap = warm.seconds_since_last_callback()
+            buffer_s = warm.buffer_s
             with self._lock:
                 if generation == self._capture_generation:
                     self._timing.anchor = attach_at
+                    self._timing.buffer_s = buffer_s
                     self._timing.warm_attach_gap_s = (
                         float("inf") if gap is None else gap
                     )
@@ -1127,7 +1171,7 @@ class AudioCapture:
                 device_index: int | None = None
                 if self._device_resolver is not None:
                     device_index = self._device_resolver()
-                stream = _open_input_stream(
+                stream, buffer_s = _open_input_stream(
                     sample_rate=self.sample_rate,
                     channels=self.channels,
                     block_size=self.block_size,
@@ -1156,6 +1200,7 @@ class AudioCapture:
             with self._lock:
                 if generation == self._capture_generation:
                     self._timing.anchor = started_at
+                    self._timing.buffer_s = buffer_s
             self._stream = stream
         except (
             AudioSystemUnavailableError,
@@ -1295,21 +1340,38 @@ class AudioCapture:
         started = time.monotonic()
         deadline = started + budget_s
         hard_deadline = started + _first_callback_hard_limit_s()
-        # (monotonic time, frames received) samples of the last second.
+        block_s = self.block_size / self.sample_rate
+        # (monotonic time, frames received) samples of the last second, and
+        # when the wait last saw a block arrive.
         progress: deque[tuple[float, int]] = deque([(started, timing.frames)])
+        last_arrival: float | None = None
         try:
             while timing.frames < self._drain_cutoff_frames - self.block_size:
                 now = time.monotonic()
-                if now >= deadline and self._still_catching_up(progress, now):
-                    # Review round 2 P3: under contention MME drains a burst
-                    # at about twice real time, so a long backlog outlasts
-                    # the budget while it still arrives.
+                if now >= deadline and (
+                    self._still_catching_up(progress, now)
+                    or (
+                        last_arrival is not None
+                        and now - last_arrival <= AUDIO_STEADY_MAX_GAP_BLOCKS * block_s
+                    )
+                ):
+                    # Review round 2 P3: blocks still come, so the backlog
+                    # is still arriving -- under contention MME drained a
+                    # burst at about twice real time, and under CPU load plus
+                    # a busy Python thread it first sent seconds at only real
+                    # time. And blocks of a loss not yet settled must reach
+                    # the steady second that settles it: ended at 3 s, a stop
+                    # inside a stall kept 0.8 s said after it (real MME
+                    # microphone, 0.01 s buffer, 2026-10-10).
                     deadline = min(now + _DRAIN_ACTIVE_CHECK_S, hard_deadline)
                 remaining = deadline - now
                 if remaining <= 0 or self.stream_is_active() is False:
                     break
                 self._audio_arrived.wait(min(remaining, _DRAIN_ACTIVE_CHECK_S))
-                progress.append((time.monotonic(), timing.frames))
+                woke = time.monotonic()
+                if timing.frames != progress[-1][1]:
+                    last_arrival = woke
+                progress.append((woke, timing.frames))
         finally:
             keep = max(frames_before, self._drain_cutoff_frames)
             self._drain_owed_s = None

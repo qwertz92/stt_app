@@ -9692,3 +9692,12 @@ on and the overlay green, the first ~10 s were not captured.
   back-to-back fake bursts encodes the idle machine's timing; the bug was
   reported from a loaded one, so the regression tests now space the burst
   as load does.
+- **A steady second is not evidence of a loss either.** The re-measure with
+  16 CPU burners plus a busy Python thread kept 1.0-1.1 of 3.0 s in 4 of 5
+  runs: a timeline probe showed MME delivering 1-2 s at exactly real-time
+  pace after the stall, deficit flat at 4 s, and only then the backlog as a
+  burst. A deficit now rises only after an overflow flag (MME flags its
+  drops) or by what exceeds the requested buffer, and the wait goes on
+  while blocks come. Lesson: re-measure the reviewer's design under the
+  heaviest load that was reported, not only under the load that found the
+  defect; the busy-thread runs alone were 5/5 correct.

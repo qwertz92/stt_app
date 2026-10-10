@@ -398,7 +398,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     2 s, before its Error, unless PortAudio reports it inactive.
   - A stop during a stall can hold the Qt thread for up to
     `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives -- up to 12 s
-    while a slow burst is still catching up -- and a stop
+    while blocks keep coming -- and a stop
     before the first block of a running stream up to the watchdog's 12 s
     hard limit. Not waiting loses the recording; not blocking would need a
     two-phase stop in the controller (~4-6 h with its re-entrancy cases).
@@ -411,12 +411,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the canceled recording, Retry or the unfinished store lacks the
     seconds still in PortAudio's buffer. Waiting would hold the Qt thread
     up to 12 s on paths the user did not ask to wait on.
-  - Loss and backlog are told apart only by a steady second of real-time
-    arrivals (the settled deficit). A stop within that second after a
-    permanent loss waits until it passes, and a burst that drains at
-    0.9-1.1x real time looks like loss, so the rest of it is not waited
-    for. Streaming already forwarded the blocks a settling wait drops
-    again (at most about a second spoken after the stop).
+  - Loss and backlog are told apart by a steady second of real-time
+    arrivals plus evidence of a loss (an overflow flag, or a deficit above
+    the requested buffer). A stop within that second after a permanent loss
+    waits until it passes; streaming already forwarded the blocks such a
+    wait drops again (at most about a second spoken after the stop).
+  - A driver that accepts the 20 s buffer request but drops audio anyway
+    without raising the overflow flag leaves a deficit that never settles:
+    a stop then waits while blocks come (up to the deficit, at most 12 s)
+    and keeps up to that much said after the stop -- the review F2 defect,
+    for such drivers only. Not seen: MME flags its drops, and WASAPI with a
+    12 s buffer lost nothing in a 10 s stall.
+  - A stall longer than the buffer with MME: the overflow flag lets the
+    deficit settle at its full size while the buffered 20 s may still be
+    on its way, so a stop in that phase cuts them off.
   - Unverified (review F5): Deepgram closes a streaming socket that gets
     no audio for about 10 s, and the app sends no KeepAlive. A start stall
     that the watchdog now holds for up to 12 s may therefore lose the

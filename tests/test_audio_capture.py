@@ -1830,6 +1830,86 @@ def test_the_capture_tells_whether_its_stop_will_wait(monkeypatch):
     starved.stop(drain=False)
 
 
+def test_the_wait_lets_a_permanent_loss_settle_before_it_cuts(monkeypatch):
+    """Real MME microphone, 0.01 s buffer, stall 1-5 s, stop at 3 s: the
+    stall's audio is lost, the stream runs in real time from 5 s, and its
+    deficit settles a second later -- after the 3 s deadline, so the wait
+    ended unsettled and kept 0.8 s said after the stop (1.90 s for 1.0 s).
+    The deadline moves on while blocks keep coming."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    capture, callback = _slow_burst_capture(monkeypatch)
+    clock = audio_capture_module._clock
+
+    def _deliver():
+        time.sleep(0.1)
+        for index in range(1, 31):  # the stream is back, in real time
+            clock.now = 105.0 + index / 10
+            callback(_block(), 1600, None, _Overflow() if index == 1 else None)
+            time.sleep(0.1)  # and in real time, so the wait sees 1x
+
+    frames, waited = _stop_during_a_stall(capture, _deliver)
+
+    assert frames <= 11 * 1600, f"{frames / 16000:.2f}s kept for 1.0 s spoken"
+    assert waited < 2.5
+
+
+def test_a_backlog_that_first_arrives_at_real_time_pace_is_still_collected(
+    monkeypatch,
+):
+    """Real MME microphone under 16 CPU burners plus a busy Python thread
+    (2026-10-10): after a 4 s stall the stream delivered at exactly
+    real-time pace for 1-2 s, the deficit flat at 4 s, and only then sent
+    the backlog as a burst. So a steady second is no proof of a loss:
+    without the overflow flag MME raises for dropped audio, a deficit the
+    buffer can hold is owed, and the wait goes on while blocks keep
+    coming. Settled on pace alone, 4 of 5 runs kept 1.0-1.1 of 3.0 s."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    capture, callback = _slow_burst_capture(monkeypatch)
+    clock = audio_capture_module._clock
+
+    def _deliver():
+        time.sleep(0.05)
+        for index in range(1, 16):  # 1.5 s at real-time pace, in real time
+            clock.now = 105.0 + index / 10
+            callback(_block(), 1600, None, None)
+            time.sleep(0.1)
+        for _ in range(40):  # then the rest, back to back
+            callback(_block(), 1600, None, None)
+
+    frames, _waited = _stop_during_a_stall(capture, _deliver)
+
+    assert 29 * 1600 <= frames <= 30 * 1600, f"{frames / 16000:.2f}s of 3.00 s kept"
+
+
+def test_a_refused_buffer_settles_a_loss_without_an_overflow_flag(monkeypatch):
+    """A driver that refused the 20 s buffer runs on its default of about
+    0.1-0.2 s, which a deficit of seconds cannot be waiting in: lost, flag
+    or no flag (WASAPI drops without one, measured 2026-10-10)."""
+
+    def _factory(**kwargs):
+        if "latency" in kwargs:
+            raise sd.PortAudioError("Invalid buffer size")
+        return FakeInputStream(**kwargs)
+
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    FakeInputStream.instances = []
+    capture = AudioCapture(sample_rate=16000, channels=1)
+    capture.start()
+    callback = FakeInputStream.instances[-1].kwargs["callback"]
+    for index in [*range(1, 11), *range(61, 73)]:  # five seconds lost, no flag
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now += 0.05
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert time.perf_counter() - started < 0.1
+    assert _wav_frames(wav_bytes) == 22 * 1600
+
+
 def test_a_stop_without_drain_keeps_what_arrived_at_once(monkeypatch):
     """A cancel, an abort or a quit (`drain=False`) does not wait for the
     backlog the user's stop would collect."""
@@ -1874,15 +1954,16 @@ def test_stop_after_a_permanent_loss_neither_waits_nor_keeps_later_audio(
     the Qt thread the full 3 s and kept about 3 s spoken after it (measured
     on the real MME microphone with a 0.01 s buffer and a 5 s stall). A
     deficit that stayed put while blocks arrived at real-time pace for a
-    second is settled -- lost, not owed -- and the stop owes nothing."""
+    second, after the overflow flag MME raises for dropped audio, is
+    settled -- lost, not owed -- and the stop owes nothing."""
     clock = _Clock()
     capture, callback = _cold_capture(monkeypatch, clock)
     for index in range(1, 11):
         clock.now = 100.0 + index / 10
         callback(_block(), 1600, None, None)
-    for index in range(61, 73):  # five seconds are gone for good
+    for index in range(61, 73):  # five seconds are gone for good, flagged
         clock.now = 100.0 + index / 10
-        callback(_block(), 1600, None, None)
+        callback(_block(), 1600, None, _Overflow() if index == 61 else None)
     clock.now += 0.05
 
     started = time.perf_counter()
@@ -1907,8 +1988,8 @@ def test_the_backlog_wait_refuses_audio_captured_after_the_stop(monkeypatch):
 
     def _deliver():
         time.sleep(0.2)
-        for _ in range(5):  # the burst, back to back
-            callback(_block(), 1600, None, None)
+        for index in range(5):  # the burst, back to back, after a loss
+            callback(_block(), 1600, None, _Overflow() if index == 0 else None)
         for index in range(1, 31):  # then real-time pace
             clock.now = 103.0 + index / 10
             callback(_block(), 1600, None, None)
@@ -2004,9 +2085,9 @@ def test_a_stall_after_a_permanent_loss_is_collected_up_to_the_stop(monkeypatch)
     for index in range(1, 11):
         clock.now = 100.0 + index / 10
         callback(_block(), 1600, None, None)
-    for index in range(61, 73):  # five seconds are gone for good
+    for index in range(61, 73):  # five seconds are gone for good, flagged
         clock.now = 100.0 + index / 10
-        callback(_block(), 1600, None, None)
+        callback(_block(), 1600, None, _Overflow() if index == 61 else None)
     clock.now = 109.2  # the stop, 2 s into a stall
 
     def _deliver():
@@ -2031,9 +2112,9 @@ def test_a_device_delivering_blocks_in_pairs_settles_a_permanent_loss(monkeypatc
     for index in range(1, 11):
         clock.now = 100.0 + 0.2 * ((index + 1) // 2)
         callback(_block(), 1600, None, None)
-    for index in range(61, 73):  # five seconds are gone for good
+    for index in range(61, 73):  # five seconds are gone for good, flagged
         clock.now = 100.0 + 0.2 * ((index + 1) // 2)
-        callback(_block(), 1600, None, None)
+        callback(_block(), 1600, None, _Overflow() if index == 61 else None)
     clock.now += 0.15
 
     started = time.perf_counter()

@@ -170,10 +170,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   than `AUDIO_BACKLOG_TOLERANCE_S` + `AUDIO_BACKLOG_DRIFT_PER_S` x length,
   `stop` waits on `_audio_arrived` until the audio reaches the stop moment
   within one block, at most `AUDIO_STOP_DRAIN_MAX_S` (3 s, on the Qt thread)
-  -- longer, up to the 12 s hard limit, while the last second's audio still
-  arrived at over 1.25x real time (`AUDIO_STOP_DRAIN_CATCH_UP_RATE`; review
-  round 2: under contention MME drains a burst at about 2x, so a long backlog
-  outlasted the 3 s while still arriving) -- or until PortAudio reports the
+  -- longer, up to the 12 s hard limit, while blocks keep coming (one
+  within the last 2.5 block lengths, or the last second's audio at over
+  1.25x real time, `AUDIO_STOP_DRAIN_CATCH_UP_RATE`; review round 2: under
+  contention MME drains a burst at about 2x, under CPU load plus a busy
+  Python thread it first sent seconds at only real time, and a loss not yet
+  settled needs its steady second) -- or until PortAudio reports the
   stream stopped; blocks past the stop moment
   are refused (`_drain_cutoff_frames`). No "silent for a while" exit: a
   starved thread delivers nothing for seconds, then everything. A capture
@@ -189,10 +191,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   ~3 s said after it (review F2, real MME microphone, 0.01 s buffer, 5 s
   stall). The **settled deficit** separates loss from backlog
   (`_CaptureTiming.settled_deficit_s`, review round 2): the deficit (audio
-  the wall clock owes minus audio received) is taken as loss -- plus the
-  stream's own latency -- only once the last `AUDIO_STEADY_PACE_GAPS` (10)
-  gaps between blocks spanned the audio they carried within 0.9-1.1, none
-  longer than 2.5 blocks. The stop waits only for the deficit beyond it,
+  the wall clock owes minus audio received) is measured once the last
+  `AUDIO_STEADY_PACE_GAPS` (10) gaps between blocks spanned the audio they
+  carried within 0.9-1.1, none longer than 2.5 blocks, and taken as loss
+  (plus the stream's own latency) only **with evidence** (`_settle`): a
+  lower deficit always (the stream caught up); a higher one after an
+  input-overflow flag since it last rose (MME raises one when it drops
+  audio: the 0.01 s-buffer runs had `overflows=1`), otherwise only the part
+  the buffer cannot hold (all of it when the 20 s buffer was refused --
+  `_open_input_stream` reports 0.0 -- since WASAPI drops without the flag).
+  Pace alone is no evidence: on the real MME microphone under 16 CPU
+  burners plus a busy Python thread, a 4 s stall was followed by 1-2 s of
+  blocks at exactly real-time pace, the deficit flat at 4 s, before the
+  backlog came as a burst (timeline probe, 4/4 runs); settled on pace, 4 of
+  5 stops kept 1.0-1.1 of 3.0 s. PortAudio does not report the buffer it
+  gave (`stream.latency` 0.100 s for every request on MME), so the buffer
+  is what was requested. The stop waits only for the deficit beyond it,
   and its stop moment is the audio owed minus it; when the deficit settles
   during the wait (the stream caught up and runs on in real time), blocks
   taken past the new stop moment are dropped again
@@ -204,9 +218,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   mid-burst kept 2.00 of 3.00 s. Judged over ten gaps, a device delivering
   blocks in pairs (gaps ~0 and ~200 ms, review P4) settles like any other
   (`test_a_device_delivering_blocks_in_pairs_settles_a_permanent_loss`).
-  Cost: a stop within a second after a loss has settled waits until it
-  settles, and a burst that drains at 0.9-1.1x real time is
-  indistinguishable from loss (its rest is not waited for). For a warm capture the
+  Cost: a stop within a second after a loss waits until it settles. For a warm capture the
   audio owed includes `warm_attach_gap` (`_CaptureTiming.pre_attach_s`): the
   burst of a stall spanning hotkey and stop carries the seconds before the
   attach too, and a cutoff counted from the attach refused the last ones
