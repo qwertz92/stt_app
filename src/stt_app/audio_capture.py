@@ -1393,6 +1393,15 @@ class AudioCapture:
             return hard_limit_s - wall_s
         if timing.backlog_s(wall_s) <= timing.backlog_tolerance_s(wall_s):
             return None
+        if self.stream_is_active() is True and timing.last_block_at is not None:
+            # Review round 3 F2: a stall that outlasts the budget delivers
+            # after it, and the extensions in the wait need arriving blocks
+            # -- a 10 s stall from 1 s in, stop at 4 s, kept 1.0 of 4.0 s
+            # (real MME and WASAPI microphone). A stream PortAudio still runs
+            # is waited for up to the hard limit counted from the stall's
+            # start, as one that never delivered is from its own start.
+            stalled_s = _clock() - timing.last_block_at
+            return max(AUDIO_STOP_DRAIN_MAX_S, hard_limit_s - stalled_s)
         return AUDIO_STOP_DRAIN_MAX_S
 
     def _still_catching_up(

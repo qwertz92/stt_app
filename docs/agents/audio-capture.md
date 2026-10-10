@@ -175,8 +175,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   1.25x real time, `AUDIO_STOP_DRAIN_CATCH_UP_RATE`; review round 2: under
   contention MME drains a burst at about 2x, under CPU load plus a busy
   Python thread it first sent seconds at only real time, and a loss not yet
-  settled needs its steady second) -- or until PortAudio reports the
-  stream stopped; blocks past the stop moment
+  settled needs its steady second); on a stream PortAudio reports running,
+  up to the 12 s hard limit counted from the stall's start (the last
+  block), like the zero-block case below (review round 3 F2: a 10 s stall
+  from 1 s in, stop at 4 s, gave up 3 s after the stop and kept 1.0 of
+  4.0 s on the real MME and WASAPI microphone) -- or until PortAudio
+  reports the stream stopped; blocks past the stop moment
   are refused (`_drain_cutoff_frames`). No "silent for a while" exit: a
   starved thread delivers nothing for seconds, then everything. A capture
   with zero blocks is waited for only while the first-callback watchdog would

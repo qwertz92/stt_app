@@ -396,11 +396,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     hotkey's own message time (`MSG.time`) carried to the capture (~2-3 h).
   - A starved stream that never delivers waits 12 s (the hard limit), not
     2 s, before its Error, unless PortAudio reports it inactive.
-  - A stop during a stall can hold the Qt thread for up to
-    `AUDIO_STOP_DRAIN_MAX_S` (3 s) while the backlog arrives -- up to 12 s
-    while blocks keep coming -- and a stop
-    before the first block of a running stream up to the watchdog's 12 s
-    hard limit. Not waiting loses the recording; not blocking would need a
+  - A stop during a stall can hold the Qt thread until 12 s after the
+    stall began (the watchdog's hard limit, also for a stop before the
+    first block), and while blocks keep coming up to 12 s after the stop.
+    A stall longer than that still loses what was said between its start
+    and the stop: the stop gives up before the burst comes. Not waiting loses the recording; not blocking would need a
     two-phase stop in the controller (~4-6 h with its re-entrancy cases).
   - A click on the overlay's record button or the tray during a stop's
     backlog wait is handled after the wait and starts a new recording; only

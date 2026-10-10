@@ -1922,6 +1922,57 @@ def test_a_stop_without_drain_keeps_what_arrived_at_once(monkeypatch):
     assert _wav_frames(wav_bytes) == 10 * 1600
 
 
+def test_a_stall_outlasting_the_budget_is_waited_for_from_its_start(monkeypatch):
+    """Review round 3 F2 (real MME and WASAPI microphone): a 10 s stall
+    starting 1 s in, stop at 4 s. With a block already received the wait
+    was `AUDIO_STOP_DRAIN_MAX_S`, and its extensions need arriving blocks,
+    so it gave up 3 s after the stop with nothing recovered: 1.0 of 4.0 s
+    kept. A stream PortAudio still runs is waited for up to the hard limit
+    counted from the stall's start (the last block), as a stream that never
+    delivered is from its start."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    monkeypatch.setattr(
+        audio_capture_module, "AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS", 2_500
+    )
+    clock = _Clock()
+    capture, callback = _running_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 102.0  # the stop, 1.0 s into the stall
+
+    def _deliver():
+        time.sleep(1.0)  # the stall goes on well past the 0.3 s budget
+        for _ in range(30):
+            callback(_block(), 1600, None, None)
+
+    frames, waited = _stop_during_a_stall(capture, _deliver)
+
+    assert 19 * 1600 <= frames <= 20 * 1600, f"{frames / 16000:.2f}s of 2.00 s kept"
+    assert waited < 1.4
+
+
+def test_a_stall_longer_than_the_hard_limit_ends_the_wait_there(monkeypatch):
+    """The hard limit still bounds the Qt thread's wait, counted from the
+    stall's start: 2.5 s, of which 1.0 s had passed at the stop."""
+    monkeypatch.setattr(audio_capture_module, "AUDIO_STOP_DRAIN_MAX_S", 0.3)
+    monkeypatch.setattr(
+        audio_capture_module, "AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS", 2_500
+    )
+    clock = _Clock()
+    capture, callback = _running_capture(monkeypatch, clock)
+    for index in range(1, 11):
+        clock.now = 100.0 + index / 10
+        callback(_block(), 1600, None, None)
+    clock.now = 102.0
+
+    started = time.perf_counter()
+    wav_bytes = capture.stop()
+
+    assert 1.4 <= time.perf_counter() - started < 1.9
+    assert _wav_frames(wav_bytes) == 10 * 1600
+
+
 class _StoppedStream(FakeInputStream):
     """PortAudio reports the stream no longer active (its device went away)."""
 
