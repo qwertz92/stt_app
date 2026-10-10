@@ -10,20 +10,34 @@ def _requirement_base(value: str) -> str:
     return value.split(";", 1)[0].strip()
 
 
-def test_windows_requirements_match_direct_runtime_dependencies():
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-    project_dependencies = {
-        _requirement_base(value) for value in project["project"]["dependencies"]
-    }
-    windows_requirements = {
+def _pinned_requirements(name: str) -> set[str]:
+    return {
         line.strip()
-        for line in (ROOT / "requirements-win.txt")
-        .read_text(encoding="utf-8")
-        .splitlines()
+        for line in (ROOT / name).read_text(encoding="utf-8").splitlines()
         if line.strip() and not line.lstrip().startswith(("#", "-r "))
     }
 
-    assert windows_requirements == project_dependencies
+
+def _project() -> dict:
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def test_windows_requirements_match_direct_runtime_dependencies():
+    project_dependencies = {
+        _requirement_base(value) for value in _project()["project"]["dependencies"]
+    }
+
+    assert _pinned_requirements("requirements-win.txt") == project_dependencies
+
+
+def test_windows_dev_requirements_match_the_dev_group():
+    # A pip-only machine (uv is blocked on the owner's work PC) installs from
+    # these files; ruff stayed at 0.16.10 here after the lock moved to 0.17.0.
+    dev_group = {
+        _requirement_base(value) for value in _project()["dependency-groups"]["dev"]
+    }
+
+    assert _pinned_requirements("requirements-dev-win.txt") == dev_group
 
 
 def test_installed_av_decodes_a_file_the_way_faster_whisper_opens_it(tmp_path):
