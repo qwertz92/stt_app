@@ -9701,3 +9701,12 @@ on and the overlay green, the first ~10 s were not captured.
   while blocks come. Lesson: re-measure the reviewer's design under the
   heaviest load that was reported, not only under the load that found the
   defect; the busy-thread runs alone were 5/5 correct.
+- **The rest of the second review.** A hotkey press during the stop's wait
+  was dispatched after it and started a recording (now dropped by its
+  `MSG.time`, and the overlay says it is collecting delayed audio before
+  the wait); a slow burst was cut at 3 s (the wait now goes on while blocks
+  come); cancel, abort and quit waited for audio as if they were the
+  user's stop (now `drain=False`; they keep what arrived); and a reopened
+  warm stream inherited its predecessor's last callback time, read as a
+  60 s stall. Lesson: a wait added on the Qt thread changes every input
+  path that queues behind it, not just the one that called it.

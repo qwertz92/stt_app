@@ -1294,7 +1294,8 @@ class AudioCapture:
         exceeds the settled deficit by more than a healthy stream ever does
         (see `AUDIO_BACKLOG_TOLERANCE_S`), this waits until the audio reaches
         the moment of the stop within one block, at most
-        `AUDIO_STOP_DRAIN_MAX_S`. (Waiting only until it is back within the
+        `AUDIO_STOP_DRAIN_MAX_S` -- longer, up to the first-callback hard
+        limit, while blocks keep coming. (Waiting only until it is back within the
         tolerance left 0.47 s of a real 4 s stall uncollected.) Blocks past
         that moment were spoken after the stop and are not kept.
         There is no "nothing arrived for a while" exit: a starved thread
@@ -1318,9 +1319,9 @@ class AudioCapture:
         wall clock while the stream runs in real time again, and the count
         let every stop wait the full 3 s and keep about 3 s said after it
         (review F2, measured on the real MME microphone). The settled
-        deficit -- the deficit while blocks last arrived at a steady
-        real-time pace for a second (`_CaptureTiming.settled_deficit_s`) --
-        is that loss: only the deficit beyond it is waited for, and the stop
+        deficit -- measured over a steady second of real-time arrivals and
+        taken only with evidence of a loss (`_CaptureTiming._settle`) -- is
+        that loss: only the deficit beyond it is waited for, and the stop
         moment is the audio owed minus it. A single gap decides nothing:
         deciding on one block-length gap ended the wait in the middle of a
         burst slowed down by load (review round 2: 1.1-1.7 of 3.0 s kept).
