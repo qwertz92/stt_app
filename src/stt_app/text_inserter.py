@@ -1037,7 +1037,11 @@ class Win32ClipboardBackend:
         cannot be read, is ours; any other payload is not. A password
         manager marks a secret with the same DWORD 0, and once the capture
         has kept our markers from an earlier restore, a marker match let the
-        reattempt empty that secret away (2026-10-13 review).
+        reattempt empty that secret away (2026-10-13 review). A clipboard
+        holding our markers and nothing else is ours the way an empty one
+        is: a partial restore whose markers landed before the content failed
+        leaves exactly that, and refusing it lost the content without a
+        retry (2026-10-13 second review).
 
         Heuristic by nature, which is why a retry seconds later never uses it
         and goes by the sequence counter instead (`TextInserter._restore_check`):
@@ -1063,6 +1067,7 @@ class Win32ClipboardBackend:
             for format_id, _name, payload in self._copy_clipboard_formats(format_ids)
         }
         matched = False
+        holds_content = False
         for format_id in format_ids:
             if format_id in marker_ids:
                 if format_id in present and present[format_id] not in (
@@ -1071,6 +1076,7 @@ class Win32ClipboardBackend:
                 ):
                     return False
                 continue
+            holds_content = True
             if format_id in present:
                 if ours.get(format_id) == present[format_id]:
                     matched = True
@@ -1083,7 +1089,7 @@ class Win32ClipboardBackend:
                 and format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS
             ):
                 return False
-        return matched
+        return matched or not holds_content
 
     def _restore_clipboard_formats(
         self, formats: tuple[tuple[int, str, bytes], ...]

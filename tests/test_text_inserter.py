@@ -4305,6 +4305,56 @@ def test_a_restore_reattempt_never_takes_markers_for_its_own_content(monkeypatch
     assert clipboard.calls.count("empty") == 1
 
 
+def test_a_reattempt_over_markers_alone_finishes_the_restore(monkeypatch):
+    """The captured markers came before the picture, landed, and then the
+    picture's write answered NULL because a manager closed our open. The
+    clipboard holds markers alone -- as good as empty, and just as much
+    ours: refusing there ended the restore as `skipped_changed`, the
+    picture gone without a retry or a report (2026-10-13 second review)."""
+    clipboard = _NotOpenClipboard(
+        contents=[
+            (_EXCLUDE_FROM_MONITOR, b"\x01"),
+            (_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO),
+            (_CAN_UPLOAD_TO_CLOUD, _DWORD_ZERO),
+            (CF_DIB, b"the screenshot"),
+        ],
+    )
+    clipboard.registered = dict(_HISTORY_FORMAT_IDS)
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    original_set_data = clipboard._set_clipboard_data
+    refused = []
+
+    def _set_data(format_id, handle):
+        if format_id == CF_DIB and not refused:
+            refused.append(format_id)
+            clipboard.close_not_open = 1
+            return 0
+        return original_set_data(format_id, handle)
+
+    clipboard.user32.SetClipboardData = _Win32Stub(_set_data)
+
+    backend.restore_clipboard_state(state)
+
+    assert refused == [CF_DIB]
+    assert clipboard.payloads[CF_DIB] == b"the screenshot"
+    assert clipboard.payloads[_EXCLUDE_FROM_MONITOR] == b"\x01"
+
+
+def test_a_failed_screenshot_restore_with_a_lost_close_still_fails(monkeypatch):
+    """The screenshot cannot be set, only the kept markers can, and the close
+    is lost as well. The reattempt must find its own markers and fail the
+    same way -- a refusal there was `skipped_changed`: no retry, no report."""
+    clipboard = _screenshot_marked_by_an_earlier_restore(_NotOpenClipboard)
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    clipboard.set_failures = {CF_DIB}
+    clipboard.close_not_open = 1
+
+    with pytest.raises(ClipboardEmptiedError):
+        backend.restore_clipboard_state(state)
+
+
 def test_a_restore_reattempt_accepts_an_unreadable_marker_of_its_own(monkeypatch):
     """The whole restore went in and its close was lost; on the reattempt one
     of our own markers cannot be locked. It is still ours: refusing there

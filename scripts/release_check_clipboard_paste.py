@@ -17,8 +17,8 @@ Seven things, in this order:
      adds no entry -- neither the transcript nor the restored picture --
      while the picture is back on the clipboard afterwards. Runs right after
      B. Skipped when the history is switched off or refused, when Windows
-     lists no planted copy, and when the history is full (25 entries)
-     unless `--win-v-may-evict` is given (see WHAT IT TOUCHES).
+     lists no planted copy, and when fewer than three of its 25 places are
+     free, unless `--win-v-may-evict` is given (see WHAT IT TOUCHES).
   C. `TextInserter` on the WM_PASTE road into a real EDIT window.
   D. `TextInserter` on the SendInput road into a real foreground EDIT window,
      including the deferred clipboard restore 1.5 s after the keystroke.
@@ -56,11 +56,13 @@ WHAT IT TOUCHES
 * Windows' clipboard history (Win+V), read through Windows PowerShell's
   WinRT projection. Parts A to F plant clipboards that stand for
   milliseconds, and Windows did not list those (2026-10-13). Part G's
-  planted picture stands long enough to be listed: it is deleted again
-  afterwards, but in a full history (25 entries) it has already pushed the
-  oldest unpinned entry out for good -- hence the skip on a full history.
-  Part G deletes only an entry that is certainly its own; anything a user
-  copies meanwhile stays, and entries it leaves are named in a NOTE line.
+  planted picture stands long enough to be listed, and a regression lists
+  up to two more: it is deleted again afterwards, but once the history
+  holds 25 unpinned entries each new one has already pushed the oldest out
+  for good -- hence the skip with fewer than three free places. Part G
+  deletes only its planted picture, and only when that is certainly its
+  own; anything else new when it ends (a regression's entries, a copy the
+  user made meanwhile) stays and is named in a NOTE line.
 * A throwaway folder under %TEMP% for the files Explorer moves and copies.
   `APPDATA` and `LOCALAPPDATA` point there for the whole run, so the real
   `%APPDATA%\\stt_app` is unreachable. No network.
@@ -594,6 +596,9 @@ WIN_V_CHECKS = (
 WIN_V_LIST_WAIT_S = 5.0
 # Windows keeps this many unpinned entries and drops the oldest for a new one.
 WIN_V_HISTORY_LIMIT = 25
+# How many entries one run can add: the planted picture, and on a regression
+# the restored picture and the transcript. Each is an eviction once full.
+WIN_V_ENTRIES_A_RUN_MAY_ADD = 3
 # What a 2x2 CF_DIB alone is listed as.
 WIN_V_PICTURE_FORMATS = ["Bitmap"]
 
@@ -661,10 +666,11 @@ def _new_win_v_entries(before: list[dict], after: list[dict]) -> list[dict]:
 
 
 def _only_our_picture(new_entries: list[dict]) -> str | None:
-    """The id to delete when the planted picture is the only new entry.
+    """The planted picture's id, when it is the only new entry.
 
     Anything else -- a second new entry, other formats -- may be a copy the
-    user made meanwhile, and that is never deleted.
+    user made meanwhile, and that is never deleted. Asked only right after
+    the plant: later, a picture the user copies looks exactly the same.
     """
     if len(new_entries) == 1 and new_entries[0].get("formats") == WIN_V_PICTURE_FORMATS:
         return new_entries[0]["id"]
@@ -690,26 +696,30 @@ def part_g(
     every restore was, so a user's one screenshot stood in Win+V once per
     dictation.
 
-    The planted copy is a real entry: in a full history (25 entries) it
-    pushes the user's oldest unpinned entry out, and deleting it later does
-    not bring that back. So a full history skips this part unless
-    `--win-v-may-evict` is given. An entry is deleted again only when it is
-    certainly ours (`_only_our_picture`); a copy the user makes meanwhile is
-    left alone, and so is anything ambiguous, which is reported.
+    The planted copy is a real entry, and a regression adds up to two more:
+    once the history holds 25 unpinned entries each pushes the user's oldest
+    out, and deleting it later does not bring that back. So this part skips
+    unless three places are free, or `--win-v-may-evict` is given. Only the
+    planted picture is deleted again, and only when it is certainly ours
+    (`_only_our_picture`, asked right after the plant). Whatever else is new
+    when the part ends -- a regression's entries, a copy the user made
+    meanwhile, an entry a crash left -- stays and is named in a NOTE line.
     """
     before = win_v_history()
     unavailable = _win_v_unavailable(before)
-    if not unavailable and len(before) >= WIN_V_HISTORY_LIMIT and not may_evict:
+    free = WIN_V_HISTORY_LIMIT - len(before)
+    if not unavailable and free < WIN_V_ENTRIES_A_RUN_MAY_ADD and not may_evict:
         unavailable = (
-            "the Win+V history is full, so the planted copy would push the "
-            "user's oldest entry out; clear Win+V or pass --win-v-may-evict"
+            f"the Win+V history has {max(free, 0)} of the "
+            f"{WIN_V_ENTRIES_A_RUN_MAY_ADD} free places a run may fill, and each "
+            "further entry pushes the user's oldest out; clear Win+V or pass "
+            "--win-v-may-evict"
         )
     if unavailable:
         for name in WIN_V_CHECKS:
             checks.skipped(name, unavailable)
         return {"skipped": unavailable}
     created: list[str] = []
-    left: list[object] = []
     try:
         picture = unique_dib()
         put_clipboard([(CF_DIB, picture)])
@@ -723,8 +733,6 @@ def part_g(
         ours = _only_our_picture(new)
         if ours:
             created.append(ours)
-        elif new:
-            left.append([entry.get("formats") for entry in new])
         if not any(entry.get("formats") == WIN_V_PICTURE_FORMATS for entry in new):
             reason = (
                 f"Windows listed no planted picture within {WIN_V_LIST_WAIT_S:.0f} s "
@@ -747,11 +755,6 @@ def part_g(
         backend.restore_clipboard_state(state)
         time.sleep(WIN_V_LIST_WAIT_S)
         added = _new_win_v_entries(after_copy, _win_v_entries_now())
-        regression = _only_our_picture(added)
-        if regression:
-            created.append(regression)
-        elif added:
-            left.append([entry.get("formats") for entry in added])
         checks.verdict(
             "win_v.a_dictation_adds_no_entry",
             not added,
@@ -772,20 +775,38 @@ def part_g(
         )
         return {"listed_formats": new[0].get("formats"), "added": len(added)}
     finally:
-        deleted = 0
+        _report_win_v_leftovers(checks, before, created)
+
+
+def _report_win_v_leftovers(
+    checks: common.Checks, before: list[dict], created: list[str]
+) -> None:
+    """Delete the planted picture, then name every entry still new.
+
+    On every way out of part G, a crash included, and never raising: an
+    exception from here would replace the one that ended the part. What is
+    named stays in the user's Win+V until removed by hand.
+    """
+    try:
         if created:
-            deleted = sum(
-                1 for entry in win_v_history("delete", created) if entry.get("ok")
+            deleted = win_v_history("delete", created)
+            checks.details["win_v_entries_deleted"] = sum(
+                1 for entry in deleted if entry.get("ok")
             )
-        checks.details["win_v_entries_deleted"] = deleted
-        if left or deleted != len(created):
-            # Left on purpose (possibly the user's) or not deleted: said
-            # aloud, because they stay in the user's Win+V until removed.
-            checks.details["win_v_entries_left"] = left
-            sys.stdout.write(
-                f"NOTE part G left Win+V entries: {len(created) - deleted} of its "
-                f"own could not be deleted, {len(left)} ambiguous ones kept\n"
-            )
+        still_new = _new_win_v_entries(before, win_v_history())
+    except Exception as exc:
+        sys.stdout.write(
+            f"NOTE part G could not tidy or re-read Win+V: {common.ascii_safe(exc)}\n"
+        )
+        return
+    if still_new:
+        formats = [entry.get("formats") for entry in still_new]
+        checks.details["win_v_entries_left"] = formats
+        sys.stdout.write(
+            f"NOTE part G: {len(still_new)} Win+V entries that appeared while it "
+            f"ran are still listed (a regression's, or copies made meanwhile): "
+            f"formats {common.ascii_safe(formats)}\n"
+        )
 
 
 def window_text(hwnd: int) -> str:
@@ -1247,8 +1268,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--win-v-may-evict",
         action="store_true",
         help=(
-            "Run part G even when the Win+V history is full. Its planted copy "
-            "then pushes your oldest unpinned Win+V entry out for good."
+            "Run part G even with fewer than three of the 25 Win+V places "
+            "free. Each entry it adds past 25 pushes your oldest unpinned "
+            "Win+V entry out for good."
         ),
     )
     common.add_report_argument(parser)

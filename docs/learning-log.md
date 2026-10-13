@@ -47,6 +47,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
   the restore delay -- back to back, its "no entry" proved nothing about
   the transcript. Pasted-from-Win+V content was measured by hand on the
   newest existing entry (no new entry, history unchanged).
+- **Review round 2: a clipboard of markers alone is as good as empty.** With
+  markers never the match, a reattempt that found only markers on the
+  clipboard -- a partial restore whose markers landed before the failed
+  content, or the round-1 screenshot case with a lost close -- was refused
+  as a foreign write and ended `skipped_changed`: content gone, no retry,
+  no report. Now such a clipboard is ours, as an empty one is. Part G
+  deleted a "regression" entry that could just as well be a picture the
+  user copied during its wait, and its full-history skip ignored the up to
+  two entries a regression adds; it now deletes only the planted picture,
+  skips with fewer than three free places, and names every entry still new
+  when it ends, crash included.
 
 ## 2026-10-10 (overlay: "Starting" is no longer green)
 
