@@ -133,21 +133,41 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     never fails the paste or the restore. With `keep_transcript_in_clipboard`
     the transcript is an ordinary entry. The capture keeps the formats like
     any other, so a password manager's excluded copy comes back excluded
-    with its own payload, never overwritten by ours; `_holds_only_our_restore`
-    accepts our own DWORD-0 markers on a reattempt but never counts them as
-    the match. Why the restore is marked (owner's report 2026-10-13: Win+V
-    full of screenshots he did not take that often): Windows lists every
-    write, so every restore was one more entry of the user's copy -- 16 of
-    23 entries on his machine coincided with a logged restore to the
-    second, 10 of them one screenshot, pushing real entries out of the
-    25-entry history. Windows skipped a restored text equal to the newest
-    entry but listed a restored picture every time. The 2026-10-01 rule "the
-    restore never adds the formats" (its premise: marking would hide the
-    user's own copy) was wrong: the copy is listed from when the user made
-    it. `scripts/release_check_clipboard_paste.py` part G measures it on the
-    real history (plain copy listed as the control, capture -> transcript ->
-    restore adds no entry, picture back); with the restore unmarked it
-    fails with one new Bitmap entry.
+    with its own payload, never overwritten by ours.
+    *The three formats are markers, never content* (2026-10-13 review):
+    after one marked restore the next capture carries ours as formats, so
+    `wrote_anything` and the "nothing written" error leave the marker ids
+    out (a restore whose screenshot could not be set but whose 4-byte
+    markers could passed as `restored`: no retry, no report), a clipboard
+    of markers alone is restored as it was without a failure, and
+    `_holds_only_our_restore` never takes a marker for its match (a
+    password manager's secret marked CanInclude=0 / CanUpload=0 over our
+    kept markers was emptied away by the reattempt); a marker holding our
+    DWORD 0 or its captured payload, or one that cannot be read, is ours.
+    Why the restore is marked (owner's report 2026-10-13: Win+V full of
+    screenshots he did not take that often): Windows lists every write
+    that stands for a moment, so every restore was one more entry of the
+    user's copy -- 16 of 23 entries on his machine coincided with a logged
+    restore to the second, 10 of them one screenshot, pushing real entries
+    out of the 25-entry history. Windows skipped a restored text equal to
+    the newest entry but listed a restored picture every time. The
+    2026-10-01 rule "the restore never adds the formats" rested on the
+    premise in its test's docstring (`55a380a`): marking would hide the
+    user's own copy. It does not: the copy is listed from when the user made
+    it. Measured on the real history: a plain picture copy is listed, an
+    unmarked restore of it added one more Bitmap entry, a marked one none;
+    content pasted from Win+V (`SetHistoryItemAsContent`: carries
+    ClipboardHistoryItemId and Windows' own Exclude marker, which the
+    restore keeps and to which it adds the two Can* formats) came back with
+    no new entry and the history unchanged -- measured once by hand, not in
+    part G; before, such a restore surfaced as the top entry (log
+    correlation, 00:25:34). `scripts/release_check_clipboard_paste.py` part
+    G repeats the plain-copy case (the transcript stands for
+    `CLIPBOARD_RESTORE_DELAY_S` as in a real paste: a clipboard standing for
+    milliseconds is not listed at all, so a back-to-back write would prove
+    nothing about the transcript) and fails on an unmarked restore. Not
+    measured: that a transcript kept with `keep_transcript_in_clipboard` is
+    listed.
   - `TextInserter.paste_pace_remaining_s` is the time left until the last
     SendInput keystroke's restore window ends (0 after a WM_PASTE or before
     any paste); the controller paces queued pastes by it (below).

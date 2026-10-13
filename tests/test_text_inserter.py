@@ -4220,6 +4220,111 @@ def test_a_restore_reattempt_accepts_its_own_history_formats(monkeypatch):
     }
 
 
+def _screenshot_marked_by_an_earlier_restore(clipboard_class=_FakeClipboard):
+    """What the next capture finds after one marked restore of a screenshot:
+    the picture plus our three markers, which the capture keeps as formats."""
+    clipboard = clipboard_class(
+        contents=[
+            (CF_DIB, b"the screenshot"),
+            (_EXCLUDE_FROM_MONITOR, _DWORD_ZERO),
+            (_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO),
+            (_CAN_UPLOAD_TO_CLOUD, _DWORD_ZERO),
+        ],
+    )
+    clipboard.registered = dict(_HISTORY_FORMAT_IDS)
+    return clipboard
+
+
+def test_a_restore_that_wrote_only_markers_has_failed(monkeypatch):
+    """The screenshot cannot be set again (a ~33 MB block refused under memory
+    pressure) while the 4-byte markers can. Counted as written, the markers
+    made that a "restored" outcome: no retry, no report, and the user's
+    screenshot gone for good (2026-10-13 review, reproduced)."""
+    clipboard = _screenshot_marked_by_an_earlier_restore()
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    assert {format_id for format_id, _name, _payload in state.formats} == {
+        CF_DIB,
+        _EXCLUDE_FROM_MONITOR,
+        _CAN_INCLUDE_IN_HISTORY,
+        _CAN_UPLOAD_TO_CLOUD,
+    }, "precondition: the capture keeps the earlier restore's markers"
+    clipboard.set_failures = {CF_DIB}
+
+    with pytest.raises(ClipboardEmptiedError):
+        backend.restore_clipboard_state(state)
+
+
+def test_a_clipboard_of_markers_alone_comes_back_without_a_failure(monkeypatch):
+    """Markers and no content (a clear that marks itself) is restored as it
+    was. Not counting markers as content must not turn that into a failed
+    restore, which the transaction retries and then reports in the tray."""
+    clipboard = _history_aware_clipboard(
+        contents=[(_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO)]
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.payloads == {_CAN_INCLUDE_IN_HISTORY: _DWORD_ZERO}
+
+
+def test_a_restore_reattempt_never_takes_markers_for_its_own_content(monkeypatch):
+    """Our close is taken, and before the reattempt a password manager copies
+    a secret marked CanIncludeInClipboardHistory=0 and CanUploadToCloud=0 --
+    payloads equal to the markers the capture kept from an earlier restore.
+    Markers describe no content: they must never be the reattempt guard's
+    match, or the reattempt empties the clipboard and the secret is gone
+    (2026-10-13 review, reproduced)."""
+    clipboard = _screenshot_marked_by_an_earlier_restore(_NotOpenClipboard)
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    secret = "s3cret".encode("utf-16-le") + b"\x00\x00"
+    original_close = clipboard.CloseClipboard
+
+    def _close_taken_by_a_password_manager():
+        if clipboard.close_not_open > 0:
+            clipboard.payloads = {
+                CF_UNICODETEXT: secret,
+                _CAN_INCLUDE_IN_HISTORY: _DWORD_ZERO,
+                _CAN_UPLOAD_TO_CLOUD: _DWORD_ZERO,
+            }
+            clipboard.order = list(clipboard.payloads)
+            clipboard.text = "s3cret"
+            clipboard.sequence += 1
+        original_close()
+
+    clipboard.CloseClipboard = _close_taken_by_a_password_manager
+    clipboard.close_not_open = 1
+
+    with pytest.raises(ClipboardContentionError):
+        backend.restore_clipboard_state(state)
+
+    assert clipboard.payloads[CF_UNICODETEXT] == secret
+    assert clipboard.calls.count("empty") == 1
+
+
+def test_a_restore_reattempt_accepts_an_unreadable_marker_of_its_own(monkeypatch):
+    """The whole restore went in and its close was lost; on the reattempt one
+    of our own markers cannot be locked. It is still ours: refusing there
+    reported a failed restore over a clipboard that was fully restored."""
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+    clipboard.registered = dict(_HISTORY_FORMAT_IDS)
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    clipboard.close_not_open = 1
+    clipboard.lock_refused = {_CAN_INCLUDE_IN_HISTORY}
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.payloads[CF_DIB] == b"the screenshot"
+    assert clipboard.calls.count("empty") == 2
+
+
 def test_another_programs_history_exclusion_is_captured_and_put_back(monkeypatch):
     """A password manager's copy must stay out of Win+V after a dictation.
 

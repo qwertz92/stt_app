@@ -968,7 +968,11 @@ class Win32ClipboardBackend:
                         f"written back: {exc}"
                     ) from exc
                 written.add(win32con.CF_UNICODETEXT)
-            wrote_anything = bool(written)
+            # Markers are not content. After one marked restore the next
+            # capture carries ours as formats, and counting them let a restore
+            # whose screenshot could not be set pass as done: no retry, no
+            # report, the picture gone (2026-10-13 review).
+            wrote_anything = bool(written.difference(exclusion_format_ids))
             # A format the capture brought back stays as it was: a password
             # manager's own marking is theirs, never overwritten by ours.
             exclusion_failures = (
@@ -1001,7 +1005,12 @@ class Win32ClipboardBackend:
             reopen_on_lost_close=True,
         )
         _log_history_exclusion_failures("restore", exclusion_failures)
-        if not wrote_anything and (state.formats or wants_text):
+        # A clipboard that held markers and no content has nothing to miss.
+        had_content = wants_text or any(
+            format_id not in exclusion_format_ids
+            for format_id, _name, _payload in state.formats
+        )
+        if not wrote_anything and had_content:
             raise ClipboardEmptiedError(
                 "The clipboard was emptied but none of its content could be "
                 "written back."
@@ -1019,11 +1028,16 @@ class Win32ClipboardBackend:
         that -- or only what our partial restore wrote. Every present format
         must match a captured one byte for byte (trailing NULs aside:
         `GlobalSize` may round a block up), or be one Windows synthesizes
-        from such a format (`_CLIPBOARD_SYNTHESIZED_FORMATS`), or be one of
-        the Win+V exclusion formats the restore adds, holding our DWORD 0;
-        and at least one captured format must match -- our markers alone are
-        not a restore. A format that cannot be read counts only if `state`
+        from such a format (`_CLIPBOARD_SYNTHESIZED_FORMATS`), and at least
+        one must match. A format that cannot be read counts only if `state`
         has it.
+
+        The Win+V exclusion formats are markers, not content, and never the
+        match: one holding our DWORD 0 or the captured payload, or one that
+        cannot be read, is ours; any other payload is not. A password
+        manager marks a secret with the same DWORD 0, and once the capture
+        has kept our markers from an earlier restore, a marker match let the
+        reattempt empty that secret away (2026-10-13 review).
 
         Heuristic by nature, which is why a retry seconds later never uses it
         and goes by the sequence counter instead (`TextInserter._restore_check`):
@@ -1042,22 +1056,24 @@ class Win32ClipboardBackend:
                 win32con.CF_UNICODETEXT,
                 str(state.text).encode("utf-16-le").rstrip(b"\x00"),
             )
-        our_markers = {
-            format_id: _CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD.rstrip(b"\x00")
-            for format_id in exclusion_format_ids
-            if format_id and format_id not in ours
-        }
+        marker_ids = {format_id for format_id in exclusion_format_ids if format_id}
+        our_marker = _CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD.rstrip(b"\x00")
         present = {
             format_id: payload.rstrip(b"\x00")
             for format_id, _name, payload in self._copy_clipboard_formats(format_ids)
         }
         matched = False
         for format_id in format_ids:
+            if format_id in marker_ids:
+                if format_id in present and present[format_id] not in (
+                    our_marker,
+                    ours.get(format_id),
+                ):
+                    return False
+                continue
             if format_id in present:
                 if ours.get(format_id) == present[format_id]:
                     matched = True
-                    continue
-                if our_markers.get(format_id) == present[format_id]:
                     continue
                 if format_id in ours or format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
                     return False

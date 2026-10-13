@@ -31,6 +31,22 @@ Agents and developers: use this as a knowledge base for past issues and solution
   which repeats the measurement and deletes its own entries; with the
   restore unmarked it fails with one new Bitmap entry. Duplicates already in
   a history stay until the user deletes them in Win+V.
+- **Review round 1 found that the markers came back as "content".** After
+  one marked restore the next capture keeps our markers as formats, and
+  three decisions counted them: a restore whose screenshot could not be
+  set passed as done (silent loss instead of retry and tray report), the
+  reattempt guard took a password manager's equally marked secret for our
+  own partial restore and emptied it, and an unreadable marker of ours
+  refused a complete restore. All three reproduced against the fakes and
+  fixed by one rule: the exclusion formats are markers, never content.
+  Part G could delete a copy the user made while it ran, and on a full
+  history its planted copy evicts the user's oldest entry for good; it now
+  deletes only what is certainly its own and skips a full history unless
+  `--win-v-may-evict`. A clipboard that stood for milliseconds (parts A
+  and B) was never listed, so part G also lets the transcript stand for
+  the restore delay -- back to back, its "no entry" proved nothing about
+  the transcript. Pasted-from-Win+V content was measured by hand on the
+  newest existing entry (no new entry, history unchanged).
 
 ## 2026-10-10 (overlay: "Starting" is no longer green)
 

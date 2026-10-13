@@ -258,7 +258,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   lost after them then leaves our own formats on the clipboard, which
   `_refuse_if_written_since_our_empty` would read as a foreign write and
   refuse the retried paste -- trading a cosmetic Win+V entry for a failed
-  paste; teaching that check our own formats is ~3 h. Separately and on purpose, the
+  paste; teaching that check our own formats is ~3 h. The restore has the
+  same gap since it is marked (2026-10-13): its markers follow the content
+  inside one open, so a close lost before them lets Windows list the
+  restored copy once more, as every restore did before. Separately and on purpose, the
   `copy_on_error` fallback (`QGuiApplication.clipboard().setText`) leaves a
   failed paste's transcript on the clipboard as an ordinary copy, so it is
   in Win+V: the user is meant to paste it by hand.
@@ -284,8 +287,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   microphone, as for an immediate-mode paste during a batch recording.
 - **A transcript left on the clipboard after an abandoned restore**
   (`abandoned_busy`) is not in Win+V history, though it is on the clipboard
-  (a restore that does run is marked the same way since 2026-10-13, so the
-  user's copy is never listed twice). Kept 2026-10-03: writing it again
+  (a restore that does run is marked the same way since 2026-10-13, so it
+  does not list the user's copy again, short of the lost-close race above).
+  Kept 2026-10-03: writing it again
   without the exclusion formats
   empties the clipboard first, so the late read by the busy target that the
   abandon protects could see an empty clipboard; ~1 h, and it raises the
