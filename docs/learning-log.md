@@ -58,6 +58,15 @@ Agents and developers: use this as a knowledge base for past issues and solution
   two entries a regression adds; it now deletes only the planted picture,
   skips with fewer than three free places, and names every entry still new
   when it ends, crash included.
+- **Release checks for v0.12.3.** The frozen-bundle check failed its Granite
+  CTC case by construction with the runbook's own `--language de`: the
+  benchmark worker rightly refuses an English-only model for any other
+  language, and the check handed the clip's language to every model. An
+  English-only model now runs in a pass of its own on `auto`, which still
+  exercises its frozen runtime (22/22 on the dry-run build). The clipboard
+  check's one failure, the Explorer cut control that runs no app code,
+  coincided with the owner dictating (three pastes inside its window, one
+  restore `skipped_changed`); rerun while the desktop was idle, it passed.
 
 ## 2026-10-10 (overlay: "Starting" is no longer green)
 
