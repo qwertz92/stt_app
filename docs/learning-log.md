@@ -3,6 +3,35 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-13 (every clipboard restore was a new Win+V entry)
+
+- **Owner: Win+V full of screenshots he did not remember taking, while he
+  dictates all the time.** Cause, verified: `restore_clipboard_state` wrote
+  the user's content back as an ordinary clipboard write, and Windows'
+  clipboard history lists every write. Of the 23 entries in his history,
+  16 coincided to the second with a `clipboard_restore ... outcome=restored`
+  log line, 10 of them pictures of one screenshot; at 25 entries the history
+  then drops its oldest, so real entries were pushed out. Windows skipped a
+  restored text equal to the newest entry, but listed a restored picture
+  every time -- which is why he saw pictures. The transcript itself was
+  never listed (its write has carried the three exclusion formats since
+  2026-10-01).
+- **The 2026-10-01 decision "the restore never adds the formats" rested on a
+  wrong premise** -- that marking the restore would hide the user's own copy
+  from Win+V. The copy is listed from when the user made it; the restore
+  only duplicated it. Measured on the real history before changing code: a
+  plain picture copy added 1 entry (the control), today's capture ->
+  transcript -> restore added 1 more Bitmap entry, the same restore with
+  the three formats set inside its open added none and the picture was back
+  on the clipboard.
+- **Now the restore marks what it wrote** with each exclusion format the
+  restored content does not already carry (a password manager's own marking
+  keeps its payload), only when it wrote something, and its reattempt guard
+  accepts those markers. `release_check_clipboard_paste.py` gained part G,
+  which repeats the measurement and deletes its own entries; with the
+  restore unmarked it fails with one new Bitmap entry. Duplicates already in
+  a history stay until the user deletes them in Win+V.
+
 ## 2026-10-10 (overlay: "Starting" is no longer green)
 
 - **Owner: "the overlay was already green" while the first ~10 s were not

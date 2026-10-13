@@ -2411,9 +2411,14 @@ def test_restore_empties_the_clipboard_and_sets_every_format_in_order(monkeypatc
         (CF_UNICODETEXT, _GUTEN_TAG),
         (HTML_FORMAT, b"<b>bold</b>"),
     ]
-    assert clipboard.calls[0] == "open"
-    assert "empty" in clipboard.calls
-    assert clipboard.calls[-1] == "close"
+    # Registering the Win+V format names needs no open clipboard and runs
+    # before it; every clipboard call sits inside the one open.
+    clipboard_calls = [
+        call for call in clipboard.calls if not call.startswith("register:")
+    ]
+    assert clipboard_calls[0] == "open"
+    assert "empty" in clipboard_calls
+    assert clipboard_calls[-1] == "close"
     assert clipboard.locked == []
     assert clipboard.freed == [], (
         "a block SetClipboardData took ownership of was freed again"
@@ -4094,7 +4099,7 @@ def test_a_refused_history_format_costs_the_exclusion_not_the_paste(
     assert len(clipboard.freed) == 1
     assert clipboard.locked == []
     assert _one_log_line(caplog, "clipboard_history_exclusion_partial ") == (
-        "clipboard_history_exclusion_partial failed=2"
+        "clipboard_history_exclusion_partial op=write failed=2"
     )
 
 
@@ -4114,11 +4119,15 @@ def test_the_paste_transaction_excludes_a_transcript_it_will_restore():
     assert backend.history_exclusions == [True, False]
 
 
-def test_the_restore_never_adds_the_history_formats(monkeypatch):
-    """The restore writes the user's own content back, exactly as captured.
+def test_a_restore_stays_out_of_clipboard_history(monkeypatch):
+    """Putting the user's content back must not list it in Win+V again.
 
-    Excluding it would hide the user's own copy from their history; the
-    exclusion is for the transcript only.
+    Windows listed that content when the user copied it, and records every
+    clipboard write as a new entry. Measured on the owner's machine on
+    2026-10-13: 16 of the 23 Win+V entries were this app's restores, 10 of
+    them copies of a screenshot the user had taken once, and they pushed
+    real entries out of the 25-entry history. A real restore marked with the
+    three formats added no entry, and the picture was back on the clipboard.
     """
     clipboard = _history_aware_clipboard(
         contents=[(CF_UNICODETEXT, _GUTEN_TAG), (HTML_FORMAT, b"<b>bold</b>")],
@@ -4136,7 +4145,79 @@ def test_the_restore_never_adds_the_history_formats(monkeypatch):
     assert clipboard.set_formats == [
         (CF_UNICODETEXT, _GUTEN_TAG),
         (HTML_FORMAT, b"<b>bold</b>"),
+        (_EXCLUDE_FROM_MONITOR, _DWORD_ZERO),
+        (_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO),
+        (_CAN_UPLOAD_TO_CLOUD, _DWORD_ZERO),
     ]
+    # Inside the restore's one open: no monitor sees the content unmarked.
+    assert clipboard.calls.count("open") == 1
+    assert clipboard.calls.count("close") == 1
+    assert clipboard.freed == []
+    assert clipboard.locked == []
+
+
+def test_an_empty_clipboard_is_restored_empty(monkeypatch):
+    """Nothing to put back means nothing to mark: three marker formats alone
+    would turn an empty clipboard into one that other programs see as
+    holding something."""
+    clipboard = _history_aware_clipboard()
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    backend.set_clipboard_text("the transcript", exclude_from_history=True)
+    clipboard.set_formats.clear()
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.set_formats == []
+    assert clipboard.payloads == {}
+
+
+def test_a_refused_history_format_on_a_restore_costs_only_the_exclusion(
+    monkeypatch, caplog
+):
+    """The user's content is the restore; the marking is best-effort."""
+    clipboard = _history_aware_clipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+    clipboard.registered.pop("CanUploadToCloudClipboard")
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
+        backend.restore_clipboard_state(state)
+
+    assert clipboard.payloads[CF_DIB] == b"the screenshot"
+    assert clipboard.payloads[CF_UNICODETEXT] == _GUTEN_TAG
+    assert _one_log_line(caplog, "clipboard_history_exclusion_partial ") == (
+        "clipboard_history_exclusion_partial op=restore failed=1"
+    )
+
+
+def test_a_restore_reattempt_accepts_its_own_history_formats(monkeypatch):
+    """A manager closed our open after the whole restore went in. The
+    reattempt finds the user's formats plus our three markers -- all ours --
+    and must finish the restore rather than take the markers for a foreign
+    write."""
+    clipboard = _NotOpenClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+    clipboard.registered = dict(_HISTORY_FORMAT_IDS)
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    clipboard.close_not_open = 1
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.calls.count("empty") == 2
+    assert clipboard.payloads == {
+        CF_UNICODETEXT: _GUTEN_TAG,
+        CF_DIB: b"the screenshot",
+        _EXCLUDE_FROM_MONITOR: _DWORD_ZERO,
+        _CAN_INCLUDE_IN_HISTORY: _DWORD_ZERO,
+        _CAN_UPLOAD_TO_CLOUD: _DWORD_ZERO,
+    }
 
 
 def test_another_programs_history_exclusion_is_captured_and_put_back(monkeypatch):
@@ -4145,7 +4226,9 @@ def test_another_programs_history_exclusion_is_captured_and_put_back(monkeypatch
     Password managers mark a copied secret with these same formats. The
     capture keeps them and the restore writes them back as they were, so the
     restored secret is still excluded; dropping them would push it into the
-    history the password manager kept it out of.
+    history the password manager kept it out of. The restore's own marking
+    adds only the format the copy did not carry, and never overwrites one
+    it did.
     """
     secret = "s3cret".encode("utf-16-le") + b"\x00\x00"
     clipboard = _history_aware_clipboard(
@@ -4170,6 +4253,7 @@ def test_another_programs_history_exclusion_is_captured_and_put_back(monkeypatch
         (CF_UNICODETEXT, secret),
         (_CAN_INCLUDE_IN_HISTORY, _DWORD_ZERO),
         (_EXCLUDE_FROM_MONITOR, b"\x01"),
+        (_CAN_UPLOAD_TO_CLOUD, _DWORD_ZERO),
     ]
 
 

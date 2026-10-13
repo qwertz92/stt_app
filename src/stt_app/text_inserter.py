@@ -284,6 +284,20 @@ class _PendingRestore:
     chain: int = 0
 
 
+def _log_history_exclusion_failures(operation: str, failures: int) -> None:
+    """Report Win+V exclusion formats a write or a restore could not set.
+
+    The content is on the clipboard either way; without these formats Windows
+    may list it in Win+V. A warning, because the user sees an entry they did
+    not expect, never an error, because the paste or the restore is
+    unaffected.
+    """
+    if failures:
+        _LOGGER.warning(
+            "clipboard_history_exclusion_partial op=%s failed=%d", operation, failures
+        )
+
+
 def _schedule_on_a_daemon_timer(delay_s: float, callback):
     """Run `callback` once after `delay_s` on a throwaway daemon thread.
 
@@ -336,10 +350,13 @@ _CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE = frozenset({"DataObject", "Ole Private D
 # respectively, and each "does not affect" the other. All three are obtained
 # through `RegisterClipboardFormat`. A DWORD 0 goes into each, which is also
 # "any data" for the first. Set on a transcript the transaction will replace
-# with the user's own content -- never on a restore, never on a transcript the
-# user keeps -- and kept, like any other format, when the capture finds them
-# on someone else's copy (a password manager marks a secret this way).
-_CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES = (
+# with the user's own content, and on the restore that puts that content back
+# -- Windows listed it when the user copied it, and recorded every restore as
+# one more entry: 16 of 23 Win+V entries on the owner's machine on 2026-10-13,
+# mostly copies of one screenshot. Never set on a transcript the user keeps.
+# Kept, like any other format, when the capture finds them on someone else's
+# copy (a password manager marks a secret this way).
+CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES = (
     "ExcludeClipboardContentFromMonitorProcessing",
     "CanIncludeInClipboardHistory",
     "CanUploadToCloudClipboard",
@@ -699,7 +716,7 @@ class Win32ClipboardBackend:
 
         `exclude_from_history` adds the three registered formats that keep this
         write out of Windows' clipboard history and cloud clipboard (see
-        `_CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES`), inside the same open, so
+        `CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES`), inside the same open, so
         no monitor ever sees the transcript without them. Best-effort: a format
         that cannot be registered or set is logged and costs the exclusion,
         never the write.
@@ -756,14 +773,7 @@ class Win32ClipboardBackend:
         _result, lost_close = self._with_reopen(
             "write", _write_into_open_clipboard, exhausted_error=_spent
         )
-        if exclusion_failures:
-            # The transcript is on the clipboard either way; without these
-            # formats Windows may list it in Win+V as it did before they
-            # existed. A warning, because the user sees an entry they did not
-            # expect, never an error, because the paste is unaffected.
-            _LOGGER.warning(
-                "clipboard_history_exclusion_partial failed=%d", exclusion_failures
-            )
+        _log_history_exclusion_failures("write", exclusion_failures)
         if lost_close:
             return self._confirm_write_landed(text)
         # The counter is read here -- after `CloseClipboard` and before
@@ -779,7 +789,7 @@ class Win32ClipboardBackend:
     def _history_exclusion_format_ids(self) -> list[int]:
         """The registered ids of the exclusion formats, 0 for any refused."""
         format_ids = []
-        for name in _CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES:
+        for name in CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES:
             try:
                 format_id = int(win32clipboard.RegisterClipboardFormat(name) or 0)
             except Exception:
@@ -898,6 +908,14 @@ class Win32ClipboardBackend:
         separately when `CF_UNICODETEXT` is not among the formats that were
         set, so this can never put back less text than it used to.
 
+        Whatever was written back is marked with the Win+V exclusion formats
+        (`CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES`) inside the same open,
+        each one the captured content does not already carry: the user's copy
+        is in their history from when they made it, and Windows would list
+        every restore as another entry. Best-effort like the transcript's.
+        Nothing restored means nothing marked, so an empty clipboard stays
+        empty.
+
         Through `_with_reopen`, and a lost close writes again: the formats go
         in through ctypes `SetClipboardData`, which answers NULL on a
         clipboard closed under us without raising, so a manager closing our
@@ -913,14 +931,17 @@ class Win32ClipboardBackend:
         emptied = False
         wrote_anything = False
         wants_text = bool(state.has_text and state.text is not None)
+        # Registering needs no open clipboard, so it stays out of the open.
+        exclusion_format_ids = self._history_exclusion_format_ids()
+        exclusion_failures = 0
         # Read before the first open: a reattempt that has not emptied yet
         # must find nobody has written since.
         sequence_before = self.get_clipboard_sequence_number()
 
         def _restore_into_open_clipboard() -> None:
-            nonlocal emptied, wrote_anything
+            nonlocal emptied, wrote_anything, exclusion_failures
             if emptied:
-                if not self._holds_only_our_restore(state):
+                if not self._holds_only_our_restore(state, exclusion_format_ids):
                     raise _ClipboardRestoreRefusedError(
                         "Another program wrote to the clipboard while it was "
                         "being restored; left its content untouched."
@@ -936,8 +957,8 @@ class Win32ClipboardBackend:
                 _raise_if_clipboard_not_open(exc)
                 raise
             emptied = True
-            text_restored, written = self._restore_clipboard_formats(state.formats)
-            if wants_text and not text_restored:
+            written = self._restore_clipboard_formats(state.formats)
+            if wants_text and win32con.CF_UNICODETEXT not in written:
                 try:
                     win32clipboard.SetClipboardText(state.text, win32con.CF_UNICODETEXT)
                 except Exception as exc:
@@ -946,8 +967,21 @@ class Win32ClipboardBackend:
                         f"The clipboard was emptied but its text could not be "
                         f"written back: {exc}"
                     ) from exc
-                written += 1
-            wrote_anything = written > 0
+                written.add(win32con.CF_UNICODETEXT)
+            wrote_anything = bool(written)
+            # A format the capture brought back stays as it was: a password
+            # manager's own marking is theirs, never overwritten by ours.
+            exclusion_failures = (
+                self._set_history_exclusion_formats(
+                    [
+                        format_id
+                        for format_id in exclusion_format_ids
+                        if format_id not in written
+                    ]
+                )
+                if wrote_anything
+                else 0
+            )
 
         def _spent() -> TextInsertionError:
             message = (
@@ -966,13 +1000,16 @@ class Win32ClipboardBackend:
             exhausted_error=_spent,
             reopen_on_lost_close=True,
         )
+        _log_history_exclusion_failures("restore", exclusion_failures)
         if not wrote_anything and (state.formats or wants_text):
             raise ClipboardEmptiedError(
                 "The clipboard was emptied but none of its content could be "
                 "written back."
             )
 
-    def _holds_only_our_restore(self, state: ClipboardState) -> bool:
+    def _holds_only_our_restore(
+        self, state: ClipboardState, exclusion_format_ids: list[int]
+    ) -> bool:
         """The open clipboard holds nothing, or only formats of `state`.
 
         The guard of a reattempt inside one `restore_clipboard_state` call,
@@ -982,8 +1019,10 @@ class Win32ClipboardBackend:
         that -- or only what our partial restore wrote. Every present format
         must match a captured one byte for byte (trailing NULs aside:
         `GlobalSize` may round a block up), or be one Windows synthesizes
-        from such a format (`_CLIPBOARD_SYNTHESIZED_FORMATS`), and at least
-        one must match. A format that cannot be read counts only if `state`
+        from such a format (`_CLIPBOARD_SYNTHESIZED_FORMATS`), or be one of
+        the Win+V exclusion formats the restore adds, holding our DWORD 0;
+        and at least one captured format must match -- our markers alone are
+        not a restore. A format that cannot be read counts only if `state`
         has it.
 
         Heuristic by nature, which is why a retry seconds later never uses it
@@ -1003,6 +1042,11 @@ class Win32ClipboardBackend:
                 win32con.CF_UNICODETEXT,
                 str(state.text).encode("utf-16-le").rstrip(b"\x00"),
             )
+        our_markers = {
+            format_id: _CLIPBOARD_HISTORY_EXCLUSION_PAYLOAD.rstrip(b"\x00")
+            for format_id in exclusion_format_ids
+            if format_id and format_id not in ours
+        }
         present = {
             format_id: payload.rstrip(b"\x00")
             for format_id, _name, payload in self._copy_clipboard_formats(format_ids)
@@ -1012,6 +1056,8 @@ class Win32ClipboardBackend:
             if format_id in present:
                 if ours.get(format_id) == present[format_id]:
                     matched = True
+                    continue
+                if our_markers.get(format_id) == present[format_id]:
                     continue
                 if format_id in ours or format_id not in _CLIPBOARD_SYNTHESIZED_FORMATS:
                     return False
@@ -1025,26 +1071,24 @@ class Win32ClipboardBackend:
 
     def _restore_clipboard_formats(
         self, formats: tuple[tuple[int, str, bytes], ...]
-    ) -> tuple[bool, int]:
-        """Set every captured format; answer (text among them, formats set).
+    ) -> set[int]:
+        """Set every captured format; answer the ids that were set.
 
         One format that cannot be set must not cost the user the rest of
         their clipboard, so a refusal is counted and the remaining formats are
         still written. The caller holds the clipboard open and has emptied it.
         """
         failed = 0
-        written = 0
-        text_restored = False
+        written: set[int] = set()
         for format_id, name, payload in formats:
             target_id = self._restore_target_format_id(format_id, name)
             if target_id and self._set_clipboard_bytes(target_id, payload):
-                text_restored = text_restored or target_id == win32con.CF_UNICODETEXT
-                written += 1
+                written.add(target_id)
                 continue
             failed += 1
         if failed:
             _LOGGER.warning("clipboard_restore_partial failed=%s", failed)
-        return text_restored, written
+        return written
 
     def _restore_target_format_id(self, format_id: int, name: str) -> int:
         """Under which id this format has to be set now, or 0 for "cannot".

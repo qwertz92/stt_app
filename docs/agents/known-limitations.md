@@ -283,9 +283,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   stream, its completion tone (if enabled) plays into the stream's
   microphone, as for an immediate-mode paste during a batch recording.
 - **A transcript left on the clipboard after an abandoned restore**
-  (`abandoned_busy`) is not in Win+V history, though it is on the clipboard;
-  restoring the user's own content may add their copy to Win+V again, as
-  before. Kept 2026-10-03: writing it again without the exclusion formats
+  (`abandoned_busy`) is not in Win+V history, though it is on the clipboard
+  (a restore that does run is marked the same way since 2026-10-13, so the
+  user's copy is never listed twice). Kept 2026-10-03: writing it again
+  without the exclusion formats
   empties the clipboard first, so the late read by the busy target that the
   abandon protects could see an empty clipboard; ~1 h, and it raises the
   risk the abandon exists to avoid.

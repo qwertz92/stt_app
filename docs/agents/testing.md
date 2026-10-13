@@ -21,8 +21,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
 - **Four `scripts/release_check_*.py` scripts measure what the suite fakes**,
   run by hand before a release, never by pytest or CI:
   `release_check_file_locks.py` (23 checks, share-mode-0 locks),
-  `release_check_clipboard_paste.py` (23: format round trip, Explorer
-  cut/copy, WM_PASTE and SendInput into a real EDIT, deferred restore,
+  `release_check_clipboard_paste.py` (26: format round trip, Explorer
+  cut/copy, no Win+V entry from a dictation (part G, 2026-10-13; it reads
+  the history through Windows PowerShell's WinRT projection and deletes
+  its own entries), WM_PASTE and SendInput into a real EDIT, deferred restore,
   foreground guard, the paste target check on an EDIT and on an Edge --app
   textarea and button, WM_PASTE refused for Edge),
   `release_check_providers.py` (AssemblyAI batch/realtime,

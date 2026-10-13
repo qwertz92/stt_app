@@ -119,19 +119,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     write, the read-back after a lost close, the changed-after-set read), so
     about 1.3 s. This survives the race; an owner window would close it and
     is not built (see the rejected alternatives below).
-  - *A transcript the transaction will restore stays out of Win+V and the
-    cloud clipboard* (2026-10-01). `set_clipboard_text(exclude_from_history=
+  - *A transcript the transaction will restore, and the restore itself, stay
+    out of Win+V and the cloud clipboard* (2026-10-01; the restore since
+    2026-10-13). `set_clipboard_text(exclude_from_history=
     restore_clipboard)` sets ExcludeClipboardContentFromMonitorProcessing,
     CanIncludeInClipboardHistory and CanUploadToCloudClipboard (DWORD 0,
     `RegisterClipboardFormat`) inside the same open (Microsoft, "Clipboard
-    Formats", section "Cloud Clipboard and Clipboard History Formats").
-    Best-effort: a miss logs `clipboard_history_exclusion_partial failed=N`
-    and never fails the paste. With `keep_transcript_in_clipboard` the
-    transcript is an ordinary entry. The restore never adds the formats, and
-    the capture keeps them like any other format, so a password manager's
-    excluded copy comes back excluded. Unit-tested against the fake clipboard
-    only: `scripts/release_check_clipboard_paste.py` should gain a check that
-    a transcript is absent from Win+V history and a kept one present.
+    Formats", section "Cloud Clipboard and Clipboard History Formats");
+    `restore_clipboard_state` sets each of them the restored content does not
+    already carry, inside its open, after the content, and only when it
+    wrote something (an empty clipboard stays empty). Best-effort: a miss
+    logs `clipboard_history_exclusion_partial op=write|restore failed=N` and
+    never fails the paste or the restore. With `keep_transcript_in_clipboard`
+    the transcript is an ordinary entry. The capture keeps the formats like
+    any other, so a password manager's excluded copy comes back excluded
+    with its own payload, never overwritten by ours; `_holds_only_our_restore`
+    accepts our own DWORD-0 markers on a reattempt but never counts them as
+    the match. Why the restore is marked (owner's report 2026-10-13: Win+V
+    full of screenshots he did not take that often): Windows lists every
+    write, so every restore was one more entry of the user's copy -- 16 of
+    23 entries on his machine coincided with a logged restore to the
+    second, 10 of them one screenshot, pushing real entries out of the
+    25-entry history. Windows skipped a restored text equal to the newest
+    entry but listed a restored picture every time. The 2026-10-01 rule "the
+    restore never adds the formats" (its premise: marking would hide the
+    user's own copy) was wrong: the copy is listed from when the user made
+    it. `scripts/release_check_clipboard_paste.py` part G measures it on the
+    real history (plain copy listed as the control, capture -> transcript ->
+    restore adds no entry, picture back); with the restore unmarked it
+    fails with one new Bitmap entry.
   - `TextInserter.paste_pace_remaining_s` is the time left until the last
     SendInput keystroke's restore window ends (0 after a WM_PASTE or before
     any paste); the controller paces queued pastes by it (below).

@@ -1,7 +1,7 @@
 """Exercise the clipboard backend and the paste transaction on the real desktop.
 
 WHAT IT CHECKS
-Six things, in this order:
+Seven things, in this order:
 
   A. capture -> set transcript -> restore on a real clipboard holding text,
      HTML, a DIB image, a file list and "Preferred DropEffect": every format
@@ -11,6 +11,11 @@ Six things, in this order:
      for a CUT file (which must still move) and a COPIED file (which must
      still copy). This is what proves the restored clipboard is not merely
      equal byte for byte but still means the same thing to the shell.
+  G. Windows' clipboard history (Win+V): a picture planted as an ordinary
+     copy is listed (the control), and a capture -> transcript -> restore
+     over it adds no entry -- neither the transcript nor the restored
+     picture -- while the picture is back on the clipboard afterwards. Runs
+     right after B; skipped when the history is switched off.
   C. `TextInserter` on the WM_PASTE road into a real EDIT window.
   D. `TextInserter` on the SendInput road into a real foreground EDIT window,
      including the deferred clipboard restore 1.5 s after the keystroke.
@@ -44,13 +49,18 @@ WHAT IT TOUCHES
   127.0.0.1, and ends that Edge process tree. Because that steals the
   keyboard, those parts wait until the user has been idle for 12 seconds
   (up to 10 minutes) and are skipped entirely with `--skip-focus`. Parts A to
-  C never take the focus.
+  C and G never take the focus.
+* Windows' clipboard history (Win+V), read through Windows PowerShell's
+  WinRT projection. Every clipboard the script plants is an ordinary copy and
+  is listed there like one; part G deletes the entries it created itself.
+  In a full history (25 entries) each planted copy pushes the oldest
+  unpinned entry out, which no delete brings back.
 * A throwaway folder under %TEMP% for the files Explorer moves and copies.
   `APPDATA` and `LOCALAPPDATA` point there for the whole run, so the real
   `%APPDATA%\\stt_app` is unreachable. No network.
 
 HOW LONG IT TAKES
-About 15 seconds with `--skip-focus`; about 40 seconds plus the idle wait
+About 25 seconds with `--skip-focus`; about 50 seconds plus the idle wait
 without it.
 
 COMMAND LINE
@@ -64,9 +74,11 @@ Needs Windows and pywin32.
 from __future__ import annotations
 
 import argparse
+import base64
 import ctypes
 import json
 import logging
+import os
 import struct
 import subprocess
 import sys
@@ -104,6 +116,7 @@ from stt_app.paste_target_check import (  # noqa: E402
     PasteTargetCheck,
 )
 from stt_app.text_inserter import (  # noqa: E402
+    CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES,
     TextInserter,
     TextInsertionError,
     TextMayHaveBeenPastedError,
@@ -517,6 +530,182 @@ class ProbeWindows:
         if self.thread_id:
             user32.PostThreadMessageW(self.thread_id, WM_QUIT, 0, 0)
             self._thread.join(5)
+
+
+# Windows' clipboard history (Win+V) through its WinRT API, read by Windows
+# PowerShell 5.1: the one runtime on every Windows 11 that projects WinRT
+# without installing a package. Mode `list` prints one JSON line per entry --
+# its id and format names, never its content; `delete` removes the entries
+# named in STT_HISTORY_IDS. History switched off prints {"disabled":true}.
+_WIN_V_SCRIPT = r"""
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$clip = [Windows.ApplicationModel.DataTransfer.Clipboard, Windows.ApplicationModel.DataTransfer, ContentType = WindowsRuntime]
+if (-not $clip::IsHistoryEnabled()) { '{"disabled":true}'; exit 0 }
+$resultType = [Windows.ApplicationModel.DataTransfer.ClipboardHistoryItemsResult, Windows.ApplicationModel.DataTransfer, ContentType = WindowsRuntime]
+$asTask = ([System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+    $_.Name -eq 'AsTask' -and $_.GetParameters().Count -eq 1 -and
+    $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' })[0]
+$task = $asTask.MakeGenericMethod($resultType).Invoke($null, @($clip::GetHistoryItemsAsync()))
+if (-not $task.Wait(30000)) { throw 'GetHistoryItemsAsync did not answer within 30 s' }
+$result = $task.Result
+if ([string]$result.Status -ne 'Success') {
+    @{ status = [string]$result.Status } | ConvertTo-Json -Compress
+    exit 0
+}
+$wanted = @($env:STT_HISTORY_IDS -split ',' | Where-Object { $_ })
+foreach ($item in $result.Items) {
+    if ($env:STT_HISTORY_MODE -eq 'delete') {
+        if ($wanted -contains $item.Id) {
+            @{ deleted = $item.Id; ok = $clip::DeleteItemFromHistory($item) } | ConvertTo-Json -Compress
+        }
+        continue
+    }
+    @{ id = $item.Id; formats = @($item.Content.AvailableFormats) } | ConvertTo-Json -Compress
+}
+"""
+WIN_V_CHECKS = (
+    "win_v.a_plain_copy_is_listed",
+    "win_v.a_dictation_adds_no_entry",
+    "win_v.the_picture_is_back_after_the_dictation",
+)
+# How long a plain copy may take to be listed (polled), and how long a
+# dictation is given to show up before "no new entry" counts. Entries were
+# listed within the 2 s the 2026-10-13 measurement waited.
+WIN_V_LIST_WAIT_S = 5.0
+WIN_V_SETTLE_S = 3.0
+
+
+def win_v_history(mode: str = "list", ids: list[str] | None = None) -> list[dict]:
+    """The history's entries (`list`), or what `delete` removed.
+
+    Raises `RuntimeError` when the reader itself failed. A history that is
+    switched off or refused comes back as one `{"disabled": True}` or
+    `{"status": ...}` entry, which `_win_v_unavailable` turns into a skip.
+    """
+    encoded = base64.b64encode(_WIN_V_SCRIPT.encode("utf-16-le")).decode("ascii")
+    env = dict(os.environ, STT_HISTORY_MODE=mode, STT_HISTORY_IDS=",".join(ids or ()))
+    result = common.run_child(
+        [
+            "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-EncodedCommand",
+            encoded,
+        ],
+        env=env,
+        timeout_s=60.0,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"the Win+V reader exited with {result.returncode}: "
+            f"{common.ascii_safe(result.stderr.strip()[-300:])}"
+        )
+    return [
+        json.loads(line)
+        for line in result.stdout.splitlines()
+        if line.strip().startswith("{")
+    ]
+
+
+def _win_v_unavailable(entries: list[dict]) -> str:
+    """Why the history cannot be measured, or "" when it can."""
+    if entries and entries[0].get("disabled"):
+        return "clipboard history (Win+V) is switched off"
+    if entries and "status" in entries[0]:
+        return f"Windows refused the clipboard history: {entries[0]['status']}"
+    return ""
+
+
+def _new_win_v_entries(before: list[dict], after: list[dict]) -> list[dict]:
+    known = {entry["id"] for entry in before}
+    return [entry for entry in after if entry["id"] not in known]
+
+
+def unique_dib() -> bytes:
+    """A 2x2 picture no earlier run left in the history."""
+    header = struct.pack("<IiiHHIIiiII", 40, 2, 2, 1, 32, 0, 16, 2835, 2835, 0, 0)
+    return header + os.urandom(16)
+
+
+def part_g(checks: common.Checks, backend: Win32ClipboardBackend) -> dict:
+    """A dictation over a copied picture leaves Win+V as it was.
+
+    A picture is planted as an ordinary copy, and Windows has to list it: the
+    control that proves this reader sees new entries at all. Then capture,
+    transcript and restore run as a paste runs them, and neither the
+    transcript nor the restored picture may be listed -- before 2026-10-13
+    every restore was, so a user's one screenshot stood in Win+V once per
+    dictation. Every entry this part created is deleted again; the plain
+    copy can still push the oldest unpinned entry out of a full history (25
+    entries), as each clipboard parts A and B plant does.
+    """
+    before = win_v_history()
+    unavailable = _win_v_unavailable(before)
+    if unavailable:
+        for name in WIN_V_CHECKS:
+            checks.skipped(name, unavailable)
+        return {"skipped": unavailable}
+    created: list[str] = []
+    try:
+        picture = unique_dib()
+        put_clipboard([(CF_DIB, picture)])
+        deadline = time.monotonic() + WIN_V_LIST_WAIT_S
+        after_copy = win_v_history()
+        listed = _new_win_v_entries(before, after_copy)
+        while not listed and time.monotonic() < deadline:
+            time.sleep(0.5)
+            after_copy = win_v_history()
+            listed = _new_win_v_entries(before, after_copy)
+        created += [entry["id"] for entry in listed]
+        if not listed:
+            reason = (
+                f"Windows listed no plain copy within {WIN_V_LIST_WAIT_S:.0f} s, "
+                "so an absent entry would prove nothing"
+            )
+            for name in WIN_V_CHECKS:
+                checks.skipped(name, reason)
+            return {"skipped": reason}
+        checks.passed(
+            "win_v.a_plain_copy_is_listed",
+            f"{len(listed)} new entry, formats {listed[0].get('formats')}",
+        )
+        state = backend.capture_clipboard_state()
+        # As the paste transaction writes a transcript it will restore.
+        backend.set_clipboard_text(
+            f"stt_app probe transcript {UMLAUTS}", exclude_from_history=True
+        )
+        backend.restore_clipboard_state(state)
+        time.sleep(WIN_V_SETTLE_S)
+        added = _new_win_v_entries(after_copy, win_v_history())
+        created += [entry["id"] for entry in added]
+        checks.verdict(
+            "win_v.a_dictation_adds_no_entry",
+            not added,
+            f"{len(added)} new entries"
+            + (
+                f", formats {[entry.get('formats') for entry in added]}"
+                if added
+                else ""
+            ),
+        )
+        back = read_clipboard([CF_DIB])[CF_DIB]
+        checks.verdict(
+            "win_v.the_picture_is_back_after_the_dictation",
+            same_bytes(picture, back),
+            "CF_DIB identical to the planted picture"
+            if same_bytes(picture, back)
+            else "CF_DIB differs from the planted picture",
+        )
+        return {"listed_formats": listed[0].get("formats"), "added": len(added)}
+    finally:
+        if created:
+            deleted = win_v_history("delete", created)
+            checks.details["win_v_entries_deleted"] = sum(
+                1 for entry in deleted if entry.get("ok")
+            )
 
 
 def window_text(hwnd: int) -> str:
@@ -970,7 +1159,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-focus",
         action="store_true",
         help=(
-            "Leave out parts D and E, the only two that take the keyboard "
+            "Leave out parts D to F, the only ones that take the keyboard "
             "focus. Everything else still runs."
         ),
     )
@@ -1027,7 +1216,11 @@ def main() -> int:
     windows = ProbeWindows()
     previous_foreground = int(user32.GetForegroundWindow() or 0)
     try:
-        for label, runner in (("A_round_trip", part_a), ("B_explorer_paste", part_b)):
+        for label, runner in (
+            ("A_round_trip", part_a),
+            ("B_explorer_paste", part_b),
+            ("G_win_v_history", part_g),
+        ):
             try:
                 parts[label] = runner(checks, backend)
             except Exception as exc:
@@ -1070,14 +1263,22 @@ def main() -> int:
             backend.restore_clipboard_state(user_state)
             again = backend.capture_clipboard_state()
             checks.details["user_clipboard_formats_after"] = describe_state(again)
-            before_ids = [
-                (item["id"], item["bytes"]) for item in describe_state(user_state)
+            before = describe_state(user_state)
+            before_ids = [(item["id"], item["bytes"]) for item in before]
+            # The restore adds the Win+V exclusion formats the user's copy did
+            # not carry, so the copy is not listed in Win+V a second time.
+            had = {item["name"] for item in before}
+            markers = set(CLIPBOARD_HISTORY_EXCLUSION_FORMAT_NAMES) - had
+            after_ids = [
+                (item["id"], item["bytes"])
+                for item in describe_state(again)
+                if item["name"] not in markers
             ]
-            after_ids = [(item["id"], item["bytes"]) for item in describe_state(again)]
             checks.verdict(
                 "user_clipboard.is_back_exactly_as_it_was",
                 before_ids == after_ids,
-                f"{len(before_ids)} formats before, {len(after_ids)} after",
+                f"{len(before_ids)} formats before, {len(after_ids)} after "
+                "(not counting the restore's Win+V exclusion formats)",
             )
         except Exception as exc:
             checks.crashed("user_clipboard.is_back_exactly_as_it_was", exc)
