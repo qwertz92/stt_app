@@ -3,6 +3,31 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
+
+Round 2 of the independent review (main `35cd764`) found no P1 or P2 and five
+smaller points; each was reproduced by a test that failed for the stated reason
+before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
+- **P3: a Retry stopped whatever held the overlay's token, not the jobs of its
+  own recording.** (a) A changed-request retry R2 left R1 running when R1 had
+  lost the token (a newer dictation was recorded and cancelled, or is still in
+  flight): both delivered, two history entries and two pastes of one text.
+  (b) Older than the Retry work: a Retry for an old failure stopped the newest
+  dictation when that held the token, which then went to history only and was
+  never pasted. Reproduced with the three sequences (R1 `aborting` stayed False;
+  the newest job's `aborting` became True). A Retry now stops every non-aborting
+  job working on the slot's recording (`_live_jobs_of_the_slot`, the filter
+  `_running_retry_of_the_slot` already had) and no other. The retry takes the
+  overlay's token as every submit does, so it keeps its Processing and Cancel
+  cancels it; the newer job becomes a queued one. What it costs: one worker, so
+  the retry starts when the running job ends. One job cannot be left running,
+  a pending streaming finalize: only its foreground result clears
+  `_streaming_recording`, so with the token moved away the session would stay
+  open and refuse every new recording. The Retry is refused with a tray note
+  until the finalize has ended instead (before, it stopped the finalize, which
+  is the diversion again). Not tested on a real stream: the refusal is shown
+  with the fake streaming transcriber.
+
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 
 An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and

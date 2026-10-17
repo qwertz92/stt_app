@@ -4330,6 +4330,113 @@ def test_a_canceled_retry_does_not_block_the_next_one(monkeypatch, tmp_path):
     _ = app
 
 
+def test_a_changed_request_retry_stops_the_running_retry_without_the_overlay_token(
+    monkeypatch, tmp_path
+):
+    """The retry stops the jobs working on its own recording, not whichever job
+    holds the overlay's token. Retry 1 lost the token when a newer dictation was
+    recorded and cancelled; a changed retry then left it running, and both
+    delivered: two history entries and two pastes of one text."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = _record_and_stop(controller)
+    controller.cancel_queued_transcription(newer)
+    assert controller._active_request_token is None
+    assert first.aborting is False
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert first.aborting is True, "retry 1 keeps running beside its replacement"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_never_stops_a_job_of_another_recording(monkeypatch, tmp_path):
+    """A retry of an older failure used to stop whatever held the active token:
+    the newest dictation, which then went to history only and was never pasted.
+    It is left running; the retry takes the overlay and queues behind it, and
+    Cancel on the overlay cancels the retry."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    id_a = controller._jobs[token_a].source_recording_id
+    controller._on_transcription_failed("down", request_token=token_a)
+    token_b = _record_and_stop(controller)
+    newest = controller._jobs[token_b]
+    assert controller._active_request_token == token_b
+
+    assert controller.retry_last_transcription() is True
+
+    retry = controller._jobs[controller._active_request_token]
+    assert retry.token not in (token_a, token_b)
+    assert retry.source_recording_id == id_a
+    assert newest.aborting is False
+    assert newest.background_delivery == "insert", "the newest dictation was diverted"
+    assert overlay.states[-1][0] == "Processing"
+    controller.cancel_current_action()
+    assert retry.aborting is True
+    assert newest.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_changed_retry_beside_a_newer_dictation_replaces_only_its_own_job(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = controller._jobs[_record_and_stop(controller)]
+    assert controller._active_request_token == newer.token
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    assert first.aborting is True
+    assert newer.aborting is False
+    assert newer.background_delivery == "insert"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it(
+    monkeypatch, tmp_path
+):
+    """A pending streaming finalize owns the session (`_streaming_recording`),
+    and only its own result clears it: left running while the retry takes the
+    overlay's token, its result would be handled as a background one and the
+    session would stay open for good (a new recording is refused while it is).
+    It cannot be left running and cannot be stopped without diverting the
+    newest dictation, so the retry is refused until the finalize has ended."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    token_a = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_a)
+    controller._settings = replace(controller._settings, mode="streaming")
+    token_b = _record_and_stop(controller)
+    finalize = controller._jobs[token_b]
+    assert finalize.mode == "streaming" and controller._streaming_recording is True
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is False
+
+    assert finalize.aborting is False
+    assert controller._active_request_token == token_b
+    assert len(controller._executor.calls) == submitted
+    assert tray and "finaliz" in tray[-1], tray
+    assert controller._last_failed_wav_bytes, "the slot keeps the recording"
+    controller.shutdown()
+    _ = app
+
+
 def test_queue_rows_name_the_language_each_recording_was_made_in(monkeypatch, tmp_path):
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"

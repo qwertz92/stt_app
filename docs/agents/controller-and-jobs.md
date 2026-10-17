@@ -151,10 +151,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     remembers the one it was submitted under; any provider's key change counts,
     which can only allow a retry, never block one. Settings that no provider
     receives (opacity, history size, hotkeys) stay out of it: such a retry is
-    still a duplicate. A changed request is another request: it stops the
-    running job as an engine change always did, and the late result of that job
-    goes to history only. A job being stopped does not count, so Cancel, then
-    Retry, works; a retry that went behind a newer dictation still counts.
+    still a duplicate. A changed request is another request: it replaces the
+    running one (next bullet). A job being stopped does not count, so Cancel,
+    then Retry, works; a retry that went behind a newer dictation still counts.
+  - **A Retry stops the jobs working on its own recording, and nothing else**
+    (owner decision 2026-10-17, review round 2). `_live_jobs_of_the_slot()` --
+    not aborting, not a finished result waiting for its paste, request audio and
+    `source_recording_id` equal to the slot's, the filter
+    `_running_retry_of_the_slot` applies before it compares requests -- are
+    each stopped with `_request_job_stop(delivery=history)`; a late result of
+    theirs goes to history only. It used to stop `_active_request_token`'s job,
+    which was wrong both ways: a retry R1 that had lost the token (a newer
+    dictation was recorded and cancelled, or is still in flight) kept running
+    beside a changed retry R2, and both delivered -- two history entries, two
+    pastes of one text -- and a Retry of an older failure stopped whatever held
+    the token, which could be the newest dictation: diverted to history only,
+    never pasted. Now the newest dictation is left alone and keeps its
+    `insert` delivery. The retry takes the overlay's token as every submit
+    does: it paints and keeps its "Processing", Cancel on the overlay cancels
+    it (`cancel_current_action` stops the token's job), and the newer job
+    becomes a queued one that delivers by the normal order rules (its paste
+    waits while a foreground job is active, and goes to its own window).
+    The one cost: `_executor` has a single worker, so the retry starts only when
+    the running job has ended -- behind a long local transcription that can be
+    minutes, which the old stop cut short for the newest dictation at the price
+    of discarding its paste. Cancel on that job's queue row frees the worker.
+    **One job cannot be left running: a pending streaming finalize**
+    (`_streaming_recording` with the microphone closed). It owns the session
+    and only its own foreground result clears it; with the token moved to the
+    retry its result would be a background one and the session would stay open,
+    refusing every new recording ("Streaming transcript is still finalizing").
+    Stopping it would be the diversion again, so the Retry is refused with a
+    tray note ("The streaming transcript is still finalizing. Retry the last
+    failed transcription when it has finished.") and works a few seconds later.
+    Before this the comment at the guard said a pending finalize "is stopped by
+    design". Tests: `test_a_retry_never_stops_a_job_of_another_recording`,
+    `test_a_changed_request_retry_stops_the_running_retry_without_the_overlay_token`,
+    `test_a_changed_retry_beside_a_newer_dictation_replaces_only_its_own_job`,
+    `test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it`.
   - **The ignored press is answered on the tray, never on the overlay**: it
     logs `retry_ignored_duplicate`, returns `False` and emits
     `busy_overlay_error` -- "A retry of this recording is already running with

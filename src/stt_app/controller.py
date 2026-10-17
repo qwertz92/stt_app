@@ -9546,34 +9546,43 @@ class DictationController(QtCore.QObject):
             credentials_generation,
         )
 
-    def _running_retry_of_the_slot(
-        self, settings: AppSettings
-    ) -> _TranscriptionJob | None:
-        """The job still working on the retry slot's recording with the very
-        request `settings` would send (`_request_identity`), if there is one.
+    def _live_jobs_of_the_slot(self) -> list[_TranscriptionJob]:
+        """The jobs still working on the retry slot's recording.
 
         The recording is the slot's own: the same audio bytes under the same
         recording id, which is how `_retire_retry_audio_delivered_by` tells a
         failure's retry from any other delivery. A job being stopped does not
         count -- the user cancelled it, or a retry with other settings
         replaced it -- and neither does a finished result waiting for its
-        paste, whose delivery retires the slot. Engine and model are part of
-        the request, and so are the vocabulary, region, endpoint, key and
-        language: a retry the user changed one of is not what the running one
-        was sent with, and waiting for that one would be the wrong answer.
+        paste, whose delivery retires the slot.
         """
         slot = (self._last_failed_wav_bytes, self._last_failed_recording_id)
-        wanted = self._request_identity(settings, self._credentials_generation)
+        jobs = []
         for job in self._jobs.values():
             if job.aborting or job.insertion_deferred:
                 continue
-            if (
-                self._request_identity(job.settings, job.credentials_generation)
-                != wanted
-            ):
-                continue
             payload = self._request_audio_by_token.get(job.token)
             if payload is not None and (payload[0], job.source_recording_id) == slot:
+                jobs.append(job)
+        return jobs
+
+    def _running_retry_of_the_slot(
+        self, settings: AppSettings
+    ) -> _TranscriptionJob | None:
+        """The job still working on the retry slot's recording with the very
+        request `settings` would send (`_request_identity`), if there is one.
+
+        Engine and model are part of the request, and so are the vocabulary,
+        region, endpoint, key and language: a retry the user changed one of is
+        not what the running one was sent with, and waiting for that one would
+        be the wrong answer.
+        """
+        wanted = self._request_identity(settings, self._credentials_generation)
+        for job in self._live_jobs_of_the_slot():
+            if (
+                self._request_identity(job.settings, job.credentials_generation)
+                == wanted
+            ):
                 return job
         return None
 
@@ -9588,16 +9597,28 @@ class DictationController(QtCore.QObject):
             or self._recording_stop_in_progress
             or self._audio_capture is not None
         ):
-            # A retry stops the running transcription and paints
-            # "Processing"; from the tray while the microphone was open it
-            # did both over a live recording (wave 15). Deliberately not
-            # `_streaming_recording`: a pending finalize keeps that flag
-            # with the microphone closed, and it is a transcription in
-            # flight, which the retry stops by design. The refusal reaches
-            # the tray, since the recording owns the overlay.
+            # A retry paints "Processing" and takes the overlay; from the tray
+            # while the microphone was open it did that over a live recording
+            # (wave 15). The refusal reaches the tray, since the recording owns
+            # the overlay.
             self.show_overlay_error(
                 "Finish the current recording before retrying the last failed "
                 "transcription."
+            )
+            return False
+        if self._streaming_recording:
+            # The microphone is closed and a streaming finalize is in flight.
+            # It owns the session, and only its own result clears it
+            # (`_on_transcription_ready` on the foreground road): left running
+            # while the retry takes the overlay's token, its result would be
+            # handled as a background one and the session would stay open for
+            # good, refusing every new recording. It is another recording's
+            # job, so the retry does not stop it either -- that diverted the
+            # newest dictation to history only. It waits; the finalize takes
+            # seconds.
+            self.show_overlay_error(
+                "The streaming transcript is still finalizing. Retry the last "
+                "failed transcription when it has finished."
             )
             return False
         settings, detail = self._retry_settings()
@@ -9622,12 +9643,18 @@ class DictationController(QtCore.QObject):
                 "settings; cancel it first to retry again."
             )
             return False
-        # Stop any still-running transcription before retrying; if it finishes
-        # anyway it is kept in history rather than discarded.
-        self._request_job_stop(
-            self._active_request_token,
-            delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
-        )
+        # Stop what is still working on this recording, whichever job holds the
+        # overlay's token -- an earlier retry that lost the token to a newer
+        # dictation kept running beside its replacement, and both delivered --
+        # and nothing else: a job of another recording is not this retry's to
+        # stop, and the newest dictation was diverted to history only when it
+        # was. A result that still arrives goes to history rather than being
+        # discarded. The retry then queues like any job, behind whatever is
+        # running on the single worker, and Cancel cancels it.
+        for job in self._live_jobs_of_the_slot():
+            self._request_job_stop(
+                job.token, delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+            )
         self._overlay.set_state("Processing", detail)
         # The retry names the recording whose bytes it resubmits. Registered
         # from the store's slot, the job took the newest recording's id --
