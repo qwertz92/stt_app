@@ -478,9 +478,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   - **One writer paints every offer** (owner's decision 2026-10-17): a
     transcript that exists but is not (surely) in its window is a warning,
     not the red Error, so `_paint_not_inserted` is the only call that paints
-    it: `_paint_insert_offer`, both arms of `_paint_status_keeping_offer`
-    ("Still not inserted:" and "Possibly inserted already") and both arms of
-    the failed paste in `_insert_text_at_target`. It takes the offer's own
+    it, from four call sites: `_paint_insert_offer`, `_paint_status_keeping_offer`
+    (one call; its wordings are "Still not inserted:" and "Possibly inserted
+    already") and the two arms of the failed paste in
+    `_insert_text_at_target`. It takes the offer's own
     `may_have_pasted` and derives both the label word and the action from
     it -- "Not inserted" with Insert, or "Check window" without -- so the
     two cannot disagree; the state stays Error for every control and check
@@ -489,8 +490,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     aborted streaming session, although its partial text is in history --
     it is a failed session, not an insert that did not land (open question
     to the owner, 2026-10-17) --, and so is a refusal painted while no offer
-    is pending. A new writer of an Insert offer goes through the helper;
-    `FakeOverlay` refuses one that does not.
+    is pending. **Severity wins** (lead's decision 2026-10-17): a real
+    failure that arrives while an offer is pending -- a hotkey that did not
+    register, a failed model preload, a setting that was not saved, a refused
+    recording start -- repaints the offer as the red Error
+    (`_paint_status_keeping_offer` passes `failure=True`, `warning=None`),
+    with the same "Still not inserted" detail, transcript and Insert: the
+    orange hid that something failed, and the red costs the transcript
+    nothing. Informational lines and the insert path's own errors
+    (`show_overlay_error(..., about_insert=True)`) keep the orange; a new
+    error raised from the insert or re-paste path must pass it. A new writer
+    of an Insert offer goes through the helper; `FakeOverlay` refuses one
+    that does not.
   - **A refused recording start keeps the offer**: the clear sits past every
     refusal; `_refuse_recording_start` repaints it ("Still not inserted:")
     with `copy_text`/`error_action` on the offer (the stripped transcript).
