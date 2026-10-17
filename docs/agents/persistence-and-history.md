@@ -154,6 +154,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   moves files to the recordings folder under their own name, which the
   archive prune (`recording_<stamp>.wav` only) never deletes; a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.
+- **A recording carries the language it was made in** (owner decision
+  2026-10-17; Retry transcribes in that language, `docs/agents/controller-and-jobs.md`).
+  `LastRecordingState.language_mode` is written by
+  `save_recording(language_mode=)` from the recording's own settings snapshot and
+  rides every later mark of the state (`asdict` writes it back). An additive
+  field, so no schema bump: a file the previous version wrote reads as `""`
+  (unknown, as does orphaned audio without a state), which Retry answers with the
+  language selected now; an older version reading a newer file ignores it.
+  Tests: `tests/test_last_recording_store.py`.
 - **Ctrl+C in either history view copies the whole selection** (explicit
   `QKeySequence.Copy` shortcut; the default copies one cell).
 - **Nothing that only reads may call `appdata_root`** (it creates the folder
