@@ -1329,7 +1329,10 @@ class TestDeepgramKeepAlive:
         release_send = threading.Event()
         _FakeWebSocketApp.binary_send_started = send_started
         _FakeWebSocketApp.release_binary_send = release_send
-        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        # The first wait is long, so no idle frame can come before the audio
+        # however late this thread is; the interval shrinks once the audio is
+        # inside the send, and the sender reads it again for its next wait.
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 30.0)
         t = DeepgramTranscriber(api_key="key")
         monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
 
@@ -1338,6 +1341,7 @@ class TestDeepgramKeepAlive:
             ws = _FakeWebSocketApp.instances[-1]
             t.push_audio_chunk(b"audio")
             assert send_started.wait(timeout=1.0)
+            monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
 
             time.sleep(0.3)  # six intervals with the sender stuck in the send
             assert [payload for payload, _opcode in ws.send_calls] == [b"audio"]
@@ -1357,21 +1361,31 @@ class TestDeepgramKeepAlive:
         KeepAlive the sender is writing when the stop begins is inside it."""
         _FakeWebSocketApp.instances = []
         _FakeWebSocketApp.finalize_message = None
+        audio_in_flight = threading.Event()
+        release_audio = threading.Event()
         started = threading.Event()
         release = threading.Event()
 
-        class _SocketHoldingTheFirstKeepAlive(_FakeWebSocketApp):
+        class _SocketHoldingTheAudioAndTheFirstKeepAlive(_FakeWebSocketApp):
             def send(self, payload, opcode=None):
                 first = payload == _KEEPALIVE_FRAME and not started.is_set()
                 super().send(payload, opcode)
+                if payload == b"audio":
+                    audio_in_flight.set()
+                    assert release_audio.wait(timeout=2.0)
                 if first:
                     started.set()
                     assert release.wait(timeout=2.0)
 
         class _Module(_FakeWebSocketModule):
-            WebSocketApp = _SocketHoldingTheFirstKeepAlive
+            WebSocketApp = _SocketHoldingTheAudioAndTheFirstKeepAlive
 
-        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        # The first wait is long, so no idle frame can come before the audio
+        # however late this thread is. The interval shrinks while the audio
+        # is held inside the send; the sender reads it for its next wait. A
+        # session with audio gets no silence frame, so the first idle frame is
+        # the KeepAlive this test holds.
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 30.0)
         t = DeepgramTranscriber(api_key="key")
         monkeypatch.setattr(t, "_get_websocket_module", lambda: _Module)
 
@@ -1379,7 +1393,10 @@ class TestDeepgramKeepAlive:
             t.start_stream()
             ws = _FakeWebSocketApp.instances[-1]
             send_thread = t._stream_send_thread
-            t.push_audio_chunk(b"audio")  # a session with audio gets no silence
+            t.push_audio_chunk(b"audio")
+            assert audio_in_flight.wait(timeout=2.0)
+            monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+            release_audio.set()
             assert started.wait(timeout=2.0)
 
             stopper = threading.Thread(target=t.stop_stream)
@@ -1404,6 +1421,7 @@ class TestDeepgramKeepAlive:
             assert len(ws.send_calls) == 4
             assert not send_thread.is_alive()
         finally:
+            release_audio.set()
             release.set()
             t.abort_stream()
 
