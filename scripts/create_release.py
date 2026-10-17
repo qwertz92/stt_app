@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
 from collections.abc import Sequence
@@ -24,6 +25,20 @@ RELEASE_METADATA_PATHS = [
     "src/stt_app/__init__.py",
     "installer/windows/stt_app.iss",
 ]
+
+# The arguments of the `npm audit` that windows-release.yml runs after the tag
+# is pushed (quality.yml runs the same one on every push; a test compares all
+# three). The audit asks npm's live advisory database, so its verdict moves
+# with no change to the repository: v0.12.1 was tagged and pushed, then the
+# workflow failed on a sharp advisory published after the last green push,
+# leaving a tag with no release. Running it here, before anything is changed
+# or pushed, turns that into an error the script can still recover from.
+NPM_AUDIT_ARGS = (
+    "audit",
+    "--omit=dev",
+    "--package-lock-only",
+    "--audit-level=moderate",
+)
 
 
 class CreateReleaseError(RuntimeError):
@@ -100,6 +115,10 @@ def create_release(
 ) -> None:
     _ensure_release_branch(root=root, remote=remote)
     _ensure_no_tracked_changes(root=root)
+    # Before the bump, so a failure has nothing to restore, and whatever
+    # `skip_tests` says: it takes seconds, and no earlier pytest run can stand
+    # in for it, because its verdict is today's advisory list, not the code's.
+    _ensure_javascript_audit_passes(root=root)
 
     # Captured before the bump so a gate below can put them back.
     # `_ensure_no_tracked_changes` has just proven the tree clean, so this is
@@ -179,6 +198,32 @@ def _ensure_no_tracked_changes(*, root: Path) -> None:
         )
 
 
+def _ensure_javascript_audit_passes(*, root: Path) -> None:
+    # `shutil.which`, not the bare name: on Windows npm is `npm.cmd`, which
+    # CreateProcess does not find by the name `npm`. A missing npm stops the
+    # release rather than skipping the audit: a skipped audit is the gap this
+    # check exists to close.
+    npm = shutil.which("npm")
+    if npm is None:
+        raise CreateReleaseError(
+            "npm was not found on PATH, so the release cannot run the "
+            "'npm audit' check that windows-release.yml runs after the tag is "
+            "pushed. Install Node.js (it brings npm) or fix PATH, then run the "
+            "release again. Nothing was changed, committed or tagged."
+        )
+    result = _run([npm, *NPM_AUDIT_ARGS], root=root, check=False)
+    if result.returncode != 0:
+        raise CreateReleaseError(
+            f"npm audit failed (exit code {result.returncode}); npm's output is "
+            "above. Usually the locked production JavaScript dependencies have "
+            "an advisory at or above 'moderate', or the advisory database could "
+            "not be reached. windows-release.yml runs the same command after the "
+            "tag is pushed and would fail the same way. Nothing was changed, "
+            "committed or tagged; fix package-lock.json on main, then run the "
+            "release again."
+        )
+
+
 def _has_staged_changes(*, root: Path) -> bool:
     result = subprocess.run(
         ["git", "diff", "--cached", "--quiet"],
@@ -245,12 +290,13 @@ def _run(
     *,
     root: Path,
     input_text: str | None = None,
-) -> None:
+    check: bool = True,
+) -> subprocess.CompletedProcess:
     print(f"==> {' '.join(command)}", flush=True)
-    subprocess.run(
+    return subprocess.run(
         command,
         cwd=root,
-        check=True,
+        check=check,
         input=input_text,
         text=input_text is not None,
     )
@@ -293,7 +339,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--skip-tests",
         action="store_true",
-        help="Skip ruff and pytest before committing the release bump.",
+        help=(
+            "Skip ruff and pytest before committing the release bump. "
+            "The npm audit still runs."
+        ),
     )
     parser.add_argument(
         "--remote",

@@ -3,6 +3,33 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (the release script audits npm before it tags)
+
+- **What went wrong on 2026-10-10**: `create_release.py --version 0.12.1`
+  pushed `main` and the tag, and then the "Windows Release" workflow failed
+  at `npm audit --omit=dev --package-lock-only --audit-level=moderate` on a
+  new sharp advisory (GHSA-wq5f-xc86-pv6w; `dc998a9` bumped sharp). The tag
+  stayed, without a release. The audit reads npm's live advisory database,
+  so the same lockfile passes one day and fails the next; the script's own
+  pytest run and a green `quality.yml` push run could not have seen it.
+- **Fix**: the script runs that exact command before the version bump (so
+  nothing needs restoring), also under `--skip-tests`, and stops with a
+  plain message when it fails or when `npm` is not on PATH. A test compares
+  the three copies of the command (script, `windows-release.yml`,
+  `quality.yml`) and the flow is tested with every subprocess faked.
+  Checked for real: `npm audit` through the script's own function answered
+  0 vulnerabilities on this lockfile, an absent npm and a failing npm
+  (a folder without `package-lock.json`) both stopped with the message.
+- **Second lesson, from v0.12.0**: its tag build failed at a test that
+  expected a 1026 px dialog on the runner's 976 px screen. No local check
+  reproduces a fresh runner's screen, so the order of a release is now
+  written down: dry run (`workflow_dispatch`) on `main`, green, then the
+  script. The YAML was read to say exactly what the dispatch run does: every
+  gate and build step, no tag verification, no publish, an uploaded
+  three-day artifact; and a dispatch started on a tag ref would publish.
+  The order is procedure; the script does not check that a dry run
+  happened.
+
 ## 2026-10-17 (Deepgram streaming: KeepAlive while no audio goes out)
 
 - **Why**: since 2026-10-10 the capture watchdog waits up to 12 s for audio a

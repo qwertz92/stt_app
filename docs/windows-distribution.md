@@ -156,10 +156,15 @@ evidence to `--report`.
 The repository's own `samples/benchmark_sample.wav` is synthetic sine tones,
 so the two checks that transcribe need a recording of real speech.
 
-Then start the release workflow by hand once (`gh workflow run
-windows-release.yml`): it runs the identical gate the tag will run and uploads
-the installer and ZIP as a three-day artifact, so a red gate costs a dry run
-instead of a published tag.
+Then, before tagging, start the release workflow by hand on `main` and wait
+for it to finish green (`gh workflow run windows-release.yml --ref main`, then
+`gh run watch`): it runs the identical gate and build the tag will run and
+uploads the installer and ZIP as a three-day artifact, but verifies no tag and
+publishes nothing, so a red gate costs a dry run instead of a published tag.
+Never start it with a tag as the ref: that run publishes. The v0.12.0 build
+failed on a test that only the runner's smaller screen exposes, which no local
+check can reproduce; `docs/agents/build-release-and-testing.md` has the
+details and what the dry run does not cover.
 
 What these four do **not** cover, and nothing automated does: running the
 installer, and installing over an older installed version.
@@ -177,9 +182,11 @@ The script fetches tags, shows the latest numeric release tag, and proposes the
 current project version when it is newer than the latest release tag; otherwise
 it proposes the next patch version. Press Enter to accept the default, or enter
 an explicit numeric version such as `0.7.0`. It then asks for an explicit `yes`
-confirmation before it changes files, runs `uv lock`, runs checks, creates the
-release metadata commit when one is needed, pushes `main`, creates the annotated
-tag, and pushes the tag.
+confirmation, runs the same `npm audit` the release workflow runs (always, even
+with `--skip-tests`; without npm on PATH, or on an advisory, it stops before
+changing anything), and then changes files, runs `uv lock`, runs checks, creates
+the release metadata commit when one is needed, pushes `main`, creates the
+annotated tag, and pushes the tag.
 
 Release pages intentionally publish both user-facing Windows assets:
 

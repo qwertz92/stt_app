@@ -23,6 +23,65 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-
   `uv sync --locked`, `npm ci`, Ruff, tests, audit; any worktree change is
   rejected; version bumping prepares all edits and rolls back on a failed
   write.
+- **`create_release.py` runs the workflow's `npm audit` before it changes
+  anything** (2026-10-17). On 2026-10-10 `--version 0.12.1` pushed `main` and
+  the tag, then "Windows Release" failed at `npm audit --omit=dev
+  --package-lock-only --audit-level=moderate` on a sharp advisory
+  (GHSA-wq5f-xc86-pv6w, fixed by `dc998a9`), leaving a tag with no release.
+  The audit asks npm's live advisory database, so its verdict moves with no
+  change to the repository: a green push-time run, or a pytest run a minute
+  ago, says nothing about it.
+  - **Where**: `_ensure_javascript_audit_passes`, right after the branch and
+    clean-tree checks and before the version bump, so a failure has nothing to
+    restore. It runs **whatever `--skip-tests` says** (seconds, and no other
+    check can stand in for it).
+  - **It fails closed**: a non-zero exit (an advisory, or an unreachable
+    advisory database -- npm's output is printed above the message) and an
+    `npm` that is not on PATH both stop the release with a message that says
+    nothing was changed, committed or tagged. A skipped audit is the gap this
+    closes, so a missing npm is never skipped. npm is resolved with
+    `shutil.which` (on Windows it is `npm.cmd`, which CreateProcess does not
+    find as `npm`).
+  - **One command, three copies**: `NPM_AUDIT_ARGS` in the script,
+    `windows-release.yml` and `quality.yml`. `tests/test_create_release.py`
+    compares all three (`quality.yml`'s own comment already asked for them to
+    match) and drives `create_release` with every subprocess faked, so no test
+    tags or pushes.
+- **A release is dry-run on `main` first and tagged only after that is green**
+  (2026-10-17; this is procedure, nothing in `create_release.py` checks it).
+  The v0.12.0 build failed at a test that expected a 1026 px dialog on the
+  runner's 976 px screen (`docs/agents/testing.md`): the CI runner is a fresh
+  VM with a ~1028x749 desktop, so no local run, and no `create_release.py`
+  check, can catch that class; only a build on the runner can.
+  `windows-release.yml` has `workflow_dispatch` (no inputs) for exactly that.
+  What a dispatch run does, read from the YAML:
+  - **It runs every step of the tag run** -- locked Python and JavaScript
+    installs, `ruff check`, `ruff format --check`, the whole `pytest`, the
+    `npm audit`, the Inno Setup install, the portable bundle, the installer
+    and its checksum -- on whichever ref it is started on (`gh workflow run
+    windows-release.yml --ref main`, then `gh run watch`).
+  - **It skips the two steps guarded by `startsWith(github.ref,
+    'refs/tags/v')`**: "Verify release tag matches project version" and
+    "Publish GitHub release assets". It adds one guarded by
+    `github.event_name == 'workflow_dispatch'`: "Upload manual workflow
+    artifacts" keeps the ZIP, installer and checksum as the artifact
+    `stt_app-windows-release` for three days. So nothing is published and no
+    release or tag is created. (The workflow's own comment records the dry
+    run for v0.9.0 failing on seven layout tests, run 35378290905.)
+  - **Never dispatch with a tag as the ref**: `github.ref` is then
+    `refs/tags/v...`, and the run takes the tag path, verifies and
+    publishes.
+  - **What it does not cover**: the dry run builds the commit it is started
+    on, and `create_release.py` then adds the bump commit (`pyproject.toml`,
+    `uv.lock`, `src/stt_app/__init__.py`, the Inno script) on top and tags
+    that. Those four files are the only difference unless the version was
+    already bumped on `main`; to dry-run exactly the tagged commit, bump on
+    `main` first (the manual path in `docs/windows-distribution.md`), run
+    the dry run, then `create_release.py` tags the current `main` without a
+    commit. The tag-match step is skipped in a dry run; the script runs the
+    same check (`verify_release`) before it pushes.
+  - Order of a release: `release_check_*.py` scripts, dry run on `main`,
+    green, `create_release.py`.
 - **`scripts/setup_node_windows.py`**: numeric `major.minor.patch` only,
   archives verified against `SHASUMS256.txt`, escaping ZIP members rejected.
   Keep all three.
