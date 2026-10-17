@@ -421,6 +421,44 @@ def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_
     _ = app
 
 
+def test_an_unfinished_recording_names_the_language_that_ran_not_a_stale_selection(
+    monkeypatch, tmp_path
+):
+    """The saved selection is not offered by the engine either (Deepgram
+    nova-2 has no Afrikaans): the provider's own normalization runs Auto, so
+    that is what is requested and what the startup notice names."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="af"
+    )
+    controller._settings = replace(
+        controller._settings, engine="deepgram", deepgram_model="nova-2"
+    )
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="af",
+    )
+    recording = unfinished.find("spoken1")
+
+    assert controller.transcribe_unfinished_recording(recording)[0] is True
+
+    assert seen == ["auto"]
+    assert controller.unfinished_recording_language_note(recording) == (
+        "Auto; Afrikaans not offered"
+    )
+    controller.shutdown()
+    _ = app
+
+
 def test_an_unfinished_recording_in_an_offered_language_needs_no_note(
     monkeypatch, tmp_path
 ):

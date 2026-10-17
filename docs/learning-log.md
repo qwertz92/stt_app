@@ -27,6 +27,20 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   until the finalize has ended instead (before, it stopped the finalize, which
   is the diversion again). Not tested on a real stream: the refusal is shown
   with the fake streaming transcriber.
+- **P4, reproduced: the fallback named a language that did not run.** When the
+  recorded language was not offered, a retry used "the selected language" as it
+  stood in the settings. A selection the engine does not offer either stays
+  saved when the engine is switched (the overlay's menu only shows the engine's
+  first language instead), so a stale Afrikaans on Deepgram nova-2 was named in
+  the overlay text and the startup notice while the provider's own
+  normalization ran Auto. Reproduced on both roads (`'af' == 'auto'` failed).
+  One decision now serves both: `_language_a_retry_runs_in` returns the language
+  that runs and whether it is the recorded one -- the recorded language where
+  offered, else the selection, else the engine's first language, the overlay's
+  own rule -- so the language named is the language the provider receives.
+  `_recorded_language_offered` is gone (it was the first half of this).
+  The overlay text for the clamped case reads "the selected language (Afrikaans)
+  is not offered either, so using Auto"; the log line says `using=`.
 - **P4, reproduced: the Cancel guard armed on every exit of the slot from
   Retry.** Round 1 armed `_cancel_ignored_until` in `_sync_action_slot` when
   the slot stopped showing Retry, to drop the second click of a double click.

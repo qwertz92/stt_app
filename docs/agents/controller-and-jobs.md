@@ -357,10 +357,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     which makes it translate into it instead of transcribing, Cohere forces
     German for `auto`, Granite CTC (English only) decodes German speech as
     English -- while the selection is one the user picked for the engine in use.
+    A saved selection the engine does not offer either (it stays saved when the
+    engine is switched, and the overlay's menu shows the engine's first language
+    instead) is clamped to that first language, the overlay's own rule
+    (`OverlayUI.set_language_options`), so the language named in the overlay
+    text, the log (`using=`) and the startup notice is the one the provider
+    receives. Before the review of 2026-10-17 (round 2) the selection was named
+    as it stood: a stale Afrikaans on Deepgram nova-2 was reported while the
+    provider's own normalization ran Auto.
     **One helper decides it for both roads**: `_pin_recorded_language(settings,
     recorded, recording_id)` returns the pinned settings and `True`, or the
-    settings as given and `False` (it writes the log line once);
-    `_retry_settings` words the overlay text from it and
+    settings with the language that runs and `False` (the decision is
+    `_language_a_retry_runs_in`; `_pin_recorded_language` writes the log line
+    once); `_retry_settings` words the overlay text from it and
     `transcribe_unfinished_recording` uses it too. The restart road had its own
     unchecked pin until the review of 2026-10-17: a recording made in Auto and
     retried after a restart under Canary was sent as `auto` and came out
@@ -378,7 +387,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     notice's row says so -- `Transcribed, in History (English; Auto not
     offered)`: the language that ran, then the one the engine did not offer.
     The text comes from `unfinished_recording_language_note(recording)` (the
-    same `_recorded_language_offered` check, no second log line), handed to
+    same `_language_a_retry_runs_in` decision, no second log line), handed to
     `UnfinishedRecordingsDialog(language_note=)` and asked right before each
     row's transcription; the dialog's `(ok, text)` contract is unchanged
     because many callers unpack it. History retranscribe and the Import tab
@@ -387,9 +396,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (the Import tab's "Use last recording" starts its language picker from the
     recording's own, `docs/agents/settings-dialog.md`). Tests in
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
-    the streaming, dying-stream, failed-retry and unknown-language cases),
+    the streaming, dying-stream, failed-retry and unknown-language cases, and
+    `test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_either`),
     `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
-    Granite CTC, the note, a quit during a fallback retry),
+    Granite CTC, the note, a quit during a fallback retry, a stale selection
+    named as what ran),
     `tests/test_unfinished_recordings_notice.py` (the row text).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);

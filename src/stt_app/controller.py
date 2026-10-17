@@ -1344,14 +1344,19 @@ class DictationController(QtCore.QObject):
         "English; Auto not offered" -- the selected language that is used, and
         the recorded one the engine and model selected now do not offer. ""
         when the recorded language is used or none is known. The decision is
-        `_pin_recorded_language`'s; this asks it without logging a second line.
+        `_pin_recorded_language`'s, through `_language_a_retry_runs_in`; this
+        asks it without logging a second line.
         """
         recorded = recording.language_mode
-        if not recorded or self._recorded_language_offered(self._settings, recorded):
+        if not recorded:
             return ""
-        selected = self._settings.language_mode
+        language, recorded_offered = self._language_a_retry_runs_in(
+            self._settings, recorded
+        )
+        if recorded_offered:
+            return ""
         return (
-            f"{LANGUAGE_MODE_LABELS.get(selected, selected)}; "
+            f"{LANGUAGE_MODE_LABELS.get(language, language)}; "
             f"{LANGUAGE_MODE_LABELS.get(recorded, recorded)} not offered"
         )
 
@@ -9473,7 +9478,9 @@ class DictationController(QtCore.QObject):
         and model do not offer. Passed on, the latter would reach the
         provider's own normalization, which picks a stand-in -- for Canary the
         first language of its list, so a translation; the selection is one
-        the user picked for the engine in use. The overlay says which applied.
+        the user picked for the engine in use, and where the saved selection is
+        not offered either, the engine's first language
+        (`_language_a_retry_runs_in`). The overlay says which applied.
         """
         settings = replace(self._settings)
         recording_id = self._last_failed_recording_id
@@ -9487,28 +9494,56 @@ class DictationController(QtCore.QObject):
                 "Retrying transcription with the current engine and model "
                 f"(recorded language: {recorded_label})..."
             )
-        selected_label = LANGUAGE_MODE_LABELS.get(
+        runs_label = LANGUAGE_MODE_LABELS.get(
             settings.language_mode, settings.language_mode
         )
+        selected = self._settings.language_mode
+        if settings.language_mode == selected:
+            outcome = f"using the selected language ({runs_label})"
+        else:
+            # A saved selection this engine does not offer either: the one
+            # that runs is the engine's first (`_language_a_retry_runs_in`).
+            selected_label = LANGUAGE_MODE_LABELS.get(selected, selected)
+            outcome = (
+                f"the selected language ({selected_label}) is not offered "
+                f"either, so using {runs_label}"
+            )
         return settings, (
             "Retrying transcription with the current engine and model, which "
-            f"do not offer the recorded language ({recorded_label}); using "
-            f"the selected language ({selected_label})..."
+            f"do not offer the recorded language ({recorded_label}); {outcome}..."
         )
 
-    def _recorded_language_offered(self, settings: AppSettings, recorded: str) -> bool:
-        """Whether the engine and model `settings` select offer the language a
-        recording was made in. Batch, the only mode a retry runs in."""
-        return recorded in language_modes_for_selection(
+    def _language_a_retry_runs_in(
+        self, settings: AppSettings, recorded: str
+    ) -> tuple[str, bool]:
+        """The language a retry of a recording made in `recorded` runs in under
+        the engine and model `settings` select, and whether that is `recorded`.
+
+        Batch, the only mode a retry runs in. The recorded language where the
+        engine and model offer it; otherwise the language selected now; and
+        where that is not offered either -- a saved selection stays saved when
+        the engine is switched, and the overlay's language menu shows the
+        first language of the new list instead (`OverlayUI.set_language_options`)
+        -- the first language of the list, the overlay's own rule. The language
+        that is named is then the one the provider receives, and its own
+        normalization has nothing left to substitute: a stale "af" on Deepgram
+        nova-2 was named Afrikaans in the note while the provider ran Auto.
+        """
+        offered = language_modes_for_selection(
             settings.engine, self._selected_model_name(settings), "batch"
         )
+        if recorded in offered:
+            return recorded, True
+        selected = settings.language_mode
+        return (selected if selected in offered else offered[0]), False
 
     def _pin_recorded_language(
         self, settings: AppSettings, recorded: str, recording_id: str
     ) -> tuple[AppSettings, bool]:
         """`settings` transcribing in the language a recording was made in, and
-        True -- or `settings` as given, and False when the engine and model
-        selected now do not offer that language.
+        True -- or, when the engine and model selected now do not offer that
+        language, `settings` with the language that runs instead
+        (`_language_a_retry_runs_in`), and False.
 
         The one rule both roads of a retry share, the in-process one
         (`_retry_settings`) and the one after a restart
@@ -9520,18 +9555,18 @@ class DictationController(QtCore.QObject):
         transcript in History is worse than the language the user selected
         for this engine, which is what stays. Logged, once per decision.
         """
-        if self._recorded_language_offered(settings, recorded):
-            return replace(settings, language_mode=recorded), True
-        self._logger.info(
-            "retry_recorded_language_not_offered recording_id=%s language=%s "
-            "engine=%s model=%s selected=%s",
-            recording_id,
-            recorded,
-            settings.engine,
-            self._selected_model_name(settings),
-            settings.language_mode,
-        )
-        return settings, False
+        language, recorded_offered = self._language_a_retry_runs_in(settings, recorded)
+        if not recorded_offered:
+            self._logger.info(
+                "retry_recorded_language_not_offered recording_id=%s language=%s "
+                "engine=%s model=%s using=%s",
+                recording_id,
+                recorded,
+                settings.engine,
+                self._selected_model_name(settings),
+                language,
+            )
+        return replace(settings, language_mode=language), recorded_offered
 
     def _request_identity(
         self, settings: AppSettings, credentials_generation: int

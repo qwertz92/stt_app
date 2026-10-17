@@ -3963,6 +3963,38 @@ def test_retry_keeps_the_recorded_language_only_where_the_engine_offers_it(
     _ = app
 
 
+def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_either(
+    monkeypatch, tmp_path
+):
+    """A saved selection the engine does not offer stays saved: the overlay
+    shows the first language of the engine's list and the provider's own
+    normalization runs that one, while the settings still say the stale one. A
+    retry that names the "selected" language then says Afrikaans for a request
+    that ran in Auto. The language that is sent is the one that is named."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="af"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    # Deepgram nova-2 offers neither the recorded Afrikaans nor the saved one.
+    controller._settings = replace(
+        controller._settings, engine="deepgram", deepgram_model="nova-2"
+    )
+    assert controller._settings.language_mode == "af"
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "auto"
+    detail = overlay.states[-1][1]
+    assert "do not offer the recorded language (Afrikaans)" in detail
+    assert "the selected language (Afrikaans) is not offered either" in detail
+    assert "using Auto" in detail
+    assert controller._settings.language_mode == "af", "the saved selection is kept"
+    controller.shutdown()
+    _ = app
+
+
 def test_a_failed_retry_keeps_the_recordings_language(monkeypatch, tmp_path):
     controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"
