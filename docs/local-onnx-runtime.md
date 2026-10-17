@@ -127,11 +127,11 @@ command after every such `git pull`. Since 2026-10-17 the app does it itself
    deferred it in 0.83 s, no npm run).
 
 The update runs on the thread that starts the runner (a preload or
-transcription worker, never the UI thread). During the startup preload its
-time counts as loading the model; a transcription that runs the update itself
-(with "Keep ONNX model loaded" off there is no preload) shows "Updating the
-JavaScript packages ..." as its progress. It cannot be cancelled; npm is ended
-after 10 minutes at most.
+transcription worker, never the UI thread). The overlay shows "Updating the
+JavaScript packages ..." while it runs, in the startup preload as well as
+when a transcription starts the runner (with "Keep ONNX model loaded" off
+there is no preload). It cannot be cancelled; npm is ended after 10 minutes
+at most.
 
 ## Runtime Formats
 

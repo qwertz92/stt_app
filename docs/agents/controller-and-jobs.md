@@ -274,6 +274,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   recording-start notice and streaming refusal. Clear it in both
   `_on_model_preload_done` and the `on_settings_changed` remote-engine
   cancel branch, or `_current_preload_phase()` answers for a finished one.
+  The worker also keeps the runtime's progress lines per generation
+  (`_note_preload_progress`); the load phase shows only the JavaScript
+  package update's line (`local-models-and-downloads.md`), and the worker's
+  `finally` clears the progress callback with the cancel check.
 - **A preload must not hide a failed hotkey registration**: the
   `_preload_owns_overlay()` early return in `show_idle_status` sits below
   the four hotkey-error branches (`reload_settings` relies on them).

@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17: the startup preload shows the JavaScript package update
+
+The second open question of the source-checkout package update, decided by the
+lead on the owner's behalf together with the back-off below.
+- **The startup preload shows "Updating the JavaScript packages ..."** instead
+  of "Loading '<model>' into memory." while npm runs. With "Keep ONNX model
+  loaded" on (the default) the first runner starts in the preload, and the
+  preload worker gave the transcriber no progress callback, so the update was
+  invisible there for 11 s to over a minute.
+- The worker now records the runtime's progress lines per generation
+  (`_note_preload_progress`); the 600 ms poll, the only writer of the preload
+  line, shows the update line while it is the latest one and falls back to the
+  load line with the next one (packages updated, or "Starting ONNX runtime"
+  after a failure). Nothing new paints the overlay, so the poll's rules -- no
+  paint over a live session, Done, Error or a line being read -- hold
+  unchanged. No Cancel sentence on that line: npm cannot be aborted. The text
+  is one constant (`config.NODE_PACKAGES_UPDATING_TEXT`) for the dictation
+  start and the preload, and the worker's `finally` clears the progress
+  callback with the cancel check, because the runtime is shared and cached.
+- The test drives `_preload_model_worker` with a transcriber that reports the
+  update; before the change it saw "Loading 'cohere-transcribe-03-2026' into
+  memory." while the update ran. An existing test caught the first draft's
+  renamed log line ("Failed to clear the preload transcriber hooks"): it
+  checks that a failed clear is logged as a cancel-hook failure, so the line
+  names both hooks.
+
 ## 2026-10-17: a failed JavaScript package update backs off for a day
 
 One of the open questions left by the source-checkout package update (entry

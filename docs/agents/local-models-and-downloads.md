@@ -388,6 +388,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     the stored one), ending "the app tries again after <local time>"
     (`node_packages_notice_text(reason, retry_after)`; "at its next start"
     when the record could not be saved).
+  - **The startup preload shows the update.** `_preload_model_worker` gives
+    the transcriber a progress callback (`_note_preload_progress`, kept per
+    generation under `_preload_result_lock`, cleared in the worker's
+    `finally` with the cancel check, since the runtime is shared and
+    cached). In the load phase `_preload_progress_detail` shows
+    `config.NODE_PACKAGES_UPDATING_TEXT` -- the same line a dictation start
+    shows -- plus "You can start recording now; transcription waits for
+    this model." while that is the runtime's latest line, and goes back to
+    "Loading ... into memory" with the next line (packages updated, or
+    "Starting ONNX runtime" after a failure). No Cancel sentence: npm
+    cannot be aborted. Only the 600 ms poll paints it, so its rules -- no
+    paint over a live session, Done or Error, or a line being read -- hold.
   - Measured on HomeBase, 4.3.0 -> 4.3.1 lock in a throwaway copy: 11-13 s
     in all with a warm npm cache (npm 9.2-9.3 s, staged probe 0.24-0.41 s,
     renames 0.01 s, deleting the old 466 MB tree 1.5-1.9 s); first install

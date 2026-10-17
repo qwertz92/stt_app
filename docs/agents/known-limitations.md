@@ -488,12 +488,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     in the same folder beside it; the staged checks and Windows refusing
     to rename a folder with an open file in it are what keep a mixed tree
     out of `node_modules` then.
-  - With "Keep ONNX model loaded" on, the update runs inside the startup
-    preload, whose overlay line stays "Loading selected model..." for the
-    11 s to 72 s it takes: the preload worker gives the transcriber no
-    progress callback, so "Updating the JavaScript packages ..." appears
-    only when a dictation starts the runner. Wiring the preload's progress
-    through is ~1 h with tests.
   - The benchmark worker is a process of its own; if its first runner start
     is the one that finds the drift, that case's load time includes npm.
   - A rename that keeps failing for its 30 s (a file inside held open for
