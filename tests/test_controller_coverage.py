@@ -2576,10 +2576,16 @@ class _StoreThatAssignsIds(_StoreWithIds):
         self.save_raises = save_raises
         self.saves = 0
 
-    def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
+    def save_recording(
+        self, wav_bytes: bytes, *, keep_after_success: bool, language_mode: str = ""
+    ):
         if self.save_raises:
             raise OSError("disk full")
-        super().save_recording(wav_bytes, keep_after_success=keep_after_success)
+        super().save_recording(
+            wav_bytes,
+            keep_after_success=keep_after_success,
+            language_mode=language_mode,
+        )
         self.saves += 1
         self.recording_id = f"saved-{self.saves}"
         return SimpleNamespace(recording_id=self.recording_id)

@@ -6,10 +6,11 @@ A quit with several recordings in the queue, or with failed recordings waiting
 for Retry, used to drop all the others: their audio lived only in memory.
 
 This store is a directory of WAV files and nothing else. Each file name
-carries the recording's time and id, and the duration and size come from the
-file itself, so there is no index file that could be unreadable, damaged or
-out of step with the directory. A save always writes a new file and never
-replaces one, so nothing written earlier can be lost to a later write.
+carries the recording's time, id and, when it is known, the language it was
+made in; the duration and size come from the file itself, so there is no index
+file that could be unreadable, damaged or out of step with the directory. A save
+always writes a new file and never replaces one, so nothing written earlier can
+be lost to a later write.
 """
 
 from __future__ import annotations
@@ -25,8 +26,12 @@ from .app_paths import unfinished_recordings_dir
 from .persistence import atomic_write_bytes
 
 _STAMP_FORMAT = "%Y%m%d_%H%M%S"
+# `unfinished_<stamp>_<id>[.<language>].wav`: neither the id nor the language can
+# hold a dot, so the optional middle part is unambiguous, and a file the
+# previous version wrote (no language) matches as before.
 _NAME_RE = re.compile(
-    r"^unfinished_(?P<stamp>[0-9]{8}_[0-9]{6})_(?P<id>[A-Za-z0-9-]+)\.wav$",
+    r"^unfinished_(?P<stamp>[0-9]{8}_[0-9]{6})_(?P<id>[A-Za-z0-9-]+)"
+    r"(?:\.(?P<language>[A-Za-z0-9-]+))?\.wav$",
     re.IGNORECASE,
 )
 _ID_UNSAFE_RE = re.compile(r"[^A-Za-z0-9-]+")
@@ -40,6 +45,8 @@ class UnfinishedRecording:
     recorded_at: datetime | None
     duration_s: float | None
     size_bytes: int | None
+    # The language selection the recording was made under; "" when unknown.
+    language_mode: str = ""
 
 
 def safe_recording_id(recording_id: str) -> str:
@@ -77,9 +84,12 @@ class UnfinishedRecordingStore:
         *,
         recording_id: str,
         recorded_at: datetime,
+        language_mode: str = "",
     ) -> Path | None:
         """Keep one recording; None when the same recording is already kept.
 
+        `language_mode` is the language selection it was made under, kept in
+        the file name so that its transcription can use it; "" when unknown.
         Raises `OSError` when the file cannot be written.
         """
         if not wav_bytes:
@@ -90,7 +100,9 @@ class UnfinishedRecordingStore:
         if self.find(safe_id) is not None:
             return None
         stamp = recorded_at.strftime(_STAMP_FORMAT)
-        path = self.directory / f"unfinished_{stamp}_{safe_id}.wav"
+        language = safe_recording_id(language_mode).lower()
+        suffix = f".{language}" if language else ""
+        path = self.directory / f"unfinished_{stamp}_{safe_id}{suffix}.wav"
         atomic_write_bytes(path, bytes(wav_bytes))
         return path
 
@@ -162,4 +174,5 @@ def _describe(path: Path, match: re.Match[str]) -> UnfinishedRecording:
         recorded_at=recorded_at,
         duration_s=wav_duration_seconds(path),
         size_bytes=size_bytes,
+        language_mode=(match.group("language") or "").lower(),
     )
