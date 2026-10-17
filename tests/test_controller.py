@@ -28,18 +28,29 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
+    ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
+    AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
+    AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    DEEPGRAM_NOVA_2_LANGUAGE_MODES,
+    DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
+    ENGINE_LANGUAGE_MODES,
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
+    SPEECHMATICS_LANGUAGE_MODES,
     VALID_ENGINES,
 )
 from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.persistence import backup_path
-from stt_app.settings_store import AppSettings, SettingsStore
+from stt_app.settings_store import (
+    AppSettings,
+    SettingsStore,
+    apply_engine_model_selection,
+)
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
@@ -2081,6 +2092,49 @@ def test_overlay_language_change_rejects_unsupported_cohere_auto():
         ),
         "de",
     )
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("engine", "model", "offered"),
+    [
+        ("deepgram", "nova-3", DEEPGRAM_NOVA_3_LANGUAGE_MODES),
+        ("deepgram", "nova-2", DEEPGRAM_NOVA_2_LANGUAGE_MODES),
+        ("assemblyai", "universal-3-5-pro", ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES),
+        ("azure", "mai-transcribe-1.5", AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES),
+        ("azure", "mai-transcribe-1", AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES),
+        ("speechmatics", "enhanced", SPEECHMATICS_LANGUAGE_MODES),
+    ],
+)
+def test_overlay_language_list_is_the_remote_models_own(engine, model, offered):
+    """A remote engine keeps its model in its own field, `model_size` is the
+    local one. The list used to be asked with `model_size`, so every remote
+    model with a list of its own showed -- and `set_language_mode` accepted --
+    the engine's default, wider one: Deepgram nova-2 offered 118 languages for
+    its 34, and Speechmatics Enhanced offered Auto, which only Melia 1 has."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = apply_engine_model_selection(
+        AppSettings(engine=engine, language_mode="de", hotkey=FALLBACK_HOTKEY),
+        engine,
+        model,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller, _app = make_controller(settings_store=store, overlay=overlay)
+
+    controller.reload_settings()
+
+    assert overlay.language_options[-1] == (tuple(offered), "de")
+    # What the engine's default list had over the model's own.
+    refused = next(
+        mode for mode in ENGINE_LANGUAGE_MODES[engine] if mode not in offered
+    )
+    controller.set_language_mode(refused)
+    assert controller.settings.language_mode == "de"
+    assert store.saved is None
+    controller.set_language_mode("en")
+    assert controller.settings.language_mode == "en"
     controller.shutdown()
     _ = app
 

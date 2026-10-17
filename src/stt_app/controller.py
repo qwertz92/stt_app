@@ -9816,25 +9816,29 @@ class DictationController(QtCore.QObject):
         """
         self.show_overlay_error(f"{what} was not saved. {exc}")
 
-    def _sync_overlay_language_options(self) -> None:
-        supported_modes = language_modes_for_selection(
+    def _offered_language_modes(self) -> tuple[str, ...]:
+        """The languages the active engine and model offer in the active mode.
+
+        The model is the engine's own (`_selected_model_name`): `model_size`
+        is the local model, so asking with it gave every remote model with a
+        list of its own -- Deepgram nova-2, Azure MAI-Transcribe 1, Speechmatics
+        Enhanced -- the engine's default, wider list.
+        """
+        return language_modes_for_selection(
             self._settings.engine,
-            self._settings.model_size,
+            self._selected_model_name(self._settings),
             self._settings.mode,
         )
+
+    def _sync_overlay_language_options(self) -> None:
         self._overlay.set_language_options(
-            supported_modes,
+            self._offered_language_modes(),
             self._settings.language_mode,
         )
 
     def set_language_mode(self, mode: str) -> None:
         normalized = str(mode or "").strip().lower()
-        supported_modes = language_modes_for_selection(
-            self._settings.engine,
-            self._settings.model_size,
-            self._settings.mode,
-        )
-        if normalized not in supported_modes:
+        if normalized not in self._offered_language_modes():
             self._sync_overlay_language_options()
             return
         if self._settings.language_mode == normalized:
