@@ -414,7 +414,8 @@ def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_
     assert seen == ["en"]
     assert "retry_recorded_language_not_offered recording_id=spoken1" in caplog.text
     assert controller.unfinished_recording_language_note(recording) == (
-        f"English; {label} not offered"
+        "English",
+        label,
     )
     assert controller.settings.language_mode == "en"
     controller.shutdown()
@@ -453,7 +454,8 @@ def test_an_unfinished_recording_names_the_language_that_ran_not_a_stale_selecti
 
     assert seen == ["auto"]
     assert controller.unfinished_recording_language_note(recording) == (
-        "Auto; Afrikaans not offered"
+        "Auto",
+        "Afrikaans",
     )
     controller.shutdown()
     _ = app
@@ -473,8 +475,8 @@ def test_an_unfinished_recording_in_an_offered_language_needs_no_note(
     )
 
     note = controller.unfinished_recording_language_note
-    assert note(unfinished.find("spoken1")) == ""
-    assert note(_kept_recording(unfinished, recording_id="unknown1")) == ""
+    assert note(unfinished.find("spoken1")) is None
+    assert note(_kept_recording(unfinished, recording_id="unknown1")) is None
     controller.shutdown()
     _ = app
 

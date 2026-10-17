@@ -411,13 +411,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     own snapshot is used only for a recording this process never named
     (`_recorded_language_by_recording_id` wins), or the next start would pin the
     fallback for good. Where the fallback applied after a restart the startup
-    notice's row says so -- `Transcribed, in History (English; Auto not
-    offered)`: the language that ran, then the one the engine did not offer.
-    The text comes from `unfinished_recording_language_note(recording)` (the
-    same `_language_a_retry_runs_in` decision, no second log line), handed to
+    notice's row says so -- `Transcribed in English, in History (Auto is not
+    offered by this model)`: the language that ran, then the one the engine did
+    not offer; its tooltip adds that the recording is kept and that
+    Retranscribe in History can redo it in another language. The words come
+    from `unfinished_recording_language_note(recording)`, which answers the
+    pair of labels `("English", "Auto")` or `None` (the same
+    `_language_a_retry_runs_in` decision, no second log line), handed to
     `UnfinishedRecordingsDialog(language_note=)` and asked right before each
-    row's transcription; the dialog's `(ok, text)` contract is unchanged
-    because many callers unpack it. History retranscribe and the Import tab
+    row's transcription -- outside the transcription's own `try`, through
+    `_language_fallback`, which logs a note that fails and leaves it out (the
+    exception used to become the row's failure, with the audio never sent);
+    the dialog's `(ok, text)` contract is unchanged because many callers
+    unpack it. History retranscribe and the Import tab
     take their settings from their own pickers at the click; that is where a
     wrong language is now corrected, no longer by switching and pressing Retry
     (the Import tab's "Use last recording" starts its language picker from the
@@ -428,7 +434,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
     Granite CTC, the note, a quit during a fallback retry, a stale selection
     named as what ran),
-    `tests/test_unfinished_recordings_notice.py` (the row text).
+    `tests/test_unfinished_recordings_notice.py` (the row text, that the
+    longest wording fits the status column, and a failing note).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

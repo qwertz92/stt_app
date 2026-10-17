@@ -59,6 +59,18 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   `_recorded_language_offered` is gone (it was the first half of this).
   The overlay text for the clamped case reads "the selected language (Afrikaans)
   is not offered either, so using Auto"; the log line says `using=`.
+- **P4, reproduced: the startup notice computed the language note inside the
+  transcription's `try`, and its row did not say which language ran.** A note
+  that raised (the settings could not be read) became the row's failure and the
+  recording was never sent; the dialog's worker now asks through
+  `_language_fallback`, which logs a failing note and leaves it out. The note
+  is a pair of labels (`("English", "Auto")` or `None`) and the row words it:
+  `Transcribed in English, in History (Auto is not offered by this model)`,
+  where it used to say `(English; Auto not offered)`. Measured on the real
+  desktop widgets: the wording is 357 px in the 455 px status column for
+  English/Auto, and 443 px for the longest language label twice (Haitian
+  Creole), so it is not elided; a test pins that against the column's width.
+  The tooltip adds that the recording is kept and where to redo it.
 - **P4, reproduced: the Cancel guard armed on every exit of the slot from
   Retry.** Round 1 armed `_cancel_ignored_until` in `_sync_action_slot` when
   the slot stopped showing Retry, to drop the second click of a double click.

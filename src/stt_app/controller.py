@@ -1355,26 +1355,29 @@ class DictationController(QtCore.QObject):
         self.unfinished_transcript_saved.emit(text, entry, recording.recorded_at)
         return True, text
 
-    def unfinished_recording_language_note(self, recording: UnfinishedRecording) -> str:
+    def unfinished_recording_language_note(
+        self, recording: UnfinishedRecording
+    ) -> tuple[str, str] | None:
         """What the startup notice tells about the language a transcription of
         `recording` runs in, when it is not the one the recording was made in:
-        "English; Auto not offered" -- the selected language that is used, and
-        the recorded one the engine and model selected now do not offer. ""
-        when the recorded language is used or none is known. The decision is
-        `_pin_recorded_language`'s, through `_language_a_retry_runs_in`; this
-        asks it without logging a second line.
+        ("English", "Auto") -- the language that runs, and the recorded one the
+        engine and model selected now do not offer, as the pickers spell them
+        (the row words them: "Transcribed in English, in History (Auto is not
+        offered by this model)"). None when the recorded language is used or
+        none is known. The decision is `_pin_recorded_language`'s, through
+        `_language_a_retry_runs_in`; this asks it without logging a second line.
         """
         recorded = recording.language_mode
         if not recorded:
-            return ""
+            return None
         language, recorded_offered = self._language_a_retry_runs_in(
             self._settings, recorded
         )
         if recorded_offered:
-            return ""
+            return None
         return (
-            f"{LANGUAGE_MODE_LABELS.get(language, language)}; "
-            f"{LANGUAGE_MODE_LABELS.get(recorded, recorded)} not offered"
+            LANGUAGE_MODE_LABELS.get(language, language),
+            LANGUAGE_MODE_LABELS.get(recorded, recorded),
         )
 
     @QtCore.Slot(str, object, object)
