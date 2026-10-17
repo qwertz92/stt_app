@@ -1181,6 +1181,56 @@ class TestDeepgramKeepAlive:
         ]
         assert len(announcements) == 1, [r.getMessage() for r in announcements]
 
+    def test_a_gap_longer_than_the_capture_buffer_is_not_bridged_forever(self, caplog):
+        """A microphone that stops delivering mid-dictation must still end the
+        stream: nothing in the capture notices it (the watchdog watches only
+        the first block), so Deepgram's own close is the detector -- and a
+        KeepAlive that never stops would hold it open until the hotkey."""
+        t = DeepgramTranscriber(api_key="key")
+        send_queue = _ClockedQueue([(0.1, b"before"), (300.0, _SENTINEL)])
+
+        with caplog.at_level(logging.INFO):
+            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        keepalive_times = [
+            at for at, payload, _opcode in ws.frames if payload == _KEEPALIVE_FRAME
+        ]
+        assert [payload for _at, payload, _opcode in ws.frames] == [
+            b"before",
+            *[_KEEPALIVE_FRAME] * len(keepalive_times),
+        ], "a frame followed the last KeepAlive"
+        bridged_s = keepalive_times[-1] - 0.1
+        # At least the capture's buffer: a gap that short can be a starved
+        # callback thread whose audio is still on its way.
+        assert bridged_s >= AUDIO_INPUT_BUFFER_S
+        assert bridged_s <= deepgram_provider._STREAM_KEEPALIVE_MAX_GAP_S
+        warnings = [
+            r for r in _deepgram_log_records(caplog) if r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 1, [r.getMessage() for r in warnings]
+
+    def test_audio_after_the_cap_is_sent_and_bridging_starts_over(self, caplog):
+        """If the socket outlived the gap, the stream goes on as before: the
+        cap only stops the KeepAlives of one gap, and real audio ends that gap."""
+        t = DeepgramTranscriber(api_key="key")
+        send_queue = _ClockedQueue(
+            [(0.1, b"first"), (100.0, b"second"), (200.0, _SENTINEL)]
+        )
+
+        with caplog.at_level(logging.INFO):
+            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        payloads = [payload for _at, payload, _opcode in ws.frames]
+        resumed_at = payloads.index(b"second")
+        first_gap = payloads[1:resumed_at]
+        second_gap = payloads[resumed_at + 1 :]
+        assert first_gap and set(first_gap) == {_KEEPALIVE_FRAME}
+        assert second_gap == first_gap, "the second gap was not bridged afresh"
+        warnings = [
+            r for r in _deepgram_log_records(caplog) if r.levelno == logging.WARNING
+        ]
+        assert len(warnings) == 2, "one warning per gap that reached the cap"
+
     def test_the_silence_frame_is_a_tenth_of_a_second_of_the_streams_format(
         self, monkeypatch
     ):
