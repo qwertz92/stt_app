@@ -4021,14 +4021,17 @@ def test_the_recordings_language_is_stored_with_its_audio(monkeypatch, tmp_path)
 
 
 _RETRY_ALREADY_RUNNING = (
-    "A retry of this recording is already running with the same engine and model."
+    "A retry of this recording is already running with the same settings; "
+    "cancel it first to retry again."
 )
 
 
-def _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path):
+def _a_failed_recording_with_its_retry_running(
+    monkeypatch, tmp_path, **settings_overrides
+):
     """One dictation failed and its Retry is in flight (a deferred worker)."""
     controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
-        monkeypatch, tmp_path, mode="insert"
+        monkeypatch, tmp_path, mode="insert", **settings_overrides
     )
     token = _record_and_stop(controller)
     controller._on_transcription_failed("boom", request_token=token)
@@ -4092,6 +4095,135 @@ def test_a_retry_with_another_engine_or_model_is_allowed_while_the_first_runs(
     assert (second.engine, second.model) != (first.engine, first.model)
     assert first.aborting is True
     assert len(controller._executor.calls) == submitted + 1
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("before", "change"),
+    [
+        pytest.param({}, {"custom_vocabulary": "Kubernetes"}, id="vocabulary"),
+        pytest.param({"engine": "deepgram"}, {"deepgram_region": "eu"}, id="region"),
+        pytest.param(
+            {
+                "engine": "azure",
+                "azure_endpoint": "https://a.cognitiveservices.azure.com",
+            },
+            {"azure_endpoint": "https://b.cognitiveservices.azure.com"},
+            id="azure endpoint",
+        ),
+        pytest.param(
+            {"engine": "custom", "custom_endpoint": "https://one.example/v1"},
+            {"custom_endpoint": "https://two.example/v1"},
+            id="custom endpoint",
+        ),
+    ],
+)
+def test_a_retry_with_other_request_settings_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path, before, change
+):
+    """The same request is the same audio to the same provider *as configured*:
+    vocabulary, region and endpoint decide what the provider receives, as the
+    engine and model do. A first retry sent with other values is not the one
+    the user waits for, so the new one replaces it like an engine change does."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path, **before)
+    )
+    controller._settings = replace(controller._settings, **change)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert first.aborting is True
+    assert len(controller._executor.calls) == submitted + 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_after_the_key_was_replaced_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path
+):
+    """A replaced key never shows in the settings (`invalidate_transcriber_
+    credentials`); a retry running with the old one is not the same request."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path, engine="groq")
+    )
+    assert controller.retry_last_transcription() is False
+
+    controller.invalidate_transcriber_credentials(["groq"])
+
+    assert controller.retry_last_transcription() is True
+    assert first.aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_in_another_selected_language_is_allowed_for_an_unknown_recording(
+    monkeypatch, tmp_path
+):
+    """Where the recording's own language is unknown the selected one decides
+    what the provider is asked for, so a change of it is a different request."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._hold_failed_audio_for_retry(b"RIFF-unknown", "")
+    assert controller.retry_last_transcription() is True
+    first = controller._jobs[controller._active_request_token]
+    assert controller.retry_last_transcription() is False
+
+    controller.set_language_mode("de")
+
+    assert controller.retry_last_transcription() is True
+    assert first.aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_with_an_unrelated_setting_changed_is_still_a_duplicate(
+    monkeypatch, tmp_path
+):
+    """Only what the provider receives counts: a saved opacity or history size
+    is no reason to pay for the same request twice."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller._settings = replace(
+        controller._settings, overlay_opacity_percent=40, history_max_items=7
+    )
+
+    assert controller.retry_last_transcription() is False
+
+    assert first.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_the_duplicate_notice_never_repaints_an_overlay_no_session_owns(
+    monkeypatch, tmp_path
+):
+    """A newer dictation was canceled while the retry kept running: no session
+    owns the overlay (`_active_request_token` is None), which is when
+    `show_overlay_error` paints. A red Error with a Retry button over a retry
+    that is running invites the very click this guard answers, so the notice
+    goes to the tray alone."""
+    controller, app, overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = _record_and_stop(controller)
+    controller.cancel_queued_transcription(newer)
+    assert controller._active_request_token is None
+    assert first.token in controller._jobs and first.aborting is False
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    painted = list(overlay.states)
+
+    assert controller.retry_last_transcription() is False
+
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    assert overlay.states == painted
+    assert first.aborting is False
     controller.shutdown()
     _ = app
 

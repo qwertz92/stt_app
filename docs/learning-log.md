@@ -32,6 +32,28 @@ stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
   start would have pinned that for good. It writes the recorded language where
   the process knows it and the job's snapshot only for a recording it never
   named.
+- **P3: the duplicate guard compared engine and model only.** A retry after
+  the user changed the custom vocabulary, a region, an endpoint or the key was
+  refused as "the same audio to the same provider", although the running
+  request had gone out with the old values: four cases (vocabulary, Deepgram
+  region, Azure endpoint, custom endpoint) answered `False` before the fix, as
+  did a replaced key and a changed selected language for a recording with no
+  known language. The comparison is now the request: `_transcriber_identity`
+  (what the provider's runtime is built from) plus the language plus a
+  credentials generation, because a replaced key is in no settings field. Not
+  over-triggered: a changed opacity and history size still count as a
+  duplicate (own test). The key part over-counts on purpose -- any provider's
+  key change allows a retry -- since a missed key change refuses the retry the
+  user needs, while an extra allowed one costs a request the user chose.
+  The notice now says what to do: "A retry of this recording is already
+  running with the same settings; cancel it first to retry again."
+- **P4: the duplicate notice painted a red Error over the running retry.**
+  `show_overlay_error` paints when no session owns the overlay, which is the
+  case while the retry runs if a newer dictation was cancelled meanwhile
+  (`_active_request_token` is None). The Error carries a Retry button, the very
+  press just refused. Reproduced with that sequence (the tray got nothing, the
+  overlay got an Error). The notice is now `busy_overlay_error` always -- the
+  tray -- and the overlay is untouched.
 
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 

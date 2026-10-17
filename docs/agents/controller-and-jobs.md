@@ -122,29 +122,52 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     runs it too, so a retry delivered behind a newer recording resolves its
     failure. Retry still takes the slot only.
   - **A second Retry is ignored while the first retry of the same recording
-    still runs with the same engine and model** (owner decision 2026-10-17:
+    still runs with the same request** (owner decision 2026-10-17:
     the same audio to the same provider twice costs money twice and returns
     the same text twice; before, the second press stopped the first job and
     started another, and a remote request already sent still finished into
     history, so the provider was billed twice and history got two entries).
     `_running_retry_of_the_slot(settings)` scans `_jobs` for a job that is not
-    aborting and not a finished result waiting for its paste, whose engine and
-    model are the ones the new retry would use and whose request audio and
+    aborting and not a finished result waiting for its paste, whose request
+    equals the one the new retry would send and whose request audio and
     `source_recording_id` equal the slot's own -- the identity
     `_retire_retry_audio_delivered_by` uses, so the same bytes under another
     recording id are another recording. Being derived from `_jobs`, the block
     ends with the job: delivered, failed or cancelled, it leaves the registry
     and Retry works again (a failed retry is promoted to the slot again; after a
     success the slot is retired and the older failure behind it comes forward).
-    The ignored press logs `retry_ignored_duplicate`, returns `False` and tells
-    the user through `show_overlay_error` -- the tray while the retry owns the
-    overlay -- "A retry of this recording is already running with the same
-    engine and model."; the overlay is not repainted, since it shows the retry.
-    Another engine or model is another request and stops the running one as
-    before. A job being stopped does not count, so Cancel, then Retry, works;
-    a retry that went behind a newer dictation still counts. Tests:
-    `test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model`
-    and its neighbours in `tests/test_controller_queue.py`.
+  - **"The same request" is `_request_identity`, not engine and model alone**
+    (review 2026-10-17; the first version compared only those two, so a retry
+    after the user changed the vocabulary, a region, an endpoint or the key was
+    refused as a duplicate although the running request had gone out with the
+    old values). It is `_transcriber_identity(settings)` -- everything
+    `create_transcriber` bakes into the runtime, per engine, so engine, model,
+    custom vocabulary where the model takes one, Azure endpoint, region, the
+    custom endpoint's URL, API style and key command, silence-gate threshold,
+    key presence -- plus `language_mode` (the identity leaves it out on purpose,
+    but the request carries it) plus `_credentials_generation`. A key value is
+    in no settings field, so `invalidate_transcriber_credentials` (the Settings
+    dialog's report of a replaced key) counts up a generation and each job
+    remembers the one it was submitted under; any provider's key change counts,
+    which can only allow a retry, never block one. Settings that no provider
+    receives (opacity, history size, hotkeys) stay out of it: such a retry is
+    still a duplicate. A changed request is another request: it stops the
+    running job as an engine change always did, and the late result of that job
+    goes to history only. A job being stopped does not count, so Cancel, then
+    Retry, works; a retry that went behind a newer dictation still counts.
+  - **The ignored press is answered on the tray, never on the overlay**: it
+    logs `retry_ignored_duplicate`, returns `False` and emits
+    `busy_overlay_error` -- "A retry of this recording is already running with
+    the same settings; cancel it first to retry again." -- the second half says
+    what to do, since the first alone leaves the user with a button that does
+    nothing. It does not go through `show_overlay_error`: that paints a red
+    Error with a Retry button whenever `_overlay_session_active()` is false,
+    which happens while the retry runs (`_active_request_token` is None after a
+    newer dictation was cancelled), and that button is the press just refused.
+    Tests: `test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model`,
+    `test_a_retry_with_other_request_settings_is_allowed_while_the_first_runs`,
+    `test_the_duplicate_notice_never_repaints_an_overlay_no_session_owns` and
+    their neighbours in `tests/test_controller_queue.py`.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints

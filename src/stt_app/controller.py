@@ -241,6 +241,9 @@ class _TranscriptionJob:
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
+    # `DictationController._credentials_generation` when the job was
+    # submitted: a key replaced since then makes a retry a different request.
+    credentials_generation: int = 0
     # False for a job with no recording id -- bytes the managed store never
     # received (a retry whose retained identity is unknown, a road whose
     # persist was refused) or a slot it could not name: its terminal marks
@@ -955,6 +958,11 @@ class DictationController(QtCore.QObject):
         # used for the overlay queue display, per-job target insertion, and
         # cooperative cancellation. A token is "live" while its job is present.
         self._jobs: dict[int, _TranscriptionJob] = {}
+        # Counts every reported key change (`invalidate_transcriber_
+        # credentials`): a replaced key is not in the settings, and a job
+        # remembers the count it was submitted under, which is how a retry
+        # tells whether the running one signed with the same credentials.
+        self._credentials_generation = 0
         self._deferred_background_results: list[tuple[_TranscriptionJob, str]] = []
         # True while a foreground result is between clearing its session state
         # and writing its own overlay state; a background report must not paint
@@ -1493,7 +1501,13 @@ class DictationController(QtCore.QObject):
         cost a multi-gigabyte reload for a credential it never touches.
         Selecting that provider later changes ``settings.engine``, which the
         identity does see.
+
+        Every report is counted (``_credentials_generation``), whichever
+        provider it names: a retry then knows its running predecessor was
+        signed with a key that has been replaced since. Over-counting only
+        allows a retry the user may not have needed to repeat.
         """
+        self._credentials_generation += 1
         with self._transcriber_cache_lock:
             cached_key = self._transcriber_cache_key
         if cached_key is None:
@@ -4255,6 +4269,7 @@ class DictationController(QtCore.QObject):
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
             source_recording_id=source_recording_id,
+            credentials_generation=self._credentials_generation,
             marks_last_recording=marks_last_recording,
             source_audio_path=str(source_audio_path or "").strip(),
         )
@@ -9479,25 +9494,44 @@ class DictationController(QtCore.QObject):
         )
         return settings, False
 
+    def _request_identity(
+        self, settings: AppSettings, credentials_generation: int
+    ) -> tuple[_TranscriberIdentity, str, int]:
+        """What a provider receives for one batch request: everything its
+        runtime is built from, the language it is asked for and the
+        credentials it signs with. Two retries of one recording that agree on
+        all three are the same request."""
+        return (
+            self._transcriber_identity(settings),
+            settings.language_mode,
+            credentials_generation,
+        )
+
     def _running_retry_of_the_slot(
         self, settings: AppSettings
     ) -> _TranscriptionJob | None:
-        """The job still working on the retry slot's recording with the engine
-        and model `settings` would use, if there is one.
+        """The job still working on the retry slot's recording with the very
+        request `settings` would send (`_request_identity`), if there is one.
 
         The recording is the slot's own: the same audio bytes under the same
         recording id, which is how `_retire_retry_audio_delivered_by` tells a
         failure's retry from any other delivery. A job being stopped does not
         count -- the user cancelled it, or a retry with other settings
         replaced it -- and neither does a finished result waiting for its
-        paste, whose delivery retires the slot.
+        paste, whose delivery retires the slot. Engine and model are part of
+        the request, and so are the vocabulary, region, endpoint, key and
+        language: a retry the user changed one of is not what the running one
+        was sent with, and waiting for that one would be the wrong answer.
         """
         slot = (self._last_failed_wav_bytes, self._last_failed_recording_id)
-        model = self._selected_model_name(settings)
+        wanted = self._request_identity(settings, self._credentials_generation)
         for job in self._jobs.values():
             if job.aborting or job.insertion_deferred:
                 continue
-            if (job.engine, job.model) != (settings.engine, model):
+            if (
+                self._request_identity(job.settings, job.credentials_generation)
+                != wanted
+            ):
                 continue
             payload = self._request_audio_by_token.get(job.token)
             if payload is not None and (payload[0], job.source_recording_id) == slot:
@@ -9532,8 +9566,11 @@ class DictationController(QtCore.QObject):
         if running is not None:
             # The same audio to the same provider twice costs money twice
             # and returns the same text twice (owner decision 2026-10-17).
-            # Told, never a silent no-op: the tray, since the overlay shows
-            # the retry that is running.
+            # Told, never a silent no-op: on the tray always, never through
+            # `show_overlay_error`. Without a live session that paints a red
+            # Error with a Retry button over the retry that is running (the
+            # overlay then belongs to nobody, e.g. after a newer dictation was
+            # cancelled), and the notice itself names what to do instead.
             self._logger.info(
                 "retry_ignored_duplicate token=%d recording_id=%s engine=%s model=%s",
                 running.token,
@@ -9541,9 +9578,9 @@ class DictationController(QtCore.QObject):
                 running.engine,
                 running.model,
             )
-            self.show_overlay_error(
+            self.busy_overlay_error.emit(
                 "A retry of this recording is already running with the same "
-                "engine and model."
+                "settings; cancel it first to retry again."
             )
             return False
         # Stop any still-running transcription before retrying; if it finishes
