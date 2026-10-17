@@ -27,6 +27,18 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   until the finalize has ended instead (before, it stopped the finalize, which
   is the diversion again). Not tested on a real stream: the refusal is shown
   with the fake streaming transcriber.
+- **P4, reproduced: the Cancel guard armed on every exit of the slot from
+  Retry.** Round 1 armed `_cancel_ignored_until` in `_sync_action_slot` when
+  the slot stopped showing Retry, to drop the second click of a double click.
+  Pressing the record hotkey from an Error with Retry (-> Listening, Cancel
+  where Retry was) armed it too, so a real Cancel click within 500 ms was
+  dropped; the test paints that and failed with `[] == [True]`. The guard is
+  now armed by the click itself (`_retry_button.clicked` ->
+  `_on_retry_clicked`), the `_retry_in_slot` flag is gone, and a refused Retry
+  needs no special case (the overlay stays on Error). The test also patched
+  the global `time.monotonic`, which every other reader of the clock in the
+  process saw; it now patches the module-local `overlay_ui.monotonic`
+  (`from time import monotonic`).
 
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 

@@ -4,8 +4,8 @@ import contextlib
 import functools
 import logging
 import sys
-import time
 from collections.abc import Callable
+from time import monotonic
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -682,15 +682,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._retry_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._retry_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._retry_button.setFixedSize(64, 22)
-        self._retry_button.clicked.connect(self.retry_requested.emit)
+        self._retry_button.clicked.connect(self._on_retry_clicked)
 
         self._cancel_button = QtWidgets.QPushButton("Cancel")
         self._cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._cancel_button.setFixedSize(64, 22)
-        # See `_sync_action_slot`: a Cancel click this soon after the slot
-        # left Retry is the second click of a double click on Retry.
-        self._retry_in_slot = False
+        # See `_sync_action_slot`: a Cancel click this soon after a click on
+        # Retry is the second click of a double click on it.
         self._cancel_ignored_until = 0.0
         self._cancel_button.clicked.connect(self._on_cancel_clicked)
 
@@ -1278,8 +1277,10 @@ class OverlayUI(QtWidgets.QWidget):
         The slot's one cost: a double click on Retry starts the retry with the
         first click, which paints Processing and puts Cancel at the very same
         spot, and the second click cancelled the retry just started. So a
-        Cancel click within the system's double-click interval after the slot
-        left Retry is ignored (`_on_cancel_clicked`); a Cancel after it works.
+        Cancel click within the system's double-click interval after a click
+        on Retry is ignored (`_on_retry_clicked` arms it, `_on_cancel_clicked`
+        applies it); a Cancel after it works, and so does one after the slot
+        left Retry any other way (the record hotkey over an Error).
         The geometry stays as it is: no gap, no second slot.
         """
         is_error = state == "Error"
@@ -1291,21 +1292,24 @@ class OverlayUI(QtWidgets.QWidget):
         show_retry = (
             is_error and not show_insert and error_action != OVERLAY_ERROR_ACTION_NONE
         )
-        show_cancel = not (show_retry or show_insert)
-        if self._retry_in_slot and show_cancel:
-            self._cancel_ignored_until = (
-                time.monotonic() + QtWidgets.QApplication.doubleClickInterval() / 1000
-            )
-        self._retry_in_slot = show_retry
         self._retry_button.setEnabled(show_retry)
         self._insert_button.setEnabled(show_insert)
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})
         self._retry_button.setVisible(show_retry)
         self._insert_button.setVisible(show_insert)
-        self._cancel_button.setVisible(show_cancel)
+        self._cancel_button.setVisible(not (show_retry or show_insert))
+
+    def _on_retry_clicked(self) -> None:
+        # Armed before the request goes out: the controller answers it within
+        # this call, and that is what puts Cancel under the cursor. A refused
+        # retry leaves Retry in the slot, so a second click is another Retry.
+        self._cancel_ignored_until = (
+            monotonic() + QtWidgets.QApplication.doubleClickInterval() / 1000
+        )
+        self.retry_requested.emit()
 
     def _on_cancel_clicked(self) -> None:
-        if time.monotonic() < self._cancel_ignored_until:
+        if monotonic() < self._cancel_ignored_until:
             logger.info("overlay_cancel_ignored reason=double_click_on_retry")
             return
         self.cancel_requested.emit()

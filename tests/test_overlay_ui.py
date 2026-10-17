@@ -471,7 +471,9 @@ def _overlay_with_a_controlled_clock(monkeypatch, interval_ms=400):
     test sets, so no assertion depends on how fast the machine is."""
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     clock = {"now": 100.0}
-    monkeypatch.setattr(overlay_ui_module.time, "monotonic", lambda: clock["now"])
+    # The overlay module's own name for the clock, so nothing else that reads
+    # `time.monotonic` while the test runs sees it.
+    monkeypatch.setattr(overlay_ui_module, "monotonic", lambda: clock["now"])
     monkeypatch.setattr(
         QtWidgets.QApplication, "doubleClickInterval", staticmethod(lambda: interval_ms)
     )
@@ -501,8 +503,8 @@ def test_a_second_click_on_retry_lands_on_cancel_and_is_ignored(monkeypatch):
     assert canceled == [True], "a deliberate Cancel after the interval was dropped"
 
 
-def test_cancel_works_at_once_when_the_slot_did_not_just_leave_retry(monkeypatch):
-    """The guard follows the Retry-to-Cancel switch only, not every Cancel."""
+def test_cancel_works_at_once_when_retry_was_not_clicked(monkeypatch):
+    """The guard answers a click on Retry, not every Cancel."""
     overlay, _clock = _overlay_with_a_controlled_clock(monkeypatch)
     canceled: list[bool] = []
     overlay.cancel_requested.connect(lambda: canceled.append(True))
@@ -512,6 +514,24 @@ def test_cancel_works_at_once_when_the_slot_did_not_just_leave_retry(monkeypatch
     overlay._cancel_button.click()
 
     assert canceled == [True, True]
+
+
+def test_cancel_works_at_once_when_the_error_with_retry_was_left_without_a_click(
+    monkeypatch,
+):
+    """The record hotkey pressed over an Error with Retry paints Listening and
+    puts Cancel into Retry's slot, with no click on Retry: a Cancel click within
+    the interval is the user's own, since nobody clicked twice."""
+    overlay, clock = _overlay_with_a_controlled_clock(monkeypatch)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Error", "failed")
+    overlay.set_state("Listening", "Listening...")
+
+    clock["now"] += 0.1
+    overlay._cancel_button.click()
+
+    assert canceled == [True]
 
 
 def test_overlay_always_on_top_toggle_updates_state_and_signal():
