@@ -145,8 +145,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `history_audio.py` | Shared history-entry-to-audio resolution plus file-manager reveal/open helpers for both history views |
 | `retranscribe_dialog.py` | Compact language-only retranscription of one history entry's retained audio |
 | `app_paths.py` | Centralized app data/config path helpers |
-| `last_recording_store.py` | Managed last-recording state (path, status, recovery) for Retry and Import |
-| `unfinished_recordings.py` | Recordings a quit left untranscribed: a directory of WAV files named by time and recording id, no index |
+| `last_recording_store.py` | Managed last-recording state (path, status, recovery, the language it was made in) for Retry and Import |
+| `unfinished_recordings.py` | Recordings a quit left untranscribed: a directory of WAV files named by time, recording id and language, no index |
 | `unfinished_recordings_dialog.py` | Startup notice listing those recordings: transcribe all/selected into history, show in folder, delete, keep files |
 | `quit_dialog.py` | The tray's Quit: quits at once, or asks (wait and insert / quit now / don't quit) while work is pending |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |

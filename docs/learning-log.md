@@ -3,6 +3,53 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (Retry keeps the recording's language and is never sent twice)
+
+- **Two owner decisions.** Retry transcribes in the language the recording was
+  made in, with the current engine and model (before: the language selected at
+  the moment of the press, a rule written down on 2026-10-09 and pinned by
+  `test_retry_uses_the_language_selected_now`, now rewritten). And a second
+  Retry is ignored while the first retry of the same recording still runs with
+  the same engine and model: before, the second press stopped the first job
+  and submitted another, and a remote request already sent still finished into
+  history, so the provider was billed twice and history got two entries. The
+  four duplicate-press tests failed before the change for exactly that reason.
+- **Where the language lives, and why in three places.** `Retry` itself has no
+  restart path: `_last_failed_wav_bytes` is memory, so after a restart it
+  answers "No failed transcription to retry". The Retry after a restart is the
+  startup notice of unfinished recordings, which gets its files from a quit
+  (`_keep_unfinished_recordings`) or from the managed last recording
+  (`_adopt_recoverable_last_recording`). So the language is (1) in memory,
+  `_recorded_language_by_recording_id`, filled in `_persist_last_recording_audio`
+  where a recording's id is born, which is what lets a failed retry, an older
+  failure and a streaming dictation keep it; (2) in `last_recording.json`
+  (`language_mode`, additive, old files read as unknown); (3) in the unfinished
+  recording's file name, `unfinished_<stamp>_<id>[.<language>].wav`, because
+  that directory has no index by design. Reading the language off the job or the
+  retry job's settings was rejected: the retry job's settings are the pinned
+  ones and the first job is gone by then.
+- **A language the new engine lacks is not passed on.** Read in the providers,
+  not guessed: their `_normalize_language_mode` replaces an unsupported
+  language with a stand-in, and for Canary that stand-in is the first language
+  of its list, which makes it translate into that language instead of
+  transcribing. A recording made on Auto and retried on Canary with German
+  selected would have come back in English. `_retry_settings` therefore pins
+  the recorded language only where `language_modes_for_selection(engine, model,
+  "batch")` offers it, else keeps the selected one and says so in the overlay
+  text and the log (`retry_recorded_language_not_offered`).
+- **Not changed, on purpose.** History retranscribe and the Import tab (also
+  "Use last recording") take language, engine and model from their own visible
+  pickers at the click; that is now the way to correct a wrongly chosen
+  language, since switching and pressing Retry no longer does. The Error text
+  after a failure says so ("...with another service or language"). An older
+  version cannot list an unfinished file whose name carries a language (its
+  name pattern ends at the id); this matters only for a downgrade.
+- **Observed, not part of this change and not tested.** `controller.set_language_mode`
+  and `_sync_overlay_language_options` ask `language_modes_for_selection` with
+  `settings.model_size` even for a remote engine, so the overlay's language list
+  for a remote model with its own list (Azure MAI, Speechmatics Enhanced,
+  Deepgram nova-2) may be the engine's default list instead.
+
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
 - **Owner: Win+V full of screenshots he did not remember taking, while he
