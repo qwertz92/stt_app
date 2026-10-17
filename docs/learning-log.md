@@ -3,6 +3,43 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17: a failed JavaScript package update backs off for a day
+
+One of the open questions left by the source-checkout package update (entry
+"a source checkout updates its JavaScript packages by itself", further down)
+was decided by the lead on the owner's behalf: his work PC is slow, Cohere is
+his main model there, and whether its network reaches the npm registry is
+unknown. Quitting during an update stays as it is (npm finishes on its own,
+`docs/agents/known-limitations.md`).
+- **A failed update waits 24 h before npm runs again for the same lock.**
+  Before, every start retried, and each retry delayed that session's first
+  Cohere start by as long as npm takes to fail -- 71 s measured against an
+  unreachable registry, up to the 600 s bound for a connection that hangs.
+  The record (`app_paths.node_packages_back_off_path()`) names the checkout,
+  the lock's SHA-256, the time and the reason. A changed lock tries at once,
+  since the next `git pull` may be the fix. Every failure records, the cheap
+  ones too (npm not found): one rule to explain instead of a list of
+  exceptions, and a tree that does not load is never held back anyway --
+  `_check_js_runtime` probes after a backed-off sync and runs the update
+  regardless when the import fails, because such a tree leaves the models
+  unusable whatever happens. A damaged record, a record from another lock or
+  checkout, or a failure time in the future (a clock set back would otherwise
+  stretch the wait) counts as none; the record is disposable, so the next
+  failure writes over it.
+- **The tray notice says when the next try comes** ("the app tries again
+  after 2026-10-18 14:05", local time), and a session that is held back still
+  gets its one notice with the stored reason: the user learns once per
+  session that the models run on old packages, not only on the day of the
+  failure.
+- Tests were written first and failed for the stated reason: 14 failures for
+  the back-off (the API did not exist, a second start ran npm again, a
+  damaged record path, the notice text). A real run on HomeBase, in a
+  throwaway checkout with a working 4.3.0 tree, the current lock and an npm
+  that could reach no registry: the first start failed in 1.9 s, wrote the
+  record and notified "... tries again after 2026-10-18 19:58"; the second
+  ran no npm (0.2 s), notified again with the stored reason, and 4.3.0 stayed
+  in use.
+
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 
 An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and

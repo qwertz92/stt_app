@@ -471,12 +471,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     (AssemblyAI, local): this entry does not claim whether they notice it.
 - **A source checkout's JavaScript package update** (2026-10-17,
   `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
-  - A failed update is tried again at every app start, and each try delays
-    that session's first Cohere/Granite start by as long as npm takes to
-    fail: 71 s for an unreachable registry (npm's own retries, measured),
-    up to the 600 s bound for a connection that hangs. Retrying is what lets
-    a passing network problem heal without the user; a back-off (remember
-    the failed lock and wait a day) needs an owner decision, ~1 h.
+  - A failed update waits 24 h before npm runs again for the same lock
+    (`UPDATE_BACK_OFF_S`), so a network problem that passed within minutes
+    still leaves the old packages in use until the day is over or the next
+    `git pull` changes the lock. That is the price of not delaying every
+    start by npm's failure time (71 s measured, up to the 600 s bound). The
+    record holds the last failure only: a failure in a second checkout
+    replaces the first one's, which then retries at its next start.
   - The update cannot be cancelled, and a quit during it ends only by the
     15 s quit watchdog; npm then keeps running in its job until it finishes,
     and the next start removes `.node_modules_update` (or, while npm still
@@ -497,7 +498,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     is the one that finds the drift, that case's load time includes npm.
   - A rename that keeps failing for its 30 s (a file inside held open for
     good) throws the staged tree away although it was verified, and the
-    next start runs npm again; keeping it for a later swap is ~1 h. While
+    next try, a day later, runs npm again; keeping it for a later swap is
+    ~1 h. While
     the second rename retries, `node_modules` is absent for up to 30 s
     (60 s if the way back retries too); Cohere/Granite starts in this
     process wait on `_JS_RUNTIME_LOCK` meanwhile, and the overlay keeps

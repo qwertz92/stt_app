@@ -92,7 +92,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/_pcm_audio.py` | Linear resampling (Nemotron, Granite CTC), the quiet-point splitter (Granite CTC passes, remote batch parts) and the 16-bit mono WAV encoder |
 | `transcriber/_audio_parts.py` | Sends a remote batch recording past its engine's limit (`config.remote_batch_part_limit`) as consecutive WAV parts through the provider's own single-request code (OpenAI, Groq, Azure) |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |
-| `transcriber/_node_packages.py` | A source checkout's `node_modules` kept in step with `package-lock.json` before the first runner start: drift check against npm's record, staged `npm ci` and swap, never while a runner child of any process holds its presence lock |
+| `transcriber/_node_packages.py` | A source checkout's `node_modules` kept in step with `package-lock.json` before the first runner start: drift check against npm's record, staged `npm ci` and swap, never while a runner child of any process holds its presence lock; a failed update waits 24 h for the same lock (`app_paths.node_packages_back_off_path`) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |

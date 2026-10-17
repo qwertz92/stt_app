@@ -107,7 +107,11 @@ command after every such `git pull`. Since 2026-10-17 the app does it itself
 3. If that fails -- an unreachable registry made npm give up after 71 s -- the
    tree in use stays untouched, the models start on it, the log gets
    `node_modules_update_failed` with npm's output, and the tray says once
-   what failed. The next app start tries again. Run in place, `npm ci` would
+   per session what failed and when the next try comes. The app waits 24
+   hours before it runs npm again for the same `package-lock.json`, so a
+   network that cannot reach the registry does not slow down every start;
+   a `git pull` that changes the lock tries at once, and a tree that does
+   not load at all is not made to wait. Run in place, `npm ci` would
    first have deleted the working tree: the same failed run left a
    half-deleted `node_modules` behind.
 4. No update replaces the tree while any runner child is alive, in the app

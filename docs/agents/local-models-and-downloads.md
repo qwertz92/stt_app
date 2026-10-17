@@ -364,6 +364,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     staged way (this replaced the in-place `npm install` repair, which
     could also rewrite the checkout's lock). An update that was tried is not
     repeated in the session.
+  - **A failed update waits 24 h before npm runs again for the same lock**
+    (lead's decision on the owner's behalf, 2026-10-17: his work PC is slow,
+    Cohere is his main model there, and whether its network reaches the
+    registry is unknown; each retry cost a start up to npm's failure time,
+    71 s measured, 600 s bound). `_record_back_off` writes the checkout
+    root, the lock's SHA-256, the time and the reason to
+    `app_paths.node_packages_back_off_path()` on every failure, cheap ones
+    (npm not found) included, so the rule has no exceptions to explain;
+    `_back_off` holds npm back while root and hash match and the failure is
+    less than a day old. A changed lock (the next `git pull`) tries at once;
+    a success deletes the record. The record only saves a retry, so it is
+    disposable: anything unreadable or untrustworthy -- damaged JSON, wrong
+    types, a failure time in the future after the clock was set back --
+    counts as none and is written over by the next failure (the
+    persistence rule against writing over an unreadable store protects
+    user data, which this is not). The back-off applies only while the tree
+    in use loads: `_check_js_runtime` probes the runner after a backed-off
+    sync and, if the import fails, runs `sync(force=True)`, which ignores
+    the back-off -- such a tree leaves the models unusable, so waiting a
+    day would only add a day without them. Each session on old packages
+    gets its one notice, also a backed-off one (no npm ran, the reason is
+    the stored one), ending "the app tries again after <local time>"
+    (`node_packages_notice_text(reason, retry_after)`; "at its next start"
+    when the record could not be saved).
   - Measured on HomeBase, 4.3.0 -> 4.3.1 lock in a throwaway copy: 11-13 s
     in all with a warm npm cache (npm 9.2-9.3 s, staged probe 0.24-0.41 s,
     renames 0.01 s, deleting the old 466 MB tree 1.5-1.9 s); first install

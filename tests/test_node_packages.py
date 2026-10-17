@@ -16,10 +16,12 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 
 import pytest
 
+from stt_app import app_paths
 from stt_app.config import TRAY_MESSAGE_MAX_CHARS
 from stt_app.transcriber import _node_packages, local_webgpu_asr
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
@@ -316,20 +318,196 @@ def test_a_failed_update_keeps_the_old_packages_and_tells_the_user_once(
 
     first = local_webgpu_asr._ensure_js_runtime_available("node", runner)
     first.release()
-    # A second start in the same session that checks again (another Node).
+    # A second start in the same session that checks again (another Node):
+    # the back-off holds it, and the user has been told already.
     local_webgpu_asr._JS_RUNTIME_READY.clear()
     local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
 
-    assert len(npm.calls) == 2
+    assert len(npm.calls) == 1
     assert _marker(root) == "old"
     assert _node_packages.lock_drift(root) != []
     assert not (root / _node_packages.STAGING_DIR_NAME).exists()
     assert notices == [
         local_webgpu_asr.node_packages_notice_text(
-            "npm reported an error (code ECONNREFUSED)"
+            "npm reported an error (code ECONNREFUSED)", _retry_after()
         )
     ]
     assert "keep working with the previous packages" in notices[0]
+    assert "tries again after " in notices[0]
+
+
+def _back_off_path() -> Path:
+    return app_paths.node_packages_back_off_path()
+
+
+def _retry_after() -> float:
+    record = json.loads(_back_off_path().read_text(encoding="utf-8"))
+    return record["failed_at"] + _node_packages.UPDATE_BACK_OFF_S
+
+
+def _a_day_passes() -> None:
+    record = json.loads(_back_off_path().read_text(encoding="utf-8"))
+    record["failed_at"] -= _node_packages.UPDATE_BACK_OFF_S
+    _back_off_path().write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_a_failed_update_waits_a_day_before_npm_runs_again(monkeypatch, tmp_path):
+    """Whether the work PC's network reaches the npm registry is unknown;
+    retrying at every start delayed each session's first Cohere start by as
+    long as npm takes to fail (71 s measured, up to the 600 s bound). The
+    tree in use keeps working meanwhile, and a success forgets the failure."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    failing = _FakeNpm(returncode=1, stderr="npm error code ETIMEDOUT\n")
+    monkeypatch.setattr(_node_packages, "run_bounded", failing)
+
+    failed = _sync(root)
+    waiting = _sync(root)
+    _a_day_passes()
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+    updated = _sync(root)
+
+    assert failed.failure == "npm reported an error (code ETIMEDOUT)"
+    assert failed.retry_after == pytest.approx(
+        time.time() + _node_packages.UPDATE_BACK_OFF_S, abs=60
+    )
+    assert len(failing.calls) == 1
+    assert waiting.backed_off
+    assert (waiting.failure, waiting.retry_after) == (
+        failed.failure,
+        failed.retry_after,
+    )
+    assert len(npm.calls) == 1
+    assert updated.updated
+    assert _marker(root) == "new"
+    assert not _back_off_path().exists()
+
+
+def test_a_changed_lock_is_tried_at_once_despite_a_back_off(monkeypatch, tmp_path):
+    """The back-off belongs to the lock that failed. The next `git pull`
+    that changes the lock may be the fix, so it is not made to wait."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm(returncode=1))
+    _sync(root)
+    newer = {
+        **NEW,
+        "node_modules/sharp": {"version": "0.35.6", "integrity": "sha512-sharp-356"},
+    }
+    (root / "package-lock.json").write_text(
+        json.dumps(_lock({**newer, **_OTHER_PLATFORM})), encoding="utf-8"
+    )
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+
+    outcome = _sync(root)
+
+    assert outcome.updated, outcome
+    assert len(npm.calls) == 1
+
+
+def _damage_back_off(damage: str) -> None:
+    path = _back_off_path()
+    record = json.loads(path.read_text(encoding="utf-8"))
+    if damage == "not-json":
+        path.write_bytes(b"\xff\xfe{ half a record")
+    elif damage == "not-an-object":
+        path.write_text("[]", encoding="utf-8")
+    elif damage == "wrong-types":
+        path.write_text(json.dumps({**record, "failed_at": "yesterday"}), "utf-8")
+    elif damage == "no-reason":
+        del record["reason"]
+        path.write_text(json.dumps(record), encoding="utf-8")
+    elif damage == "in-the-future":
+        # The clock was set back after the failure: without a bound the
+        # back-off would last until the clock caught up again.
+        record["failed_at"] = time.time() + 3600
+        path.write_text(json.dumps(record), encoding="utf-8")
+    elif damage == "unreadable":
+        path.unlink()
+        path.mkdir()
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "not-json",
+        "not-an-object",
+        "wrong-types",
+        "no-reason",
+        "in-the-future",
+        "unreadable",
+    ],
+)
+def test_a_damaged_back_off_record_never_blocks_an_update(
+    monkeypatch, tmp_path, damage
+):
+    """The record only saves a retry; one that cannot be read or trusted
+    counts as none and is never a crash."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm(returncode=1))
+    _sync(root)
+    _damage_back_off(damage)
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+
+    outcome = _sync(root)
+
+    assert outcome.updated, outcome
+    assert len(npm.calls) == 1
+
+
+def test_a_backed_off_tree_that_does_not_load_is_tried_again_at_once(
+    monkeypatch, tmp_path
+):
+    """The back-off protects a tree that works. One that does not load
+    leaves Cohere and Granite unusable whatever happens, so waiting a day
+    would only add a day without them."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm(returncode=1))
+    _sync(root)
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+    # The tree in use fails; the staged one, and then the swapped-in one, load.
+    probe = _Probe(1, 0, 0)
+    monkeypatch.setattr(local_webgpu_asr, "_run_transformers_import_probe", probe)
+
+    local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
+
+    assert len(npm.calls) == 1
+    assert _marker(root) == "new"
+
+
+def test_each_session_on_old_packages_says_so_once_with_the_next_try(
+    monkeypatch, tmp_path
+):
+    """A later start inside the day runs no npm but still runs on the old
+    packages: its one notice gives the reason of the failed try and when the
+    next one comes."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    monkeypatch.setattr(
+        _node_packages,
+        "run_bounded",
+        _FakeNpm(returncode=1, stderr="npm error code E403\n"),
+    )
+    _sync(runner.parents[2])
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+    monkeypatch.setattr(local_webgpu_asr, "_run_transformers_import_probe", _Probe(0))
+    notices: list[str] = []
+    local_webgpu_asr.set_node_packages_notice_handler(notices.append)
+
+    local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
+
+    assert npm.calls == []
+    assert notices == [
+        local_webgpu_asr.node_packages_notice_text(
+            "npm reported an error (code E403)", _retry_after()
+        )
+    ]
 
 
 def test_a_notice_raised_before_the_tray_exists_reaches_it(monkeypatch, tmp_path):
@@ -347,21 +525,34 @@ def test_a_notice_raised_before_the_tray_exists_reaches_it(monkeypatch, tmp_path
 
     assert notices == [
         local_webgpu_asr.node_packages_notice_text(
-            "npm, which comes with Node.js, was not found"
+            "npm, which comes with Node.js, was not found", _retry_after()
         )
     ]
 
 
-def test_the_notice_fits_the_tray_whole_however_long_the_reason():
+@pytest.mark.parametrize(
+    ("retry_after", "ending"),
+    [
+        (
+            # 14:05 on this machine's clock, daylight saving time included.
+            time.mktime((2026, 10, 18, 14, 5, 0, 0, 0, -1)),
+            "the app tries again after 2026-10-18 14:05.",
+        ),
+        # The back-off could not be saved: the next start does try again.
+        (0.0, "the app tries again at its next start."),
+    ],
+    ids=["backed-off", "not-saved"],
+)
+def test_the_notice_fits_the_tray_whole_however_long_the_reason(retry_after, ending):
     """Windows cuts a tray text after 255 characters. A fixed cap on the
     reason made the text 256 long, so its final full stop went; sized
     against the tray's limit, the text arrives whole."""
     text = local_webgpu_asr.node_packages_notice_text(
-        "npm did not install " + "x" * 200
+        "npm did not install " + "x" * 200, retry_after
     )
 
     assert len(text) <= TRAY_MESSAGE_MAX_CHARS
-    assert text.endswith("the app tries again at its next start.")
+    assert text.endswith(ending)
     assert "x..." in text
 
 
@@ -548,6 +739,7 @@ def test_a_staged_tree_without_a_package_the_tree_in_use_has_is_refused(
 
     skipped = _sync(root)
     marker_after_skip = _marker(root)
+    _a_day_passes()
     monkeypatch.setattr(
         _node_packages, "run_bounded", _FakeNpm(platform=(THIS_PLATFORM_KEY,))
     )

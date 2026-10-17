@@ -369,9 +369,10 @@ located from `STT_APP_NODE_PATH`, so this works even when Node is not on
 `PATH`. The update installs into a separate folder (`.node_modules_update`)
 and replaces `node_modules` only once the new packages load; if it fails (for
 example a proxy blocks the npm registry), the models keep running on the
-previous packages, a tray notification says what failed, and the app tries
-again at its next start. The installed app bundles its packages and never runs
-npm.
+previous packages, a tray notification says what failed and when the app
+tries again: 24 hours later for the same `package-lock.json`, or at once
+after a `git pull` that changes it. The installed app bundles its packages and
+never runs npm.
 
 **npm behind a TLS-intercepting proxy.** Node/npm ship their own CA list and
 ignore the Windows certificate store, so behind Zscaler `npm install` fails with

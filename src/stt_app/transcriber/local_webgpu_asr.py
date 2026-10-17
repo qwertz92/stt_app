@@ -13,6 +13,7 @@ import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -381,7 +382,7 @@ NODE_PACKAGES_NOTICE_TITLE = "Cohere/Granite packages not updated"
 _NODE_PACKAGES_NOTICE_TEXT = (
     "Could not update the JavaScript packages that Cohere and Granite run "
     "on: {reason}. Both models keep working with the previous packages; "
-    "the app tries again at its next start."
+    "the app tries again {when}."
 )
 
 
@@ -869,16 +870,25 @@ def set_node_packages_notice_handler(handler: Callable[[str], None] | None) -> N
         _deliver_node_packages_notice(handler, pending)
 
 
-def node_packages_notice_text(reason: str) -> str:
+def node_packages_notice_text(reason: str, retry_after: float) -> str:
     """The tray text for an update that failed while the old tree still loads.
 
-    The reason is shortened so that the whole text fits the tray's limit and
-    its second sentence -- the models still work -- is never cut off.
+    `retry_after` is when npm runs again (`SyncOutcome.retry_after`, local
+    time on screen), or 0 when the next start tries anyway. The reason is
+    shortened so that the whole text fits the tray's limit and its second
+    sentence -- the models still work, and when the next try comes -- is
+    never cut off.
     """
-    room = TRAY_MESSAGE_MAX_CHARS - len(_NODE_PACKAGES_NOTICE_TEXT.format(reason=""))
+    when = (
+        f"after {datetime.fromtimestamp(retry_after, UTC).astimezone():%Y-%m-%d %H:%M}"
+        if retry_after
+        else "at its next start"
+    )
+    fixed = _NODE_PACKAGES_NOTICE_TEXT.format(reason="", when=when)
+    room = TRAY_MESSAGE_MAX_CHARS - len(fixed)
     if len(reason) > room:
         reason = reason[: room - 3].rstrip() + "..."
-    return _NODE_PACKAGES_NOTICE_TEXT.format(reason=reason)
+    return _NODE_PACKAGES_NOTICE_TEXT.format(reason=reason, when=when)
 
 
 def _deliver_node_packages_notice(handler: Callable[[str], None], text: str) -> None:
@@ -888,9 +898,9 @@ def _deliver_node_packages_notice(handler: Callable[[str], None], text: str) -> 
         logger.debug("node_packages_notice_failed", exc_info=True)
 
 
-def _notify_previous_packages_kept(reason: str) -> None:
+def _notify_previous_packages_kept(reason: str, retry_after: float) -> None:
     global _NODE_PACKAGES_NOTICE_PENDING, _NODE_PACKAGES_NOTICE_SENT
-    text = node_packages_notice_text(reason)
+    text = node_packages_notice_text(reason, retry_after)
     with _NODE_PACKAGES_NOTICE_LOCK:
         if _NODE_PACKAGES_NOTICE_SENT:
             return
@@ -977,17 +987,22 @@ def _check_js_runtime(
 
         outcome = sync(force=False)
     loads, detail = _probe_js_runtime(node_path, runner.parent)
-    if not loads and source_root is not None and not outcome.changes:
+    if (
+        not loads
+        and source_root is not None
+        and (not outcome.changes or outcome.backed_off)
+    ):
         # npm's record says the tree is in step, yet it does not load (a
-        # deleted file, an interrupted manual install): reinstall it once,
-        # the same staged way. An update that was tried is not repeated.
+        # deleted file, an interrupted manual install), or the back-off held
+        # back the update of a tree that does not load either: reinstall it
+        # once, the same staged way. An update that was tried is not repeated.
         outcome = sync(force=True)
         if outcome.updated:
             loads, detail = _probe_js_runtime(node_path, runner.parent)
     if loads:
         _JS_RUNTIME_READY.add(cache_key)
         if outcome.failure:
-            _notify_previous_packages_kept(outcome.failure)
+            _notify_previous_packages_kept(outcome.failure, outcome.retry_after)
         return
     if source_root is None:
         install_hint = (
