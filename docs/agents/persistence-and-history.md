@@ -162,7 +162,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   field, so no schema bump: a file the previous version wrote reads as `""`
   (unknown, as does orphaned audio without a state), which Retry answers with the
   language selected now; an older version reading a newer file ignores it.
-  Tests: `tests/test_last_recording_store.py`.
+  The unfinished-recordings directory has no index, so its copy of that language
+  is in the file name, `unfinished_<stamp>_<id>[.<language>].wav` (neither part
+  can hold a dot; a file without one is as before and reads as unknown), and the
+  startup adoption of the managed slot copies it. Tests:
+  `tests/test_last_recording_store.py`, `tests/test_unfinished_recordings.py`,
+  `tests/test_unfinished_recordings_notice.py`.
 - **Ctrl+C in either history view copies the whole selection** (explicit
   `QKeySequence.Copy` shortcut; the default copies one cell).
 - **Nothing that only reads may call `appdata_root`** (it creates the folder

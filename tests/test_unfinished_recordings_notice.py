@@ -89,6 +89,27 @@ def test_the_notice_lists_the_quits_recordings_and_the_last_recording(
     dialog.close()
 
 
+def test_the_last_recordings_language_goes_with_it_into_the_list(app, stores, tmp_path):
+    """Owner decision 2026-10-17: a retry uses the language the recording was
+    made in. The managed slot is the only place that language is stored
+    after a crash, so the copy into the list must carry it."""
+    last, _history, unfinished = stores
+    last.save_recording(b"RIFF-german", keep_after_success=False, language_mode="de")
+    last.mark_failed("network")
+    _offer(stores, tmp_path).close()
+    # A state without a language (an earlier version's) is kept as unknown.
+    last.save_recording(b"RIFF-older", keep_after_success=False)
+    last.mark_failed("network")
+    _offer(stores, tmp_path).close()
+
+    languages = {
+        item.path.read_bytes(): item.language_mode
+        for item in unfinished.list_recordings()
+    }
+
+    assert languages == {b"RIFF-german": "de", b"RIFF-older": ""}
+
+
 def test_a_slot_that_cannot_be_marked_is_not_copied_twice(
     app, stores, tmp_path, monkeypatch
 ):

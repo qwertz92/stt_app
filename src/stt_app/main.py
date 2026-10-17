@@ -892,6 +892,7 @@ def _adopt_recoverable_last_recording(
             audio,
             recording_id=state_id or f"orphan-{modified_ns}",
             recorded_at=recorded_at,
+            language_mode=str(getattr(state, "language_mode", "") or ""),
         )
     except (OSError, ValueError) as exc:
         return (
