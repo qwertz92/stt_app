@@ -31,7 +31,7 @@ from typing import ClassVar
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import app_icon_path
-from .config import APP_DISPLAY_NAME, APP_LOGGER_NAME
+from .config import APP_DISPLAY_NAME, APP_LOGGER_NAME, TRAY_MESSAGE_MAX_CHARS
 
 WM_DESTROY = 0x0002
 WM_COMMAND = 0x0111
@@ -88,7 +88,6 @@ SM_CYSMICON = 50
 _TRAY_ICON_ID = 1
 _WINDOW_CLASS_NAME = "SttAppNotificationIconWindow"
 _MAX_TIP_CHARS = 127
-_MAX_INFO_CHARS = 255
 _MAX_INFO_TITLE_CHARS = 63
 
 LRESULT = ctypes.c_ssize_t
@@ -390,7 +389,7 @@ class Win32TrayApi:
         data = self._icon_data(hwnd)
         data.uFlags = NIF_INFO
         data.szInfoTitle = title[:_MAX_INFO_TITLE_CHARS]
-        data.szInfo = message[:_MAX_INFO_CHARS]
+        data.szInfo = message[:TRAY_MESSAGE_MAX_CHARS]
         data.dwInfoFlags = flags
         self._shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
 

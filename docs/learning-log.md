@@ -10135,3 +10135,110 @@ on and the overlay green, the first ~10 s were not captured.
   warm stream inherited its predecessor's last callback time, read as a
   60 s stall. Lesson: a wait added on the Qt thread changes every input
   path that queues behind it, not just the one that called it.
+
+## 2026-10-17: a source checkout updates its JavaScript packages by itself
+
+- **Owner complaint.** The work PC runs the app from a git checkout with
+  plain Python and pip (uv and installers are blocked there). The
+  2026-10-10 release changed `package-lock.json` (Transformers.js 4.3.0 ->
+  4.3.1, sharp 0.35.4 -> 0.35.5 for an advisory), so after `git pull` the
+  Cohere/Granite runtime needed `npm ci --omit=dev` by hand -- an npm
+  command he does not know and should not have to. The installed app was
+  never affected: `build_windows_release.ps1` runs `npm ci --omit=dev` and
+  `stt_app.spec` copies `node_modules` into the bundle (and refuses to build
+  without it).
+- **What existed.** Since the first ONNX models, `_ensure_js_runtime_available`
+  ran `npm install` in the checkout when the Transformers.js import probe
+  failed. A changed lock never made the probe fail (4.3.0 imports fine), so
+  it never ran; and run in place, `npm install` could rewrite the checkout's
+  own lock, which then blocks the next `git pull`.
+- **Decision (lead): the app keeps `node_modules` in step itself, for
+  source runs only.** `transcriber/_node_packages.py`: drift is the lock
+  against npm's record `node_modules/.package-lock.json` (version and
+  integrity, 0.02 s, no network while in step); an update runs `npm ci` in
+  `.node_modules_update`, checks the staged tree, then swaps it in with two
+  renames. The old in-place repair became the same staged install.
+- **Measured, and what it changed in the design** (HomeBase, throwaway
+  copy, never the repo's tree):
+  - A failed `npm ci` against an unreachable registry gave up after 71 s and
+    left a half-deleted `node_modules` (`npm warn cleanup Failed to remove
+    some directories`, EPERM): in place, every proxy hiccup would have
+    broken a model that worked. Hence the staging folder.
+  - Windows renamed `node_modules` while a node child that had imported
+    Transformers.js had five DLLs mapped from it (onnxruntime binding and
+    DLL, sharp, two libvips). The rename does not protect a running child,
+    so every runner child holds an OS lock file (its presence) for its
+    lifetime, in the app and in the benchmark worker alike, and an update
+    waits while one is held.
+  - A presence cannot cover a runner of an older build, which is exactly
+    what runs after a `git pull` until the app restarts, while the
+    benchmark worker it spawns already imports the new code. A write-open
+    of a DLL, though, is refused for exactly the five files a live child
+    has mapped and for none once it exited, so the update also checks that
+    (0.45 s walk, only when due), before npm and right before the swap. A
+    live node child without a presence then deferred the update in 0.83 s.
+  - npm's record lists only what it installed (42 entries here); the lock
+    lists 27 more, all optional: 25 sharp builds for other platforms and two
+    helpers of its WebAssembly build. Counting their absence as drift would
+    have run npm, and reached the network, at every start.
+  - Update 4.3.0 -> 4.3.1 with a warm npm cache: 11.2 s in all (npm 9.3 s,
+    staged probe 0.24 s, renames 0.01 s, deleting the old 466 MB tree
+    1.5 s), 12.6 s with the final code's two DLL checks; Transformers.js
+    4.3.1 imported afterwards. A first install with an empty cache
+    (151 MB) took 17.8 s. The failure run took 72.7 s, kept the tree in use
+    (it still imported) and produced the tray notice once.
+- **Review round 1 (Opus) found one P2, fixed with a test that failed
+  first.** npm exits 0 when it cannot fetch an optional package. Without
+  `@img/sharp-win32-x64` -- a proxy that blocks one tarball is enough --
+  the staged tree passed `lock_drift`, which cannot tell this platform's
+  sharp binary from the 25 others that are rightly absent, and passed the
+  import probe, because Node resolved the binary from the old tree one
+  folder up; the swap then deleted the only tree sharp loaded from. The
+  staged tree must now hold every package the tree in use has that the lock
+  still lists (`dev` packages of a developer's full install excepted:
+  `--omit=dev` leaves them out on purpose, and counting them would refuse
+  every update in that checkout -- hypothetical today, since `package.json`
+  has no devDependencies). Reproduced for real on HomeBase in the
+  throwaway copy with an `.npmrc` saying `optional=false`, which makes npm
+  skip every optional package and still exit 0: the d8a394c code swapped
+  in a tree with only `@img/colour` and the runner's import then failed
+  inside sharp, whose error asked for the win32-x64 binary
+  (`npm install --os=win32 --cpu=x64 sharp`); the fixed code refused it
+  ("npm did not install @img/sharp-win32-x64", 22 s), kept 4.3.1, which
+  still imported, and sent the notice once. Without that `.npmrc` the fixed
+  code updated 4.3.1 -> 4.3.0 and back with no false refusal (35 s and
+  13 s; npm itself 30 s and 11 s while other agents loaded the machine).
+  Blocking the `@img` scope's registry instead did not reproduce it: npm
+  then refuses the non-optional `@img/colour` too (`EALLOWREMOTE`) and
+  fails outright. Smaller fixes from the same round: a rename retries for 30 s
+  instead of 2 s (the reviewer measured that one open file anywhere inside
+  refuses a directory rename, and a virus scanner opens each freshly
+  extracted file); the tray notice fits Windows' 255 characters whole (it
+  was 256 with a long reason, which cost it its final full stop); a notice
+  raised
+  before the tray registered its handler waits for it instead of being
+  dropped (the startup preload runs first); older npm's `npm ERR!` lines
+  name the error too.
+- **Review round 2 (Sonnet) over those fixes: no P1 or P2.** It fed the
+  real records of the real lock installed by npm 10.9.9, 11.19.0 and
+  12.0.2 (`ci --omit=dev` and plain `install`, 42 keys each) to
+  `_dropped_packages` in all 36 pairs: no false refusal. Its P3, fixed with
+  a test that failed first: a tree in use installed for another platform
+  (from WSL into the Windows checkout, or copied from x64 to ARM64) holds
+  that platform's sharp binaries, which npm here rightly skips, so every
+  update was refused -- the repair for exactly such a tree included. The
+  refusal now applies only while the tree in use still loads (one more
+  0.25 s probe, only when a package is missing); a tree that does not load
+  protects nothing. Also from that round: a first install had no test, the
+  30 s rename retry can stretch a stuck stranded tree to about 90 s per
+  dictation (recorded in known limitations), and `FileExistsError` no
+  longer waits out the retry.
+- **Lessons.** A repair that waits for a symptom (the import failing) never
+  sees a change that leaves the old state working; compare against the
+  declared state instead. "The OS will refuse while files are in use" needs
+  measuring before it carries a safety argument, and for the exact kind of
+  use: on Windows a mapped DLL does not stop a directory rename, one open
+  file handle inside does, and a write-open of a mapped DLL is refused. And
+  an import probe run from a staging folder inside the checkout proves
+  nothing about what the staged tree lacks: Node's module resolution climbs
+  up into the tree in use.

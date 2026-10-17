@@ -384,14 +384,19 @@ The app removes unusable `*.incomplete` files left by the interrupted transfer
 but preserves files that finished downloading so a later retry can reuse them.
 The command-line download script applies the same cleanup after `Ctrl+C`.
 
-For Cohere and Granite, source checkouts use the system Node.js executable. If
-`@huggingface/transformers` is missing, the app attempts `npm install`
-automatically from the repository root on first ONNX use. That is the only
-declared JavaScript dependency; `onnxruntime-node` comes with it. The packaged Windows
-release includes the JavaScript dependency tree when `node_modules` is present
-at build time, but it still needs a Node.js executable unless the distribution
-bundle adds one separately. Set `STT_APP_NODE_PATH` if Node.js is installed in a
-non-standard location.
+For Cohere and Granite, source checkouts use the system Node.js executable.
+Before the first Cohere/Granite start of a session, the app compares
+`package-lock.json` with what npm recorded as installed
+(`node_modules/.package-lock.json`). When they differ -- a fresh clone, or a
+`git pull` that changed the lock -- it runs `npm ci --omit=dev` itself in a
+separate folder and swaps the result in only once it loads, so nothing has to
+be run by hand and a failed install never breaks the packages that worked
+before; when they agree it runs no npm at all. `@huggingface/transformers` is
+the only declared JavaScript dependency; `onnxruntime-node` comes with it. The packaged Windows
+release bundles the JavaScript dependency tree and never runs npm, but it
+still needs a Node.js executable unless the distribution bundle adds one
+separately. Set `STT_APP_NODE_PATH` if Node.js is installed in a non-standard
+location.
 
 If the machine-wide Node.js installer is blocked by corporate policy, use the
 no-admin portable install: run `python scripts/setup_node_windows.py` (Windows

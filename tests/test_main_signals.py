@@ -1,5 +1,7 @@
 import os
 import signal
+import threading
+import time
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
@@ -22,6 +24,7 @@ from stt_app.main import (
     _TrayUpdateChecker,
 )
 from stt_app.settings_store import AppSettings
+from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.unfinished_recordings import UnfinishedRecordingStore
 from stt_app.update_checker import UpdateCheckResult
@@ -1100,6 +1103,7 @@ class _NotificationSignals(QtCore.QObject):
     background_insertion_failed = QtCore.Signal(str)
     busy_overlay_error = QtCore.Signal(str)
     clipboard_restore_failed = QtCore.Signal(str)
+    node_packages_not_updated = QtCore.Signal(str)
 
 
 class _TrayMessages:
@@ -1110,13 +1114,59 @@ class _TrayMessages:
         self.messages.append((title, message))
 
 
-def test_an_error_the_overlay_cannot_show_reaches_the_tray():
+def test_packages_that_were_not_updated_reach_the_tray_from_the_runner_thread(
+    monkeypatch,
+):
+    """The update runs where the Node runner starts -- a preload or
+    transcription worker -- and its one-time notice must still end up as a
+    tray message on the Qt thread."""
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_HANDLER", None)
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_PENDING", "")
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_SENT", False)
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    tray = _TrayMessages()
+    shown_on: list[threading.Thread] = []
+    original_show = tray.showMessage
+
+    def show(*args, **kwargs):
+        shown_on.append(threading.current_thread())
+        original_show(*args, **kwargs)
+
+    tray.showMessage = show
+    controller = _NotificationSignals()
+    main_module._connect_tray_notifications(tray, controller)
+
+    worker = threading.Thread(
+        target=local_webgpu_asr._notify_previous_packages_kept,
+        args=("npm reported an error (code E403)",),
+    )
+    worker.start()
+    worker.join(timeout=10)
+    deadline = time.monotonic() + 5
+    while not tray.messages and time.monotonic() < deadline:
+        app.processEvents()
+
+    assert tray.messages == [
+        (
+            local_webgpu_asr.NODE_PACKAGES_NOTICE_TITLE,
+            local_webgpu_asr.node_packages_notice_text(
+                "npm reported an error (code E403)"
+            ),
+        )
+    ]
+    assert shown_on == [threading.main_thread()]
+
+
+def test_an_error_the_overlay_cannot_show_reaches_the_tray(monkeypatch):
     """An error raised while a session owns the overlay is a tray message.
 
     `show_overlay_error` hands such an error to `busy_overlay_error` instead
     of painting over "Listening"; the wiring to the tray is pinned by
     emitting the signal, beside the two reports that already took this road.
     """
+    # The wiring also registers a module-level handler; keep it to this test.
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_HANDLER", None)
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_PENDING", "")
     fake_signals = {
         name
         for name, value in vars(_NotificationSignals).items()

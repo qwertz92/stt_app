@@ -195,7 +195,7 @@ def test_allowed_download_urls_cover_the_redirect_cases():
 
 
 def test_a_half_extracted_node_is_not_reported_as_ready(monkeypatch, tmp_path):
-    """node.exe alone is not a usable install; the app runs `npm install`.
+    """node.exe alone is not a usable install; the app runs `npm ci` itself.
 
     An extraction cut short by Ctrl+C, a full disk or an AV quarantine leaves
     node.exe in place with npm missing, and the old check passed it. --force

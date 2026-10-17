@@ -48,3 +48,5 @@ Benchmark_testing_*.txt
 
 # JavaScript runtime dependencies
 node_modules/
+# The app's staged JavaScript package update (src/stt_app/transcriber/_node_packages.py)
+.node_modules_update/
