@@ -414,9 +414,49 @@ def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_
     assert seen == ["en"]
     assert "retry_recorded_language_not_offered recording_id=spoken1" in caplog.text
     assert controller.unfinished_recording_language_note(recording) == (
-        f"English; {label} not offered"
+        "English",
+        label,
     )
     assert controller.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unfinished_recording_names_the_language_that_ran_not_a_stale_selection(
+    monkeypatch, tmp_path
+):
+    """The saved selection is not offered by the engine either (Deepgram
+    nova-2 has no Afrikaans): the provider's own normalization runs Auto, so
+    that is what is requested and what the startup notice names."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="af"
+    )
+    controller._settings = replace(
+        controller._settings, engine="deepgram", deepgram_model="nova-2"
+    )
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="af",
+    )
+    recording = unfinished.find("spoken1")
+
+    assert controller.transcribe_unfinished_recording(recording)[0] is True
+
+    assert seen == ["auto"]
+    assert controller.unfinished_recording_language_note(recording) == (
+        "Auto",
+        "Afrikaans",
+    )
     controller.shutdown()
     _ = app
 
@@ -435,8 +475,42 @@ def test_an_unfinished_recording_in_an_offered_language_needs_no_note(
     )
 
     note = controller.unfinished_recording_language_note
-    assert note(unfinished.find("spoken1")) == ""
-    assert note(_kept_recording(unfinished, recording_id="unknown1")) == ""
+    assert note(unfinished.find("spoken1")) is None
+    assert note(_kept_recording(unfinished, recording_id="unknown1")) is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_language_keeps_the_recording_like_a_gap_does(monkeypatch, tmp_path):
+    """The recorded language was not offered, so the transcript is in another
+    language than the speech. The WAV was deleted after the success (recording
+    retention off): nothing was left to retranscribe in the right language. It
+    stays, History's entry points at it (Retranscribe there takes a language),
+    and a recording that fell back nowhere is deleted as before."""
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, language_mode="de"
+    )
+    controller._settings = replace(controller._settings, model_size=CANARY_MODEL_SIZE)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hallo")
+    for recording_id, language in (("fell1", "auto"), ("plain1", "en")):
+        unfinished.save(
+            b"RIFF-spoken",
+            recording_id=recording_id,
+            recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+            language_mode=language,
+        )
+    fell = unfinished.find("fell1")
+    plain = unfinished.find("plain1")
+
+    assert controller.transcribe_unfinished_recording(fell)[0] is True
+    assert controller.transcribe_unfinished_recording(plain)[0] is True
+
+    assert fell.path.is_file()
+    assert not plain.path.exists()
+    entries = {entry.source_recording_id: entry for entry in history.load()}
+    assert entries["fell1"].source_audio_path == os.path.abspath(fell.path)
+    assert entries["plain1"].source_audio_path == ""
     controller.shutdown()
     _ = app
 

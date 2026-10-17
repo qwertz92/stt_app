@@ -3822,15 +3822,20 @@ class _FailHoldSucceedTranscriber:
 def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_store(
     monkeypatch, tmp_path
 ):
-    """The retry of a failed recording W carries W's own identity.
+    """The retry of a failed recording W carries W's own identity and leaves
+    the newest recording A alone.
 
     `retry_last_transcription` resubmits W's retained bytes, and the job
     used to take its recording id from the store's slot at registration --
-    the newest recording A, whose transcription the retry first stops. The
-    retry's unkeyed transcribing mark then relabelled A's slot, and its
-    completion, keyed by A's id, matched and deleted A's audio and state
-    (`keep_after_success` off) although A never completed under its own
-    name (the wave-14 concurrency lens, on the real store).
+    the newest recording A. The retry's unkeyed transcribing mark then
+    relabelled A's slot, and its completion, keyed by A's id, matched and
+    deleted A's audio and state (`keep_after_success` off) although A never
+    completed under its own name (the wave-14 concurrency lens, on the real
+    store). The retry also used to stop A, because A held the overlay's
+    token, which diverted A to history only (review round 2, 2026-10-17);
+    A is another recording's job and keeps running, and the retry queues
+    behind it. A's state is its own: transcribing while it runs, completed
+    -- and its audio deleted -- by its own job.
     """
     history_store = TranscriptHistoryStore(tmp_path / "history.json")
     recordings = LastRecordingStore(
@@ -3887,11 +3892,14 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
         assert token_retry != token_a
         retry_job = controller._jobs[token_retry]
         assert retry_job.source_recording_id == w_id
-        # The retry's stop marked A canceled; the retry's own transcribing
-        # mark, keyed by W, left that alone.
+        assert controller._jobs[token_a].aborting is False
+        # The retry's own transcribing mark, keyed by W, left A's slot alone.
         after_retry = recordings.load()
         assert after_retry is not None
-        assert (after_retry.recording_id, after_retry.status) == (a_id, "canceled")
+        assert (after_retry.recording_id, after_retry.status) == (
+            a_id,
+            "transcribing",
+        )
 
         release.set()
         _pump_until(
@@ -3903,11 +3911,10 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
 
         assert transcriber.calls == 3
         assert overlay.states[-1] == ("Done", "retry of W succeeded.")
-        final_state = recordings.load()
-        assert final_state is not None
-        assert (final_state.recording_id, final_state.status) == (a_id, "canceled")
-        assert recordings.audio_path.is_file()
-        assert recordings.has_recoverable_recording() is True
+        # A completed under its own name, which deletes its audio; the retry's
+        # completion, keyed by W, found the slot gone (or A's) and left it.
+        assert recordings.load() is None
+        assert not recordings.audio_path.is_file()
         assert [entry.text for entry in history_store.load()] == [
             "transcript A.",
             "retry of W succeeded.",

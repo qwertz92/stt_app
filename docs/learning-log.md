@@ -3,6 +3,92 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
+
+Round 2 of the independent review (main `35cd764`) found no P1 or P2 and five
+smaller points; each was reproduced by a test that failed for the stated reason
+before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
+- **P3: a Retry stopped whatever held the overlay's token, not the jobs of its
+  own recording.** (a) A changed-request retry R2 left R1 running when R1 had
+  lost the token (a newer dictation was recorded and cancelled, or is still in
+  flight): both delivered, two history entries and two pastes of one text.
+  (b) Older than the Retry work: a Retry for an old failure stopped the newest
+  dictation when that held the token, which then went to history only and was
+  never pasted. Reproduced with the three sequences (R1 `aborting` stayed False;
+  the newest job's `aborting` became True). A Retry now stops every non-aborting
+  job working on the slot's recording (`_live_jobs_of_the_slot`, the filter
+  `_running_retry_of_the_slot` already had) and no other. The retry takes the
+  overlay's token as every submit does, so it keeps its Processing and Cancel
+  cancels it; the newer job becomes a queued one. What it costs: one worker, so
+  the retry starts when the running job ends. One job cannot be left running,
+  a pending streaming finalize: only its foreground result clears
+  `_streaming_recording`, so with the token moved away the session would stay
+  open and refuse every new recording. The Retry is refused with a tray note
+  until the finalize has ended instead (before, it stopped the finalize, which
+  is the diversion again). Not tested on a real stream: the refusal is shown
+  with the fake streaming transcriber. Two older tests had pinned the
+  diversion as intended behaviour ("a retry stops the transcription in flight";
+  "the newer recording is marked canceled by the retry") and failed once the
+  rule changed; I only found them when the wider test files ran after the
+  merge, so they were rewritten in a follow-up commit rather than with the
+  change.
+- **P3: a fallback retry left no lasting trace.** The recorded language was not
+  offered, so the transcript came out in another language than the speech; the
+  Processing line that said so was overwritten by the first provider progress
+  line, History stores no language, and with "keep last recording" off the WAV
+  was deleted after the success, so Import's "Use last recording" could not
+  redo it in the right language. Reproduced on both roads (the managed state
+  was gone after the delivery; no notice; the unfinished file was deleted).
+  Fix with the gap transcript's own mechanism, no new one: the job carries
+  `language_fallback_from`, its delivery marks the recording failed instead of
+  completed (which keeps the file) while the managed slot still holds it, and
+  one `busy_overlay_error` tray notice names the language that ran and where
+  the audio can be redone. Where a newer recording took the slot the notice
+  says the audio is no longer offered instead of promising it. After a restart
+  the file is kept as the settings keep any recording, and in place where they
+  would delete it, so History's Retranscribe still offers it. Decision: the
+  restart road has no tray notice per row, because the dialog row already
+  names the language (see the row-wording bullet below) and a toast per row on
+  top of an open window would be noise; say so if a toast there is wanted too.
+- **P4, reproduced: the fallback named a language that did not run.** When the
+  recorded language was not offered, a retry used "the selected language" as it
+  stood in the settings. A selection the engine does not offer either stays
+  saved when the engine is switched (the overlay's menu only shows the engine's
+  first language instead), so a stale Afrikaans on Deepgram nova-2 was named in
+  the overlay text and the startup notice while the provider's own
+  normalization ran Auto. Reproduced on both roads (`'af' == 'auto'` failed).
+  One decision now serves both: `_language_a_retry_runs_in` returns the language
+  that runs and whether it is the recorded one -- the recorded language where
+  offered, else the selection, else the engine's first language, the overlay's
+  own rule -- so the language named is the language the provider receives.
+  `_recorded_language_offered` is gone (it was the first half of this).
+  The overlay text for the clamped case reads "the selected language (Afrikaans)
+  is not offered either, so using Auto"; the log line says `using=`.
+- **P4, reproduced: the startup notice computed the language note inside the
+  transcription's `try`, and its row did not say which language ran.** A note
+  that raised (the settings could not be read) became the row's failure and the
+  recording was never sent; the dialog's worker now asks through
+  `_language_fallback`, which logs a failing note and leaves it out. The note
+  is a pair of labels (`("English", "Auto")` or `None`) and the row words it:
+  `Transcribed in English, in History (Auto is not offered by this model)`,
+  where it used to say `(English; Auto not offered)`. Measured on the real
+  desktop widgets: the wording is 357 px in the 455 px status column for
+  English/Auto, and 443 px for the longest language label twice (Haitian
+  Creole), so it is not elided; a test pins that against the column's width.
+  The tooltip adds that the recording is kept and where to redo it.
+- **P4, reproduced: the Cancel guard armed on every exit of the slot from
+  Retry.** Round 1 armed `_cancel_ignored_until` in `_sync_action_slot` when
+  the slot stopped showing Retry, to drop the second click of a double click.
+  Pressing the record hotkey from an Error with Retry (-> Listening, Cancel
+  where Retry was) armed it too, so a real Cancel click within 500 ms was
+  dropped; the test paints that and failed with `[] == [True]`. The guard is
+  now armed by the click itself (`_retry_button.clicked` ->
+  `_on_retry_clicked`), the `_retry_in_slot` flag is gone, and a refused Retry
+  needs no special case (the overlay stays on Error). The test also patched
+  the global `time.monotonic`, which every other reader of the clock in the
+  process saw; it now patches the module-local `overlay_ui.monotonic`
+  (`from time import monotonic`).
+
 ## 2026-10-17 (round 2 on the not-inserted warning: three P4s)
 
 The second review of the severity rule (`d507947`) found no P1 to P3 and three

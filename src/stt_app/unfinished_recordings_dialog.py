@@ -9,6 +9,7 @@ notice: the owner listens to the files before deciding.
 
 from __future__ import annotations
 
+import logging
 import threading
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -27,12 +28,16 @@ from .settings_dialog_helpers import (
 from .ui_feedback import reserve_button_width_for_texts
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 
+_LOGGER = logging.getLogger(__name__)
+
 TranscribeRecording = Callable[
     [UnfinishedRecording, Callable[[str], None] | None], "tuple[bool, str]"
 ]
 # What to tell about the language a recording is transcribed in when it is not
-# the one it was made in; "" when there is nothing to tell.
-LanguageNote = Callable[[UnfinishedRecording], str]
+# the one it was made in: (the language that runs, the recorded language the
+# engine and model do not offer), both as the pickers spell them. None when
+# there is nothing to tell.
+LanguageNote = Callable[[UnfinishedRecording], "tuple[str, str] | None"]
 
 _DIALOG_WIDTH = 680
 _VISIBLE_ROWS = 6
@@ -72,6 +77,26 @@ def format_size(size_bytes: int | None) -> str:
     return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
+def _language_fallback(
+    language_note: LanguageNote, recording: UnfinishedRecording
+) -> tuple[str, str]:
+    """`language_note` for `recording`, ("", "") when there is none.
+
+    Never raises: the note only describes the transcription, so one that
+    cannot be worked out is logged and left out. Asked inside the
+    transcription's own `try`, its exception became the row's failure and
+    the audio was never sent."""
+    try:
+        return language_note(recording) or ("", "")
+    except Exception:
+        _LOGGER.exception(
+            "The language note of an unfinished recording could not be worked "
+            "out. recording_id=%s",
+            recording.recording_id,
+        )
+        return "", ""
+
+
 def _confirm_delete(parent: QtWidgets.QWidget, count: int) -> bool:
     noun = "this recording" if count == 1 else f"these {count} recordings"
     box = styled_message_box(
@@ -95,7 +120,9 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
 
     _row_started = QtCore.Signal(str)
     _row_progress = QtCore.Signal(str, str)
-    _row_finished = QtCore.Signal(str, bool, str, str)
+    # recording id, ok, transcript or error, language that ran, language not
+    # offered (both "" when the recorded language was used)
+    _row_finished = QtCore.Signal(str, bool, str, str, str)
     _run_finished = QtCore.Signal()
 
     def __init__(
@@ -114,7 +141,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self._recordings = list(recordings)
         self._store = store
         self._transcribe = transcribe
-        self._language_note = language_note or (lambda _recording: "")
+        self._language_note = language_note or (lambda _recording: None)
         self._keep_dir = Path(keep_dir)
         self._reveal = reveal
         self._confirm_delete = confirm_delete
@@ -254,13 +281,15 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
                 return row
         return -1
 
-    def _set_status_cell(self, recording_id: str, text: str) -> None:
+    def _set_status_cell(
+        self, recording_id: str, text: str, *, tooltip: str | None = None
+    ) -> None:
         row = self._row_of(recording_id)
         if row < 0:
             return
         item = self.table.item(row, len(_COLUMNS) - 1)
         item.setText(text)
-        item.setToolTip(text)
+        item.setToolTip(text if tooltip is None else tooltip)
 
     def _selected(self) -> list[UnfinishedRecording]:
         rows = sorted({index.row() for index in self.table.selectedIndexes()})
@@ -328,10 +357,9 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
                 def _progress(message: str, recording_id=item.recording_id) -> None:
                     emit(self, "_row_progress", recording_id, str(message))
 
-                note = ""
+                # Asked right before the transcription that decides it.
+                ran, not_offered = _language_fallback(language_note, item)
                 try:
-                    # Asked right before the transcription that decides it.
-                    note = language_note(item)
                     ok, text = transcribe(item, _progress)
                 except Exception as exc:
                     ok, text = False, exception_reason(exc)
@@ -341,7 +369,8 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
                     item.recording_id,
                     bool(ok),
                     str(text),
-                    str(note),
+                    str(ran),
+                    str(not_offered),
                 )
             emit(self, "_run_finished")
 
@@ -369,15 +398,28 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
             self._set_status_cell(recording_id, message.strip())
 
     def _on_row_finished(
-        self, recording_id: str, ok: bool, text: str, language_note: str
+        self, recording_id: str, ok: bool, text: str, ran: str, not_offered: str
     ) -> None:
         if ok:
             self._states[recording_id] = _DONE
-            self._set_status_cell(
-                recording_id,
-                "Transcribed, in History"
-                + (f" ({language_note})" if language_note else ""),
-            )
+            if ran:
+                # One line: the cell elides on the right, so what says why the
+                # language is another comes last and the whole text is the
+                # tooltip, with where the audio stays.
+                status = (
+                    f"Transcribed in {ran}, in History "
+                    f"({not_offered} is not offered by this model)"
+                )
+                self._set_status_cell(
+                    recording_id,
+                    status,
+                    tooltip=(
+                        f"{status}. The recording is kept: Retranscribe... in "
+                        "History runs it in another language."
+                    ),
+                )
+            else:
+                self._set_status_cell(recording_id, "Transcribed, in History")
         else:
             self._states[recording_id] = _FAILED
             self._set_status_cell(recording_id, f"Failed: {text}")
