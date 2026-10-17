@@ -9824,12 +9824,31 @@ on and the overlay green, the first ~10 s were not captured.
   - Update 4.3.0 -> 4.3.1 with a warm npm cache: 11.2 s in all (npm 9.3 s,
     staged probe 0.24 s, renames 0.01 s, deleting the old 466 MB tree
     1.5 s), 12.6 s with the final code's two DLL checks; Transformers.js
-    4.3.1 imported afterwards. A first install with
-    an empty cache (151 MB) took 17.8 s. The failure run took 72.7 s, kept
-    the tree in use (it still imported) and produced the tray notice once.
+    4.3.1 imported afterwards. A first install with an empty cache
+    (151 MB) took 17.8 s. The failure run took 72.7 s, kept the tree in use
+    (it still imported) and produced the tray notice once.
+- **Review round 1 (Opus) found one P2, fixed with a test that failed
+  first.** npm exits 0 when it cannot fetch an optional package. Without
+  `@img/sharp-win32-x64` -- a proxy that blocks one tarball is enough --
+  the staged tree passed `lock_drift`, which cannot tell this platform's
+  sharp binary from the 25 others that are rightly absent, and passed the
+  import probe, because Node resolved the binary from the old tree one
+  folder up; the swap then deleted the only tree sharp loaded from. The
+  staged tree must now hold every package the tree in use has that the lock
+  still lists. Smaller fixes from the same round: a rename retries for 30 s
+  instead of 2 s (the reviewer measured that one open file anywhere inside
+  refuses a directory rename, and a virus scanner opens each freshly
+  extracted file); the tray notice fits Windows' 255 characters whole (it
+  was 256 with a long reason, which cut its last sentence); a notice raised
+  before the tray registered its handler waits for it instead of being
+  dropped (the startup preload runs first); older npm's `npm ERR!` lines
+  name the error too.
 - **Lessons.** A repair that waits for a symptom (the import failing) never
   sees a change that leaves the old state working; compare against the
-  declared state instead. And "the OS will refuse while files are in use"
-  needs measuring before it carries a safety argument: for a directory
-  rename on Windows it does not hold, for a write-open of a loaded DLL it
-  does.
+  declared state instead. "The OS will refuse while files are in use" needs
+  measuring before it carries a safety argument, and for the exact kind of
+  use: on Windows a mapped DLL does not stop a directory rename, one open
+  file handle inside does, and a write-open of a mapped DLL is refused. And
+  an import probe run from a staging folder inside the checkout proves
+  nothing about what the staged tree lacks: Node's module resolution climbs
+  up into the tree in use.

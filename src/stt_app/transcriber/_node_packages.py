@@ -12,8 +12,9 @@ comes here (`local_webgpu_asr._find_source_package_root`).
   integrity: two JSON reads, no npm and no network while they agree.
 - **An update never touches the working tree until it is complete**:
   `npm ci` runs in a staging folder beside `node_modules`, the staged tree
-  must match the lock and import Transformers.js, and only then do two
-  renames swap it in. `npm ci` deletes `node_modules` before installing, so
+  must match the lock, hold every package the tree in use has that the lock
+  still lists, and import Transformers.js, and only then do two renames
+  swap it in. `npm ci` deletes `node_modules` before installing, so
   in place a failure (a proxy, a blocked registry, no npm) left a model that
   had worked without packages -- measured: an unreachable registry failed
   after 71 s and left a half-deleted tree.
@@ -64,9 +65,12 @@ _PREVIOUS_TREE_NAME = "node_modules.previous"
 NPM_CI_TIMEOUT_S = 600.0
 # Another process's update holds the root lock for at most its own npm run.
 _ROOT_LOCK_WAIT_S = NPM_CI_TIMEOUT_S + 120.0
-# A file a virus scanner opened a moment ago refuses a rename on Windows.
-_RENAME_ATTEMPTS = 10
-_RENAME_PAUSE_S = 0.2
+# Windows refuses to rename a folder while any file in it is open (measured
+# in review: one open file three levels down, WinError 5), and a virus
+# scanner opens every freshly extracted file. Up to 30 s, because giving up
+# throws the verified staged tree away and the next start runs npm again.
+_RENAME_ATTEMPTS = 60
+_RENAME_PAUSE_S = 0.5
 _REASON_MAX_CHARS = 80
 _DETAIL_MAX_LINES = 20
 
@@ -146,6 +150,28 @@ def lock_drift(root: Path) -> list[str]:
         name = key.removeprefix("node_modules/")
         changes.append(f"{name} {installed[key].get('version')} no longer in the lock")
     return changes
+
+
+def _dropped_packages(root: Path, staging: Path) -> list[str]:
+    """What the tree in use has and the lock still lists, but npm did not stage.
+
+    npm skips an optional package it cannot fetch and still exits 0 -- for
+    sharp that is its Windows binary, `@img/sharp-win32-x64`. `lock_drift`
+    cannot tell that from another platform's binary, and the staged import
+    probe found the old tree's copy one folder up, so a tree that could not
+    load replaced one that could (review of d8a394c, reproduced). Without a
+    tree in use there is nothing to fall back on and the probe decides.
+    """
+    try:
+        live = _lock_packages(root / "node_modules" / ".package-lock.json")
+    except ValueError:
+        return []
+    wanted = _lock_packages(staging / "package-lock.json")
+    staged = _lock_packages(staging / "node_modules" / ".package-lock.json")
+    return sorted(
+        key.removeprefix("node_modules/")
+        for key in (live.keys() & wanted.keys()) - staged.keys()
+    )
 
 
 def _presence_dir() -> Path:
@@ -343,11 +369,16 @@ def _npm_error_summary(stderr: str) -> str:
     says nothing; its `npm error code ECONNREFUSED` line does.
     """
     lines = [line.strip() for line in (stderr or "").splitlines() if line.strip()]
-    errors = [line for line in lines if line.startswith("npm error ")]
+    # Current npm writes "npm error"; older releases wrote "npm ERR!".
+    errors = [
+        line.removeprefix("npm error ").removeprefix("npm ERR! ")
+        for line in lines
+        if line.startswith(("npm error ", "npm ERR! "))
+    ]
     summary = next(
-        (line for line in errors if line.startswith("npm error code ")),
+        (line for line in errors if line.startswith("code ")),
         errors[0] if errors else (lines[-1] if lines else "no output"),
-    ).removeprefix("npm error ")
+    )
     if len(summary) > _REASON_MAX_CHARS:
         summary = summary[: _REASON_MAX_CHARS - 3].rstrip() + "..."
     return summary
@@ -403,16 +434,19 @@ def _install_and_swap(
             f"npm reported an error ({_npm_error_summary(result.stderr)})",
             _tail(result.stderr or result.stdout),
         )
+    # Both checks also keep the probe below honest: a package missing from
+    # the staged tree would resolve from the old tree one folder up.
     try:
         mismatch = lock_drift(staging)
+        dropped = _dropped_packages(root, staging)
     except ValueError as exc:
-        mismatch = [str(exc)]
+        mismatch, dropped = [str(exc)], []
     if mismatch:
-        # Also what keeps the probe honest: without the staged copy of a
-        # package, Node would resolve it from the old tree one folder up.
         raise _UpdateFailed(
             "the new packages do not match package-lock.json", "; ".join(mismatch)
         )
+    if dropped:
+        raise _UpdateFailed(f"npm did not install {', '.join(dropped)}")
     try:
         check = probe(staging)
     except Exception as exc:

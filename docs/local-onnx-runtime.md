@@ -95,7 +95,10 @@ command after every such `git pull`. Since 2026-10-17 the app does it itself
    here, so their absence is not a difference.
 2. When they differ, it runs `npm ci --omit=dev` in `.node_modules_update`
    beside `node_modules` (git ignores it), checks that the staged tree
-   matches the lock and imports Transformers.js, and only then replaces
+   matches the lock, still holds every package the tree in use has that the
+   lock lists (npm skips an optional package it cannot download, such as
+   sharp's Windows binary, and still reports success), and imports
+   Transformers.js, and only then replaces
    `node_modules` with two renames and deletes the old tree. Measured on
    HomeBase with the 2026-10-10 change: 11-13 s in all with a warm npm cache
    (npm 9.2 s, deleting the old 466 MB tree 1.5-1.9 s); a first install with an

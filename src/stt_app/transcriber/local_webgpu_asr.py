@@ -30,6 +30,7 @@ from ..config import (
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
     PARAKEET_ULTRA_MODEL_SIZE,
+    TRAY_MESSAGE_MAX_CHARS,
     effective_preferred_device,
     language_modes_for_selection,
 )
@@ -367,12 +368,21 @@ _JS_RUNTIME_READY: set[tuple[str, str]] = set()
 # `_ensure_js_runtime_available` checks, updates and announces a runner.
 _JS_RUNTIME_LOCK = threading.Lock()
 # Carries "the packages could not be updated" to the tray once per session.
-# Set by the app (`main._connect_tray_notifications`); the benchmark worker
-# has none, and its failures are in the log only.
+# Set by the app (`main._connect_tray_notifications`), after the startup
+# preload may already have raised the notice, which then waits in PENDING.
+# The benchmark worker has none, and its failures are in the log only. Its
+# own lock: the Qt thread sets the handler and must never wait for
+# `_JS_RUNTIME_LOCK`, which an update holds for minutes.
+_NODE_PACKAGES_NOTICE_LOCK = threading.Lock()
 _NODE_PACKAGES_NOTICE_HANDLER: Callable[[str], None] | None = None
+_NODE_PACKAGES_NOTICE_PENDING = ""
 _NODE_PACKAGES_NOTICE_SENT = False
 NODE_PACKAGES_NOTICE_TITLE = "Cohere/Granite packages not updated"
-_NOTICE_REASON_MAX_CHARS = 90
+_NODE_PACKAGES_NOTICE_TEXT = (
+    "Could not update the JavaScript packages that Cohere and Granite run "
+    "on: {reason}. Both models keep working with the previous packages; "
+    "the app tries again at its next start."
+)
 
 
 def default_hf_cache_dir() -> str:
@@ -845,35 +855,51 @@ def _find_source_package_root(runner: Path) -> Path | None:
 
 
 def set_node_packages_notice_handler(handler: Callable[[str], None] | None) -> None:
-    """Route the one-time "packages not updated" notice (see `_ensure_...`)."""
-    global _NODE_PACKAGES_NOTICE_HANDLER
-    _NODE_PACKAGES_NOTICE_HANDLER = handler
+    """Route the one-time "packages not updated" notice (`_check_js_runtime`).
+
+    A notice raised before a handler existed is delivered to this one.
+    """
+    global _NODE_PACKAGES_NOTICE_HANDLER, _NODE_PACKAGES_NOTICE_PENDING
+    with _NODE_PACKAGES_NOTICE_LOCK:
+        _NODE_PACKAGES_NOTICE_HANDLER = handler
+        pending = _NODE_PACKAGES_NOTICE_PENDING if handler is not None else ""
+        if pending:
+            _NODE_PACKAGES_NOTICE_PENDING = ""
+    if pending:
+        _deliver_node_packages_notice(handler, pending)
 
 
 def node_packages_notice_text(reason: str) -> str:
     """The tray text for an update that failed while the old tree still loads.
 
-    Kept within Windows' 255-character notification limit.
+    The reason is shortened so that the whole text fits the tray's limit and
+    its second sentence -- the models still work -- is never cut off.
     """
-    if len(reason) > _NOTICE_REASON_MAX_CHARS:
-        reason = reason[: _NOTICE_REASON_MAX_CHARS - 3].rstrip() + "..."
-    return (
-        "Could not update the JavaScript packages that Cohere and Granite run "
-        f"on: {reason}. Both models keep working with the previous packages; "
-        "the app tries again at its next start."
-    )
+    room = TRAY_MESSAGE_MAX_CHARS - len(_NODE_PACKAGES_NOTICE_TEXT.format(reason=""))
+    if len(reason) > room:
+        reason = reason[: room - 3].rstrip() + "..."
+    return _NODE_PACKAGES_NOTICE_TEXT.format(reason=reason)
+
+
+def _deliver_node_packages_notice(handler: Callable[[str], None], text: str) -> None:
+    try:
+        handler(text)
+    except Exception:
+        logger.debug("node_packages_notice_failed", exc_info=True)
 
 
 def _notify_previous_packages_kept(reason: str) -> None:
-    global _NODE_PACKAGES_NOTICE_SENT
-    handler = _NODE_PACKAGES_NOTICE_HANDLER
-    if handler is None or _NODE_PACKAGES_NOTICE_SENT:
-        return
-    _NODE_PACKAGES_NOTICE_SENT = True
-    try:
-        handler(node_packages_notice_text(reason))
-    except Exception:
-        logger.debug("node_packages_notice_failed", exc_info=True)
+    global _NODE_PACKAGES_NOTICE_PENDING, _NODE_PACKAGES_NOTICE_SENT
+    text = node_packages_notice_text(reason)
+    with _NODE_PACKAGES_NOTICE_LOCK:
+        if _NODE_PACKAGES_NOTICE_SENT:
+            return
+        _NODE_PACKAGES_NOTICE_SENT = True
+        handler = _NODE_PACKAGES_NOTICE_HANDLER
+        if handler is None:
+            _NODE_PACKAGES_NOTICE_PENDING = text
+            return
+    _deliver_node_packages_notice(handler, text)
 
 
 def _run_transformers_import_probe(

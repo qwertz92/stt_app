@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from stt_app.config import TRAY_MESSAGE_MAX_CHARS
 from stt_app.transcriber import _node_packages, local_webgpu_asr
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
@@ -62,13 +63,31 @@ def _lock(packages: dict) -> dict:
     }
 
 
-def _write_tree(node_modules: Path, packages: dict, marker: str) -> None:
-    """A tree as `npm ci` leaves it: its record, minus what it skipped."""
+# This machine's sharp binary: optional in the lock like the others, but npm
+# installs it here, and sharp does not load without it.
+THIS_PLATFORM_KEY = "node_modules/@img/sharp-win32-x64"
+THIS_PLATFORM = {
+    THIS_PLATFORM_KEY: {
+        "version": "0.35.5",
+        "integrity": "sha512-win32",
+        "optional": True,
+        "os": ["win32"],
+    },
+}
+
+
+def _write_tree(
+    node_modules: Path, packages: dict, marker: str, *, platform: tuple = ()
+) -> None:
+    """A tree as `npm ci` leaves it: its record, minus what it skipped.
+
+    Optional packages are skipped unless named in `platform`.
+    """
     node_modules.mkdir(parents=True)
     installed = {
         key: entry
         for key, entry in packages.items()
-        if key and not entry.get("optional")
+        if key and (not entry.get("optional") or key in platform)
     }
     (node_modules / ".package-lock.json").write_text(
         json.dumps({**_lock({}), "packages": installed}), encoding="utf-8"
@@ -76,7 +95,9 @@ def _write_tree(node_modules: Path, packages: dict, marker: str) -> None:
     (node_modules / "marker.txt").write_text(marker, encoding="utf-8")
 
 
-def _checkout(tmp_path: Path, *, lock: dict, installed: dict | None) -> Path:
+def _checkout(
+    tmp_path: Path, *, lock: dict, installed: dict | None, platform: tuple = ()
+) -> Path:
     """A checkout with a lock and an `old` tree; returns the runner path."""
     root = tmp_path / "checkout"
     (root / ".git").mkdir(parents=True)
@@ -88,7 +109,7 @@ def _checkout(tmp_path: Path, *, lock: dict, installed: dict | None) -> Path:
         json.dumps(_lock({**lock, **_OTHER_PLATFORM})), encoding="utf-8"
     )
     if installed is not None:
-        _write_tree(root / "node_modules", installed, "old")
+        _write_tree(root / "node_modules", installed, "old", platform=platform)
     runner = root / "src" / "stt_app" / "webgpu_asr_runner.mjs"
     runner.parent.mkdir(parents=True)
     runner.write_text("", encoding="utf-8")
@@ -102,16 +123,21 @@ def _marker(root: Path) -> str:
 class _FakeNpm:
     """`run_bounded` for `npm ci`: installs the staged lock, or fails half-way."""
 
-    def __init__(self, *, returncode: int = 0, stderr: str = "") -> None:
+    def __init__(
+        self, *, returncode: int = 0, stderr: str = "", platform: tuple = ()
+    ) -> None:
         self.returncode = returncode
         self.stderr = stderr
+        self.platform = platform
         self.calls: list[tuple[list[str], Path, float]] = []
 
     def __call__(self, arguments, *, timeout, cwd, **_kwargs):
         staging = Path(cwd)
         self.calls.append((list(arguments), staging, timeout))
         lock = json.loads((staging / "package-lock.json").read_text(encoding="utf-8"))
-        _write_tree(staging / "node_modules", lock["packages"], "new")
+        _write_tree(
+            staging / "node_modules", lock["packages"], "new", platform=self.platform
+        )
         if self.returncode != 0:
             # npm ci removes what it extracted on a failure, and on Windows
             # not always all of it.
@@ -159,6 +185,7 @@ def _fresh_runtime_state(monkeypatch):
     monkeypatch.setattr(local_webgpu_asr, "_JS_RUNTIME_READY", set())
     monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_SENT", False)
     monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_HANDLER", None)
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_PENDING", "")
     monkeypatch.setattr(local_webgpu_asr, "_npm_executable", lambda node_path: "npm")
     monkeypatch.setattr(_node_packages, "_RENAME_PAUSE_S", 0.0)
 
@@ -291,7 +318,53 @@ def test_a_failed_update_keeps_the_old_packages_and_tells_the_user_once(
         )
     ]
     assert "keep working with the previous packages" in notices[0]
-    assert len(notices[0]) <= 255
+
+
+def test_a_notice_raised_before_the_tray_exists_reaches_it(monkeypatch, tmp_path):
+    """The startup preload runs from `controller.initialize()`, before
+    `main` registers the tray's handler; "npm was not found" fails in
+    milliseconds, so the notice can come first and must not be lost."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    monkeypatch.setattr(local_webgpu_asr, "_npm_executable", lambda node_path: None)
+    monkeypatch.setattr(local_webgpu_asr, "_run_transformers_import_probe", _Probe(0))
+
+    local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
+    notices: list[str] = []
+    local_webgpu_asr.set_node_packages_notice_handler(notices.append)
+    local_webgpu_asr.set_node_packages_notice_handler(notices.append)
+
+    assert notices == [
+        local_webgpu_asr.node_packages_notice_text(
+            "npm, which comes with Node.js, was not found"
+        )
+    ]
+
+
+def test_the_notice_fits_the_tray_whole_however_long_the_reason():
+    """Windows cuts a tray text after 255 characters; cut there, the notice
+    would lose the sentence that says the models still work."""
+    text = local_webgpu_asr.node_packages_notice_text(
+        "npm did not install " + "x" * 200
+    )
+
+    assert len(text) <= TRAY_MESSAGE_MAX_CHARS
+    assert text.endswith("the app tries again at its next start.")
+    assert "x..." in text
+
+
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "npm error code ENOTFOUND\nnpm error A complete log of this run ...\n",
+        "npm ERR! code ENOTFOUND\nnpm ERR! A complete log of this run ...\n",
+    ],
+    ids=["current-npm", "older-npm"],
+)
+def test_the_reason_names_npms_error_code(stderr):
+    """Older npm releases, still bundled with older Node.js installs, wrote
+    `npm ERR!`; unrecognised, the reason was npm's last line, which only
+    says where its log file is."""
+    assert _node_packages._npm_error_summary(stderr) == "code ENOTFOUND"
 
 
 _HOLD_PRESENCE = """
@@ -435,6 +508,110 @@ def test_a_swap_that_fails_half_way_puts_the_old_tree_back(monkeypatch, tmp_path
     assert outcome.failure == "the new packages could not be moved into place"
     assert _marker(root) == "old"
     assert not (root / _node_packages.STAGING_DIR_NAME).exists()
+
+
+def _sync(root: Path) -> _node_packages.SyncOutcome:
+    return _node_packages.sync_node_modules(
+        root,
+        npm_path="npm",
+        # Passes, as the real probe did: Node resolved what the staged tree
+        # lacked from the tree in use one folder up.
+        probe=lambda cwd: _Probe(0)("node", cwd),
+        progress=lambda _text: None,
+    )
+
+
+def test_a_staged_tree_without_a_package_the_tree_in_use_has_is_refused(
+    monkeypatch, tmp_path
+):
+    """npm exits 0 when it could not fetch an optional package -- sharp's
+    Windows binary, behind a proxy that blocks it. The lock check cannot
+    tell that binary from another platform's, so the swap deleted the only
+    tree sharp loaded from (review of d8a394c)."""
+    runner = _checkout(
+        tmp_path,
+        lock={**NEW, **THIS_PLATFORM},
+        installed={**OLD, **THIS_PLATFORM},
+        platform=(THIS_PLATFORM_KEY,),
+    )
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm())
+
+    skipped = _sync(root)
+    marker_after_skip = _marker(root)
+    monkeypatch.setattr(
+        _node_packages, "run_bounded", _FakeNpm(platform=(THIS_PLATFORM_KEY,))
+    )
+    installed = _sync(root)
+
+    assert skipped.failure == "npm did not install @img/sharp-win32-x64"
+    assert marker_after_skip == "old"
+    assert installed.updated
+    assert _marker(root) == "new"
+
+
+def test_a_swap_cut_between_its_renames_is_undone_at_the_next_start(
+    monkeypatch, tmp_path
+):
+    """A crash after the tree in use was moved aside and before the new one
+    took its place leaves no `node_modules`; the moved tree is then the only
+    one there is, and the next start puts it back rather than deleting it
+    with the staging folder."""
+    runner = _checkout(tmp_path, lock=NEW, installed=None)
+    root = runner.parents[2]
+    staging = root / _node_packages.STAGING_DIR_NAME
+    _write_tree(staging / _node_packages._PREVIOUS_TREE_NAME, NEW, "old")
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+
+    outcome = _sync(root)
+
+    assert outcome == _node_packages.SyncOutcome()
+    assert npm.calls == []
+    assert _marker(root) == "old"
+    assert not staging.exists()
+
+
+def test_a_runner_that_started_during_npm_defers_the_swap(monkeypatch, tmp_path):
+    """npm runs for seconds to minutes; a runner of an older build can start
+    meanwhile, so the loaded-DLL check runs again right before the renames."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+    answers = [[], ["onnxruntime.dll"]]
+    monkeypatch.setattr(
+        _node_packages, "loaded_native_modules", lambda tree: answers.pop(0)
+    )
+
+    outcome = _sync(root)
+
+    assert outcome.deferred
+    assert not outcome.failure
+    assert len(npm.calls) == 1
+    assert answers == []
+    assert _marker(root) == "old"
+    assert not (root / _node_packages.STAGING_DIR_NAME).exists()
+
+
+def test_a_staging_folder_left_behind_goes_when_nothing_needs_updating(
+    monkeypatch, tmp_path
+):
+    """A staging folder outlives an update only when its deletion failed (a
+    file still open); the tree it held can be hundreds of megabytes."""
+    runner = _checkout(tmp_path, lock=NEW, installed=NEW)
+    root = runner.parents[2]
+    staging = root / _node_packages.STAGING_DIR_NAME
+    _write_tree(staging / _node_packages._PREVIOUS_TREE_NAME, OLD, "older")
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+
+    outcome = _sync(root)
+
+    assert outcome == _node_packages.SyncOutcome()
+    assert npm.calls == []
+    assert _marker(root) == "old"
+    assert not staging.exists()
 
 
 @pytest.mark.parametrize(

@@ -452,7 +452,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     and the next start removes `.node_modules_update` (or, while npm still
     writes there, reports "a folder left by an earlier update could not be
     removed" once and tries again a start later). `run_bounded` has no
-    cancel hook; adding one is ~2 h.
+    cancel hook; adding one is ~2 h. Reasoned, not measured: should that
+    removal succeed between two of the orphan's writes, a second npm runs
+    in the same folder beside it; the staged checks and Windows refusing
+    to rename a folder with an open file in it are what keep a mixed tree
+    out of `node_modules` then.
+  - With "Keep ONNX model loaded" on, the update runs inside the startup
+    preload, whose overlay line stays "Loading selected model..." for the
+    11 s to 72 s it takes: the preload worker gives the transcriber no
+    progress callback, so "Updating the JavaScript packages ..." appears
+    only when a dictation starts the runner. Wiring the preload's progress
+    through is ~1 h with tests.
+  - The benchmark worker is a process of its own; if its first runner start
+    is the one that finds the drift, that case's load time includes npm.
+  - A rename that keeps failing for its 30 s (a file inside held open for
+    good) throws the staged tree away although it was verified, and the
+    next start runs npm again; keeping it for a later swap is ~1 h.
   - A runner of an older build (or of a crashed app) holds no presence and
     is seen only by its loaded DLLs, so in the fraction of a second between
     its start and its import of Transformers.js an update can still swap

@@ -306,14 +306,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     --omit=dev --no-audit --no-fund --no-update-notifier` in
     `.node_modules_update` (beside `node_modules`, same volume, git-ignored)
     through `run_bounded` (600 s, tree kill, no console window), then the
-    staged tree must pass `lock_drift` (also what keeps the probe honest:
-    a package missing there would resolve from the old tree one folder up)
-    and the import probe from the staging folder, then two renames swap it
-    in and the old tree is deleted. A rename retries 10 x 0.2 s (virus
-    scanners); a failed second rename moves the old tree back, and
-    `_discard_staging` never deletes a stranded `node_modules.previous`
-    while `node_modules` is missing. In place, a failed `npm ci` (registry
-    unreachable, 71 s) left a half-deleted tree.
+    staged tree must pass `lock_drift`, must hold every package the tree in
+    use has that the lock still lists (`_dropped_packages`), and must pass
+    the import probe from the staging folder; then two renames swap it in
+    and the old tree is deleted. The second check exists because npm exits
+    0 when it could not fetch an optional package: without
+    `@img/sharp-win32-x64` the staged tree passed `lock_drift` (it cannot
+    tell this platform's binary from another's) and the probe, which
+    resolved the binary from the old tree one folder up, and the swap
+    deleted the only tree sharp loaded from (review of d8a394c,
+    reproduced). A rename retries 60 x 0.5 s: Windows refuses to rename a
+    folder while any file in it is open (WinError 5, measured in review
+    with one file open three levels down), virus scanners open freshly
+    extracted files, and giving up throws the verified staged tree away. A
+    failed second rename moves the old tree back, and `_discard_staging`
+    never deletes a stranded `node_modules.previous` while `node_modules`
+    is missing. In place, a failed `npm ci` (registry unreachable, 71 s)
+    left a half-deleted tree.
   - Never under a live runner, in any process of the user: every runner
     child holds a `RunnerPresence` (an OS lock file under
     `locks/node-runners`, `file_lock.is_lock_held` reads it) from before its
@@ -323,8 +332,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `_JS_RUNTIME_LOCK` (in-process), so neither can slip between the
     other's check and act. Measured: Windows renames `node_modules` while a
     node child has five DLLs mapped from it (onnxruntime binding and DLL,
-    sharp, two libvips), so the rename protects nothing; the benchmark
-    worker is a second process that starts runners.
+    sharp, two libvips) -- a mapped DLL is no open file handle -- so the
+    rename protects nothing; the benchmark worker is a second process that
+    starts runners.
   - A runner without a presence -- started by an older build that still
     runs after `git pull` while the benchmark worker already runs the new
     code, or left by a crashed app -- is caught by its loaded DLLs:
@@ -334,9 +344,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     defers the update before npm and again right before the renames.
   - A failure keeps the old tree, logs `node_modules_update_failed` with
     npm's output, and, once the old tree has loaded, sends one tray notice
-    per session (`node_packages_notice_text`, under Windows' 255
-    characters, via `set_node_packages_notice_handler` ->
-    `DictationController.node_packages_not_updated`); success logs
+    per session (`node_packages_notice_text`, via
+    `set_node_packages_notice_handler` ->
+    `DictationController.node_packages_not_updated`). The text fits
+    `config.TRAY_MESSAGE_MAX_CHARS` whole -- the reason is shortened, never
+    the sentence that the models still work -- and a notice raised before
+    `main` registers the handler (the startup preload runs from
+    `controller.initialize()`, and "npm was not found" fails in
+    milliseconds) waits and is delivered at registration; success logs
     `node_modules_updated` with the version changes. A tree that does not
     load although the record says in step is reinstalled once the same
     staged way (this replaced the in-place `npm install` repair, which

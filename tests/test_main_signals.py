@@ -1121,6 +1121,7 @@ def test_packages_that_were_not_updated_reach_the_tray_from_the_runner_thread(
     transcription worker -- and its one-time notice must still end up as a
     tray message on the Qt thread."""
     monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_HANDLER", None)
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_PENDING", "")
     monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_SENT", False)
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     tray = _TrayMessages()
@@ -1165,6 +1166,7 @@ def test_an_error_the_overlay_cannot_show_reaches_the_tray(monkeypatch):
     """
     # The wiring also registers a module-level handler; keep it to this test.
     monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_HANDLER", None)
+    monkeypatch.setattr(local_webgpu_asr, "_NODE_PACKAGES_NOTICE_PENDING", "")
     fake_signals = {
         name
         for name, value in vars(_NotificationSignals).items()
