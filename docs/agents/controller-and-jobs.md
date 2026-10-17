@@ -297,9 +297,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     file name (`docs/agents/persistence-and-history.md`), which the quit writes
     (`_keep_unfinished_recordings`) and the startup notice transcribes with
     (`transcribe_unfinished_recording`). History retranscribe and the Import tab
-    (incl. "Use last recording") still take their settings from their own
-    pickers at the click; that is where a wrong language is now corrected, no
-    longer by switching and pressing Retry. Tests in
+    take their settings from their own pickers at the click; that is where a
+    wrong language is now corrected, no longer by switching and pressing Retry
+    (the Import tab's "Use last recording" starts its language picker from the
+    recording's own, `docs/agents/settings-dialog.md`). Tests in
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
     the streaming, dying-stream, failed-retry and unknown-language cases),
     `tests/test_controller_quit.py`.

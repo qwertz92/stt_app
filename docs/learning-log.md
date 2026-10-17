@@ -162,13 +162,26 @@ Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,
   the recorded language only where `language_modes_for_selection(engine, model,
   "batch")` offers it, else keeps the selected one and says so in the overlay
   text and the log (`retry_recorded_language_not_offered`).
-- **Not changed, on purpose.** History retranscribe and the Import tab (also
-  "Use last recording") take language, engine and model from their own visible
-  pickers at the click; that is now the way to correct a wrongly chosen
-  language, since switching and pressing Retry no longer does. The Error text
-  after a failure says so ("...with another service or language"). An older
-  version cannot list an unfinished file whose name carries a language (its
-  name pattern ends at the id); this matters only for a downgrade.
+- **Not changed, on purpose.** History retranscribe and the Import tab take
+  language, engine and model from their own visible pickers at the click; that
+  is now the way to correct a wrongly chosen language, since switching and
+  pressing Retry no longer does. The Error text after a failure says so
+  ("...with another service or language"). An older version cannot list an
+  unfinished file whose name carries a language (its name pattern ends at the
+  id); this matters only for a downgrade.
+- **Follow-up, same day (owner's answer to the open question): the Import tab's
+  "Use last recording" starts its language picker from the recording's own.**
+  Without it the correction path began from the Transcription tab's language,
+  which is the wrong one in exactly the case the owner is correcting.
+  `_preselect_recorded_import_language` acts at the click, only for a managed
+  recording that stored a language, only when the selected import engine and
+  model offer it (the status line says which language was selected, or that the
+  model does not offer it and the choice stands), and never over a language the
+  user picked on the tab since the dialog was populated
+  (`_import_language_chosen`; the selector blocks its signals, so only a real
+  pick sets it, and reopening the dialog clears it). Changing the Import
+  service afterwards rebuilds the picker as before: it is a preselection, not a
+  pin.
 - **Observed, not part of this change and not tested.** `controller.set_language_mode`
   and `_sync_overlay_language_options` ask `language_modes_for_selection` with
   `settings.model_size` even for a remote engine, so the overlay's language list
