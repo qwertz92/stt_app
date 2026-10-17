@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import importlib.util
+import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -136,3 +138,132 @@ def test_release_rejects_untracked_worktree_files(monkeypatch, tmp_path):
         "--porcelain",
         "--untracked-files=normal",
     ]
+
+
+# -- the npm audit gate ------------------------------------------------------
+#
+# 2026-10-10: `create_release.py --version 0.12.1` pushed main and the tag, and
+# the "Windows Release" workflow then failed at its `npm audit` step on a sharp
+# advisory published since the last merge, leaving a tag with no release. The
+# audit asks the live advisory database, so a green push-time run proves
+# nothing at tag time; the script now runs the same command before it changes
+# or pushes anything. The tests below never reach git: every subprocess call is
+# recorded and answered by a fake.
+
+_NPM = "C:/node/npm.CMD"
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class _ReleaseRun:
+    """Drives `create_release` with every outside effect recorded, none run."""
+
+    def __init__(self, module, monkeypatch, tmp_path, *, audit_exit_code=0, npm=_NPM):
+        self.module = module
+        self.root = tmp_path
+        self.calls: list[list[str]] = []
+        self._audit_exit_code = audit_exit_code
+
+        def fake_run(command, **_kwargs):
+            self.calls.append([str(part) for part in command])
+            code = self._audit_exit_code if command[1:2] == ["audit"] else 0
+            return subprocess.CompletedProcess(command, code)
+
+        monkeypatch.setattr(module.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            module.shutil, "which", lambda name: npm if name == "npm" else None
+        )
+        monkeypatch.setattr(module, "_ensure_release_branch", self._record("branch"))
+        monkeypatch.setattr(module, "_ensure_no_tracked_changes", self._record("clean"))
+        monkeypatch.setattr(module, "bump_version", self._record("bump"))
+        monkeypatch.setattr(module, "verify_release", self._record("verify"))
+        monkeypatch.setattr(module, "_has_staged_changes", lambda **_kwargs: True)
+
+    def _record(self, name):
+        def record(*_args, **_kwargs):
+            self.calls.append([f"<{name}>"])
+
+        return record
+
+    def release(self, *, skip_tests):
+        version = self.module.ReleaseVersion.parse("0.12.4")
+        self.module.create_release(
+            version=version,
+            existing_tags=["v0.12.3"],
+            remote="origin",
+            skip_tests=skip_tests,
+            root=self.root,
+        )
+
+    def position_of(self, first_word):
+        return next(i for i, call in enumerate(self.calls) if call[0] == first_word)
+
+    def commands_that_change_something(self):
+        return [
+            call
+            for call in self.calls
+            if call[0] in {"<bump>", "uv"}
+            or (call[0] == "git" and call[1] in {"add", "commit", "push", "tag"})
+        ]
+
+
+@pytest.mark.parametrize("skip_tests", [True, False])
+def test_the_release_audits_the_javascript_dependencies_before_changing_anything(
+    monkeypatch, tmp_path, skip_tests
+):
+    module = _load_create_release_module()
+    run = _ReleaseRun(module, monkeypatch, tmp_path)
+
+    run.release(skip_tests=skip_tests)
+
+    assert [
+        _NPM,
+        "audit",
+        "--omit=dev",
+        "--package-lock-only",
+        "--audit-level=moderate",
+    ] in run.calls
+    audit = run.position_of(_NPM)
+    assert audit < run.position_of("<bump>")
+    assert audit < run.position_of("uv")
+    assert audit < run.position_of("git")
+    # `--skip-tests` really did skip the suite; only the audit is unconditional.
+    assert any("pytest" in call for call in run.calls) is not skip_tests
+
+
+@pytest.mark.parametrize("skip_tests", [True, False])
+def test_a_failed_audit_stops_the_release_before_any_change(
+    monkeypatch, tmp_path, skip_tests
+):
+    module = _load_create_release_module()
+    run = _ReleaseRun(module, monkeypatch, tmp_path, audit_exit_code=1)
+
+    with pytest.raises(module.CreateReleaseError, match="npm audit failed") as raised:
+        run.release(skip_tests=skip_tests)
+
+    assert "Nothing was changed, committed or tagged" in str(raised.value)
+    assert run.commands_that_change_something() == []
+
+
+def test_a_missing_npm_stops_the_release_instead_of_skipping_the_audit(
+    monkeypatch, tmp_path
+):
+    module = _load_create_release_module()
+    run = _ReleaseRun(module, monkeypatch, tmp_path, npm=None)
+
+    with pytest.raises(module.CreateReleaseError, match="npm was not found on PATH"):
+        run.release(skip_tests=True)
+
+    assert run.commands_that_change_something() == []
+    assert [call for call in run.calls if "audit" in call] == []
+
+
+@pytest.mark.parametrize("workflow", ["windows-release.yml", "quality.yml"])
+def test_the_audit_is_the_command_both_workflows_run(workflow):
+    """quality.yml says its audit "must match the release job's bar": three
+    copies of one command drift unless something compares them."""
+    module = _load_create_release_module()
+    text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
+
+    commands = re.findall(r"(?m)^\s*run:\s*(npm audit\b.*?)\s*$", text)
+
+    assert commands == ["npm " + " ".join(module.NPM_AUDIT_ARGS)]

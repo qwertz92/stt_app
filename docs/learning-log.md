@@ -3,6 +3,76 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (the release script audits npm before it tags)
+
+- **What went wrong on 2026-10-10**: `create_release.py --version 0.12.1`
+  pushed `main` and the tag, and then the "Windows Release" workflow failed
+  at `npm audit --omit=dev --package-lock-only --audit-level=moderate` on a
+  new sharp advisory (GHSA-wq5f-xc86-pv6w; `dc998a9` bumped sharp). The tag
+  stayed, without a release. The audit reads npm's live advisory database,
+  so the same lockfile passes one day and fails the next; the script's own
+  pytest run and a green `quality.yml` push run could not have seen it.
+- **Fix**: the script runs that exact command before the version bump (so
+  nothing needs restoring), also under `--skip-tests`, and stops with a
+  plain message when it fails or when `npm` is not on PATH. A test compares
+  the three copies of the command (script, `windows-release.yml`,
+  `quality.yml`) and the flow is tested with every subprocess faked.
+  Checked for real: `npm audit` through the script's own function answered
+  0 vulnerabilities on this lockfile, an absent npm and a failing npm
+  (a folder without `package-lock.json`) both stopped with the message.
+- **Second lesson, from v0.12.0**: its tag build failed at a test that
+  expected a 1026 px dialog on the runner's 976 px screen. No local check
+  reproduces a fresh runner's screen, so the order of a release is now
+  written down: dry run (`workflow_dispatch`) on `main`, green, then the
+  script. The YAML was read to say exactly what the dispatch run does: every
+  gate and build step, no tag verification, no publish, an uploaded
+  three-day artifact; and a dispatch started on a tag ref would publish.
+  The order is procedure; the script does not check that a dry run
+  happened.
+
+## 2026-10-17 (Deepgram streaming: KeepAlive while no audio goes out)
+
+- **Why**: since 2026-10-10 the capture watchdog waits up to 12 s for audio a
+  starved machine delivers late, and a stop during a stall can wait as long.
+  The Deepgram socket is open and sends nothing for that time, and the
+  review of the starved-capture fix (F5) had left "Deepgram drops the socket
+  after about 10 s and the app sends no KeepAlive" as an unchecked entry in
+  `docs/agents/known-limitations.md`.
+- **Checked against Deepgram's own pages (read 2026-10-17, raw `.md` of each
+  page, not a summary)**: the Audio Keep Alive page confirms the 10 s limit
+  (`NET-0001`), the message (text frame `{"type": "KeepAlive"}`, no reply)
+  and "every 3-5 seconds". The Finalize and CloseStream pages do not mention
+  KeepAlive, and no page says whether a KeepAlive may be sent while audio
+  flows. The troubleshooting page adds a newer `NET-0002` no-audio timeout
+  that KeepAlive does reset -- and, under `NET-0001`, a sentence that
+  contradicts the Audio Keep Alive page ("KeepAlive messages alone will not
+  prevent closure; you must send at least one audio message"). Quotations
+  and URLs are in the comment above `_STREAM_KEEPALIVE_INTERVAL_S` and in
+  `docs/agents/remote-providers.md`.
+- **Implemented in the sender thread**, not a timer: the queue read waits at
+  most 3 s, and an empty wait writes the KeepAlive. No clock is needed, no
+  KeepAlive can overlap an audio frame (one writer), and the sentinel that
+  ends the loop precedes `Finalize`/`CloseStream`, so none follows them. The
+  tests drive the real loop with a queue that carries a fake clock (a 14 s
+  gap costs no real time), and the overlap and ordering cases with real
+  threads and a 50 ms interval.
+- **Follow-up the same day (lead's decision)**: since nobody could check the
+  contradicting sentence without a key and the cover costs about 0.1 s of
+  billed audio per start stall, the sender covers both readings. When its
+  first 3 s wait runs out in a session that has sent no audio at all, it
+  writes one 0.1 s frame of PCM16 zeros (built from the same sample rate,
+  channel count and linear16 sample width as the connection URL, and a test
+  reads those from the URL) as a binary frame instead of the first
+  KeepAlive, then KeepAlives. Once audio has gone out it never writes
+  silence, so a gap inside a dictation still gets KeepAlives only.
+- **Still open, needs a Deepgram key**: whether the contradicting sentence is
+  right, i.e. whether the silence frame is needed at all. Kept as an
+  "unverified live" entry in `docs/agents/known-limitations.md` with the
+  one-run check. Lesson: a vendor's own pages can disagree; read the
+  troubleshooting page and not only the feature page before calling a
+  protocol question answered, and when two readings cannot be told apart,
+  prefer the cheap behaviour that satisfies both.
+
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
 - **Owner: Win+V full of screenshots he did not remember taking, while he

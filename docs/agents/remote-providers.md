@@ -310,6 +310,58 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     host only; `wss://api.eu.deepgram.com/v1/listen` is derived from it.
     AssemblyAI's pages say nothing about key or model availability in the EU,
     so whether Universal-3.6 Pro streams there is open.
+- **Deepgram streaming holds its socket open with a KeepAlive while no audio
+  goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
+  capture's audio over up to 12 s late, so the socket is open and silent for
+  that long. Vendor pages read 2026-10-17 (developers.deepgram.com/docs/):
+  `audio-keep-alive`, `stt-troubleshooting-websocket-data-and-net-errors`,
+  `finalize`, `close-stream`. Rules:
+  - **Facts**: the message is the text frame `{"type": "KeepAlive"}` ("sending
+    it as binary may result in incorrect handling"), no reply; "Send a
+    `KeepAlive` message every 3-5 seconds to prevent the 10-second timeout
+    that triggers a `NET-0001` error"; "If no audio data or `KeepAlive`
+    messages are sent within a 10-second window, the connection will close
+    with a `NET-0001` error" (WebSocket close 1011). A newer 1011 `NET-0002`
+    (close reason `no_audio_timeout`) is a no-audio timeout that KeepAlive
+    does reset. Not stated on any of the four pages: whether a KeepAlive may
+    be sent while audio flows, and how KeepAlive meets `Finalize` or
+    `CloseStream`.
+  - **The sender thread writes it** (`_stream_send_worker`): its queue read
+    waits at most `_STREAM_KEEPALIVE_INTERVAL_S` (3 s, the page's example and
+    the low end of its 3-5 s, so a late sender thread still beats 10 s), and
+    an empty wait is the signal. That keeps three properties without a lock
+    or a clock: audio that keeps coming never reaches the interval, so no
+    KeepAlive is sent while audio flows; a KeepAlive and an audio frame are
+    written by the same thread and cannot overlap; and the sender barrier
+    that precedes `Finalize` and `CloseStream` (the sentinel ends the loop)
+    ends KeepAlives before those are sent. A timer thread would break the
+    second and third; `_send_stream_control`'s helper thread was not reused
+    because it gives up waiting after 1 s while its send may still be in
+    flight. A failed KeepAlive fails the stream like a failed audio send; a
+    session that was retired stops the loop instead of writing to its socket.
+    The first idle moment of a session is logged at INFO.
+  - **A session that has sent no audio yet gets one frame of digital silence
+    instead of its first KeepAlive** (decided 2026-10-17 by the lead session,
+    cheap enough not to wait for a live check). The two vendor pages disagree
+    on whether KeepAlive alone holds a stream open before its first audio:
+    the troubleshooting page's
+    NET-0001 checklist says "you must send at least one audio message". When
+    the sender's first 3 s wait runs out and no audio frame has gone out on
+    the session, it writes `_STREAM_SILENCE_FRAME` -- PCM16 zeros, 0.1 s
+    long, built from `AUDIO_SAMPLE_RATE`, `AUDIO_CHANNELS` and linear16's
+    2 bytes per sample, the same constants as the connection URL's
+    `sample_rate` / `channels` / `encoding` -- as a binary frame from the
+    same sender thread, and KeepAlives from then on. That satisfies both
+    readings for about 3 kB of billed audio (0.1 s) per start stall. Silence
+    is never written once audio has gone out (the sender's `audio_sent`
+    flag): a gap inside a dictation gets KeepAlives only, so nothing is ever
+    inserted into speech. Deepgram's word timings follow the audio sent, not
+    the wall clock (the Audio Keep Alive page's "Word Timings" section), so
+    the 0.1 s only moves timestamps the app does not use.
+  - **Not verified live**: no Deepgram key exists here, so whether KeepAlive
+    alone would have been enough is open; the silence frame makes the answer
+    not matter for correctness (`known-limitations.md`, audio capture, has
+    the optional check that would let the frame be dropped).
 - **Diagnostics**: workers log `transcription_timing`. Groq reuses its
   SDK/HTTP client for the cached transcriber's lifetime.
 - **The custom endpoint is one engine with two API styles, free-text model

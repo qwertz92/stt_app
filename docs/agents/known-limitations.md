@@ -433,9 +433,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     in the second after that stall, before its backlog arrives, can cut the
     backlog off. MME drops the whole of a stall longer than its buffer
     (measured), so nothing of it is on its way later.
-  - Unverified (review F5): Deepgram closes a streaming socket that gets
-    no audio for about 10 s, and the app sends no KeepAlive. A start stall
-    that the watchdog now holds for up to 12 s may therefore lose the
-    Deepgram session before the burst arrives. Not reproduced; sending
-    `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
-    (~1-2 h with tests).
+  - Unverified live (2026-10-17): Deepgram closes a streaming socket that
+    receives nothing for 10 s, and Deepgram's Audio Keep Alive page says a
+    KeepAlive every 3-5 s prevents it, so the sender writes one every 3 s in
+    which it had no audio to send (`docs/agents/remote-providers.md`).
+    Deepgram's troubleshooting page contradicts that page for a stream that
+    has sent no audio yet: under 1011 `NET-0001` it says KeepAlive messages
+    "alone will not prevent closure; you must send at least one audio
+    message". The fallback is in place: such a session gets one 0.1 s frame
+    of digital silence before its first KeepAlive (about 3 kB, billed as
+    0.1 s of audio, once per start stall), which satisfies both readings, so
+    a start stall of up to 12 s (the watchdog's limit) should not lose the
+    session. What stays unverified is the whole mechanism against the real
+    service: no Deepgram key was available. One live run with a key shows it
+    holds: start a streaming dictation and make the microphone deliver nothing
+    for 12 s (or open a stream and send nothing but the sender's frames), then
+    speak. The same run with the silence frame removed would show whether
+    KeepAlive alone suffices, and the frame could then be dropped. If the
+    session still dies, the user sees "Deepgram streaming failed: WebSocket
+    connection closed unexpectedly." and the audio is kept as the first entry
+    of `docs/agents/streaming.md` describes.

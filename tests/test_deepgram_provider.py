@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
+import queue
 import threading
 import time
 import urllib.error
@@ -13,6 +15,7 @@ from unittest.mock import patch
 import pytest
 
 from stt_app.config import AUDIO_BLOCK_DURATION_MS, AUDIO_INPUT_BUFFER_S
+from stt_app.transcriber import deepgram_provider
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import (
     DEFAULT_DEEPGRAM_MODEL,
@@ -1075,6 +1078,312 @@ class TestDeepgramStreaming:
             _FakeWebSocketApp.binary_send_started = None
             _FakeWebSocketApp.release_binary_send = None
             _FakeWebSocketApp.finalize_message = None
+
+
+# ---------------------------------------------------------------------------
+# Tests: KeepAlive during a gap in the audio
+# ---------------------------------------------------------------------------
+
+_KEEPALIVE_FRAME = json.dumps({"type": "KeepAlive"})
+_SENTINEL = deepgram_provider._STREAM_SEND_SENTINEL
+
+
+class _ClockedQueue:
+    """The sender's queue with a clock of its own, so a gap costs no real time.
+
+    `arrivals` are `(at_s, item)` pairs in fake seconds. `get(timeout)` answers
+    as `queue.Queue.get` does: the item when it arrives within the wait,
+    otherwise the whole wait passes on the fake clock and `queue.Empty` is
+    raised (after `on_timeout`, a hook for the test to change the world).
+    """
+
+    def __init__(self, arrivals, on_timeout=None):
+        self.now = 0.0
+        self.timeouts_asked: list[float | None] = []
+        self._arrivals = list(arrivals)
+        self._on_timeout = on_timeout
+
+    def get(self, timeout=None):
+        self.timeouts_asked.append(timeout)
+        at_s, item = self._arrivals[0]
+        if at_s - self.now <= (math.inf if timeout is None else timeout):
+            self.now = max(self.now, at_s)
+            self._arrivals.pop(0)
+            return item
+        self.now += timeout
+        if self._on_timeout is not None:
+            self._on_timeout()
+        raise queue.Empty
+
+
+class _TimedSocket:
+    """Notes the fake time of every frame the sender hands to it."""
+
+    def __init__(self, clock: _ClockedQueue):
+        self._clock = clock
+        self.frames: list[tuple[float, object, object]] = []
+
+    def send(self, payload, opcode=None):
+        self.frames.append((self._clock.now, payload, opcode))
+
+
+def _run_the_sender_to_its_sentinel(t, send_queue: _ClockedQueue) -> _TimedSocket:
+    """Run the provider's own sender loop on the test thread."""
+    ws = _TimedSocket(send_queue)
+    with t._stream_lock:
+        t._stream_generation = 1
+        t._stream_ws = ws
+        t._stream_send_queue = send_queue
+        t._stream_state = "active"
+    t._stream_send_worker(1, ws, send_queue, threading.Event(), _FakeWebSocketModule)
+    return ws
+
+
+class TestDeepgramKeepAlive:
+    """Deepgram closes a stream that gets neither audio nor `KeepAlive` for 10 s.
+
+    Sources (developers.deepgram.com, read 2026-10-17): "Audio Keep Alive"
+    -- "Send a `KeepAlive` message every 3-5 seconds", a text frame, no reply;
+    "STT Troubleshooting WebSocket, NET, and DATA Errors" -- the 1011 close
+    codes. The comment above `_STREAM_KEEPALIVE_INTERVAL_S` has the quotations,
+    and why a session that has sent no audio yet gets one frame of digital
+    silence before its first KeepAlive: the troubleshooting page says a
+    KeepAlive "alone will not prevent closure; you must send at least one
+    audio message".
+    """
+
+    def test_a_gap_before_any_audio_starts_with_one_silence_frame(self, caplog):
+        t = DeepgramTranscriber(api_key="key")
+        send_queue = _ClockedQueue(
+            [(14.1, b"first"), (20.5, b"second"), (20.6, _SENTINEL)]
+        )
+
+        with caplog.at_level(logging.INFO):
+            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        payloads = [payload for _at, payload, _opcode in ws.frames]
+        silence = payloads[0]
+        assert isinstance(silence, bytes) and silence and not any(silence)
+        assert ws.frames[0][2] == _FakeABNF.OPCODE_BINARY
+        # One silence frame, then KeepAlives; once real audio has flowed, a
+        # later gap gets KeepAlives only -- silence is never inserted into
+        # speech.
+        assert payloads[1:] == [
+            *[_KEEPALIVE_FRAME] * 3,
+            b"first",
+            *[_KEEPALIVE_FRAME] * 2,
+            b"second",
+        ]
+        times = [0.0] + [at for at, _payload, _opcode in ws.frames]
+        assert max(b - a for a, b in itertools.pairwise(times)) <= 5.0
+        announcements = [
+            r for r in _deepgram_log_records(caplog) if "silence" in r.getMessage()
+        ]
+        assert len(announcements) == 1, [r.getMessage() for r in announcements]
+
+    def test_the_silence_frame_is_a_tenth_of_a_second_of_the_streams_format(
+        self, monkeypatch
+    ):
+        """The frame must be audio Deepgram can decode as the stream it opened:
+        `encoding`, `sample_rate` and `channels` come from the connection URL,
+        not from this test's own idea of them."""
+        _FakeWebSocketApp.instances = []
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            ws = _FakeWebSocketApp.instances[-1]
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(ws.url).query)
+            _wait_for(lambda: len(ws.send_calls) >= 3)
+        finally:
+            t.abort_stream()
+
+        assert params["encoding"] == ["linear16"], "2 bytes per sample below"
+        samples = round(int(params["sample_rate"][0]) * 0.1)
+        expected = bytes(samples * int(params["channels"][0]) * 2)
+        assert ws.send_calls[0] == (expected, _FakeABNF.OPCODE_BINARY)
+        assert [p for p, _o in ws.send_calls[1:3]] == [_KEEPALIVE_FRAME] * 2
+
+    def test_a_gap_in_the_audio_is_bridged_with_keepalive_frames(self, caplog):
+        t = DeepgramTranscriber(api_key="key")
+        send_queue = _ClockedQueue(
+            [(0.1, b"before"), (14.1, b"after"), (14.2, _SENTINEL)]
+        )
+
+        with caplog.at_level(logging.INFO):
+            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        assert [payload for _at, payload, _opcode in ws.frames] == [
+            b"before",
+            *[_KEEPALIVE_FRAME] * 4,
+            b"after",
+        ]
+        for _at, payload, opcode in ws.frames:
+            if payload == _KEEPALIVE_FRAME:
+                # `ws.send(text)` defaults to a text frame; the page warns that a
+                # binary one "may result in incorrect handling".
+                assert opcode != _FakeABNF.OPCODE_BINARY
+        times = [at for at, _payload, _opcode in ws.frames]
+        longest_silence = max(b - a for a, b in itertools.pairwise(times))
+        assert longest_silence <= 5.0, (
+            f"{longest_silence:.1f} s without a frame; Deepgram recommends one "
+            "every 3-5 s and closes the stream at 10 s"
+        )
+        announcements = [
+            r for r in _deepgram_log_records(caplog) if "KeepAlive" in r.getMessage()
+        ]
+        assert len(announcements) == 1, [r.getMessage() for r in announcements]
+
+    @pytest.mark.parametrize("spacing_s", [0.1, 2.9])
+    def test_audio_that_keeps_coming_gets_no_keepalive(self, spacing_s):
+        t = DeepgramTranscriber(api_key="key")
+        arrivals = [(spacing_s * n, b"audio") for n in range(1, 31)]
+        send_queue = _ClockedQueue([*arrivals, (arrivals[-1][0] + 0.1, _SENTINEL)])
+
+        ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        assert [payload for _at, payload, _opcode in ws.frames] == [b"audio"] * 30
+
+    def test_a_retired_session_gets_no_further_keepalive(self):
+        """A sender that outlives its session (a stop that raised and was
+        retired, a drain that timed out) must not keep writing to that socket."""
+        t = DeepgramTranscriber(api_key="key")
+
+        waits: list[None] = []
+
+        def retire_on_the_second_wait():
+            waits.append(None)
+            if len(waits) == 2:
+                with t._stream_lock:
+                    t._reset_stream_state_locked()
+
+        send_queue = _ClockedQueue(
+            [(0.1, b"audio"), (100.0, _SENTINEL)], on_timeout=retire_on_the_second_wait
+        )
+
+        ws = _run_the_sender_to_its_sentinel(t, send_queue)
+
+        assert [payload for _at, payload, _opcode in ws.frames] == [
+            b"audio",
+            _KEEPALIVE_FRAME,
+        ]
+        assert len(waits) == 2, "the sender went on waiting"
+
+    def test_a_keepalive_never_overlaps_a_binary_send(self, monkeypatch):
+        """The sender thread is the only writer: while it is inside a binary
+        send, no KeepAlive can start. A timer thread would send one at once."""
+        _FakeWebSocketApp.instances = []
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            ws = _FakeWebSocketApp.instances[-1]
+            t.push_audio_chunk(b"audio")
+            assert send_started.wait(timeout=1.0)
+
+            time.sleep(0.3)  # six intervals with the sender stuck in the send
+            assert [payload for payload, _opcode in ws.send_calls] == [b"audio"]
+
+            release_send.set()
+            _wait_for(lambda: _KEEPALIVE_FRAME in [p for p, _o in ws.send_calls])
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
+    def test_nothing_follows_the_finalize_and_a_keepalive_in_flight_finishes_first(
+        self, monkeypatch
+    ):
+        """Finalize and CloseStream are sent after the sender barrier; a
+        KeepAlive the sender is writing when the stop begins is inside it."""
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        started = threading.Event()
+        release = threading.Event()
+
+        class _SocketHoldingTheFirstKeepAlive(_FakeWebSocketApp):
+            def send(self, payload, opcode=None):
+                first = payload == _KEEPALIVE_FRAME and not started.is_set()
+                super().send(payload, opcode)
+                if first:
+                    started.set()
+                    assert release.wait(timeout=2.0)
+
+        class _Module(_FakeWebSocketModule):
+            WebSocketApp = _SocketHoldingTheFirstKeepAlive
+
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _Module)
+
+        try:
+            t.start_stream()
+            ws = _FakeWebSocketApp.instances[-1]
+            send_thread = t._stream_send_thread
+            t.push_audio_chunk(b"audio")  # a session with audio gets no silence
+            assert started.wait(timeout=2.0)
+
+            stopper = threading.Thread(target=t.stop_stream)
+            stopper.start()
+            time.sleep(0.1)
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"audio",
+                _KEEPALIVE_FRAME,
+            ], "a control frame went out while a KeepAlive was being written"
+
+            release.set()
+            stopper.join(timeout=3.0)
+            assert not stopper.is_alive()
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"audio",
+                _KEEPALIVE_FRAME,
+                json.dumps({"type": "Finalize"}),
+                json.dumps({"type": "CloseStream"}),
+            ]
+
+            time.sleep(0.3)  # six intervals after the close
+            assert len(ws.send_calls) == 4
+            assert not send_thread.is_alive()
+        finally:
+            release.set()
+            t.abort_stream()
+
+    def test_a_failed_keepalive_fails_the_stream_like_a_failed_audio_send(
+        self, monkeypatch
+    ):
+        _FakeWebSocketApp.instances = []
+
+        class _SocketThatRefusesKeepAlive(_FakeWebSocketApp):
+            def send(self, payload, opcode=None):
+                if payload == _KEEPALIVE_FRAME:
+                    raise ConnectionError("socket gone")
+                super().send(payload, opcode)
+
+        class _Module(_FakeWebSocketModule):
+            WebSocketApp = _SocketThatRefusesKeepAlive
+
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _Module)
+        errors: list[str] = []
+
+        try:
+            t.start_stream(on_error=errors.append)
+            send_thread = t._stream_send_thread
+            _wait_for(lambda: errors)
+            assert errors == ["Deepgram streaming failed: socket gone"]
+            _wait_for(lambda: not send_thread.is_alive())
+        finally:
+            t.abort_stream()
 
 
 # ---------------------------------------------------------------------------
