@@ -9835,7 +9835,21 @@ on and the overlay green, the first ~10 s were not captured.
   import probe, because Node resolved the binary from the old tree one
   folder up; the swap then deleted the only tree sharp loaded from. The
   staged tree must now hold every package the tree in use has that the lock
-  still lists. Smaller fixes from the same round: a rename retries for 30 s
+  still lists (`dev` packages of a developer's full install excepted:
+  `--omit=dev` leaves them out on purpose, and counting them would refuse
+  every update in that checkout). Reproduced for real on HomeBase in the
+  throwaway copy with an `.npmrc` saying `optional=false`, which makes npm
+  skip every optional package and still exit 0: the d8a394c code swapped
+  in a tree with only `@img/colour` and the runner's import then failed
+  inside sharp, whose error asked for the win32-x64 binary
+  (`npm install --os=win32 --cpu=x64 sharp`); the fixed code refused it
+  ("npm did not install @img/sharp-win32-x64", 22 s), kept 4.3.1, which
+  still imported, and sent the notice once. Without that `.npmrc` the fixed
+  code updated 4.3.1 -> 4.3.0 and back with no false refusal (35 s and
+  13 s; npm itself 30 s and 11 s while other agents loaded the machine).
+  Blocking the `@img` scope's registry instead did not reproduce it: npm
+  then refuses the non-optional `@img/colour` too (`EALLOWREMOTE`) and
+  fails outright. Smaller fixes from the same round: a rename retries for 30 s
   instead of 2 s (the reviewer measured that one open file anywhere inside
   refuses a directory rename, and a virus scanner opens each freshly
   extracted file); the tray notice fits Windows' 255 characters whole (it

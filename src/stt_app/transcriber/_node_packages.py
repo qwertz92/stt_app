@@ -160,7 +160,8 @@ def _dropped_packages(root: Path, staging: Path) -> list[str]:
     cannot tell that from another platform's binary, and the staged import
     probe found the old tree's copy one folder up, so a tree that could not
     load replaced one that could (review of d8a394c, reproduced). Without a
-    tree in use there is nothing to fall back on and the probe decides.
+    tree in use there is nothing to fall back on and the probe decides. A
+    `dev` package a developer's full install has is left out on purpose.
     """
     try:
         live = _lock_packages(root / "node_modules" / ".package-lock.json")
@@ -171,6 +172,7 @@ def _dropped_packages(root: Path, staging: Path) -> list[str]:
     return sorted(
         key.removeprefix("node_modules/")
         for key in (live.keys() & wanted.keys()) - staged.keys()
+        if not wanted[key].get("dev")
     )
 
 
@@ -446,7 +448,11 @@ def _install_and_swap(
             "the new packages do not match package-lock.json", "; ".join(mismatch)
         )
     if dropped:
-        raise _UpdateFailed(f"npm did not install {', '.join(dropped)}")
+        # npm's warnings say why it skipped them (a blocked download).
+        raise _UpdateFailed(
+            f"npm did not install {', '.join(dropped)}",
+            _tail(result.stderr or result.stdout),
+        )
     try:
         check = probe(staging)
     except Exception as exc:

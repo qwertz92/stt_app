@@ -77,17 +77,25 @@ THIS_PLATFORM = {
 
 
 def _write_tree(
-    node_modules: Path, packages: dict, marker: str, *, platform: tuple = ()
+    node_modules: Path,
+    packages: dict,
+    marker: str,
+    *,
+    platform: tuple = (),
+    omit_dev: bool = False,
 ) -> None:
     """A tree as `npm ci` leaves it: its record, minus what it skipped.
 
-    Optional packages are skipped unless named in `platform`.
+    Optional packages are skipped unless named in `platform`, and `dev`
+    ones with `omit_dev` (`npm ci --omit=dev`).
     """
     node_modules.mkdir(parents=True)
     installed = {
         key: entry
         for key, entry in packages.items()
-        if key and (not entry.get("optional") or key in platform)
+        if key
+        and (not entry.get("optional") or key in platform)
+        and not (omit_dev and entry.get("dev"))
     }
     (node_modules / ".package-lock.json").write_text(
         json.dumps({**_lock({}), "packages": installed}), encoding="utf-8"
@@ -136,7 +144,11 @@ class _FakeNpm:
         self.calls.append((list(arguments), staging, timeout))
         lock = json.loads((staging / "package-lock.json").read_text(encoding="utf-8"))
         _write_tree(
-            staging / "node_modules", lock["packages"], "new", platform=self.platform
+            staging / "node_modules",
+            lock["packages"],
+            "new",
+            platform=self.platform,
+            omit_dev=True,
         )
         if self.returncode != 0:
             # npm ci removes what it extracted on a failure, and on Windows
@@ -547,6 +559,28 @@ def test_a_staged_tree_without_a_package_the_tree_in_use_has_is_refused(
     assert skipped.failure == "npm did not install @img/sharp-win32-x64"
     assert marker_after_skip == "old"
     assert installed.updated
+    assert _marker(root) == "new"
+
+
+def test_dev_packages_of_a_full_install_do_not_block_the_update(monkeypatch, tmp_path):
+    """A developer's plain `npm ci` also installs dev packages; the update
+    leaves them out by design (`--omit=dev`), so their absence from the
+    staged tree is no lost package -- counted as one, it would refuse every
+    update in that checkout for good."""
+    dev = {
+        "node_modules/prettier": {
+            "version": "3.6.2",
+            "integrity": "sha512-prettier",
+            "dev": True,
+        },
+    }
+    runner = _checkout(tmp_path, lock={**NEW, **dev}, installed={**OLD, **dev})
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm())
+
+    outcome = _sync(root)
+
+    assert outcome.updated, outcome.failure
     assert _marker(root) == "new"
 
 
