@@ -12,6 +12,7 @@ from __future__ import annotations
 from conftest import FakeCapture, FakeOverlay, FakeSettingsStore
 from conftest import make_controller as _make_controller
 
+from stt_app import controller as controller_module
 from stt_app.config import FALLBACK_HOTKEY, NODE_PACKAGES_UPDATING_TEXT
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import ProgressReporter
@@ -98,5 +99,33 @@ def test_the_startup_preload_shows_the_package_update_while_npm_runs(monkeypatch
     # The runtime is shared and cached: its next owner must not report into
     # this finished preload.
     assert transcriber._progress_callback is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retired_preloads_update_line_never_describes_the_next_one(monkeypatch):
+    """A settings change retires a preload whose worker can still be inside
+    npm; its lines, before or after the change, are not the new preload's."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY, engine="local", mode="batch", model_size=_MODEL
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings), overlay=FakeOverlay()
+    )
+    controller._preload_target_model = _MODEL
+    retired = controller._preload_generation
+    controller._note_preload_progress(retired, NODE_PACKAGES_UPDATING_TEXT)
+    controller._preload_generation = retired + 1
+    controller._set_preload_phase(retired + 1, controller_module._PRELOAD_PHASE_LOAD)
+
+    retired_line_shown = controller._preload_progress_detail()
+    # The current preload updates; the retired worker moves on meanwhile.
+    controller._note_preload_progress(retired + 1, NODE_PACKAGES_UPDATING_TEXT)
+    controller._note_preload_progress(retired, f"Starting ONNX runtime for {_MODEL}.")
+    current_line_shown = controller._preload_progress_detail()
+
+    assert f"Loading '{_MODEL}' into memory." in retired_line_shown
+    assert current_line_shown.startswith(NODE_PACKAGES_UPDATING_TEXT)
     controller.shutdown()
     _ = app

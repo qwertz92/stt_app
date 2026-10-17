@@ -5781,15 +5781,22 @@ class DictationController(QtCore.QObject):
                 # forever and every dictation would quietly build its own
                 # isolated multi-gigabyte runtime.
                 try:
-                    self._set_transcriber_cancel_check(runtime_lease.transcriber, None)
-                    self._set_transcriber_progress_callback(
-                        runtime_lease.transcriber, None
-                    )
-                except BaseException:
-                    self._logger.exception(
-                        "Failed to clear the preload transcriber cancel hook "
-                        "or progress callback"
-                    )
+                    try:
+                        self._set_transcriber_cancel_check(
+                            runtime_lease.transcriber, None
+                        )
+                    except BaseException:
+                        self._logger.exception(
+                            "Failed to clear the preload transcriber cancel hook"
+                        )
+                    try:
+                        self._set_transcriber_progress_callback(
+                            runtime_lease.transcriber, None
+                        )
+                    except BaseException:
+                        self._logger.exception(
+                            "Failed to clear the preload transcriber progress callback"
+                        )
                 finally:
                     runtime_lease.release()
 

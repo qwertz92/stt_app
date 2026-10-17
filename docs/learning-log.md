@@ -3,6 +3,41 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17: review of the package back-off and the preload line
+
+One review round (Sonnet) over the two entries below found no P1 or P2; the
+P3/P4 findings fixed on the spot:
+- **Only a failure of npm or of what it installed backs off**
+  (`_UpdateFailed.back_off`). The first version recorded every failure, so a
+  user who closed the editor holding `node_modules` open, or installed npm,
+  still waited a day. A cause on this PC now retries at the next start, and its
+  notice says so ("at its next start"). This narrows the lead's wording ("after
+  a failed update") to the failures a retry within the day would only repeat.
+- **One failed probe no longer overrides the back-off.** A slow, loaded PC can
+  time a working tree's import probe out once, which then forced the npm run
+  the back-off exists to spare; `_check_js_runtime` now looks twice before it
+  forces.
+- **A record that crashed the sync now counts as none**: a failure time with
+  more than ~309 digits (`OverflowError` in `float()`) and JSON nested deeper
+  than the parser descends (`RecursionError`, which `except ValueError` does not
+  catch). Both crashed every Cohere/Granite start until someone deleted the
+  file -- the opposite of "a damaged record never blocks an update".
+- The preload worker clears its cancel hook and its progress callback in two
+  separate `try` blocks, so a failing first clear no longer skips the second.
+- Untested guards got tests: a retired preload's update line neither shows nor
+  replaces the current one's, and another checkout's record neither holds this
+  one back nor is deleted by its success.
+- The tests for the first three fixes failed first (7 failures), then passed.
+  The guard tests passed from the start, since the guards existed; removing
+  the generation check on write, on read, or the record's root comparison
+  each made its test fail.
+- Left as they are: an old tree that passes the import probe but no longer
+  suits a pulled runner can fail Cohere/Granite at transcription time for up
+  to the day (reasoned, recorded in `known-limitations.md`); after an npm
+  failure the update line stays until the runner's next line, about a second;
+  a first install that fails retries at every preload (no tree to fall back
+  on, by design); Cancel during npm takes effect only once npm ends.
+
 ## 2026-10-17: the startup preload shows the JavaScript package update
 
 The second open question of the source-checkout package update, decided by the

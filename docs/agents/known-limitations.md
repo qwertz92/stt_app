@@ -471,13 +471,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     (AssemblyAI, local): this entry does not claim whether they notice it.
 - **A source checkout's JavaScript package update** (2026-10-17,
   `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
-  - A failed update waits 24 h before npm runs again for the same lock
-    (`UPDATE_BACK_OFF_S`), so a network problem that passed within minutes
-    still leaves the old packages in use until the day is over or the next
-    `git pull` changes the lock. That is the price of not delaying every
-    start by npm's failure time (71 s measured, up to the 600 s bound). The
-    record holds the last failure only: a failure in a second checkout
-    replaces the first one's, which then retries at its next start.
+  - A failure of npm or of what it installed waits 24 h before npm runs
+    again for the same lock (`UPDATE_BACK_OFF_S`), so a network problem
+    that passed within minutes, or a proxy fixed in `.npmrc`, still leaves
+    the old packages in use until the first start after the day or the next
+    `git pull` that changes the lock. Deleting
+    `%APPDATA%\stt_app\node_packages_update.json` and restarting tries at
+    once; nothing in the app offers that. That is the price of not delaying
+    every start by npm's failure time (71 s measured, up to the 600 s
+    bound). The record holds the last failure only: a failure in a second
+    checkout replaces the first one's, which then retries at its next start.
+  - Reasoned, not measured (review of 75fc685): the lock change whose
+    install failed can be the one the pulled runner needs. The old tree
+    still passes the probe, which only imports Transformers.js, so it is not
+    forced to update, and Cohere/Granite can then fail at transcription
+    time for up to the day, while the tray notice says both models keep
+    working on the previous packages. Before the back-off the next start
+    retried. A probe that runs the pulled runner against the tree would
+    catch it, at the cost of starting it on every check; not estimated.
   - The update cannot be cancelled, and a quit during it ends only by the
     15 s quit watchdog; npm then keeps running in its job until it finishes,
     and the next start removes `.node_modules_update` (or, while npm still
@@ -492,7 +503,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     is the one that finds the drift, that case's load time includes npm.
   - A rename that keeps failing for its 30 s (a file inside held open for
     good) throws the staged tree away although it was verified, and the
-    next try, a day later, runs npm again; keeping it for a later swap is
+    next start runs npm again (a folder held open is a cause on this PC, so
+    it does not wait the day); keeping it for a later swap is
     ~1 h. While
     the second rename retries, `node_modules` is absent for up to 30 s
     (60 s if the way back retries too); Cohere/Granite starts in this

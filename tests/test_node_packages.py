@@ -427,6 +427,12 @@ def _damage_back_off(damage: str) -> None:
     elif damage == "unreadable":
         path.unlink()
         path.mkdir()
+    elif damage == "huge-number":
+        # Valid JSON that no float holds: `failed_at + a day` overflowed.
+        path.write_text(json.dumps({**record, "failed_at": 10**400}), "utf-8")
+    elif damage == "deep-nesting":
+        # Valid JSON that the parser cannot descend into (RecursionError).
+        path.write_text("[" * 200_000, encoding="utf-8")
 
 
 @pytest.mark.parametrize(
@@ -438,6 +444,8 @@ def _damage_back_off(damage: str) -> None:
         "no-reason",
         "in-the-future",
         "unreadable",
+        "huge-number",
+        "deep-nesting",
     ],
 )
 def test_a_damaged_back_off_record_never_blocks_an_update(
@@ -471,14 +479,90 @@ def test_a_backed_off_tree_that_does_not_load_is_tried_again_at_once(
     _sync(root)
     npm = _FakeNpm()
     monkeypatch.setattr(_node_packages, "run_bounded", npm)
-    # The tree in use fails; the staged one, and then the swapped-in one, load.
-    probe = _Probe(1, 0, 0)
+    # The tree in use fails twice; the staged one, and then the swapped-in
+    # one, load.
+    probe = _Probe(1, 1, 0, 0)
     monkeypatch.setattr(local_webgpu_asr, "_run_transformers_import_probe", probe)
 
     local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
 
     assert len(npm.calls) == 1
     assert _marker(root) == "new"
+
+
+def test_one_failed_look_at_a_working_tree_does_not_override_the_back_off(
+    monkeypatch, tmp_path
+):
+    """On a loaded, slow PC the import probe can time out once (30 s) on a
+    tree that works. Taken as "does not load", that ran npm despite the
+    back-off -- a full failure time on a registry it cannot reach -- and then
+    failed the start (review of 75fc685, reproduced)."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm(returncode=1))
+    _sync(runner.parents[2])
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+    monkeypatch.setattr(
+        local_webgpu_asr, "_run_transformers_import_probe", _Probe(1, 0)
+    )
+
+    local_webgpu_asr._ensure_js_runtime_available("node", runner).release()
+
+    assert npm.calls == []
+
+
+@pytest.mark.parametrize("cause", ["no-npm", "folder-held-open"])
+def test_a_failure_caused_on_this_pc_does_not_wait_a_day(monkeypatch, tmp_path, cause):
+    """The day-long wait is for npm and the registry. A missing npm or a
+    folder an editor or virus scanner holds open has its cause on this PC;
+    once the user fixes it, a restart must try again, not the next day
+    (review of 75fc685)."""
+    runner = _checkout(tmp_path, lock=NEW, installed=OLD)
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm())
+    npm_path = None if cause == "no-npm" else "npm"
+    if cause == "folder-held-open":
+        staged_tree = root / _node_packages.STAGING_DIR_NAME / "node_modules"
+        real_rename = _node_packages.os.rename
+
+        def rename(source, target):
+            if Path(source) == staged_tree:
+                raise PermissionError(5, "Access is denied", str(source))
+            real_rename(source, target)
+
+        monkeypatch.setattr(_node_packages.os, "rename", rename)
+
+    outcome = _node_packages.sync_node_modules(
+        root,
+        npm_path=npm_path,
+        probe=lambda cwd: _Probe(0)("node", cwd),
+        progress=lambda _text: None,
+    )
+
+    assert outcome.failure
+    assert outcome.retry_after == 0.0
+    assert not _back_off_path().exists()
+
+
+def test_another_checkouts_back_off_neither_holds_this_one_back_nor_goes(
+    monkeypatch, tmp_path
+):
+    """Two checkouts with the same lock (a second clone, an agent worktree):
+    a failure in one says nothing about the other, and the other's success
+    must not erase it."""
+    first = _checkout(tmp_path / "first", lock=NEW, installed=OLD).parents[2]
+    second = _checkout(tmp_path / "second", lock=NEW, installed=OLD).parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm(returncode=1))
+    _sync(first)
+    npm = _FakeNpm()
+    monkeypatch.setattr(_node_packages, "run_bounded", npm)
+
+    in_second = _sync(second)
+    in_first = _sync(first)
+
+    assert in_second.updated, in_second
+    assert in_first.backed_off
+    assert len(npm.calls) == 1
 
 
 def test_each_session_on_old_packages_says_so_once_with_the_next_try(
@@ -523,9 +607,10 @@ def test_a_notice_raised_before_the_tray_exists_reaches_it(monkeypatch, tmp_path
     local_webgpu_asr.set_node_packages_notice_handler(notices.append)
     local_webgpu_asr.set_node_packages_notice_handler(notices.append)
 
+    # A missing npm is fixed on this PC, so the next start tries again.
     assert notices == [
         local_webgpu_asr.node_packages_notice_text(
-            "npm, which comes with Node.js, was not found", _retry_after()
+            "npm, which comes with Node.js, was not found", 0.0
         )
     ]
 

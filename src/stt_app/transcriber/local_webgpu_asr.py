@@ -987,6 +987,12 @@ def _check_js_runtime(
 
         outcome = sync(force=False)
     loads, detail = _probe_js_runtime(node_path, runner.parent)
+    if not loads and outcome.backed_off:
+        # One more look before a failed import overrides the back-off: on a
+        # loaded, slow PC the probe can time out once on a tree that works,
+        # and the update it would trigger costs a full npm failure time
+        # (review of 75fc685).
+        loads, detail = _probe_js_runtime(node_path, runner.parent)
     if (
         not loads
         and source_root is not None
