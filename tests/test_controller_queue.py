@@ -37,6 +37,7 @@ from speech_fixtures import (
 )
 
 from stt_app.config import (
+    CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     FALLBACK_HOTKEY,
@@ -3916,6 +3917,48 @@ def test_a_dying_streams_recording_is_retried_in_its_language(monkeypatch, tmp_p
 
     retry_job = controller._jobs[controller._active_request_token]
     assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"),
+    [
+        # Canary never offers Auto and would translate into English instead of
+        # transcribing: the recorded Auto is not sent, the selected German is.
+        pytest.param("auto", "de", id="recorded language not offered"),
+        pytest.param("en", "en", id="recorded language offered"),
+    ],
+)
+def test_retry_keeps_the_recorded_language_only_where_the_engine_offers_it(
+    monkeypatch, tmp_path, caplog, recorded, expected
+):
+    """The engine the user retries with may not offer the language the audio
+    was recorded in. Passed on, a provider's own normalization picks a
+    stand-in (for Canary the first language of its list, a translation); the
+    language selected now is one the user picked for that engine."""
+    caplog.set_level(logging.INFO)
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode=recorded
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == expected
+    detail = overlay.states[-1][1]
+    if expected == recorded:
+        assert "retry_recorded_language_not_offered" not in caplog.text
+        assert "do not offer" not in detail
+    else:
+        assert "retry_recorded_language_not_offered" in caplog.text
+        assert "do not offer the recorded language (Auto)" in detail
+        assert "selected language (German)" in detail
     controller.shutdown()
     _ = app
 

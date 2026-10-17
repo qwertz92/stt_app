@@ -9341,6 +9341,54 @@ class DictationController(QtCore.QObject):
         )
         return shown_followed, offer
 
+    def _retry_settings(self) -> tuple[AppSettings, str]:
+        """What a retry of the slot's recording runs under, and the overlay
+        text that says so.
+
+        The engine and model are the current ones -- a user switches provider
+        after a provider failure and retries -- but the language is the one
+        the recording was made in (owner decision 2026-10-17; it used to be
+        the selection of the moment). Two cases keep the selection: a
+        recording this process has no language for (the store refused its
+        write, an id from an earlier run), and a language the current engine
+        and model do not offer. Passed on, the latter would reach the
+        provider's own normalization, which picks a stand-in -- for Canary the
+        first language of its list, so a translation; the selection is one
+        the user picked for the engine in use. The overlay says which applied.
+        """
+        settings = replace(self._settings)
+        recorded = self._recorded_language_by_recording_id.get(
+            self._last_failed_recording_id, ""
+        )
+        if not recorded:
+            return settings, "Retrying transcription with current settings..."
+        model = self._selected_model_name(settings)
+        recorded_label = LANGUAGE_MODE_LABELS.get(recorded, recorded)
+        if recorded not in language_modes_for_selection(
+            settings.engine, model, "batch"
+        ):
+            self._logger.info(
+                "retry_recorded_language_not_offered recording_id=%s language=%s "
+                "engine=%s model=%s selected=%s",
+                self._last_failed_recording_id,
+                recorded,
+                settings.engine,
+                model,
+                settings.language_mode,
+            )
+            selected_label = LANGUAGE_MODE_LABELS.get(
+                settings.language_mode, settings.language_mode
+            )
+            return settings, (
+                "Retrying transcription with the current engine and model, which "
+                f"do not offer the recorded language ({recorded_label}); using "
+                f"the selected language ({selected_label})..."
+            )
+        return replace(settings, language_mode=recorded), (
+            "Retrying transcription with the current engine and model "
+            f"(recorded language: {recorded_label})..."
+        )
+
     def retry_last_transcription(self) -> bool:
         if not self._last_failed_wav_bytes:
             self._paint_status_keeping_offer(
@@ -9364,23 +9412,7 @@ class DictationController(QtCore.QObject):
                 "transcription."
             )
             return False
-        # The engine and model are the current ones -- a user switches
-        # provider after a provider failure and retries -- but the language is
-        # the one the recording was made in (owner decision 2026-10-17; it
-        # used to be the selection of the moment). A recording this process
-        # has no language for keeps the current selection.
-        settings = replace(self._settings)
-        recorded_language = self._recorded_language_by_recording_id.get(
-            self._last_failed_recording_id, ""
-        )
-        detail = "Retrying transcription with current settings..."
-        if recorded_language:
-            settings = replace(settings, language_mode=recorded_language)
-            label = LANGUAGE_MODE_LABELS.get(recorded_language, recorded_language)
-            detail = (
-                "Retrying transcription with the current engine and model "
-                f"(recorded language: {label})..."
-            )
+        settings, detail = self._retry_settings()
         # Stop any still-running transcription before retrying; if it finishes
         # anyway it is kept in history rather than discarded.
         self._request_job_stop(

@@ -251,18 +251,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     2026-10-09 rule that Retry used what is selected now; a user switches
     provider after a provider failure and retries, but the audio was spoken in
     one language). `retry_last_transcription` resubmits the kept bytes under
-    `replace(self._settings)` with `language_mode` set to
+    `_retry_settings()`: `replace(self._settings)` with `language_mode` set to
     `_recorded_language_by_recording_id[_last_failed_recording_id]`, which
     `_persist_last_recording_audio(wav_bytes, language_mode)` fills where a
     recording's id is born -- the stop (batch and streaming), the watchdog abort,
     a dying stream, a cancel -- from the recording's own snapshot
     (`_open_recording_language`; the stream's `_active_stream_settings`).
     A streaming session is retried as a batch job in its stream's language. The
-    overlay says "(recorded language: X)". Unknown -- no id because the store
-    refused the write, an id from an earlier run -- keeps the language selected
-    now, as before. A language the current engine does not offer is not replaced
-    here: the engine's own `_normalize_language_mode` applies, as for any job
-    (auto for most). The language also travels to disk, so the same holds after
+    overlay says "(recorded language: X)". Two cases keep the language selected
+    now, as before, and the overlay says which applied: a recording this process
+    has no language for (the store refused the write, an id from an earlier
+    run), and a language the current engine and model do not offer
+    (`language_modes_for_selection(engine, model, "batch")`, logged as
+    `retry_recorded_language_not_offered`). The second is not passed on to the
+    provider because each provider's own `_normalize_language_mode` then picks a
+    stand-in -- Canary falls back to the first language of its list, which makes
+    it translate into it instead of transcribing -- while the selection is one
+    the user picked for the engine in use. The language also travels to disk,
+    so the same holds after
     a restart: `LastRecordingStore.language_mode` and the unfinished recording's
     file name (`docs/agents/persistence-and-history.md`), which the quit writes
     (`_keep_unfinished_recordings`) and the startup notice transcribes with
