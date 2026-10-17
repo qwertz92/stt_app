@@ -55,6 +55,8 @@ from .config import (
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
+    OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_NOT_INSERTED,
     PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
@@ -351,6 +353,11 @@ class _UndeliveredInsert:
     # but never joined to failed rows by the re-paste, and dropped by the
     # next paste that goes out (`_drop_superseded_doubtful_rows`).
     outside_text_field: bool = False
+    # A transcript the startup notice of unfinished recordings saved: no insert
+    # was ever attempted for it, so its row says so instead of "Not inserted"
+    # (owner's decision 2026-10-17). Insertable like a failed paste, joined to
+    # the others by the re-paste and counted by the badge.
+    from_earlier_session: bool = False
     # The transcripts `text` joins, each with its history entry (or None),
     # oldest first: one for a single result, several for a coalesced paste.
     # An edit of one of those entries rewrites its part and `text`
@@ -1290,13 +1297,14 @@ class DictationController(QtCore.QObject):
         entry: TranscriptHistoryEntry | None,
         recorded_at: datetime | None,
     ) -> None:
-        """List a transcript from the startup notice as not inserted.
+        """List a transcript from the startup notice as waiting to be inserted.
 
         A row like a failed paste's: the queue panel and the not-inserted
         count show it, the re-paste joins it with the others and retires it
         once pasted, Dismiss drops it, an edit of its entry reaches it. Its
-        time is the recording's own (local wall clock, as the file name
-        says).
+        status reads "From earlier session", not "Not inserted": no insert
+        was ever attempted for it (owner's decision 2026-10-17). Its time is
+        the recording's own (local wall clock, as the file name says).
         """
         self._record_undelivered_insert(
             text,
@@ -1307,6 +1315,7 @@ class DictationController(QtCore.QObject):
                 else datetime.now().astimezone()
             ),
             history_entry=entry,
+            from_earlier_session=True,
         )
 
     def _retain_unfinished_audio(self, recording: UnfinishedRecording) -> str:
@@ -4264,6 +4273,8 @@ class DictationController(QtCore.QObject):
             status = "Possibly inserted, check the window"
         elif entry.outside_text_field:
             status = "Not in a text field"
+        elif entry.from_earlier_session:
+            status = "From earlier session"
         else:
             status = "Not inserted"
         timestamp = entry.created_at.strftime("%H:%M:%S")
@@ -4339,6 +4350,7 @@ class DictationController(QtCore.QObject):
         created_at: datetime,
         history_entry: TranscriptHistoryEntry | None,
         outside_text_field: bool = False,
+        from_earlier_session: bool = False,
         parts: Sequence[tuple[TranscriptHistoryEntry | None, str]] = (),
     ) -> _UndeliveredInsert | None:
         """Keep a failed or doubtful paste listed until inserted or dismissed.
@@ -4356,15 +4368,17 @@ class DictationController(QtCore.QObject):
             may_have_pasted=may_have_pasted,
             created_at=created_at,
             outside_text_field=outside_text_field,
+            from_earlier_session=from_earlier_session,
             parts=tuple(parts) or ((history_entry, transcript),),
         )
         self._undelivered_inserts.append(entry)
         self._logger.info(
             "undelivered_insert_recorded row=%d may_have_pasted=%s "
-            "outside_text_field=%s chars=%d waiting=%d",
+            "outside_text_field=%s from_earlier_session=%s chars=%d waiting=%d",
             -self._undelivered_row_counter,
             may_have_pasted,
             outside_text_field,
+            from_earlier_session,
             len(transcript),
             len(self._insertable_undelivered()),
         )
@@ -7255,6 +7269,38 @@ class DictationController(QtCore.QObject):
         detail = f"{message}\n\n{transcript}" if transcript else message
         # One value for Copy and Insert; a raw text here and the stripped
         # one there would let the two act on different strings.
+        self._paint_not_inserted(
+            detail,
+            transcript,
+            may_have_pasted=may_have_pasted,
+            rows=self._insert_action_rows,
+            entry=history_entry,
+        )
+        self._reveal_overlay_result(is_error=True)
+
+    def _paint_not_inserted(
+        self,
+        detail: str,
+        transcript: str,
+        *,
+        may_have_pasted: bool,
+        rows: Sequence[_UndeliveredInsert],
+        entry: TranscriptHistoryEntry | None,
+    ) -> None:
+        """The one writer of a transcript that exists but is not (surely) in
+        its window: every Insert offer and every "check the window" report.
+
+        Owner's decision 2026-10-17: nothing failed that Retry could redo and
+        the text is safe in history, so this is a warning, not the red Error
+        that stays for failures without a transcript. The overlay state is
+        still Error (every control and check keys on it); ``warning`` makes
+        the overlay paint it orange under the word that says what happened.
+        ``may_have_pasted`` decides both the word and the action from the one
+        fact: a keystroke that went out means the text is most likely in the
+        window, so "Check window" and no Insert; otherwise "Not inserted"
+        with Insert. ``rows`` and ``entry`` are what an edit of
+        ``transcript`` reaches (`_edit_reaches`).
+        """
         self._overlay.set_state(
             "Error",
             detail,
@@ -7264,11 +7310,13 @@ class DictationController(QtCore.QObject):
                 if may_have_pasted
                 else OVERLAY_ERROR_ACTION_INSERT
             ),
-            editable=self._edit_reaches(
-                transcript, (row,) if row is not None else (), history_entry
+            editable=self._edit_reaches(transcript, rows, entry),
+            warning=(
+                OVERLAY_WARNING_CHECK_WINDOW
+                if may_have_pasted
+                else OVERLAY_WARNING_NOT_INSERTED
             ),
         )
-        self._reveal_overlay_result(is_error=True)
 
     # -- Paste target check ---------------------------------------------------
 
@@ -8328,26 +8376,15 @@ class DictationController(QtCore.QObject):
                 f"{detail}\n\nPossibly inserted already -- check the target "
                 f"window before inserting it again:\n{pending}"
             )
-            self._overlay.set_state(
-                "Error",
-                painted,
-                copy_text=pending,
-                error_action=OVERLAY_ERROR_ACTION_NONE,
-                editable=self._edit_reaches(
-                    pending, self._insert_action_rows, self._insert_action_entry
-                ),
-            )
         else:
             painted = f"{detail}\n\nStill not inserted:\n{pending}"
-            self._overlay.set_state(
-                "Error",
-                painted,
-                copy_text=pending,
-                error_action=OVERLAY_ERROR_ACTION_INSERT,
-                editable=self._edit_reaches(
-                    pending, self._insert_action_rows, self._insert_action_entry
-                ),
-            )
+        self._paint_not_inserted(
+            painted,
+            pending,
+            may_have_pasted=self._insert_offer_may_have_pasted,
+            rows=self._insert_action_rows,
+            entry=self._insert_action_entry,
+        )
         self._offer_painted = ("Error", painted)
 
     def _offer_painted_is_on_screen(self) -> bool:
@@ -8538,21 +8575,19 @@ class DictationController(QtCore.QObject):
                     "target window before inserting it again."
                 )
                 if show_overlay_error:
-                    self._overlay.set_state(
-                        "Error",
+                    # No Insert action (`may_have_pasted`): omitting it would
+                    # leave Retry, which re-transcribes the last *failed*
+                    # recording -- cleared only on the foreground ready path,
+                    # so from a re-paste it can be an entirely different one
+                    # and lands on top of the text just inserted. The edit
+                    # reaches history and Copy; nothing pastes a text whose
+                    # keystroke went out.
+                    self._paint_not_inserted(
                         self._last_insert_error_text,
-                        copy_text=insertion_text,
-                        # Explicitly no action. Omitting this leaves Retry,
-                        # which re-transcribes the last *failed* recording --
-                        # cleared only on the foreground ready path, so from
-                        # a re-paste it can be an entirely different one and
-                        # lands on top of the text just inserted.
-                        error_action=OVERLAY_ERROR_ACTION_NONE,
-                        # The edit reaches history and Copy; nothing pastes
-                        # a text whose keystroke went out.
-                        editable=self._edit_reaches(
-                            insertion_text, keep_rows, text_entry
-                        ),
+                        insertion_text,
+                        may_have_pasted=True,
+                        rows=keep_rows,
+                        entry=text_entry,
                     )
                 # The keystroke went out, so this is a paste like any other for
                 # the doubtful rows before it: the text in front of it is as
@@ -8590,12 +8625,12 @@ class DictationController(QtCore.QObject):
                 self._insert_action_entry = text_entry
                 self._insert_offer_may_have_pasted = False
                 self._last_insert_offered = True
-                self._overlay.set_state(
-                    "Error",
+                self._paint_not_inserted(
                     detail,
-                    copy_text=insertion_text,
-                    error_action=OVERLAY_ERROR_ACTION_INSERT,
-                    editable=self._edit_reaches(insertion_text, keep_rows, text_entry),
+                    insertion_text,
+                    may_have_pasted=False,
+                    rows=keep_rows,
+                    entry=text_entry,
                 )
             self._logger.exception("Text insertion failed")
             return False

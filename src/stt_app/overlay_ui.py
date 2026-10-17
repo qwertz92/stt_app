@@ -26,6 +26,7 @@ from .config import (
     OVERLAY_QUEUE_MAX_HEIGHT,
     OVERLAY_QUEUE_MIN_HEIGHT,
     OVERLAY_STATE_COLORS,
+    OVERLAY_WARNING_LABELS,
     OVERLAY_WIDTH,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
@@ -609,11 +610,22 @@ class OverlayUI(QtWidgets.QWidget):
         self._state_label.setFont(state_font)
         # Fix stable width: ensure the label reserves space for the widest
         # state text so that _target_window_width() returns a constant value
-        # across all overlay states and prevents horizontal jumping.
+        # across all overlay states and prevents horizontal jumping. The
+        # warning words ("Not inserted", "Check window") are the widest, so
+        # they set the reservation; the header still fits inside the controls
+        # row, which alone decides the overlay's width.
         _state_fm = QtGui.QFontMetrics(state_font)
         _max_state_w = max(
             _state_fm.horizontalAdvance(s)
-            for s in ("Idle", "Starting", "Listening", "Processing", "Done", "Error")
+            for s in (
+                "Idle",
+                "Starting",
+                "Listening",
+                "Processing",
+                "Done",
+                "Error",
+                *OVERLAY_WARNING_LABELS,
+            )
         )
         self._state_label.setMinimumWidth(_max_state_w)
 
@@ -1157,6 +1169,7 @@ class OverlayUI(QtWidgets.QWidget):
         error_action: str | None = None,
         editable: bool = False,
         starting: bool = False,
+        warning: str | None = None,
     ) -> None:
         """Render an overlay state.
 
@@ -1178,10 +1191,21 @@ class OverlayUI(QtWidgets.QWidget):
         the dictation has begun but the microphone is not open yet, so nothing
         is recorded and the Listening green would invite speech too early.
         Every control still behaves as in Listening.
+
+        ``warning`` (one of ``OVERLAY_WARNING_LABELS``, on an Error only)
+        paints that Error as a warning under that word, in the warning's own
+        colour instead of the red: the transcript exists and was not, or may
+        not have been, inserted (owner's decision 2026-10-17). It is an
+        appearance, like ``starting``: the state, its controls and its checks
+        stay those of Error.
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
         shown_state = "Starting" if starting and state == "Listening" else state
+        colour_key = shown_state
+        if warning and state == "Error":
+            shown_state = warning
+            colour_key = "Warning"
         self._state_label.setText(shown_state)
         self._detail_label.setText(detail)
         self._state = state
@@ -1211,7 +1235,7 @@ class OverlayUI(QtWidgets.QWidget):
         # part of its contents margins, so measuring first would size the
         # window for an unstyled container and leave it below its own layout
         # minimum (the window then refused to shrink to the computed target).
-        self._apply_state_stylesheet(shown_state)
+        self._apply_state_stylesheet(colour_key)
         self._update_detail_height()
         # Errors lead with the reason and may be followed by a long transcript
         # preview, so keep the reason in view; every other state shows the end
@@ -1349,8 +1373,8 @@ class OverlayUI(QtWidgets.QWidget):
         else:
             scrollbar.setValue(self._detail_rest_value())
 
-    def _apply_state_stylesheet(self, state: str) -> None:
-        bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
+    def _apply_state_stylesheet(self, colour_key: str) -> None:
+        bg = OVERLAY_STATE_COLORS.get(colour_key, OVERLAY_STATE_COLORS["Idle"])
         if bg != self._state_background:
             self.setStyleSheet(
                 f"""
@@ -1454,7 +1478,8 @@ class OverlayUI(QtWidgets.QWidget):
                 color: #ffd98a;
             }}
             /* Not inserted: amber with dark text, apart from every state
-               colour (Error red, Listening green), whatever the state. */
+               colour (Error red, Listening green, the warning's burnt
+               orange), whatever the state. */
             QLabel#overlayNotInsertedBadge {{
                 background-color: #ffb300;
                 color: #1f1400;
@@ -2274,8 +2299,10 @@ class OverlayUI(QtWidgets.QWidget):
         return max(OVERLAY_WIDTH, content_width + chrome_width)
 
     def _should_preserve_size_on_reset(self) -> bool:
+        # The state, not the label's word: a warning is an Error labelled
+        # "Not inserted".
         return bool(self._detail_label.text().strip()) and (
-            self._state_label.text() in {"Done", "Error"}
+            self._state in {"Done", "Error"}
         )
 
     def ensure_compact_size_unless_showing_a_result(self) -> None:

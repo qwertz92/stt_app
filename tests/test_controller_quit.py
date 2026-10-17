@@ -308,16 +308,55 @@ def test_a_transcribed_unfinished_recording_waits_for_the_re_paste(
     assert row.text == "hello again"
     assert row.parts[0][0] == history.load()[0], "an edit must reach the row"
     assert overlay.queue_kinds[-1] == ["undelivered"]
-    # The time the recording was made, as every row shows it.
-    assert "· 00:00:00 ·" in overlay.queue_updates[-1][0][1]
+    # No insert was ever attempted for it, so it is not "Not inserted"
+    # (owner's decision 2026-10-17); the status stays the row's first words,
+    # before the part the one-line row elides, and the time the recording was
+    # made follows it, as every row shows it.
+    label = overlay.queue_updates[-1][0][1]
+    assert label.startswith("From earlier session · 00:00:00 · "), label
+    assert "Not inserted" not in label
+    # Still counted and still pasted by the re-paste.
+    assert overlay.badge.startswith("1 not inserted")
     assert controller.quit_pending_work().not_inserted == 1
 
     controller.repaste_last_transcript()
 
     assert [call[0] for call in controller._text_inserter.calls] == ["hello again"]
     assert controller._undelivered_inserts == []
+    assert overlay.queue_updates[-1] == []
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize(
+    ("changes", "status"),
+    [
+        ({}, "Not inserted"),
+        ({"from_earlier_session": True}, "From earlier session"),
+        ({"outside_text_field": True}, "Not in a text field"),
+        ({"may_have_pasted": True}, "Possibly inserted, check the window"),
+        # A failed re-paste whose keystroke went out marks the row in place;
+        # that is what the user must know, wherever the row came from.
+        (
+            {"from_earlier_session": True, "may_have_pasted": True},
+            "Possibly inserted, check the window",
+        ),
+    ],
+)
+def test_a_waiting_rows_status_is_its_first_words(changes, status):
+    from stt_app.controller import DictationController, _UndeliveredInsert
+
+    row = _UndeliveredInsert(
+        row_id=-1,
+        text="hello again",
+        created_at=datetime.fromisoformat("2026-10-09T09:01:02"),
+        **{"may_have_pasted": False, **changes},
+    )
+
+    assert (
+        DictationController._undelivered_row_label(row)
+        == f'{status} · 09:01:02 · "hello again"'
+    )
 
 
 def test_unfinished_transcripts_are_listed_on_the_qt_thread(monkeypatch, tmp_path):

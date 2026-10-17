@@ -9775,3 +9775,58 @@ on and the overlay green, the first ~10 s were not captured.
   warm stream inherited its predecessor's last callback time, read as a
   60 s stall. Lesson: a wait added on the Qt thread changes every input
   path that queues behind it, not just the one that called it.
+
+## 2026-10-17: a transcript that was not inserted is a warning, not an error
+
+Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,
+`docs/agents/text-insertion.md`).
+- **A transcript that exists but was not (or maybe not) inserted is no
+  longer the red Error.** The Insert offer -- a failed paste, a queued paste
+  that failed, a paste into something that is no text field -- and the
+  "possibly inserted, check the window" report were `set_state("Error")`
+  in red under the word "Error", although nothing failed that Retry could
+  redo and the text is in history. `set_state(..., warning=...)` now paints
+  such an Error burnt orange (`#9a4d00`) under "Not inserted" (Insert
+  offered) or "Check window" (the keystroke went out, no Insert). It is an
+  appearance like "Starting", not a new state: the state stays Error, so the
+  controls, the scroll-to-top, the preload poll's and the paste check's
+  "is this still the offer" tests and every test that reads `state ==
+  "Error"` are untouched. Failures with no transcript stay red.
+- **One writer, enforced.** Five places painted the offer with their own
+  `set_state("Error", ...)` (`_paint_insert_offer`, two arms of
+  `_paint_status_keeping_offer`, two arms of the failed paste in
+  `_insert_text_at_target`). They go through `_paint_not_inserted`, which
+  derives the word and the action from one flag so they cannot disagree.
+  `FakeOverlay` in `tests/conftest.py` refuses an Insert offer without the
+  warning: with it in place all 1,044 tests of the controller and overlay
+  files passed, so none of them reaches a sixth writer.
+- **Measured, not guessed.** The label reserves the widest word, and both
+  new words are wider than "Processing" (59 / 75 / 91 px at 9 / 11.25 /
+  13.5 pt): "Not inserted" is 70 / 88 / 107, "Check window" 81 / 100 / 122.
+  Reserving them moves the header's `sizeHint` from 387 / 411 / 459 to
+  409 / 436 / 490 px, still inside the controls row (440 / 473 / 528), which
+  alone sets the overlay's width -- so the overlay stays 470 / 503 / 558 px
+  and the label rectangle 112 / 137 / 160 px in every state. "Not inserted"
+  fits, so the shorter fallback word was not needed. White text on the new
+  fill is 6.11:1, the amber queue-row text 4.52:1, and the not-inserted
+  badge's amber against it 3.41:1 (luminance, from painted pixels; the red
+  scored 6.57 / 4.86 / 3.66). The badge has the least room: 3:1 needs a
+  background of relative luminance 0.145 or less. Negative controls: a
+  lighter orange (`#b35900`) fails the row-label check, `#d98200` the white
+  text, and dropping the words from the reservation fails the three-size
+  header test.
+- **Rows made by the startup notice read "From earlier session".** A
+  transcript saved by the notice of unfinished recordings was listed as
+  "Not inserted" (bf89a24) although no insert was ever attempted. The row
+  now has `from_earlier_session`; its status is the first words of the row
+  as before, the recording's time follows, it counts in the badge and
+  F10 pastes it. A status the row earns later wins (a failed re-paste whose
+  keystroke went out: "Possibly inserted, check the window"). The row never
+  held a language code or model -- an unfinished recording has neither, and
+  every undelivered row quotes time and text only -- so none was added. The
+  notice's own text and final status said "not inserted"; they say what the
+  row says now.
+- **Not done.** A failed streaming session that keeps its partial text in
+  history ("Partial transcript (saved to history)") stays red: it is a
+  failed session, not an insert that did not land. Whether it should be a
+  warning is the owner's call.

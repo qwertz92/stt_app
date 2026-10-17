@@ -319,13 +319,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
 - **Cancel, Retry and Insert share one fixed-size overlay slot.** A
   successful transcription whose insert failed uses
   `error_action=OVERLAY_ERROR_ACTION_INSERT` (`insert_again_requested` ->
-  `insert_failed_text`). An Error whose failure kept no audio of its
+  `insert_failed_text`) and is painted as the burnt-orange "Not inserted"
+  warning, not the red Error (below, `docs/agents/overlay.md`). An Error
+  whose failure kept no audio of its
   own uses `OVERLAY_ERROR_ACTION_NONE` (a Retry would transcribe the previous
   failure's audio); the tray's "Retry transcription" still names the slot.
 - **A queued transcript that failed to paste is never silent**: it emits
   `background_insertion_failed` (tray, always); with nothing newer on the
-  overlay it shows Error + `OVERLAY_ERROR_ACTION_INSERT` and takes over
-  `_last_transcript`. `_foreground_delivery_pending` suppresses that inside
+  overlay it shows the "Not inserted" warning (an Error state with
+  `OVERLAY_ERROR_ACTION_INSERT`) and takes over `_last_transcript`. `_foreground_delivery_pending` suppresses that inside
   `_on_transcription_ready` just before the foreground result paints.
 - **A failed queued paste stays listed until inserted or dismissed**
   (owner's field report 2026-10-01: six queued pastes, two silently
@@ -360,8 +362,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   that moment (Known limitations: the tail row).
   A transcript the startup notice of unfinished recordings saved to history
   becomes such a row too (`_list_unfinished_transcript`, 2026-10-09, owner's
-  idea): never pasted on its own, listed "Not inserted" with the recording's
-  time, pasted by the re-paste at the current caret like any failed row.
+  idea): never pasted on its own, pasted by the re-paste at the current
+  caret like any failed row, counted by the badge, and listed with the
+  recording's time as "From earlier session" (`_UndeliveredInsert.
+  from_earlier_session`; owner's decision 2026-10-17 -- it read "Not
+  inserted" although no insert was ever attempted). A status that the row
+  earns later wins: a failed re-paste whose keystroke went out marks it
+  "Possibly inserted, check the window" as any other row.
 - **A paste that reports success has its target checked, report-only**
   (2026-10-03, `paste_target_check.PasteTargetCheck`, wired in `main.py`;
   the controller's `paste_target_check` argument defaults to None = no
@@ -388,8 +395,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   paste's or a streaming tail's offer took that Insert away, 2026-10-03
   review), an Error "pasted, but the focused element does not look
   like a text field. If nothing appeared, click into the field and press
-  Insert" with the Insert offer (`_paint_insert_offer`, shared with the
-  failed queued paste). A re-paste or Insert that then pastes it retires
+  Insert" with the Insert offer, painted as the "Not inserted" warning
+  (`_paint_insert_offer`, shared with the failed queued paste). A re-paste or Insert that then pastes it retires
   the row by identity like any other (owner's rule 2026-10-03: a failed or
   doubtful insert is shown briefly and stops being listed once a re-paste
   inserted exactly it); if that paste is doubtful again, it gets a new row.
@@ -468,6 +475,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   (wired in `main._connect_overlay_actions`), cleared by a successful
   re-paste and at recording start, falling back to `_last_transcript`.
   Tray/hotkey keep `repaste_last_transcript`.
+  - **One writer paints every offer** (owner's decision 2026-10-17): a
+    transcript that exists but is not (surely) in its window is a warning,
+    not the red Error, so `_paint_not_inserted` is the only call that paints
+    it: `_paint_insert_offer`, both arms of `_paint_status_keeping_offer`
+    ("Still not inserted:" and "Possibly inserted already") and both arms of
+    the failed paste in `_insert_text_at_target`. It takes the offer's own
+    `may_have_pasted` and derives both the label word and the action from
+    it -- "Not inserted" with Insert, or "Check window" without -- so the
+    two cannot disagree; the state stays Error for every control and check
+    (`docs/agents/overlay.md`). A failed transcription (foreground or
+    queued) and a microphone failure are still the red Error; so is an
+    aborted streaming session, although its partial text is in history --
+    it is a failed session, not an insert that did not land (open question
+    to the owner, 2026-10-17) --, and so is a refusal painted while no offer
+    is pending. A new writer of an Insert offer goes through the helper;
+    `FakeOverlay` refuses one that does not.
   - **A refused recording start keeps the offer**: the clear sits past every
     refusal; `_refuse_recording_start` repaints it ("Still not inserted:")
     with `copy_text`/`error_action` on the offer (the stripped transcript).
