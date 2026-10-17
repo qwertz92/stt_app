@@ -52,6 +52,84 @@ P4s. Each was reproduced first by a test that failed for the stated reason
   the tray as a second road. With no offer pending nothing changed (the
   existing test for that case still passes).
 
+## 2026-10-17 (second review of the Deepgram cap: the sender ends the stream itself)
+
+Structural change first: the sender no longer logs and keeps waiting at the cap;
+it ends the stream, through the failure path a failed send already takes, and
+returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
+... Deepgram closes after its own 10 s" part of the entry below.
+- **The finding (P3, reproduced by the lead on a fake server)**: at the cap the
+  sender only logged and `continue`d, so the dead-microphone error still
+  depended on Deepgram closing the socket. A vendor window longer than 10 s
+  after audio (the NET-0002 window has no documented length), or a proxy that
+  holds the TCP connection, would leave the overlay on "Listening" until the
+  hotkey; and when the socket did close, the user read the vendor's close
+  reason ("WebSocket connection closed unexpectedly.") although the app knew
+  the cause.
+- **The fix**: the first wait past `_STREAM_KEEPALIVE_MAX_GAP_S` (the 11th 3 s
+  wait, 33 s after the last block; ten KeepAlives went out before it) logs a
+  WARNING, records a `TranscriptionError` through
+  `_record_stream_error(..., notify=True)` and returns. The user reads
+  "Deepgram streaming failed: The microphone delivered no audio for more than
+  30 seconds, so the stream was ended." -- the number is `int` of the constant,
+  and "Deepgram streaming failed:" is the prefix `_format_stream_error` puts on
+  every streaming failure, so the lead's suggested "... so the Deepgram stream
+  was ended" would have said Deepgram twice. There is no resuming after the cap
+  (the earlier "audio after the cap restarts the count" behaviour is gone): the
+  stream is over and the recording is kept for Retry.
+- **Checked end to end, not assumed.** Reading: the provider's callback is the
+  controller's `_on_runtime_error`, which emits `stream_runtime_failed`; the
+  slot `_on_stream_runtime_failed` ignores a retired session's token and a
+  failure after the stop (the finalize reports that one), otherwise runs
+  `_on_transcription_failed` (capture stopped, audio persisted and held for
+  Retry, recording marked failed, red Error with the Retry guidance). Exactly
+  once because `_stream_error_reported` latches per session, `_on_close` only
+  notifies when no error was recorded yet, and the controller clears the
+  session token on teardown. A stop that begins first clears the callback
+  (`stop_stream` does it before anything else), so a cap landing during a stop
+  is recorded but not reported, and the stop raises it when it has no text; the
+  drain finds the sender thread dead (`_drain_stream_sender` checks
+  `send_thread.is_alive()`) and gives up without waiting for it, so the stop
+  does not hang (the test bounds it at 3 s; it does not measure how fast). An
+  abort sets the session to retiring, so the cap finds no matching session and
+  stays quiet. Run for real: a controller test
+  (`test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording`)
+  with the real `DeepgramTranscriber` on its fake socket and the real sender
+  thread (the socket stays open and silent, a cap of 120 ms) sees one
+  `stream_runtime_failed`, the capture stopped, the audio saved for Retry with
+  one failure mark, one red Error carrying the message, the socket closed by
+  the teardown, and no second report after the socket's own close. It was
+  written after the fix, so its red state is shown by mutation instead: with
+  the cap recording the error but not notifying (what the old log-and-continue
+  amounted to for the controller) it waits its 10 s for the Error and fails.
+  Calling Retry in that test would send the RIFF stub to the real Deepgram
+  batch endpoint through the patched factory, so it asserts the kept audio
+  (`_last_failed_wav_bytes`, the store's save and failure mark) instead.
+- **Tests that pin the number (P4)**: the old boundary test measured
+  `keepalive_times[-1] - 0.1` against the module's own constant, which passes
+  for a cap of 40 s and (by exact arithmetic only) for `>=`. The new one counts:
+  exactly ten KeepAlives, the end at the 11th wait, and the bound written as
+  `AUDIO_INPUT_BUFFER_S + 10.0` in the test, not read from the constant. Whole
+  multiples of 3.0 are exact in floating point, so no tolerance decides it. The
+  real-thread tests use a cap of 0.12 s on a 0.05 s interval (no float tie) and
+  hold the first block inside its send until the interval is shortened, so a
+  late test thread cannot let the sender write its silence frame first. Mutation
+  checks on the real source, each restored byte for byte afterwards: `>=` for
+  `>` fails the boundary test and the cap-during-stop test (the end comes at the
+  10th wait); a cap of `AUDIO_INPUT_BUFFER_S + 20.0` fails the same two (the end
+  comes at 42 s); `notify=False` fails the boundary test, both real-thread tests
+  and the controller test; `continue` for `return` at the cap fails all four
+  provider tests (the sender keeps waiting and the loop reaches the sentinel at
+  300 s).
+- **Doc claim corrected (P4)**: `remote-providers.md` said the silence frame
+  "stops with the cap", and commit `cacca52` said the cap stops "the silence
+  frame". Both are vacuous: the silence frame goes out only at the first empty
+  wait of a session that has sent no audio, never again, so a cap cannot stop
+  something that is already over. The entry now says that, and that the frame
+  does not reset the count (a session that never got a block would hit the same
+  cap 33 s after its sender started; the first-callback watchdog aborts such a
+  start at 12 s, long before).
+
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 
 An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and
