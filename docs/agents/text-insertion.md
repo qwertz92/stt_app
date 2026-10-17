@@ -501,7 +501,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     (`show_overlay_error(..., about_insert=True)`) keep the orange; a new
     error raised from the insert or re-paste path must pass it. A new writer
     of an Insert offer goes through the helper; `FakeOverlay` refuses one
-    that does not.
+    that does not, and one that passes `warning=None` itself fails
+    `test_only_the_one_writer_names_the_insert_action`, which allows
+    `OVERLAY_ERROR_ACTION_INSERT` in `_paint_not_inserted` alone. Another
+    job's failure on an idle overlay (`_report_background_failure`) is a
+    real failure too: with an offer pending it is painted over it as above,
+    Insert taking the action slot from Retry, and its text names the tray's
+    Retry transcription.
   - **A refused recording start keeps the offer**: the clear sits past every
     refusal; `_refuse_recording_start` repaints it ("Still not inserted:")
     with `copy_text`/`error_action` on the offer (the stripped transcript).
@@ -577,9 +583,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     pasted B a second time.
   - **Clear retires the offer it dismissed** (`OverlayUI.detail_cleared` ->
     `on_overlay_detail_cleared`), not one hidden behind a later Error.
-  - **The preload progress poll** repaints only the painter's own Error
-    (`_offer_painted` = `(state, detail)` vs `OverlayUI.state` /
-    `OverlayUI.detail`), skips a foreground transcription in flight
+  - **The preload progress poll** repaints only the painter's own
+    informational Error (`_offer_painted` = `(state, detail)` vs
+    `OverlayUI.state` / `OverlayUI.detail`, recorded for the orange offer and
+    not for a red failure painted over it, which stays until something
+    replaces it; a preload start line is informational and is refreshed),
+    skips a foreground transcription in flight
     (`_overlay_session_active`), and leaves the offer and its own progress
     line alone while `OverlayUI.detail_is_being_read`. With an offer pending,
     all five progress lines name the cancel hotkey (`_preload_abort_hint`)

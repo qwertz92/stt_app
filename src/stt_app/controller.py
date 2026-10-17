@@ -807,10 +807,11 @@ class DictationController(QtCore.QObject):
         self._last_insert_foreground: int | None = None
         # Counts the pastes that reported success, streaming inserts included.
         self._paste_serial = 0
-        # `(state, detail)` the offer painter wrote last, None once a plain
-        # status replaced it. The preload progress poll compares it with
-        # what the overlay shows, to tell the painter's own Error from a
-        # result it must not repaint.
+        # `(state, detail)` of the informational offer the painter wrote last,
+        # None once a plain status or a failure replaced it. The preload
+        # progress poll compares it with what the overlay shows, to tell
+        # the painter's own refreshable Error from a result it must not
+        # repaint.
         self._offer_painted: tuple[str, str] | None = None
         self._last_history_entry: TranscriptHistoryEntry | None = None
         self._last_failed_wav_bytes: bytes = b""
@@ -7843,20 +7844,38 @@ class DictationController(QtCore.QObject):
         error_text: str,
         retry_available: bool,
     ) -> None:
-        message = f"{self._job_identity(job)} failed: {error_text}"
+        failure = f"{self._job_identity(job)} failed: {error_text}"
+        message = failure
         if retry_available:
-            message = f"{message} The audio was kept — use Retry to try again."
+            message = f"{failure} The audio was kept — use Retry to try again."
         self._logger.warning("background_transcription_failed %s", message)
         # Always notify (the tray notification survives an active session);
         # additionally show it on the overlay when no live session owns it.
         self.background_transcription_failed.emit(message)
         if not self._overlay_session_active():
-            # Retry is right only for the failure's own promoted audio.
-            self._overlay.set_state(
-                "Error",
-                message,
-                error_action=None if retry_available else OVERLAY_ERROR_ACTION_NONE,
-            )
+            if self._insert_action_text:
+                # Another job's insert is still offered. A plain Error here
+                # took the transcript, Copy and Insert off the screen while
+                # the text stayed pending. The offer is kept under the red
+                # failure like any other failure over it; its Insert takes
+                # the overlay's one action slot from Retry, so the text
+                # names the tray's Retry transcription instead.
+                shown = failure
+                if retry_available:
+                    shown = (
+                        f"{failure} The audio was kept — use Retry transcription "
+                        "in the tray menu to try again."
+                    )
+                self._paint_status_keeping_offer("Error", shown)
+            else:
+                # Retry is right only for the failure's own promoted audio.
+                self._overlay.set_state(
+                    "Error",
+                    message,
+                    error_action=(
+                        None if retry_available else OVERLAY_ERROR_ACTION_NONE
+                    ),
+                )
             self._reveal_overlay_result(is_error=True)
 
     def _on_transcription_failed(
@@ -8511,22 +8530,30 @@ class DictationController(QtCore.QObject):
             )
         else:
             painted = f"{detail}\n\nStill not inserted:\n{pending}"
+        failure = state == "Error" and not about_insert
         self._paint_not_inserted(
             painted,
             pending,
             may_have_pasted=self._insert_offer_may_have_pasted,
             rows=self._insert_action_rows,
             entry=self._insert_action_entry,
-            failure=state == "Error" and not about_insert,
+            failure=failure,
         )
-        self._offer_painted = ("Error", painted)
+        # Only the informational paint is the poll's to refresh. A failure
+        # painted over the offer is a result that must stay on screen until
+        # something replaces it: remembered as the offer, the preload
+        # progress poll refreshed it 600 ms later, which turned the red
+        # refusal back into the orange progress line.
+        self._offer_painted = None if failure else ("Error", painted)
 
     def _offer_painted_is_on_screen(self) -> bool:
-        """True while the overlay still shows the painter's own last offer.
+        """True while the overlay still shows the painter's own refreshable offer.
 
         The preload progress poll must not repaint a Done or Error result,
         and the offer is an Error, so the poll has to tell the two apart: a
         result replaces the painter's text, an untouched offer matches it.
+        A failure painted over the offer is not recorded (see
+        `_paint_status_keeping_offer`), so it counts as a result.
         """
         painted = self._offer_painted
         return painted is not None and painted == (
