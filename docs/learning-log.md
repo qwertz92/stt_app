@@ -49,6 +49,46 @@ Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.
   has five callers and named "both arms of `_paint_status_keeping_offer`";
   it has four call sites (the status painter is one call with two wordings).
 
+## 2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead microphone)
+
+- **The finding (P3, the lead's review of 20703c0..99970e1)**: before the
+  KeepAlive, a microphone whose callback thread stopped delivering after the
+  first block (a driver wedge) made Deepgram close the socket after ~10 s,
+  and the user saw the red streaming error. With a KeepAlive that never
+  stops, the sender bridged forever and the overlay stayed on "Listening"
+  until the hotkey. Checked before accepting it: nothing else in the app
+  notices such a microphone. The first-callback watchdog in `controller.py`
+  watches only the first block, `audio_capture.py` registers no
+  stream-finished callback, and the device listener only defers its refresh
+  while a recording runs. So Deepgram's close was the detector, and the
+  KeepAlive had silently removed it.
+- **The fix**: the sender bridges one gap for at most
+  `_STREAM_KEEPALIVE_MAX_GAP_S` = `AUDIO_INPUT_BUFFER_S` + 10 s (30 s), counted
+  in whole 3 s waits since the last real audio frame. Past it, it writes
+  neither KeepAlive nor silence frame and logs one WARNING per gap; Deepgram
+  closes after its own 10 s (about 40 s after the last block instead of ~10 s)
+  and the streaming-failure path runs. The sender keeps waiting, so real audio
+  after the cap on a still-open socket is sent normally and starts a fresh
+  30 s. Why 30 s: the capture holds 20 s for a starved callback thread and
+  delivers it as a burst, so a shorter gap can be a slow microphone; the
+  longest wait the app creates itself is 12 s; past the buffer the audio is
+  lost anyway. The detection delay is recorded in `known-limitations.md`.
+- **Doc follow-up**: the troubleshooting page's NET-0002 checklist ("Unlike
+  NET-0001, KeepAlive messages do reset this timeout") is now cited as the
+  vendor evidence that a KeepAlive-only gap after audio holds, with the note
+  that the page gives no window length (re-read the same day, no number). The
+  live-check description has its second case: speak, 12 s of nothing, speak.
+- **Two test follow-ups**: the overlap and Finalize-ordering tests used a
+  50 ms interval and failed whenever the main thread was 50 ms late between
+  `start_stream()` and the first push, because the sender then wrote its
+  idle frame first (reproduced with an inserted `sleep(0.12)`). They now
+  start with a 30 s first wait and shrink it while the audio is held inside
+  the send, so no delay of the main thread matters (re-run with the 0.12 s
+  sleep inserted: all 89 pass). And the release test's fake `subprocess.run`
+  now honours `check=True` like the real one, so an audit call that stops
+  passing `check=False` fails the failing-audit test with a
+  `CalledProcessError`.
+
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 
 Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,

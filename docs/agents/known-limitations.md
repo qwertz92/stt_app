@@ -445,11 +445,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     0.1 s of audio, once per start stall), which satisfies both readings, so
     a start stall of up to 12 s (the watchdog's limit) should not lose the
     session. What stays unverified is the whole mechanism against the real
-    service: no Deepgram key was available. One live run with a key shows it
-    holds: start a streaming dictation and make the microphone deliver nothing
-    for 12 s (or open a stream and send nothing but the sender's frames), then
-    speak. The same run with the silence frame removed would show whether
-    KeepAlive alone suffices, and the frame could then be dropped. If the
-    session still dies, the user sees "Deepgram streaming failed: WebSocket
+    service: no Deepgram key was available. Live runs with a key show it
+    holds (or open a stream and send nothing but the sender's frames, which
+    needs no microphone):
+    1. Before any audio: start a streaming dictation and make the microphone
+       deliver nothing for 12 s, then speak. The same run with the silence
+       frame removed would show whether KeepAlive alone suffices there, and
+       the frame could then be dropped.
+    2. After audio: speak, then 12 s of nothing (the callback thread
+       stalled), then speak again. The vendor's NET-0002 sentence ("KeepAlive
+       messages do reset this timeout") says this holds with KeepAlives alone
+       but gives no window length. If it fails, the cover would be silence
+       frames in the gap.
+
+    If the session dies, the user sees "Deepgram streaming failed: WebSocket
     connection closed unexpectedly." and the audio is kept as the first entry
     of `docs/agents/streaming.md` describes.
+  - A microphone that stops delivering after its first block is not noticed
+    by the capture (the first-callback watchdog watches the first block only;
+    the device listener defers its refresh while a recording runs), so a
+    dying microphone ends a Deepgram stream only through Deepgram's own close:
+    about 40 s after the last block (the sender bridges a gap for at most 30 s,
+    `_STREAM_KEEPALIVE_MAX_GAP_S`, then Deepgram's 10 s window), against ~10 s
+    before the KeepAlive existed. Not checked for the other streaming engines
+    (AssemblyAI, local): this entry does not claim whether they notice it.

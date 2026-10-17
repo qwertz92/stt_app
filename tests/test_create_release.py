@@ -163,9 +163,15 @@ class _ReleaseRun:
         self.calls: list[list[str]] = []
         self._audit_exit_code = audit_exit_code
 
-        def fake_run(command, **_kwargs):
+        def fake_run(command, **kwargs):
             self.calls.append([str(part) for part in command])
             code = self._audit_exit_code if command[1:2] == ["audit"] else 0
+            # Like the real one: `check=True` turns a non-zero exit into a
+            # CalledProcessError, which `main` prints as "Command failed with
+            # exit code 1: [...]" instead of the audit message. The failing
+            # audit test fails if the call ever stops passing `check=False`.
+            if kwargs.get("check") and code != 0:
+                raise subprocess.CalledProcessError(code, command)
             return subprocess.CompletedProcess(command, code)
 
         monkeypatch.setattr(module.subprocess, "run", fake_run)
@@ -260,7 +266,9 @@ def test_a_missing_npm_stops_the_release_instead_of_skipping_the_audit(
 @pytest.mark.parametrize("workflow", ["windows-release.yml", "quality.yml"])
 def test_the_audit_is_the_command_both_workflows_run(workflow):
     """quality.yml says its audit "must match the release job's bar": three
-    copies of one command drift unless something compares them."""
+    copies of one command drift unless something compares them. The regex
+    reads single-line `run: npm audit ...` steps only; an audit moved into a
+    multi-line `run: |` block finds nothing and fails the comparison loudly."""
     module = _load_create_release_module()
     text = (_REPO_ROOT / ".github" / "workflows" / workflow).read_text(encoding="utf-8")
 
