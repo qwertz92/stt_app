@@ -27,6 +27,24 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   until the finalize has ended instead (before, it stopped the finalize, which
   is the diversion again). Not tested on a real stream: the refusal is shown
   with the fake streaming transcriber.
+- **P3: a fallback retry left no lasting trace.** The recorded language was not
+  offered, so the transcript came out in another language than the speech; the
+  Processing line that said so was overwritten by the first provider progress
+  line, History stores no language, and with "keep last recording" off the WAV
+  was deleted after the success, so Import's "Use last recording" could not
+  redo it in the right language. Reproduced on both roads (the managed state
+  was gone after the delivery; no notice; the unfinished file was deleted).
+  Fix with the gap transcript's own mechanism, no new one: the job carries
+  `language_fallback_from`, its delivery marks the recording failed instead of
+  completed (which keeps the file) while the managed slot still holds it, and
+  one `busy_overlay_error` tray notice names the language that ran and where
+  the audio can be redone. Where a newer recording took the slot the notice
+  says the audio is no longer offered instead of promising it. After a restart
+  the file is kept as the settings keep any recording, and in place where they
+  would delete it, so History's Retranscribe still offers it. Decision: the
+  restart road has no tray notice per row, because the dialog row already
+  names the language (see the row-wording bullet below) and a toast per row on
+  top of an open window would be noise; say so if a toast there is wanted too.
 - **P4, reproduced: the fallback named a language that did not run.** When the
   recorded language was not offered, a retry used "the selected language" as it
   stood in the settings. A selection the engine does not offer either stays

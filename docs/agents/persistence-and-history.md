@@ -172,7 +172,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   language the recording was *made* in, also when a retry of it ran under the
   selected language, and the startup transcription uses it only where the
   engine and model selected then offer it (`_pin_recorded_language`; the notice
-  row says when it did not). Tests:
+  row says when it did not, and the file is kept then -- in place where the
+  settings would delete it -- with its history entry pointing at it, so
+  Retranscribe can redo it in another language). Tests:
   `tests/test_last_recording_store.py`, `tests/test_unfinished_recordings.py`,
   `tests/test_unfinished_recordings_notice.py`.
 - **Ctrl+C in either history view copies the whole selection** (explicit

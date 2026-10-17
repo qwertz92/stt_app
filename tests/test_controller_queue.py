@@ -3995,6 +3995,103 @@ def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_ei
     _ = app
 
 
+def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded, newer):
+    """A dictation recorded in `recorded` failed; the engine is switched to
+    Canary (no Auto, German selected) and the Retry delivers. `newer`: another
+    dictation was recorded after the failure, so the managed slot holds that
+    one. Returns the controller, the app, the tray messages and the id of the
+    recording the slot holds at the end."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode=recorded
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    if newer:
+        _record_and_stop(controller)
+    slot_id = controller._last_recording_store.load().recording_id
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    assert controller.retry_last_transcription() is True
+    controller._on_transcription_ready(
+        "hallo", request_token=controller._active_request_token
+    )
+    return controller, app, tray, slot_id
+
+
+def test_a_fallback_retry_keeps_its_recording_and_says_which_language_ran(
+    monkeypatch, tmp_path
+):
+    """The recorded language was not offered, so the transcript is in another
+    language than the speech. Nothing of that survived the first progress line,
+    and with "keep last recording" off the WAV was deleted after the success:
+    Import's "Use last recording" could not redo it in the right language. The
+    recording is kept the way a transcript with a gap is (marked failed, which
+    keeps the file), and one tray notice names the language that ran."""
+    controller, app, tray, slot_id = _a_retry_under_canary_that_finished(
+        monkeypatch, tmp_path, recorded="auto", newer=False
+    )
+    store = controller._last_recording_store
+
+    state = store.load()
+    assert state is not None, "completing it would have deleted the recording"
+    assert (state.recording_id, state.status) == (slot_id, "failed")
+    assert state.error == (
+        "Transcribed in German because Auto is not offered by the model; "
+        "the recording was kept."
+    )
+    assert store.selectable_path() is not None
+    assert tray == [
+        (
+            "The retry ran in German because Auto is not offered by the current "
+            "engine and model. The recording is kept: Import Audio > Use last "
+            "recording transcribes it again in another language."
+        )
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_retry_of_a_replaced_recording_says_it_is_not_kept(
+    monkeypatch, tmp_path
+):
+    """A newer dictation took the managed slot, so the older recording's audio
+    is no longer anywhere Import can reach it; the notice says that instead of
+    promising it, and the newer recording's state is left alone."""
+    controller, app, tray, slot_id = _a_retry_under_canary_that_finished(
+        monkeypatch, tmp_path, recorded="auto", newer=True
+    )
+
+    state = controller._last_recording_store.load()
+    assert state is not None and state.recording_id == slot_id
+    assert state.status == "transcribing" and state.error == ""
+    assert len(tray) == 1
+    assert tray[0].startswith("The retry ran in German because Auto is not offered")
+    assert "no longer offers it" in tray[0]
+    assert "is kept" not in tray[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_in_the_recorded_language_completes_its_recording_as_before(
+    monkeypatch, tmp_path
+):
+    """Negative control: English is offered by Canary, so nothing fell back,
+    the recording is completed (deleted unless kept) and no notice is sent."""
+    controller, app, tray, _slot_id = _a_retry_under_canary_that_finished(
+        monkeypatch, tmp_path, recorded="en", newer=False
+    )
+    store = controller._last_recording_store
+
+    assert store.load() is None
+    assert store.selectable_path() is None
+    assert tray == []
+    controller.shutdown()
+    _ = app
+
+
 def test_a_failed_retry_keeps_the_recordings_language(monkeypatch, tmp_path):
     controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"
