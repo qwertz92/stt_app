@@ -9389,6 +9389,31 @@ class DictationController(QtCore.QObject):
             f"(recorded language: {recorded_label})..."
         )
 
+    def _running_retry_of_the_slot(
+        self, settings: AppSettings
+    ) -> _TranscriptionJob | None:
+        """The job still working on the retry slot's recording with the engine
+        and model `settings` would use, if there is one.
+
+        The recording is the slot's own: the same audio bytes under the same
+        recording id, which is how `_retire_retry_audio_delivered_by` tells a
+        failure's retry from any other delivery. A job being stopped does not
+        count -- the user cancelled it, or a retry with other settings
+        replaced it -- and neither does a finished result waiting for its
+        paste, whose delivery retires the slot.
+        """
+        slot = (self._last_failed_wav_bytes, self._last_failed_recording_id)
+        model = self._selected_model_name(settings)
+        for job in self._jobs.values():
+            if job.aborting or job.insertion_deferred:
+                continue
+            if (job.engine, job.model) != (settings.engine, model):
+                continue
+            payload = self._request_audio_by_token.get(job.token)
+            if payload is not None and (payload[0], job.source_recording_id) == slot:
+                return job
+        return None
+
     def retry_last_transcription(self) -> bool:
         if not self._last_failed_wav_bytes:
             self._paint_status_keeping_offer(
@@ -9413,6 +9438,24 @@ class DictationController(QtCore.QObject):
             )
             return False
         settings, detail = self._retry_settings()
+        running = self._running_retry_of_the_slot(settings)
+        if running is not None:
+            # The same audio to the same provider twice costs money twice
+            # and returns the same text twice (owner decision 2026-10-17).
+            # Told, never a silent no-op: the tray, since the overlay shows
+            # the retry that is running.
+            self._logger.info(
+                "retry_ignored_duplicate token=%d recording_id=%s engine=%s model=%s",
+                running.token,
+                running.source_recording_id or "n/a",
+                running.engine,
+                running.model,
+            )
+            self.show_overlay_error(
+                "A retry of this recording is already running with the same "
+                "engine and model."
+            )
+            return False
         # Stop any still-running transcription before retrying; if it finishes
         # anyway it is kept in history rather than discarded.
         self._request_job_stop(

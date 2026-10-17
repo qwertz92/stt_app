@@ -4020,6 +4020,184 @@ def test_the_recordings_language_is_stored_with_its_audio(monkeypatch, tmp_path)
     _ = app
 
 
+_RETRY_ALREADY_RUNNING = (
+    "A retry of this recording is already running with the same engine and model."
+)
+
+
+def _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path):
+    """One dictation failed and its Retry is in flight (a deferred worker)."""
+    controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    assert controller.retry_last_transcription() is True
+    first_retry = controller._jobs[controller._active_request_token]
+    return controller, app, overlay, history, first_retry
+
+
+def test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model(
+    monkeypatch, tmp_path, caplog
+):
+    """Owner decision 2026-10-17: the same audio to the same provider twice
+    costs money twice and makes no sense. The press is answered -- on the
+    tray, since the overlay shows the running retry -- and logged, and nothing
+    is stopped or submitted."""
+    caplog.set_level(logging.INFO)
+    controller, app, overlay, history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    submitted = len(controller._executor.calls)
+    painted = list(overlay.states)
+
+    assert controller.retry_last_transcription() is False
+
+    assert len(controller._executor.calls) == submitted
+    assert list(controller._jobs) == [first.token]
+    assert first.aborting is False
+    assert controller._active_request_token == first.token
+    assert overlay.states == painted
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    assert "retry_ignored_duplicate" in caplog.text
+    assert history.load() == []
+    assert controller._last_failed_wav_bytes, "the slot keeps the recording"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"engine": "groq"}, {"model_size": "base"}],
+    ids=["another engine", "another model"],
+)
+def test_a_retry_with_another_engine_or_model_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path, change
+):
+    """The user changed settings meanwhile: that is a different request. The
+    running one is stopped, as a retry always did, and a late result of it
+    goes to history only."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller._settings = replace(controller._settings, **change)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert (second.engine, second.model) != (first.engine, first.model)
+    assert first.aborting is True
+    assert len(controller._executor.calls) == submitted + 1
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_works_again_after_the_first_retry_failed(monkeypatch, tmp_path):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    assert controller.retry_last_transcription() is False
+    controller._on_transcription_failed("still down", request_token=first.token)
+    assert first.token not in controller._jobs
+
+    assert controller.retry_last_transcription() is True
+
+    assert controller._jobs[controller._active_request_token].token != first.token
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_works_again_once_the_first_retry_finished(monkeypatch, tmp_path):
+    """A finished retry resolves its failure, and the older failure behind it
+    comes forward: a different recording, so not a duplicate, although the
+    audio bytes and the engine are the same."""
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    id_a = controller._jobs[token_a].source_recording_id
+    controller._on_transcription_failed("down", request_token=token_a)
+    token_b = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_b)
+    assert controller.retry_last_transcription() is True
+    first = controller._jobs[controller._active_request_token]
+    assert controller.retry_last_transcription() is False
+
+    controller._on_transcription_ready("text of B", request_token=first.token)
+
+    assert first.token not in controller._jobs
+    assert [entry.text for entry in history.load()] == ["text of B"]
+    assert controller.retry_last_transcription() is True
+    assert (
+        controller._jobs[controller._active_request_token].source_recording_id == id_a
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_of_another_failed_recording_is_not_a_duplicate(monkeypatch, tmp_path):
+    """Two recordings can carry the same bytes; the recording is the identity
+    (bytes and id, as the slot retires), not the audio alone."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    token_c = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_c)
+    # Same bytes as the retry in flight, another recording.
+    assert controller._request_audio_by_token[first.token][0] == (
+        controller._last_failed_wav_bytes
+    )
+    assert controller._last_failed_recording_id != first.source_recording_id
+
+    assert controller.retry_last_transcription() is True
+
+    third = controller._jobs[controller._active_request_token]
+    assert third.token not in (first.token, token_c)
+    assert third.source_recording_id != first.source_recording_id
+    assert first.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_running_behind_a_newer_dictation_still_blocks_a_duplicate(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    _record_and_stop(controller)
+    assert first.token in controller._jobs
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+
+    assert controller.retry_last_transcription() is False
+
+    assert first.aborting is False
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_canceled_retry_does_not_block_the_next_one(monkeypatch, tmp_path):
+    """Cancel, then Retry again, is a deliberate sequence: the user stopped the
+    first request and wants another."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller.cancel_current_action()
+    assert first.aborting is True
+
+    assert controller.retry_last_transcription() is True
+
+    assert controller._jobs[controller._active_request_token].token != first.token
+    controller.shutdown()
+    _ = app
+
+
 def test_queue_rows_name_the_language_each_recording_was_made_in(monkeypatch, tmp_path):
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"
