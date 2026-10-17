@@ -34,8 +34,11 @@ from PySide6 import QtGui
 # exercised against the provider's real 32-chunk send-queue bound rather
 # than against a stand-in with no bound at all.
 from test_deepgram_provider import (
+    _SHORT_GAP_CAP_ERROR,
+    _a_short_gap_after_the_first_block,
     _FakeABNF,
     _FakeWebSocketApp,
+    _FakeWebSocketModule,
 )
 
 from stt_app import controller as controller_module
@@ -2127,6 +2130,74 @@ def test_stream_runtime_failure_cleans_up_active_session(monkeypatch):
     assert "preserved in memory" in overlay.states[-1][1].lower()
 
     controller.shutdown()
+    _ = app
+
+
+def test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording(
+    monkeypatch,
+):
+    """The microphone delivers one block and then nothing, behind a socket that
+    stays open and silent (no close, no error: what a proxy that holds the TCP
+    connection would look like). Deepgram's sender ends the stream itself at its
+    cap, through the failure path of a failed send; the controller must see
+    exactly one runtime failure, stop the capture, keep the recording for
+    Retry, close the socket, and nothing later may report the failure again.
+    Real `DeepgramTranscriber` on its fake socket, so the sender's thread, the
+    provider's report latch and the controller's queued signal are all the
+    real ones; the cap is shortened to 120 ms for the test."""
+    from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
+
+    transcriber = DeepgramTranscriber(api_key="key")
+    _FakeWebSocketApp.instances = []
+    _FakeWebSocketApp.finalize_message = None
+    monkeypatch.setattr(
+        transcriber, "_get_websocket_module", lambda: _FakeWebSocketModule
+    )
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    FakeCapture.instances = []
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", engine="deepgram")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    failures: list[str] = []
+    controller.stream_runtime_failed.connect(lambda _token, text: failures.append(text))
+    try:
+        with _a_short_gap_after_the_first_block(monkeypatch) as begin_the_gap:
+            controller.start_recording()
+            connect_thread = controller._stream_connect_thread
+            assert connect_thread is not None
+            connect_thread.join(timeout=10)
+            capture = FakeCapture.instances[-1]
+            capture.chunk_callback(bytes(3200))
+            begin_the_gap()
+            assert _pump_until(app, lambda: overlay.state == "Error", timeout=10), (
+                f"{overlay.state}: {overlay.detail}"
+            )
+        ws = _FakeWebSocketApp.instances[-1]
+        ws.close()  # the server's own close, arriving after the teardown
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        assert failures == [_SHORT_GAP_CAP_ERROR]
+        assert capture.stopped is True
+        assert controller._audio_capture is None
+        assert ws.closed is True, "the stream's socket was left open"
+        assert controller._last_failed_wav_bytes == b"RIFF"
+        assert recordings.saved == [(b"RIFF", False)]
+        assert len(recordings.failed) == 1
+        assert _SHORT_GAP_CAP_ERROR in recordings.failed[0]
+        assert [state for state, _detail in overlay.states].count("Error") == 1
+        assert _SHORT_GAP_CAP_ERROR in overlay.states[-1][1]
+    finally:
+        controller.shutdown()
+        transcriber.abort_stream()
     _ = app
 
 
@@ -4639,10 +4710,13 @@ def test_retry_last_transcription_blocked_while_the_microphone_is_open(microphon
     _ = app
 
 
-def test_retry_last_transcription_stops_a_transcription_in_flight_when_the_microphone_is_closed():
+def test_retry_last_transcription_proceeds_beside_another_recordings_job_when_the_microphone_is_closed():
     """The guard is the microphone's, not the transcription's: with the
-    microphone closed a retry still stops the job in flight (kept in
-    history if it finishes anyway) and submits the failed bytes."""
+    microphone closed a retry submits the failed bytes even though a job is in
+    flight. That job is not the slot's recording (no request audio of the
+    slot's), so the retry leaves it running: it used to stop whatever held the
+    overlay's token, which diverted the newest dictation to history only
+    (review round 2, 2026-10-17; `docs/agents/controller-and-jobs.md`)."""
     overlay = FakeOverlay()
     controller, app, store, submitted = (
         _controller_with_a_retryable_failure_and_a_job_in_flight(overlay)
@@ -4650,7 +4724,7 @@ def test_retry_last_transcription_stops_a_transcription_in_flight_when_the_micro
 
     assert controller.retry_last_transcription() is True
 
-    assert controller._jobs[5].aborting is True
+    assert controller._jobs[5].aborting is False
     retry_token = controller._active_request_token
     assert retry_token != 5 and submitted == [retry_token]
     assert store.transcribing_ids == ["rec-W"]

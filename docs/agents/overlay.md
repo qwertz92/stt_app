@@ -59,7 +59,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     `_insert_text_at_target`. It always passes `warning` -- a word, or None
     for the red Error below -- and `tests/conftest.py`'s `FakeOverlay`
     refuses an Insert offer whose call leaves `warning` out, so a fifth
-    writer fails every test that reaches it.
+    writer fails every test that reaches it. That guard cannot see a writer
+    that passes `warning=None`, so
+    `test_only_the_one_writer_names_the_insert_action` parses `controller.py`
+    and fails when `OVERLAY_ERROR_ACTION_INSERT` is named anywhere but
+    inside `_paint_not_inserted` (the import is not a use).
   - **Severity wins over the warning** (lead's decision 2026-10-17): the
     orange belongs to the offer's own state. A status painted over a pending
     offer by `_paint_status_keeping_offer` is decided by what it is. A real
@@ -79,6 +83,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     red plus Insert is the Error state it always had, so the controls are
     the same (the warning's own overlay test compares them with and without
     `warning`) and the three-size geometry test includes that case.
+    - **The red failure stays until something replaces it.** The preload
+      progress poll refreshes only the orange paint it recorded in
+      `_offer_painted`; a failure painted over the offer is not recorded, so
+      the poll treats it as the result it is and leaves it alone. Recorded
+      like the orange, the poll turned a refused start ("Model is still
+      loading.") back into the orange progress line within 600 ms.
+    - **A background failure keeps the offer too**
+      (`_report_background_failure`): another job failing on an idle overlay
+      while an offer is pending paints the red Error through
+      `_paint_status_keeping_offer`, not a plain Error that took the
+      transcript, Copy and Insert off the screen. Insert and Retry share
+      the overlay's one action slot, so Insert wins it and the text says
+      "use Retry transcription in the tray menu" (the audio is kept either
+      way).
   - **Why two words, and why these**: "Not inserted" is true for the offer;
     for a keystroke that went out it would be false (the detail says "most
     likely inserted"), so that one reads "Check window", the queue row's
@@ -246,22 +264,31 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   78x24). It runs after the first `set_state` (stylesheet padding counts only
   then), and `_balance_header_flanks` runs after it. Each entry lists every
   caption its button shows; the Cancel/Retry/Insert slot fits the widest.
-- **A Cancel click right after the slot left Retry is ignored** (review
-  2026-10-17). Retry, Cancel and Insert share one slot at one geometry
-  (`_sync_action_slot`), so a double click on Retry started the retry with its
-  first click -- which paints Processing and puts Cancel under the cursor --
-  and the second click cancelled the retry it had just started. The slot notes
-  when Retry leaves it (`_retry_in_slot`) and arms `_cancel_ignored_until` for
-  `QApplication.doubleClickInterval()` (the system's double-click time, so it
-  follows the user's own setting); `_on_cancel_clicked` drops a click before
-  that, logging `overlay_cancel_ignored reason=double_click_on_retry`, and
-  every later Cancel works, as does a Cancel in any state that did not follow
-  Retry. No layout change: no gap and no second slot, so the one-slot sizing
-  above still holds. Disabling Cancel for the interval instead was not done: the
-  button would flash grey under the cursor in the one moment the user looks at
-  it. Tests: `test_a_second_click_on_retry_lands_on_cancel_and_is_ignored`
-  (clock and interval set by the test), and its negative control
-  `test_cancel_works_at_once_when_the_slot_did_not_just_leave_retry`.
+- **A Cancel click right after a click on Retry is ignored** (review
+  2026-10-17, narrowed in round 2). Retry, Cancel and Insert share one slot at
+  one geometry (`_sync_action_slot`), so a double click on Retry started the
+  retry with its first click -- which paints Processing and puts Cancel under
+  the cursor -- and the second click cancelled the retry it had just started.
+  `_on_retry_clicked` (connected to `_retry_button.clicked`) arms
+  `_cancel_ignored_until` for `QApplication.doubleClickInterval()` (the
+  system's double-click time, so it follows the user's own setting) and then
+  emits `retry_requested`; `_on_cancel_clicked` drops a click before that,
+  logging `overlay_cancel_ignored reason=double_click_on_retry`, and every
+  later Cancel works. It is armed by the click, not by the slot leaving Retry:
+  the first version armed on any exit of the slot from Retry, so pressing the
+  record hotkey from an Error with Retry (-> Listening) dropped a real Cancel
+  click within 500 ms, which no double click explains. Arming at the click
+  also needs no case for a refused Retry (the overlay stays on Error and the
+  click has nothing under it). No layout change: no gap and no second slot, so
+  the one-slot sizing above still holds. Disabling Cancel for the interval
+  instead was not done: the button would flash grey under the cursor in the
+  one moment the user looks at it. Tests:
+  `test_a_second_click_on_retry_lands_on_cancel_and_is_ignored` (clock and
+  interval set by the test; the clock is the module-local
+  `overlay_ui.monotonic`, so no other code that reads the global
+  `time.monotonic` sees the patch), its negative control
+  `test_cancel_works_at_once_when_retry_was_not_clicked` and
+  `test_cancel_works_at_once_when_the_error_with_retry_was_left_without_a_click`.
 - **The queue panel has two row kinds** (2026-10-01): `(token, label)` or
   `(token, label, kind)`, kind `QUEUE_ROW_KIND_TRANSCRIPTION` (Cancel) or
   `QUEUE_ROW_KIND_UNDELIVERED` (Dismiss, a transcript that was not
@@ -322,9 +349,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
 - **No delayed writer paints over Done or Error** (they hold the transcript
   and the only Retry/Insert recovery). `_on_preload_progress_poll` (600 ms)
   reads `OverlayUI.state`; `FakeOverlay` in `tests/conftest.py` mirrors it.
-  One exception, scoped to its own result: the paste target check's
-  doubtful report (`_report_paste_outside_text_field`) replaces the "Done"
-  its own paste painted, or an idle overlay, and only while that exact
-  `(state, detail)` is still shown (`_PasteCheck.overlay_shown`); another
-  job's Done or Error -- a queued paste paints nothing, a re-paste may keep
-  another text's offer -- is never painted over, and the tray carries it.
+  The poll's one repaint of an Error is the orange offer the painter itself
+  wrote (`_offer_painted`, informational paints only); a red failure over
+  that offer is left alone. One exception, scoped to its own result: the
+  paste target check's doubtful report (`_report_paste_outside_text_field`)
+  replaces the "Done" its own paste painted, or an idle overlay, and only
+  while that exact `(state, detail)` is still shown
+  (`_PasteCheck.overlay_shown`); another job's Done or Error -- a queued
+  paste paints nothing, a re-paste may keep another text's offer -- is never
+  painted over, and the tray carries it.

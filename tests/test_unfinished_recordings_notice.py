@@ -9,6 +9,7 @@ import pytest
 from PySide6 import QtWidgets
 
 import stt_app.main as main_module
+from stt_app.config import LANGUAGE_MODE_LABELS
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.unfinished_recordings import UnfinishedRecordingStore
@@ -261,7 +262,7 @@ def test_a_row_says_which_language_ran_when_the_recorded_one_was_not_offered(
     _last, _history, unfinished = stores
     _keep(unfinished, "a1", stamp="2026-10-08T10:00:00")
     _keep(unfinished, "b2", stamp="2026-10-08T11:00:00")
-    notes = {"a1": "English; Auto not offered", "b2": ""}
+    notes = {"a1": ("English", "Auto"), "b2": None}
     dialog = _dialog(
         tmp_path,
         unfinished,
@@ -274,10 +275,68 @@ def test_a_row_says_which_language_ran_when_the_recorded_one_was_not_offered(
 
     cells = [dialog.table.item(row, 3) for row in range(2)]
     assert [cell.text() for cell in cells] == [
-        "Transcribed, in History (English; Auto not offered)",
+        "Transcribed in English, in History (Auto is not offered by this model)",
         "Transcribed, in History",
     ]
-    assert cells[0].toolTip() == cells[0].text()
+    assert cells[0].toolTip().startswith(cells[0].text())
+    assert "recording is kept" in cells[0].toolTip()
+    assert cells[1].toolTip() == cells[1].text()
+    dialog.close()
+
+
+def test_the_longest_row_text_fits_the_status_column(app, stores, tmp_path):
+    """The row is one line, elided on the right: a language label long enough
+    to push "is not offered by this model" out of the column would hide the
+    very words that tell why the language is another."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    longest = max(LANGUAGE_MODE_LABELS.values(), key=len)
+    dialog = _dialog(
+        tmp_path, unfinished, language_note=lambda _recording: (longest, longest)
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    cell = dialog.table.item(0, 3)
+    table = dialog.table
+    # A cell's text keeps this margin on both sides (Qt's item text layout).
+    margin = table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+    needed = table.fontMetrics().horizontalAdvance(cell.text()) + 2 * margin
+    assert needed <= table.columnWidth(3), (cell.text(), needed)
+    dialog.close()
+
+
+def test_a_failing_language_note_does_not_fail_the_transcription(
+    app, stores, tmp_path, caplog
+):
+    """The note only describes the transcription; when it cannot be worked out
+    the recording is still transcribed, and the failure is in the log. Asked
+    inside the transcription's own `try`, its exception became the row's
+    failure and the audio was never sent."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    transcribed = []
+
+    def _transcribe(recording, _progress):
+        transcribed.append(recording.recording_id)
+        return True, "hello"
+
+    def _broken_note(_recording):
+        raise RuntimeError("settings unreadable")
+
+    dialog = _dialog(
+        tmp_path, unfinished, transcribe=_transcribe, language_note=_broken_note
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    assert transcribed == ["a1"]
+    assert dialog.table.item(0, 3).text() == "Transcribed, in History"
+    assert "settings unreadable" in caplog.text
     dialog.close()
 
 
@@ -285,14 +344,14 @@ def test_the_startup_offer_hands_the_language_note_to_its_notice(app, stores, tm
     _last, _history, unfinished = stores
     _keep(unfinished, "a1")
     dialog = _offer(
-        stores, tmp_path, language_note=lambda _recording: "German; Auto not offered"
+        stores, tmp_path, language_note=lambda _recording: ("German", "Auto")
     )
 
     dialog.transcribe_all_button.click()
     _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
 
     assert dialog.table.item(0, 3).text() == (
-        "Transcribed, in History (German; Auto not offered)"
+        "Transcribed in German, in History (Auto is not offered by this model)"
     )
     dialog.close()
 

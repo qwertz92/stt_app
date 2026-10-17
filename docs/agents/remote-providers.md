@@ -362,28 +362,42 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     inserted into speech. Deepgram's word timings follow the audio sent, not
     the wall clock (the Audio Keep Alive page's "Word Timings" section), so
     the 0.1 s only moves timestamps the app does not use.
-  - **One gap is bridged for at most `_STREAM_KEEPALIVE_MAX_GAP_S` (30 s)
-    and the silence frame stops with it** (2026-10-17, lead's decision).
-    Nothing in the app notices a microphone that stops delivering after its
-    first block: the first-callback watchdog watches only the first block,
-    and `_on_audio_device_change_settled` defers its refresh while a
-    recording runs (checked in `controller.py` and `audio_capture.py`, which
-    registers no stream-finished callback). Before the KeepAlive, Deepgram's
-    own close after ~10 s was the only alarm, shown as the red streaming
-    error; an unbounded KeepAlive would have turned that into an overlay that
-    says "Listening" until the hotkey. The bound is `AUDIO_INPUT_BUFFER_S`
-    (20 s: PortAudio holds that much for a merely starved callback thread
-    and delivers it as a burst, so a gap that short can be a slow
-    microphone) plus a 10 s margin; the longest wait the app itself creates
-    is 12 s (the start watchdog's hard limit, a stop's backlog wait), and
-    past the buffer the audio is lost anyway. Counted in whole 3 s waits
-    since the last real audio frame (no clock): the 11th empty wait writes
-    nothing and logs a WARNING once per gap, Deepgram's close then fires
-    after its own 10 s (about 40 s after the last block, against ~10 s
-    before) and the existing streaming-failure path runs
-    (`docs/agents/streaming.md`, first entry). The sender keeps waiting, so
-    real audio after the cap -- the socket still open -- is sent as usual,
-    resets the count and gets a fresh 30 s.
+  - **One gap is bridged for at most `_STREAM_KEEPALIVE_MAX_GAP_S` (30 s),
+    then the sender ends the stream itself** (2026-10-17, lead's decision,
+    revised the same day: the first version stopped writing and waited for
+    Deepgram to close the socket). Nothing in the app notices a microphone
+    that stops delivering after its first block: the first-callback watchdog
+    watches only the first block, and `_on_audio_device_change_settled`
+    defers its refresh while a recording runs (checked in `controller.py`
+    and `audio_capture.py`, which registers no stream-finished callback).
+    Before the KeepAlive, Deepgram's own close after ~10 s was the only
+    alarm, shown as the red streaming error; an unbounded KeepAlive would
+    have turned that into an overlay that says "Listening" until the hotkey.
+    The bound is `AUDIO_INPUT_BUFFER_S` (20 s: PortAudio holds that much for
+    a merely starved callback thread and delivers it as a burst, so a gap
+    that short can be a slow microphone) plus a 10 s margin; the longest wait
+    the app itself creates is 12 s (the start watchdog's hard limit, a stop's
+    backlog wait), and past the buffer the audio is lost anyway. Counted in
+    whole 3 s waits since the last real audio frame (no clock): ten
+    KeepAlives go out, and the 11th empty wait, **33 s after the last block**,
+    is the cap. There the sender logs a WARNING, records a
+    `TranscriptionError` through `_record_stream_error(..., notify=True)` --
+    the path a failed send takes -- and returns. The user reads "Deepgram
+    streaming failed: The microphone delivered no audio for more than 30
+    seconds, so the stream was ended." (the number is the constant), and the
+    existing streaming-failure path runs (`docs/agents/streaming.md`, first
+    entry): once, because the session's report latch allows one, and the
+    sender is gone, so nothing follows it. The end is independent of
+    Deepgram: ending by silence and waiting for the vendor's close would have
+    made it depend on the NET-0002 window (not documented) or on a proxy that
+    keeps the TCP connection open, and shown the vendor's close reason
+    instead of the cause the app knows. There is no resuming: the stream is
+    over at the cap, and the controller keeps the recording for Retry. The
+    silence frame needs no cap of its own: it goes out only at the first
+    empty wait of a session that has sent no audio, never again. (It does
+    not reset the count, so a session that never gets a block would reach the
+    same cap 33 s after its sender started; the capture's first-callback
+    watchdog aborts such a start at its 12 s hard limit, long before.)
   - **Not verified live**: no Deepgram key exists here, so whether KeepAlive
     alone would have been enough is open; the silence frame makes the answer
     not matter for correctness (`known-limitations.md`, audio capture, has

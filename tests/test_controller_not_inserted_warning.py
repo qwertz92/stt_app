@@ -12,6 +12,9 @@ every test that reaches it.
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 from conftest import FakeOverlay, FakeTextInserter, make_controller
 from PySide6 import QtGui
@@ -314,5 +317,164 @@ def test_failures_that_left_no_transcript_stay_the_red_error(monkeypatch):
     (state, _detail), kwargs = _painted(overlay)
     assert state == "Error"
     assert not kwargs.get("warning")
+    controller.shutdown()
+    _ = app
+
+
+class _RunningPreload:
+    """A model download in flight: the progress poll has work to do."""
+
+    @staticmethod
+    def done() -> bool:
+        return False
+
+
+_FAILURES_DURING_A_PRELOAD = [
+    ("recording start refused", "Model is still loading."),
+    ("settings save refused", "The opacity was not saved. Disk full."),
+    ("hotkey registration failed", "Hotkey registration failed."),
+]
+
+
+@pytest.mark.parametrize(("how", "failure_text"), _FAILURES_DURING_A_PRELOAD)
+def test_the_preload_poll_leaves_a_red_failure_over_an_offer_alone(
+    monkeypatch, how, failure_text
+):
+    """The poll repaints every 600 ms, and it repaints the painter's own offer
+    so the progress line does not freeze. A red failure painted over a pending
+    offer is the painter's output too, so the poll took it for an offer to
+    refresh and turned it back to the orange "Not inserted" within a poll
+    interval: the refusal ("Model is still loading.") vanished before it
+    could be read. The failure stays until something else replaces it."""
+    controller, app, overlay = _controller(
+        monkeypatch, FakeTextInserter(should_fail=True)
+    )
+    controller._on_transcription_ready("the transcribed sentence")
+    controller._preload_future = _RunningPreload()
+    try:
+        _status_over_the_offer(controller, how)
+        painted = len(overlay.states)
+        assert _painted(overlay)[1]["warning"] is None
+
+        for _ in range(3):
+            controller._on_preload_progress_poll()
+
+        assert len(overlay.states) == painted, (
+            f"the poll painted over the failure: {overlay.states[painted:]!r}"
+        )
+        (state, detail), kwargs = _painted(overlay)
+        assert (state, kwargs["warning"]) == ("Error", None)
+        assert failure_text in detail
+        assert kwargs["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    finally:
+        controller._preload_future = None
+        controller.shutdown()
+    _ = app
+
+
+def test_the_preload_poll_still_refreshes_the_progress_line_over_an_offer(
+    monkeypatch,
+):
+    """What the poll must keep doing: the preload's start line and every
+    progress line are informational, painted over the offer as the warning,
+    and refreshed by the poll. A failure in between ends that until the next
+    informational status -- a preload that restarts -- paints again."""
+    controller, app, overlay = _controller(
+        monkeypatch, FakeTextInserter(should_fail=True)
+    )
+    controller._on_transcription_ready("the transcribed sentence")
+    controller._preload_future = _RunningPreload()
+    try:
+        controller._paint_status_keeping_offer(
+            "Processing", "Loading selected model..."
+        )
+        painted = len(overlay.states)
+        controller._on_preload_progress_poll()
+        assert len(overlay.states) == painted + 1, "the progress line is refreshed"
+        (state, _detail), kwargs = _painted(overlay)
+        assert (state, kwargs["warning"]) == (
+            "Error",
+            OVERLAY_WARNING_NOT_INSERTED,
+        )
+
+        controller._refuse_recording_start("Model is still downloading.")
+        painted = len(overlay.states)
+        controller._on_preload_progress_poll()
+        assert len(overlay.states) == painted
+
+        controller._paint_status_keeping_offer(
+            "Processing", "Loading selected model..."
+        )
+        painted = len(overlay.states)
+        controller._on_preload_progress_poll()
+        assert len(overlay.states) == painted + 1, "refreshed again"
+        assert _painted(overlay)[1]["warning"] == OVERLAY_WARNING_NOT_INSERTED
+    finally:
+        controller._preload_future = None
+        controller.shutdown()
+    _ = app
+
+
+def test_only_the_one_writer_names_the_insert_action():
+    """`FakeOverlay` can only check that a writer passed the `warning` key, so
+    a second writer that passed `warning=None` for an Insert offer would go
+    unnoticed. The offer is created by naming `OVERLAY_ERROR_ACTION_INSERT`;
+    this pins that the controller does so in `_paint_not_inserted` alone (the
+    import is not a use), so a second writer fails here, not in review."""
+    tree = ast.parse(Path(controller_module.__file__).read_text(encoding="utf-8"))
+
+    def uses(root):
+        return {
+            id(node)
+            for node in ast.walk(root)
+            if (isinstance(node, ast.Name) and node.id == "OVERLAY_ERROR_ACTION_INSERT")
+            or (
+                isinstance(node, ast.Attribute)
+                and node.attr == "OVERLAY_ERROR_ACTION_INSERT"
+            )
+        }
+
+    writer = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_paint_not_inserted"
+    ]
+    assert len(writer) == 1
+    in_the_writer = uses(writer[0])
+    assert in_the_writer, "the one writer must offer Insert; the guard is stale"
+    assert uses(tree) == in_the_writer, (
+        "OVERLAY_ERROR_ACTION_INSERT is named outside `_paint_not_inserted`: "
+        "route the new offer through it"
+    )
+
+
+@pytest.mark.parametrize("retry_available", [True, False], ids=["kept", "not kept"])
+def test_a_background_failure_over_a_pending_offer_keeps_the_offer(
+    monkeypatch, retry_available
+):
+    """Another queued job failing while an Insert offer is pending painted a
+    plain Error over it: the transcript, Copy and the Insert button left the
+    screen while the text stayed pending, and came back only with the next
+    status. A real failure is red and keeps the offer, as every other failure
+    does. The overlay has one action slot, so Insert takes the place of
+    Retry; the text says where Retry is (the tray) instead of pointing at a
+    button that is not there."""
+    controller, app, overlay = _controller(
+        monkeypatch, FakeTextInserter(should_fail=True)
+    )
+    controller._on_transcription_ready("the transcribed sentence")
+    job = _background_job(controller)
+
+    controller._report_background_failure(job, "boom", retry_available)
+
+    (state, detail), kwargs = _painted(overlay)
+    assert state == "Error"
+    assert kwargs["warning"] is None, "a failure is the red Error"
+    assert kwargs["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    assert kwargs["copy_text"] == "the transcribed sentence"
+    assert detail.startswith(f"{controller._job_identity(job)} failed: boom")
+    assert detail.endswith("Still not inserted:\nthe transcribed sentence")
+    assert ("Retry transcription in the tray menu" in detail) is retry_available
+    assert "use Retry to" not in detail
     controller.shutdown()
     _ = app
