@@ -433,9 +433,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     in the second after that stall, before its backlog arrives, can cut the
     backlog off. MME drops the whole of a stall longer than its buffer
     (measured), so nothing of it is on its way later.
-  - Unverified (review F5): Deepgram closes a streaming socket that gets
-    no audio for about 10 s, and the app sends no KeepAlive. A start stall
-    that the watchdog now holds for up to 12 s may therefore lose the
-    Deepgram session before the burst arrives. Not reproduced; sending
-    `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
-    (~1-2 h with tests).
+  - Unverified live (2026-10-17): Deepgram closes a streaming socket that
+    receives nothing for 10 s, and Deepgram's Audio Keep Alive page says a
+    KeepAlive every 3-5 s prevents it, so the sender writes one every 3 s in
+    which it had no audio to send (`docs/agents/remote-providers.md`).
+    Deepgram's troubleshooting page contradicts that page for the case that
+    matters here: under 1011 `NET-0001` it says KeepAlive messages "alone
+    will not prevent closure; you must send at least one audio message".
+    If that is right, a start stall longer than 10 s before the first audio
+    block went out (the watchdog allows 12 s) still loses the Deepgram
+    session. The user then sees "Deepgram streaming failed: WebSocket
+    connection closed unexpectedly." and the audio is kept as the first
+    entry of `docs/agents/streaming.md` describes. One live run with a
+    Deepgram key settles it: open a stream, send only KeepAlives for 15 s,
+    then audio. If it fails, the cover is one short frame of digital silence
+    sent while no real audio has gone out yet, at the price of billed audio
+    seconds, which is the owner's call.

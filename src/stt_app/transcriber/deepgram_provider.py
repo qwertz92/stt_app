@@ -49,6 +49,44 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 _STREAM_SEND_SENTINEL = object()
+# What the sender's queue answers when nothing arrived for a whole interval.
+_STREAM_KEEPALIVE_DUE = object()
+# A starved machine can deliver no microphone audio for up to 12 s (the capture
+# watchdog's hard limit), and a stop during such a stall waits as long. The
+# socket is open the whole time, and Deepgram closes a live stream that is
+# silent on the wire -- so the sender writes a KeepAlive whenever its queue
+# stayed empty for this long. Deepgram's documentation, read 2026-10-17:
+#
+# * https://developers.deepgram.com/docs/audio-keep-alive ("Audio Keep Alive"):
+#   "Send a `KeepAlive` message every 3-5 seconds to prevent the 10-second
+#   timeout that triggers a `NET-0001` error and closes the connection.
+#   Ensure the message is sent as a text WebSocket frame -- sending it as
+#   binary may result in incorrect handling and potential connection issues."
+#   The message is `{"type": "KeepAlive"}`; "The server will not send a
+#   response back"; "If no audio data or `KeepAlive` messages are sent within
+#   a 10-second window, the connection will close with a `NET-0001` error."
+#   Its examples send one every 3 seconds. It does not say whether a
+#   KeepAlive may be sent while audio flows, and it does not mention
+#   Finalize; the Finalize and CloseStream pages
+#   (https://developers.deepgram.com/docs/finalize, .../close-stream) do not
+#   mention KeepAlive either.
+# * https://developers.deepgram.com/docs/stt-troubleshooting-websocket-data-and-net-errors
+#   lists 1011 `NET-0001` ("has not received a Binary or Text frame from the
+#   client within the timeout window") and 1011 `NET-0002` ("No audio was
+#   received on the stream within the no-audio timeout window ... Send audio,
+#   or a `KeepAlive` message, to keep the stream open"; close reason
+#   `no_audio_timeout`). Its NET-0001 checklist contradicts the page above:
+#   "Using `KeepAlive` messages alone will not prevent closure; you must send
+#   at least one audio message", after "Ensure audio is sent within 10 seconds
+#   of opening the connection". Not verified live (no key here): a stall
+#   longer than 10 s from the very start, before any audio went out, is
+#   exactly the case that sentence would still lose.
+#
+# 3 s is the page's example and the low end of its 3-5 s: the sender thread
+# can be late under the same CPU load that starves the capture, and the
+# margin to 10 s is what absorbs it. Steady audio never reaches the interval,
+# so no KeepAlive is sent while audio flows.
+_STREAM_KEEPALIVE_INTERVAL_S = 3.0
 # The microphone hands over one block per callback, and a callback thread that
 # was starved delivers everything PortAudio buffered meanwhile -- up to
 # AUDIO_INPUT_BUFFER_S -- as one burst of `put_nowait` calls, far faster than
@@ -65,6 +103,11 @@ _STREAM_FINALIZE_MAX_WAIT_S = 1.25
 _STREAM_CONTROL_SEND_TIMEOUT_S = 1.0
 _STREAM_SERVER_CLOSE_TIMEOUT_S = 2.0
 _STREAM_SOCKET_CLOSE_TIMEOUT_S = 1.0
+
+
+def _control_message(message_type: str) -> str:
+    """The JSON text of a Deepgram control message (`Finalize`, `KeepAlive`, ...)."""
+    return json.dumps({"type": message_type})
 
 
 def _audio_queue_full_error() -> TranscriptionError:
@@ -687,8 +730,20 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         sender_drained: threading.Event,
         websocket,
     ) -> None:
+        """The one thread that writes audio to the socket.
+
+        It also writes the KeepAlive (see `_STREAM_KEEPALIVE_INTERVAL_S`) when
+        the queue stayed empty for a whole interval, so a KeepAlive can never
+        overlap an audio frame, and it is gone -- the sentinel ends the loop --
+        before `Finalize` and `CloseStream` are sent (the sender barrier in
+        `_drain_stream_sender`), so none follows them.
+        """
+        keepalive_announced = False
         while True:
-            item = send_queue.get()
+            try:
+                item = send_queue.get(timeout=_STREAM_KEEPALIVE_INTERVAL_S)
+            except queue.Empty:
+                item = _STREAM_KEEPALIVE_DUE
             if item is _STREAM_SEND_SENTINEL:
                 sender_drained.set()
                 return
@@ -699,7 +754,18 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 ):
                     return
             try:
-                ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
+                if item is _STREAM_KEEPALIVE_DUE:
+                    if not keepalive_announced:
+                        keepalive_announced = True
+                        logger.info(
+                            "Deepgram streaming: no audio for %.0f s, sending "
+                            "KeepAlive frames to hold the connection open. "
+                            "Logged once per session.",
+                            _STREAM_KEEPALIVE_INTERVAL_S,
+                        )
+                    ws.send(_control_message("KeepAlive"))
+                else:
+                    ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
             except Exception as exc:
                 self._record_stream_error(
                     generation,
@@ -742,7 +808,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
 
         def send() -> None:
             try:
-                ws.send(json.dumps({"type": message_type}))
+                ws.send(_control_message(message_type))
             except Exception as exc:
                 errors.append(exc)
             finally:

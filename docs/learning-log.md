@@ -3,6 +3,40 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (Deepgram streaming: KeepAlive while no audio goes out)
+
+- **Why**: since 2026-10-10 the capture watchdog waits up to 12 s for audio a
+  starved machine delivers late, and a stop during a stall can wait as long.
+  The Deepgram socket is open and sends nothing for that time, and the
+  review of the starved-capture fix (F5) had left "Deepgram drops the socket
+  after about 10 s and the app sends no KeepAlive" as an unchecked entry in
+  `docs/agents/known-limitations.md`.
+- **Checked against Deepgram's own pages (read 2026-10-17, raw `.md` of each
+  page, not a summary)**: the Audio Keep Alive page confirms the 10 s limit
+  (`NET-0001`), the message (text frame `{"type": "KeepAlive"}`, no reply)
+  and "every 3-5 seconds". The Finalize and CloseStream pages do not mention
+  KeepAlive, and no page says whether a KeepAlive may be sent while audio
+  flows. The troubleshooting page adds a newer `NET-0002` no-audio timeout
+  that KeepAlive does reset -- and, under `NET-0001`, a sentence that
+  contradicts the Audio Keep Alive page ("KeepAlive messages alone will not
+  prevent closure; you must send at least one audio message"). Quotations
+  and URLs are in the comment above `_STREAM_KEEPALIVE_INTERVAL_S` and in
+  `docs/agents/remote-providers.md`.
+- **Implemented in the sender thread**, not a timer: the queue read waits at
+  most 3 s, and an empty wait writes the KeepAlive. No clock is needed, no
+  KeepAlive can overlap an audio frame (one writer), and the sentinel that
+  ends the loop precedes `Finalize`/`CloseStream`, so none follows them. The
+  tests drive the real loop with a queue that carries a fake clock (a 14 s
+  gap costs no real time), and the overlap and ordering cases with real
+  threads and a 50 ms interval.
+- **Open, needs a Deepgram key**: whether the contradicting sentence is
+  right. If it is, a start stall longer than 10 s before the first audio
+  block still loses the session, and the cover is one frame of digital
+  silence (billed). Kept as an "unverified live" entry in
+  `docs/agents/known-limitations.md` with the one-run check. Lesson: a
+  vendor's own pages can disagree; read the troubleshooting page and not
+  only the feature page before calling a protocol question answered.
+
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
 - **Owner: Win+V full of screenshots he did not remember taking, while he
