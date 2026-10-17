@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
+
+An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and
+four smaller points. Each was reproduced first, by a test that failed for the
+stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
+`docs/agents/overlay.md`).
+- **P2: the Retry after a restart sent a language its engine does not offer.**
+  `transcribe_unfinished_recording` pinned `recording.language_mode` without the
+  "does the engine offer it" check `_retry_settings` has. Reproduced with the
+  restart's three realistic cases, the worker saw the recorded language: Canary
+  with a recording made in `auto` (its `_normalize_language_mode` falls back to
+  the first language of its list, `de`, so English speech is translated into
+  German), Cohere with `auto` (`_language_arg` forces `de`) and Granite CTC
+  (English only) with `de`. With recordings retention off the WAV is deleted
+  once the transcript is in History, so the wrong transcript was all that was
+  left. Fix: `_pin_recorded_language` is the one rule both roads use; where the
+  language is not offered the selected one runs and the log line is the same
+  `retry_recorded_language_not_offered`. The notice reported only "Transcribed,
+  in History" per row, so the row now says which language ran: `Transcribed, in
+  History (English; Auto not offered)`, from `unfinished_recording_language_note`
+  through `UnfinishedRecordingsDialog(language_note=)`. Not a changed return
+  value of `transcribe_unfinished_recording`: it is unpacked as `(ok, text)` by
+  the dialog's worker and a dozen tests.
+- **P4: a quit during a fallback retry wrote the fallback language into the
+  unfinished file's name.** `_keep_unfinished_recordings` took the job's
+  snapshot, which for a fallback retry is the selected language, and the next
+  start would have pinned that for good. It writes the recorded language where
+  the process knows it and the job's snapshot only for a recording it never
+  named.
+
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 
 Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,

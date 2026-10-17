@@ -296,21 +296,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (`language_modes_for_selection(engine, model, "batch")`, logged as
     `retry_recorded_language_not_offered`). The second is not passed on to the
     provider because each provider's own `_normalize_language_mode` then picks a
-    stand-in -- Canary falls back to the first language of its list, which makes
-    it translate into it instead of transcribing -- while the selection is one
-    the user picked for the engine in use. The language also travels to disk,
-    so the same holds after
-    a restart: `LastRecordingStore.language_mode` and the unfinished recording's
-    file name (`docs/agents/persistence-and-history.md`), which the quit writes
+    stand-in -- Canary falls back to the first language of its list (German),
+    which makes it translate into it instead of transcribing, Cohere forces
+    German for `auto`, Granite CTC (English only) decodes German speech as
+    English -- while the selection is one the user picked for the engine in use.
+    **One helper decides it for both roads**: `_pin_recorded_language(settings,
+    recorded, recording_id)` returns the pinned settings and `True`, or the
+    settings as given and `False` (it writes the log line once);
+    `_retry_settings` words the overlay text from it and
+    `transcribe_unfinished_recording` uses it too. The restart road had its own
+    unchecked pin until the review of 2026-10-17: a recording made in Auto and
+    retried after a restart under Canary was sent as `auto` and came out
+    translated, and with recordings retention off the WAV was deleted after the
+    wrong transcript was saved.
+    The language also travels to disk, so the same holds after a restart:
+    `LastRecordingStore.language_mode` and the unfinished recording's file name
+    (`docs/agents/persistence-and-history.md`), which the quit writes
     (`_keep_unfinished_recordings`) and the startup notice transcribes with
-    (`transcribe_unfinished_recording`). History retranscribe and the Import tab
+    (`transcribe_unfinished_recording`). The file names the language the
+    recording was **made** in, never the one a fallback retry ran under: a job's
+    own snapshot is used only for a recording this process never named
+    (`_recorded_language_by_recording_id` wins), or the next start would pin the
+    fallback for good. Where the fallback applied after a restart the startup
+    notice's row says so -- `Transcribed, in History (English; Auto not
+    offered)`: the language that ran, then the one the engine did not offer.
+    The text comes from `unfinished_recording_language_note(recording)` (the
+    same `_recorded_language_offered` check, no second log line), handed to
+    `UnfinishedRecordingsDialog(language_note=)` and asked right before each
+    row's transcription; the dialog's `(ok, text)` contract is unchanged
+    because many callers unpack it. History retranscribe and the Import tab
     take their settings from their own pickers at the click; that is where a
     wrong language is now corrected, no longer by switching and pressing Retry
     (the Import tab's "Use last recording" starts its language picker from the
     recording's own, `docs/agents/settings-dialog.md`). Tests in
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
     the streaming, dying-stream, failed-retry and unknown-language cases),
-    `tests/test_controller_quit.py`.
+    `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
+    Granite CTC, the note, a quit during a fallback retry),
+    `tests/test_unfinished_recordings_notice.py` (the row text).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

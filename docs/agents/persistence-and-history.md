@@ -168,7 +168,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   The unfinished-recordings directory has no index, so its copy of that language
   is in the file name, `unfinished_<stamp>_<id>[.<language>].wav` (neither part
   can hold a dot; a file without one is as before and reads as unknown), and the
-  startup adoption of the managed slot copies it. Tests:
+  startup adoption of the managed slot copies it. The name always holds the
+  language the recording was *made* in, also when a retry of it ran under the
+  selected language, and the startup transcription uses it only where the
+  engine and model selected then offer it (`_pin_recorded_language`; the notice
+  row says when it did not). Tests:
   `tests/test_last_recording_store.py`, `tests/test_unfinished_recordings.py`,
   `tests/test_unfinished_recordings_notice.py`.
 - **Ctrl+C in either history view copies the whole selection** (explicit

@@ -7,6 +7,7 @@ import concurrent.futures
 import logging
 import os
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -20,11 +21,13 @@ from conftest import (
     make_controller,
 )
 
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import CANARY_MODEL_SIZE, FALLBACK_HOTKEY, GRANITE_CTC_MODEL_SIZE
 from stt_app.controller import PendingQuitWork
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
 from stt_app.unfinished_recordings import UnfinishedRecordingStore
+
+COHERE_MODEL_SIZE = "cohere-transcribe-03-2026"
 
 
 class _DeferredExecutor:
@@ -223,6 +226,32 @@ def test_a_quit_keeps_each_recordings_language_with_it(monkeypatch, tmp_path):
     _ = app
 
 
+def test_a_quit_during_a_fallback_retry_keeps_the_recorded_language(
+    monkeypatch, tmp_path
+):
+    """A retry whose engine does not offer the recorded language runs in the
+    selected one (`_retry_settings`). The file a quit writes for it still names
+    the language the recording was made in: the job's own is the fallback's,
+    and the next start would pin that for good."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="auto"
+    )
+    token = _record(controller, b"RIFF-auto")
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+    assert controller.retry_last_transcription() is True
+    retry = controller._jobs[controller._active_request_token]
+    assert retry.settings.language_mode == "de", "the fallback did not run"
+
+    controller.shutdown()
+
+    [kept] = unfinished.list_recordings()
+    assert kept.language_mode == "auto"
+    _ = app
+
+
 def test_waiting_to_quit_stops_the_open_recording(monkeypatch, tmp_path):
     controller, app, _overlay, _unfinished, _history = _controller(
         monkeypatch, tmp_path
@@ -334,6 +363,80 @@ def test_an_unfinished_recording_is_transcribed_in_the_language_it_was_made_in(
 
     assert seen == ["en", "de"]
     assert controller.settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("model_size", "recorded", "label"),
+    [
+        # Canary and Cohere never offer Auto: Canary would translate into its
+        # first language instead of transcribing, Cohere would be forced to
+        # German. Granite CTC decodes English only, whatever was spoken.
+        pytest.param(CANARY_MODEL_SIZE, "auto", "Auto", id="canary has no auto"),
+        pytest.param(COHERE_MODEL_SIZE, "auto", "Auto", id="cohere has no auto"),
+        pytest.param(
+            GRANITE_CTC_MODEL_SIZE, "de", "German", id="granite ctc is english only"
+        ),
+    ],
+)
+def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_it(
+    monkeypatch, tmp_path, caplog, model_size, recorded, label
+):
+    """The restart's Retry runs under the engine and model selected now. A
+    recorded language they do not offer would reach the provider's own
+    normalization, which substitutes one; the language selected now is one
+    the user picked for this engine (`_retry_settings` decides the same way
+    for the in-process Retry). The startup notice is told which language ran."""
+    caplog.set_level(logging.INFO)
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    controller._settings = replace(controller._settings, model_size=model_size)
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode=recorded,
+    )
+    recording = unfinished.find("spoken1")
+
+    assert controller.transcribe_unfinished_recording(recording)[0] is True
+
+    assert seen == ["en"]
+    assert "retry_recorded_language_not_offered recording_id=spoken1" in caplog.text
+    assert controller.unfinished_recording_language_note(recording) == (
+        f"English; {label} not offered"
+    )
+    assert controller.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unfinished_recording_in_an_offered_language_needs_no_note(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="de",
+    )
+
+    note = controller.unfinished_recording_language_note
+    assert note(unfinished.find("spoken1")) == ""
+    assert note(_kept_recording(unfinished, recording_id="unknown1")) == ""
     controller.shutdown()
     _ = app
 

@@ -30,6 +30,9 @@ from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 TranscribeRecording = Callable[
     [UnfinishedRecording, Callable[[str], None] | None], "tuple[bool, str]"
 ]
+# What to tell about the language a recording is transcribed in when it is not
+# the one it was made in; "" when there is nothing to tell.
+LanguageNote = Callable[[UnfinishedRecording], str]
 
 _DIALOG_WIDTH = 680
 _VISIBLE_ROWS = 6
@@ -92,7 +95,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
 
     _row_started = QtCore.Signal(str)
     _row_progress = QtCore.Signal(str, str)
-    _row_finished = QtCore.Signal(str, bool, str)
+    _row_finished = QtCore.Signal(str, bool, str, str)
     _run_finished = QtCore.Signal()
 
     def __init__(
@@ -102,6 +105,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         store: UnfinishedRecordingStore,
         transcribe: TranscribeRecording,
         keep_dir: Path,
+        language_note: LanguageNote | None = None,
         reveal: Callable[[Sequence[Path]], bool] = reveal_paths_in_file_manager,
         confirm_delete: Callable[[QtWidgets.QWidget, int], bool] = _confirm_delete,
         parent: QtWidgets.QWidget | None = None,
@@ -110,6 +114,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self._recordings = list(recordings)
         self._store = store
         self._transcribe = transcribe
+        self._language_note = language_note or (lambda _recording: "")
         self._keep_dir = Path(keep_dir)
         self._reveal = reveal
         self._confirm_delete = confirm_delete
@@ -311,6 +316,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self._set_status(f"Transcribing {len(recordings)} recording(s)...")
         self._update_buttons()
         transcribe = self._transcribe
+        language_note = self._language_note
 
         def _run() -> None:
             # A window closed meanwhile only stops the reports: every
@@ -322,11 +328,21 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
                 def _progress(message: str, recording_id=item.recording_id) -> None:
                     emit(self, "_row_progress", recording_id, str(message))
 
+                note = ""
                 try:
+                    # Asked right before the transcription that decides it.
+                    note = language_note(item)
                     ok, text = transcribe(item, _progress)
                 except Exception as exc:
                     ok, text = False, exception_reason(exc)
-                emit(self, "_row_finished", item.recording_id, bool(ok), str(text))
+                emit(
+                    self,
+                    "_row_finished",
+                    item.recording_id,
+                    bool(ok),
+                    str(text),
+                    str(note),
+                )
             emit(self, "_run_finished")
 
         try:
@@ -352,10 +368,16 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         if self._states.get(recording_id) == _RUNNING and message.strip():
             self._set_status_cell(recording_id, message.strip())
 
-    def _on_row_finished(self, recording_id: str, ok: bool, text: str) -> None:
+    def _on_row_finished(
+        self, recording_id: str, ok: bool, text: str, language_note: str
+    ) -> None:
         if ok:
             self._states[recording_id] = _DONE
-            self._set_status_cell(recording_id, "Transcribed, in History")
+            self._set_status_cell(
+                recording_id,
+                "Transcribed, in History"
+                + (f" ({language_note})" if language_note else ""),
+            )
         else:
             self._states[recording_id] = _FAILED
             self._set_status_cell(recording_id, f"Failed: {text}")

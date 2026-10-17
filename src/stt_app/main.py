@@ -335,6 +335,7 @@ def run() -> int:
             history_store=history_store,
             unfinished_store=unfinished_recording_store,
             transcribe=controller.transcribe_unfinished_recording,
+            language_note=controller.unfinished_recording_language_note,
             keep_dir=resolve_recordings_dir(controller.settings.recordings_dir),
         )
 
@@ -803,6 +804,7 @@ def _offer_unfinished_recordings(
     unfinished_store: UnfinishedRecordingStore,
     transcribe,
     keep_dir: Path,
+    language_note=None,
 ) -> UnfinishedRecordingsDialog | None:
     """Show the recordings an earlier session did not transcribe, if any.
 
@@ -844,6 +846,7 @@ def _offer_unfinished_recordings(
         store=unfinished_store,
         transcribe=transcribe,
         keep_dir=keep_dir,
+        language_note=language_note,
     )
     if problems:
         dialog.show_problem(" ".join(problems))
