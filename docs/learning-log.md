@@ -9837,7 +9837,8 @@ on and the overlay green, the first ~10 s were not captured.
   staged tree must now hold every package the tree in use has that the lock
   still lists (`dev` packages of a developer's full install excepted:
   `--omit=dev` leaves them out on purpose, and counting them would refuse
-  every update in that checkout). Reproduced for real on HomeBase in the
+  every update in that checkout -- hypothetical today, since `package.json`
+  has no devDependencies). Reproduced for real on HomeBase in the
   throwaway copy with an `.npmrc` saying `optional=false`, which makes npm
   skip every optional package and still exit 0: the d8a394c code swapped
   in a tree with only `@img/colour` and the runner's import then failed
@@ -9853,10 +9854,25 @@ on and the overlay green, the first ~10 s were not captured.
   instead of 2 s (the reviewer measured that one open file anywhere inside
   refuses a directory rename, and a virus scanner opens each freshly
   extracted file); the tray notice fits Windows' 255 characters whole (it
-  was 256 with a long reason, which cut its last sentence); a notice raised
+  was 256 with a long reason, which cost it its final full stop); a notice
+  raised
   before the tray registered its handler waits for it instead of being
   dropped (the startup preload runs first); older npm's `npm ERR!` lines
   name the error too.
+- **Review round 2 (Sonnet) over those fixes: no P1 or P2.** It fed the
+  real records of the real lock installed by npm 10.9.9, 11.19.0 and
+  12.0.2 (`ci --omit=dev` and plain `install`, 42 keys each) to
+  `_dropped_packages` in all 36 pairs: no false refusal. Its P3, fixed with
+  a test that failed first: a tree in use installed for another platform
+  (from WSL into the Windows checkout, or copied from x64 to ARM64) holds
+  that platform's sharp binaries, which npm here rightly skips, so every
+  update was refused -- the repair for exactly such a tree included. The
+  refusal now applies only while the tree in use still loads (one more
+  0.25 s probe, only when a package is missing); a tree that does not load
+  protects nothing. Also from that round: a first install had no test, the
+  30 s rename retry can stretch a stuck stranded tree to about 90 s per
+  dictation (recorded in known limitations), and `FileExistsError` no
+  longer waits out the retry.
 - **Lessons.** A repair that waits for a symptom (the import failing) never
   sees a change that leaves the old state working; compare against the
   declared state instead. "The OS will refuse while files are in use" needs

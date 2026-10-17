@@ -353,8 +353,9 @@ def test_a_notice_raised_before_the_tray_exists_reaches_it(monkeypatch, tmp_path
 
 
 def test_the_notice_fits_the_tray_whole_however_long_the_reason():
-    """Windows cuts a tray text after 255 characters; cut there, the notice
-    would lose the sentence that says the models still work."""
+    """Windows cuts a tray text after 255 characters. A fixed cap on the
+    reason made the text 256 long, so its final full stop went; sized
+    against the tray's limit, the text arrives whole."""
     text = local_webgpu_asr.node_packages_notice_text(
         "npm did not install " + "x" * 200
     )
@@ -494,6 +495,18 @@ def test_a_tree_that_does_not_load_is_reinstalled_once(monkeypatch, tmp_path):
     assert _marker(root) == "new"
 
 
+def _sync(root: Path, probe=None) -> _node_packages.SyncOutcome:
+    return _node_packages.sync_node_modules(
+        root,
+        npm_path="npm",
+        # By default it passes everywhere, as the real probe did: Node
+        # resolved what the staged tree lacked from the tree in use one
+        # folder up.
+        probe=probe or (lambda cwd: _Probe(0)("node", cwd)),
+        progress=lambda _text: None,
+    )
+
+
 def test_a_swap_that_fails_half_way_puts_the_old_tree_back(monkeypatch, tmp_path):
     runner = _checkout(tmp_path, lock=NEW, installed=OLD)
     root = runner.parents[2]
@@ -510,27 +523,11 @@ def test_a_swap_that_fails_half_way_puts_the_old_tree_back(monkeypatch, tmp_path
 
     monkeypatch.setattr(_node_packages.os, "rename", rename)
 
-    outcome = _node_packages.sync_node_modules(
-        root,
-        npm_path="npm",
-        probe=lambda cwd: _Probe(0)("node", cwd),
-        progress=lambda _text: None,
-    )
+    outcome = _sync(root)
 
     assert outcome.failure == "the new packages could not be moved into place"
     assert _marker(root) == "old"
     assert not (root / _node_packages.STAGING_DIR_NAME).exists()
-
-
-def _sync(root: Path) -> _node_packages.SyncOutcome:
-    return _node_packages.sync_node_modules(
-        root,
-        npm_path="npm",
-        # Passes, as the real probe did: Node resolved what the staged tree
-        # lacked from the tree in use one folder up.
-        probe=lambda cwd: _Probe(0)("node", cwd),
-        progress=lambda _text: None,
-    )
 
 
 def test_a_staged_tree_without_a_package_the_tree_in_use_has_is_refused(
@@ -582,6 +579,59 @@ def test_dev_packages_of_a_full_install_do_not_block_the_update(monkeypatch, tmp
 
     assert outcome.updated, outcome.failure
     assert _marker(root) == "new"
+
+
+@pytest.mark.parametrize("force", [False, True], ids=["changed-lock", "repair"])
+def test_a_tree_for_another_platform_is_replaced_not_protected(
+    monkeypatch, tmp_path, force
+):
+    """A tree installed from WSL into the Windows checkout holds sharp's
+    Linux binary, which a Windows `npm ci` rightly never installs. That tree
+    does not load here, so there is nothing to protect: refusing the staged
+    tree for lacking the Linux binary (review of 9a09c99, reproduced) failed
+    every update at every start, and the repair that exists for such a tree
+    too."""
+    linux_key = next(iter(_OTHER_PLATFORM))
+    tree = NEW if force else OLD
+    runner = _checkout(
+        tmp_path,
+        lock={**NEW, **THIS_PLATFORM},
+        installed={**tree, **_OTHER_PLATFORM},
+        platform=(linux_key,),
+    )
+    root = runner.parents[2]
+    monkeypatch.setattr(
+        _node_packages, "run_bounded", _FakeNpm(platform=(THIS_PLATFORM_KEY,))
+    )
+
+    def probe(cwd):
+        # Loads wherever the staged tree is found first; not the Linux tree.
+        return _Probe(1 if Path(cwd) == root else 0)("node", cwd)
+
+    outcome = _node_packages.sync_node_modules(
+        root,
+        npm_path="npm",
+        probe=probe,
+        progress=lambda _text: None,
+        force=force,
+    )
+
+    assert outcome.updated, outcome.failure
+    assert _marker(root) == "new"
+
+
+def test_a_first_install_needs_no_tree_to_compare_with(monkeypatch, tmp_path):
+    """A fresh checkout has no `node_modules`: nothing to protect, and the
+    staged tree goes in on the lock check and the probe alone."""
+    runner = _checkout(tmp_path, lock=NEW, installed=None)
+    root = runner.parents[2]
+    monkeypatch.setattr(_node_packages, "run_bounded", _FakeNpm())
+
+    outcome = _sync(root)
+
+    assert outcome.updated, outcome.failure
+    assert _marker(root) == "new"
+    assert _node_packages.lock_drift(root) == []
 
 
 def test_a_swap_cut_between_its_renames_is_undone_at_the_next_start(

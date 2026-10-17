@@ -160,8 +160,9 @@ def _dropped_packages(root: Path, staging: Path) -> list[str]:
     cannot tell that from another platform's binary, and the staged import
     probe found the old tree's copy one folder up, so a tree that could not
     load replaced one that could (review of d8a394c, reproduced). Without a
-    tree in use there is nothing to fall back on and the probe decides. A
-    `dev` package a developer's full install has is left out on purpose.
+    tree in use, or without npm's record of it, there is nothing to compare
+    and the probe decides. A `dev` package a developer's full install has is
+    left out on purpose. The caller refuses only while the tree in use loads.
     """
     try:
         live = _lock_packages(root / "node_modules" / ".package-lock.json")
@@ -174,6 +175,16 @@ def _dropped_packages(root: Path, staging: Path) -> list[str]:
         for key in (live.keys() & wanted.keys()) - staged.keys()
         if not wanted[key].get("dev")
     )
+
+
+def _loads(
+    probe: Callable[[Path], subprocess.CompletedProcess[str]], cwd: Path
+) -> bool:
+    """Whether Transformers.js imports from `cwd`; True when that is unknown."""
+    try:
+        return probe(cwd).returncode == 0
+    except Exception:
+        return True
 
 
 def _presence_dir() -> Path:
@@ -323,7 +334,9 @@ def _rename(source: Path, target: Path) -> None:
         try:
             os.rename(source, target)
             return
-        except FileNotFoundError:
+        except (FileNotFoundError, FileExistsError):
+            # Waiting cures neither a missing source nor an existing target,
+            # only a refusal (a file held open).
             raise
         except OSError:
             if attempt == _RENAME_ATTEMPTS - 1:
@@ -447,11 +460,21 @@ def _install_and_swap(
         raise _UpdateFailed(
             "the new packages do not match package-lock.json", "; ".join(mismatch)
         )
-    if dropped:
+    if dropped and _loads(probe, root):
         # npm's warnings say why it skipped them (a blocked download).
         raise _UpdateFailed(
             f"npm did not install {', '.join(dropped)}",
             _tail(result.stderr or result.stdout),
+        )
+    if dropped:
+        # A tree that does not load protects nothing. One installed for
+        # another platform (from WSL, or copied from x64 to ARM64) holds that
+        # platform's binaries, which npm here rightly skips; refusing for
+        # them failed every update, the repair included (review of 9a09c99).
+        logger.info(
+            "node_modules_replacing_tree_that_does_not_load root=%s not_staged=%s",
+            root,
+            ", ".join(dropped),
         )
     try:
         check = probe(staging)

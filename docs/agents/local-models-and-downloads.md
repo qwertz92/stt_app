@@ -317,7 +317,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     deleted the only tree sharp loaded from (review of d8a394c; reproduced
     on HomeBase with an `.npmrc` saying `optional=false`). `dev` packages a
     developer's full install has are not counted: `--omit=dev` leaves them
-    out on purpose. A rename retries 60 x 0.5 s: Windows refuses to rename a
+    out on purpose. And the refusal applies only while the tree in use
+    loads (`_loads(probe, root)`): a tree installed for another platform
+    (from WSL, or copied from x64 to ARM64) holds binaries npm here rightly
+    skips, does not load, and protects nothing -- refusing for it failed
+    every update, the repair included (review of 9a09c99). A rename
+    retries 60 x 0.5 s: Windows refuses to rename a
     folder while any file in it is open (WinError 5, measured in review
     with one file open three levels down), virus scanners open freshly
     extracted files, and giving up throws the verified staged tree away. A

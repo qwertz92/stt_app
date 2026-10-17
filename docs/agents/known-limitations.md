@@ -467,7 +467,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     is the one that finds the drift, that case's load time includes npm.
   - A rename that keeps failing for its 30 s (a file inside held open for
     good) throws the staged tree away although it was verified, and the
-    next start runs npm again; keeping it for a later swap is ~1 h.
+    next start runs npm again; keeping it for a later swap is ~1 h. While
+    the second rename retries, `node_modules` is absent for up to 30 s
+    (60 s if the way back retries too); Cohere/Granite starts in this
+    process wait on `_JS_RUNTIME_LOCK` meanwhile, and the overlay keeps
+    the "Updating the JavaScript packages" line. A stranded
+    `node_modules.previous` that can never be moved back costs three
+    30 s restore attempts per runner start -- 88.5 s measured in review
+    with every rename refused -- and is not cached, so each Cohere/Granite
+    dictation repeats it. Renaming the staged tree once inside the staging
+    folder before moving the live one, and a per-session retry budget,
+    would bound both (~1-2 h with tests). Rare: it needs a rename Windows
+    refuses for good.
   - A runner of an older build (or of a crashed app) holds no presence and
     is seen only by its loaded DLLs, so in the fraction of a second between
     its start and its import of Transformers.js an update can still swap
