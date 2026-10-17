@@ -25,6 +25,7 @@ from test_controller_queue import DeferredExecutor, PacedTextInserter
 from stt_app.config import (
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_WARNING_NOT_INSERTED,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
 from stt_app.paste_target_check import (
@@ -152,6 +153,8 @@ def test_a_paste_into_no_text_field_is_reported_with_insert_and_no_tone(
     assert "hello world" in detail
     assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
     assert overlay.state_kwargs[-1]["copy_text"] == "hello world"
+    # Maybe not inserted, with the text safe: a warning, not the red Error.
+    assert overlay.state_kwargs[-1]["warning"] == OVERLAY_WARNING_NOT_INSERTED
     assert beeps == []
     rows = _rows(overlay)
     assert len(rows) == 1 and rows[0].startswith("Not in a text field")

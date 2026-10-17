@@ -33,6 +33,55 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   owner saw a green overlay while his first seconds were missing (2026-10-09).
   The state stays "Listening" for every control and check; only label and
   colour differ. "Speak now" and the remote "You can speak now" are green.
+- **A transcript that exists but was not (surely) inserted is a warning, not
+  the red Error** (owner's decision 2026-10-17): `set_state("Error", ...,
+  warning=OVERLAY_WARNING_NOT_INSERTED | OVERLAY_WARNING_CHECK_WINDOW)`
+  paints burnt orange (`OVERLAY_STATE_COLORS["Warning"]`, `#9a4d00`) under
+  "Not inserted" (the paste failed or its target is no text field: Insert
+  offered) or "Check window" (the keystroke went out and only the cleanup
+  failed: no Insert, never pasted twice). Red and "Error" stay for failures
+  that left no transcript (Retry, no action). Why: nothing failed that Retry
+  could redo and the text is safe in history, so the red "Error" over a
+  working Insert said more than had happened.
+  - **Appearance, not a state**, like "Starting": `state` stays "Error", so
+    the controls (Insert, Copy, Edit, Clear), the scroll-to-top, the
+    preload poll's `_offer_painted` check, the paste check's `overlay_shown`
+    and `FakeOverlay` need no change, and the many tests that read
+    `state == "Error"` keep their meaning. Only the label word and the
+    colour differ; `warning` is ignored for any other state.
+  - **One writer**: `DictationController._paint_not_inserted` picks the word
+    and the action from one flag (`may_have_pasted`) and is the only
+    `set_state` call that offers Insert; its five callers are
+    `_paint_insert_offer`, both arms of `_paint_status_keeping_offer` and
+    both arms of the failed paste in `_insert_text_at_target`.
+    `tests/conftest.py`'s `FakeOverlay` refuses an Insert offer without a
+    warning, so a sixth writer fails every test that reaches it.
+  - **Why two words, and why these**: "Not inserted" is true for the offer;
+    for a keystroke that went out it would be false (the detail says "most
+    likely inserted"), so that one reads "Check window", the queue row's
+    own advice. The state label reserves the widest word's width; both new
+    words are wider than "Processing" and that reservation now sets the
+    header's `sizeHint`, which stays inside the controls row that alone
+    decides the overlay's width. Measured with real widgets at 9 / 11.25 /
+    13.5 pt: widest word before 59 / 75 / 91 px ("Processing"), after 81 /
+    100 / 122 ("Check window"; "Not inserted" 70 / 88 / 107); header
+    `sizeHint` 387 / 411 / 459 -> 409 / 436 / 490 px against the controls
+    row's 440 / 473 / 528; overlay 470 / 503 / 558 px wide, the state label
+    rectangle 112 / 137 / 160 px wide, both before and after, in every
+    state including the two warnings; the painted glyphs sit inside the
+    label and on the overlay's centre line.
+    `test_the_warning_words_move_nothing_in_the_header_at_9_11_and_13_5_pt`
+    pins it, and fails when a word is added to the label without the
+    reservation. A shorter word ("Insert") was not needed.
+  - **Contrast, from painted pixels**
+    (`test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it`):
+    white text on `#9a4d00` 6.11:1
+    (the red it replaces: 6.57), the light-amber queue row labels 4.52:1
+    (red: 4.86; both clear WCAG AA's 4.5), the not-inserted badge's amber
+    `#ffb300` against it 3.41:1 (red: 3.66). Both are orange, so only
+    lightness tells badge from background: 3:1 needs a background of
+    relative luminance 0.145 or less (`#9a4d00` is 0.122). Negative controls:
+    `#b35900` failed the row-label check, `#d98200` the white text.
 - **A stop that waits for the microphone's backlog paints "Processing" --
   "Collecting the microphone's delayed audio..." first** (2026-10-10), with
   `paint_now()`: a synchronous `repaint()` of the visible overlay, because
@@ -198,7 +247,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   2026-10-09): `set_not_inserted_badge(text, tooltip)`, "" hides it. The
   controller writes "N not inserted · <re-paste hotkey>" ("· tray menu"
   while no hotkey is registered) and the how-to as its tooltip. Amber
-  (`#ffb300`, dark bold text), apart from every state colour, and in the
+  (`#ffb300`, dark bold text), apart from every state colour -- the
+  warning's burnt orange included, 3:1 or more in luminance (the bullet on
+  the warning above) --, and in the
   queue panel because no `set_state` touches that panel: the next
   recording's Listening cannot paint over it, while its waiting rows keep
   the panel visible. Layout: [title (eliding, the stretch)][badge][Clear

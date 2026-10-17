@@ -15,6 +15,9 @@ from stt_app.config import (
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
     OVERLAY_STATE_COLORS,
+    OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_LABELS,
+    OVERLAY_WARNING_NOT_INSERTED,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
@@ -1953,6 +1956,26 @@ def test_the_status_text_is_centred_on_the_overlay_in_every_state():
                 error_action=OVERLAY_ERROR_ACTION_NONE,
             ),
         ),
+        (
+            "Not inserted",
+            lambda: overlay.set_state(
+                "Error",
+                "Insertion failed.",
+                error_action=OVERLAY_ERROR_ACTION_INSERT,
+                copy_text="the transcript",
+                warning=OVERLAY_WARNING_NOT_INSERTED,
+            ),
+        ),
+        (
+            "Check window",
+            lambda: overlay.set_state(
+                "Error",
+                "Possibly inserted already.",
+                error_action=OVERLAY_ERROR_ACTION_NONE,
+                copy_text="the transcript",
+                warning=OVERLAY_WARNING_CHECK_WINDOW,
+            ),
+        ),
         ("Copy shows feedback", lambda: overlay._set_copy_button_feedback(True)),
         ("Copy feedback cleared", overlay._reset_copy_button_feedback),
         ("Record hovered", lambda: QtWidgets.QApplication.sendEvent(record, hover)),
@@ -3354,3 +3377,219 @@ def test_a_starting_dictation_is_not_painted_in_the_listening_green():
     assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
     assert overlay.width() == width
     overlay.close()
+
+
+# -- A transcript that was not (surely) inserted is a warning, not an error ----
+
+
+def _luminance(color: QtGui.QColor) -> float:
+    """WCAG relative luminance of an sRGB colour."""
+
+    def linear(channel: int) -> float:
+        value = channel / 255.0
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+    return (
+        0.2126 * linear(color.red())
+        + 0.7152 * linear(color.green())
+        + 0.0722 * linear(color.blue())
+    )
+
+
+def _contrast(first: QtGui.QColor, second: QtGui.QColor) -> float:
+    """WCAG contrast ratio between two colours, 1:1 to 21:1."""
+    bright, dark = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (bright + 0.05) / (dark + 0.05)
+
+
+def _control_state(overlay) -> dict[str, tuple[bool, bool]]:
+    """(enabled, hidden) of every control a result state decides."""
+    controls = {
+        "copy": overlay._copy_button,
+        "edit": overlay._edit_button,
+        "clear": overlay._clear_button,
+        "retry": overlay._retry_button,
+        "cancel": overlay._cancel_button,
+        "insert": overlay._insert_button,
+    }
+    return {
+        name: (button.isEnabled(), button.isHidden())
+        for name, button in controls.items()
+    }
+
+
+def _painted_container_background(overlay) -> QtGui.QColor:
+    """The container's fill as painted, read in the margin beside the header."""
+    image = overlay._container.grab().toImage()
+    return image.pixelColor(7, image.height() // 2)
+
+
+def test_a_not_inserted_transcript_is_a_warning_and_a_failure_without_one_stays_red():
+    """Owner's decision 2026-10-17: a transcript that exists but was not (or
+    maybe not) inserted is not an error -- the text is safe and Insert, Copy
+    and Edit work -- so it is burnt orange under a word that says what
+    happened. Red and "Error" stay for failures that left no transcript.
+    The state is still Error for every control and check, like "Starting"
+    is still Listening; only the label and the colour differ."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    text = "Insertion failed.\n\nthe transcript"
+
+    overlay.set_state("Error", "Transcription failed.")
+    assert overlay._state_label.text() == "Error"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+
+    for warning, action in (
+        (OVERLAY_WARNING_NOT_INSERTED, OVERLAY_ERROR_ACTION_INSERT),
+        (OVERLAY_WARNING_CHECK_WINDOW, OVERLAY_ERROR_ACTION_NONE),
+    ):
+        overlay.set_state(
+            "Error",
+            text,
+            copy_text="the transcript",
+            error_action=action,
+            editable=True,
+            warning=warning,
+        )
+        QtWidgets.QApplication.processEvents()
+        assert overlay._state_label.text() == warning
+        assert overlay._state_background == OVERLAY_STATE_COLORS["Warning"]
+        assert OVERLAY_STATE_COLORS["Warning"] != OVERLAY_STATE_COLORS["Error"]
+        assert overlay.state == "Error"
+
+        # Every control behaves exactly as in the red Error state it replaces.
+        warned = _control_state(overlay)
+        overlay.set_state(
+            "Error",
+            text,
+            copy_text="the transcript",
+            error_action=action,
+            editable=True,
+        )
+        QtWidgets.QApplication.processEvents()
+        assert overlay._state_label.text() == "Error"
+        assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+        assert _control_state(overlay) == warned
+
+    # The next plain Error is red again, not left orange.
+    overlay.set_state("Error", "Transcription failed.")
+    assert overlay._state_label.text() == "Error"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+    overlay.close()
+
+
+def test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it():
+    """White text and the amber row labels stay readable (WCAG AA, 4.5:1) on
+    the burnt-orange fill, and the not-inserted badge keeps a luminance
+    contrast of at least 3:1 (WCAG's bar for a graphical object) against the
+    fill it sits on: both are orange, so only their lightness tells them
+    apart. Measured from what is painted, not from the constants."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_transcription_queue(
+        [(-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    overlay.set_state(
+        "Error",
+        "Insertion failed.",
+        error_action=OVERLAY_ERROR_ACTION_INSERT,
+        warning=OVERLAY_WARNING_NOT_INSERTED,
+    )
+    QtWidgets.QApplication.processEvents()
+
+    painted = _painted_container_background(overlay)
+    assert painted.name() == OVERLAY_STATE_COLORS["Warning"], "the fill was not painted"
+    role = QtGui.QPalette.ColorRole.WindowText
+    white = overlay._state_label.palette().color(role)
+    row_label = _queue_row_parts(overlay)[0][1]
+    assert _contrast(white, painted) >= 4.5, _contrast(white, painted)
+    assert _contrast(row_label.palette().color(role), painted) >= 4.5
+    assert _contrast(_badge_fill(overlay), painted) >= 3.0, _contrast(
+        _badge_fill(overlay), painted
+    )
+    # The red it replaces had the same property, so nothing was traded away.
+    overlay.set_state("Error", "Transcription failed.")
+    QtWidgets.QApplication.processEvents()
+    assert _contrast(white, _painted_container_background(overlay)) >= 4.5
+    overlay.close()
+
+
+_STATE_WORD_CASES = [
+    ("Idle", {}),
+    ("Listening", {}),
+    ("Processing", {}),
+    ("Done", {}),
+    ("Error", {}),
+    (
+        "Error",
+        {
+            "error_action": OVERLAY_ERROR_ACTION_INSERT,
+            "warning": OVERLAY_WARNING_NOT_INSERTED,
+        },
+    ),
+    (
+        "Error",
+        {
+            "error_action": OVERLAY_ERROR_ACTION_NONE,
+            "warning": OVERLAY_WARNING_CHECK_WINDOW,
+        },
+    ),
+]
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5])
+def test_the_warning_words_move_nothing_in_the_header_at_9_11_and_13_5_pt(point_scale):
+    """The state label reserves the widest state word's width, so adding two
+    wider words must not widen the overlay or shift the header. Checked at
+    the three sizes Windows' Text size gives: every state, warnings
+    included, leaves the label one rectangle, the overlay one width, and
+    paints its word wholly inside that rectangle, centred on the overlay."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            _shown_offscreen(overlay)
+            bold = QtGui.QFont()
+            bold.setBold(True)
+            metrics = QtGui.QFontMetrics(bold)
+            words = {"Idle", "Starting", "Listening", "Processing", "Done", "Error"}
+            words.update(OVERLAY_WARNING_LABELS)
+            widest = max(metrics.horizontalAdvance(word) for word in words)
+            assert overlay._state_label.minimumWidth() >= widest, (
+                "the label reserves less than its widest word needs"
+            )
+            boxes = set()
+            widths = set()
+            for state, kwargs in _STATE_WORD_CASES:
+                overlay.set_state(state, "Some detail.", **kwargs)
+                QtWidgets.QApplication.processEvents()
+                label = overlay._state_label
+                boxes.add(_state_label_box(overlay))
+                widths.add(overlay.width())
+                assert (
+                    overlay._header_widget.sizeHint().width()
+                    <= overlay._controls_widget.sizeHint().width()
+                ), f"{label.text()!r} makes the header wider than the controls row"
+                left, right = _painted_text_span(label)
+                assert left > 0 and right < label.width() - 1, (
+                    f"{label.text()!r} is clipped: glyphs {left}..{right} of "
+                    f"{label.width()} px"
+                )
+                assert (
+                    abs(_painted_status_centre(overlay) - _overlay_centre(overlay))
+                    <= 1.0
+                ), label.text()
+            assert len(boxes) == 1, f"the status label moved between states: {boxes}"
+            assert len(widths) == 1, f"the overlay changed width: {widths}"
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)

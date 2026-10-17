@@ -23,6 +23,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from stt_app.config import (
     DEFAULT_CANCEL_HOTKEY,
     FALLBACK_HOTKEY,
+    OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_INITIAL_DETAIL,
 )
 from stt_app.controller import DictationController
@@ -221,6 +222,15 @@ class FakeOverlay:
         self.paint_calls = 0
 
     def set_state(self, state, detail="", **kwargs):
+        # The real overlay paints the red Error for an Insert offer unless told
+        # it is a warning: the offer's transcript exists, so it is never an
+        # error (owner's decision 2026-10-17). Every writer goes through
+        # `DictationController._paint_not_inserted`; one that does not fails
+        # here, in every test that reaches it.
+        offers_insert = kwargs.get("error_action") == OVERLAY_ERROR_ACTION_INSERT
+        assert not offers_insert or kwargs.get("warning"), (
+            f"an Insert offer painted without its warning: {state!r} {detail!r}"
+        )
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))
 
