@@ -464,8 +464,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   - A microphone that stops delivering after its first block is not noticed
     by the capture (the first-callback watchdog watches the first block only;
     the device listener defers its refresh while a recording runs), so a
-    dying microphone ends a Deepgram stream only through Deepgram's own close:
-    about 40 s after the last block (the sender bridges a gap for at most 30 s,
-    `_STREAM_KEEPALIVE_MAX_GAP_S`, then Deepgram's 10 s window), against ~10 s
-    before the KeepAlive existed. Not checked for the other streaming engines
-    (AssemblyAI, local): this entry does not claim whether they notice it.
+    dying microphone ends a Deepgram stream only through the Deepgram sender
+    itself: it ends the stream about 33 s after the last block (it bridges a
+    gap for at most 30 s, `_STREAM_KEEPALIVE_MAX_GAP_S`, and the 11th 3 s
+    wait is the cap), independent of Deepgram, against ~10 s before the
+    KeepAlive existed, when Deepgram's own close was the detector. The user
+    reads "Deepgram streaming failed: The microphone delivered no audio for
+    more than 30 seconds, so the stream was ended." Not checked for the other
+    streaming engines (AssemblyAI, local): this entry does not claim whether
+    they notice it.
