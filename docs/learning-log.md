@@ -3,6 +3,55 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (round 2 on the not-inserted warning: three P4s)
+
+The second review of the severity rule (`d507947`) found no P1 to P3 and three
+P4s. Each was reproduced first by a test that failed for the stated reason
+(`tests/test_controller_not_inserted_warning.py`; `docs/agents/overlay.md`,
+`docs/agents/text-insertion.md`).
+- **The preload progress poll turned a red failure orange again.** The poll
+  refreshes an Error on screen only when it is the offer the painter itself
+  wrote, which it knows from `_offer_painted = ("Error", painted)`. The red
+  variant of the severity rule set the same record, so a failure painted over
+  a pending offer (a refused start, a setting that was not saved, a hotkey
+  that did not register) looked like an offer to refresh: while a preload ran,
+  the next poll, at most 600 ms later, repainted the progress line in orange
+  over it and the failure text was gone before it could be read. Reproduced
+  with a running preload and three failures: all three were repainted, three
+  times in three polls. Fix: `_paint_status_keeping_offer` records the paint
+  only when it is informational (`None` for a failure), so the poll treats a
+  failure like any other result it must not paint over. The preload's start
+  line is informational, so it is still refreshed, and so is the progress
+  line after a failure is replaced; a test pins both. Not a flag next to the
+  tuple: the record has exactly one reader (`_offer_painted_is_on_screen`)
+  and "nothing recorded" already means "not the painter's to refresh".
+- **The single-writer guard could not see `warning=None`.** `FakeOverlay`
+  refuses an Insert offer painted without the `warning` key, which stopped a
+  writer that forgot it, but since the red variant passes `warning=None` a
+  second writer that passed `None` itself satisfied the check. A source-level
+  test (`test_only_the_one_writer_names_the_insert_action`) parses
+  `controller.py` and requires `OVERLAY_ERROR_ACTION_INSERT` to be named in
+  `_paint_not_inserted` and nowhere else. Negative control: one extra
+  reference at module level made it fail with the message naming the helper;
+  removed again.
+- **A background failure hid a pending offer** (older than the warning work).
+  `_report_background_failure` painted a plain Error when no session owned the
+  overlay, with no transcript and no Insert. A queued job failing while an
+  earlier job's insert offer was pending (an offer stays pending until a new
+  recording starts, an insert succeeds or Clear is pressed) took Copy and
+  Insert off the screen, and the "Still not inserted" text came back only
+  with the next status writer. It now goes
+  through `_paint_status_keeping_offer("Error", ...)` when an offer is
+  pending: red, the offer kept, like every other failure over an offer. The
+  trade-off is the overlay's single action slot: Insert and Retry cannot both
+  show, so the failure's Retry button gives way to Insert. Its text says
+  "use Retry transcription in the tray menu" instead of "use Retry", since
+  the audio is kept and the tray's entry reaches it; the tray notification
+  keeps the old wording because it names no button. Chosen over keeping Retry
+  because the offered text is the user's own pending words, while Retry has
+  the tray as a second road. With no offer pending nothing changed (the
+  existing test for that case still passes).
+
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 
 An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and
