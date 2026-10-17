@@ -54,6 +54,24 @@ stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
   press just refused. Reproduced with that sequence (the tray got nothing, the
   overlay got an Error). The notice is now `busy_overlay_error` always -- the
   tray -- and the overlay is untouched.
+- **P3 (older than the Retry work): a double click on Retry cancelled the
+  retry.** Retry and Cancel share one overlay slot at identical geometry, so
+  the second click of a double click landed on the Cancel that the first click's
+  Processing had put there. Reproduced with a real `OverlayUI`: Retry click,
+  `set_state("Processing")`, Cancel click 0.2 s later emitted `cancel_requested`.
+  A Cancel click within `QApplication.doubleClickInterval()` after the slot left
+  Retry is now dropped (logged); a later one works, and so does a Cancel that
+  did not follow Retry (negative control). The test fakes the clock and the
+  interval, so it does not depend on how fast the machine is. An existing test
+  (`test_overlay_control_signals_are_emitted`) clicked Retry and then Cancel
+  at once; it now clicks Cancel first, since that sequence is exactly what the
+  guard drops. Also checked once with real mouse events routed by position
+  through the shown overlay (a throwaway test, not kept: two left clicks 60 ms
+  apart at the Retry button's centre, then one after the interval): Retry's and
+  Cancel's centres are the same point (120, 49) at the default font; without the
+  guard the second click emitted `cancel_requested`, with it only the later
+  click did. Not done: the same on a real desktop with a mouse, at other font
+  sizes.
 
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 

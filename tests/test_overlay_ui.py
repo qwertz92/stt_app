@@ -455,13 +455,63 @@ def test_overlay_control_signals_are_emitted():
         lambda: got.__setitem__("cancel", got["cancel"] + 1)
     )
 
+    # Cancel first: a Cancel right after Retry's slot became Cancel is the
+    # double-click case the next tests cover.
+    overlay.set_state("Listening", "active")
+    overlay._cancel_button.click()
     overlay.set_state("Error", "failed")
     overlay._history_button.click()
     overlay._retry_button.click()
-    overlay.set_state("Listening", "active")
-    overlay._cancel_button.click()
 
     assert got == {"history": 1, "retry": 1, "cancel": 1}
+
+
+def _overlay_with_a_controlled_clock(monkeypatch, interval_ms=400):
+    """A real overlay whose click-timing clock and double-click interval the
+    test sets, so no assertion depends on how fast the machine is."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    clock = {"now": 100.0}
+    monkeypatch.setattr(overlay_ui_module.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        QtWidgets.QApplication, "doubleClickInterval", staticmethod(lambda: interval_ms)
+    )
+    return OverlayUI(), clock
+
+
+def test_a_second_click_on_retry_lands_on_cancel_and_is_ignored(monkeypatch):
+    """Retry and Cancel share one slot at the same geometry. A double click on
+    Retry starts the retry with its first click, which paints Processing and
+    puts Cancel under the cursor; the second click then cancelled the retry it
+    had just started. Only that click is dropped: a Cancel after the system's
+    double-click interval is a deliberate one and works."""
+    overlay, clock = _overlay_with_a_controlled_clock(monkeypatch, interval_ms=400)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Error", "failed")
+    overlay._retry_button.click()
+    # What the controller does within that click.
+    overlay.set_state("Processing", "Retrying transcription...")
+
+    clock["now"] += 0.2
+    overlay._cancel_button.click()
+    assert canceled == [], "the second click of a double click canceled the retry"
+
+    clock["now"] += 0.3
+    overlay._cancel_button.click()
+    assert canceled == [True], "a deliberate Cancel after the interval was dropped"
+
+
+def test_cancel_works_at_once_when_the_slot_did_not_just_leave_retry(monkeypatch):
+    """The guard follows the Retry-to-Cancel switch only, not every Cancel."""
+    overlay, _clock = _overlay_with_a_controlled_clock(monkeypatch)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Listening", "active")
+    overlay._cancel_button.click()
+    overlay.set_state("Processing", "working")
+    overlay._cancel_button.click()
+
+    assert canceled == [True, True]
 
 
 def test_overlay_always_on_top_toggle_updates_state_and_signal():
