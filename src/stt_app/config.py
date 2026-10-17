@@ -2367,6 +2367,13 @@ TRAY_REPASTE_ACTION_LABEL = "Insert transcript again"
 # holds 256 characters with its terminator); `win_tray_icon` cuts anything
 # longer, and a text composed for the tray is sized to fit whole.
 TRAY_MESSAGE_MAX_CHARS = 255
+# The progress line while a source checkout's JavaScript packages update
+# (`transcriber._node_packages`): a dictation's start shows it as reported,
+# and the startup preload's line shows it in place of "Loading ...".
+NODE_PACKAGES_UPDATING_TEXT = (
+    "Updating the JavaScript packages for Cohere/Granite to match this "
+    "version of the app (once per update, can take a few minutes)."
+)
 # The two kinds of row the overlay's queue panel shows: a transcription still
 # running or queued (its button cancels it), and a finished transcript whose
 # paste failed or may have failed (its button dismisses the row; the text

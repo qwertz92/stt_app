@@ -1136,9 +1136,10 @@ def test_packages_that_were_not_updated_reach_the_tray_from_the_runner_thread(
     controller = _NotificationSignals()
     main_module._connect_tray_notifications(tray, controller)
 
+    retry_after = time.time() + 86400
     worker = threading.Thread(
         target=local_webgpu_asr._notify_previous_packages_kept,
-        args=("npm reported an error (code E403)",),
+        args=("npm reported an error (code E403)", retry_after),
     )
     worker.start()
     worker.join(timeout=10)
@@ -1150,7 +1151,7 @@ def test_packages_that_were_not_updated_reach_the_tray_from_the_runner_thread(
         (
             local_webgpu_asr.NODE_PACKAGES_NOTICE_TITLE,
             local_webgpu_asr.node_packages_notice_text(
-                "npm reported an error (code E403)"
+                "npm reported an error (code E403)", retry_after
             ),
         )
     ]

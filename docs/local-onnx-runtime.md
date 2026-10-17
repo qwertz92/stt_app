@@ -107,7 +107,15 @@ command after every such `git pull`. Since 2026-10-17 the app does it itself
 3. If that fails -- an unreachable registry made npm give up after 71 s -- the
    tree in use stays untouched, the models start on it, the log gets
    `node_modules_update_failed` with npm's output, and the tray says once
-   what failed. The next app start tries again. Run in place, `npm ci` would
+   per session what failed and when the next try comes. After a failure of
+   npm or of what it installed, the app waits 24 hours before it runs npm
+   again for the same `package-lock.json`, so a network that cannot reach
+   the registry does not slow down every start; a `git pull` that changes
+   the lock tries at once, a cause on this PC (npm not found, a folder held
+   open) is tried again at the next start, and a tree that does not load
+   at all is not made to wait. Deleting
+   `%APPDATA%\stt_app\node_packages_update.json` and restarting tries at
+   once. Run in place, `npm ci` would
    first have deleted the working tree: the same failed run left a
    half-deleted `node_modules` behind.
 4. No update replaces the tree while any runner child is alive, in the app
@@ -123,11 +131,12 @@ command after every such `git pull`. Since 2026-10-17 the app does it itself
    deferred it in 0.83 s, no npm run).
 
 The update runs on the thread that starts the runner (a preload or
-transcription worker, never the UI thread). During the startup preload its
-time counts as loading the model; a transcription that runs the update itself
-(with "Keep ONNX model loaded" off there is no preload) shows "Updating the
-JavaScript packages ..." as its progress. It cannot be cancelled; npm is ended
-after 10 minutes at most.
+transcription worker, never the UI thread). The overlay shows "Updating the
+JavaScript packages ..." while it runs, in the startup preload as well as
+when a transcription starts the runner (with "Keep ONNX model loaded" off
+there is no preload). A recording started during the preload's update keeps
+its own lines instead, and its transcription waits for the preload to end.
+The update cannot be cancelled; npm is ended after 10 minutes at most.
 
 ## Runtime Formats
 

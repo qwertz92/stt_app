@@ -364,6 +364,54 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     staged way (this replaced the in-place `npm install` repair, which
     could also rewrite the checkout's lock). An update that was tried is not
     repeated in the session.
+  - **A failed update waits 24 h before npm runs again for the same lock**
+    (lead's decision on the owner's behalf, 2026-10-17: his work PC is slow,
+    Cohere is his main model there, and whether its network reaches the
+    registry is unknown; each retry cost a start up to npm's failure time,
+    71 s measured, 600 s bound). `_record_back_off` writes the checkout
+    root, the lock's SHA-256, the time and the reason to
+    `app_paths.node_packages_back_off_path()` when npm or what it installed
+    failed (`_UpdateFailed.back_off`: an npm error or timeout, a staged tree
+    that does not match the lock, lacks a package or does not load) -- what a
+    network that cannot reach the registry causes and the next start would
+    only repeat. A cause on this PC records nothing and the next start tries
+    again: no npm, npm that cannot be started, a folder held open by an
+    editor or a virus scanner (review of 75fc685: recording those made a
+    user who had fixed the cause wait a day). `_back_off` holds npm back
+    while root and hash match and the failure is less than a day old. A
+    changed lock (the next `git pull`) tries at once; a success deletes the
+    record, unless it is another checkout's. To try again at once (a proxy
+    fixed in `.npmrc` does not change the lock), delete the file and
+    restart. The record only saves a retry, so it is disposable: anything
+    unreadable or untrustworthy -- damaged JSON, JSON the parser cannot
+    descend into (`RecursionError`), wrong types, a number no float holds, a
+    failure time in the future after the clock was set back -- counts as
+    none and is written over by the next failure (the persistence rule
+    against writing over an unreadable store protects user data, which this
+    is not). The back-off applies only while the tree in use loads:
+    `_check_js_runtime` probes the runner after a backed-off sync, looks a
+    second time if that fails (a slow, loaded PC can time a working tree's
+    probe out once), and only then runs `sync(force=True)`, which ignores
+    the back-off -- such a tree leaves the models unusable, so waiting a
+    day would only add a day without them. Each session on old packages
+    gets its one notice, also a backed-off one (no npm ran, the reason is
+    the stored one), ending "the app tries again after <local time>"
+    (`node_packages_notice_text(reason, retry_after)`; "at its next start"
+    for a cause on this PC or when the record could not be saved).
+  - **The startup preload shows the update.** `_preload_model_worker` gives
+    the transcriber a progress callback (`_note_preload_progress` keeps the
+    latest line with its generation under `_preload_result_lock`, and a
+    retired worker's line neither shows nor replaces the current one's; the
+    worker's `finally` clears the callback after the cancel check, each in
+    its own `try`, since the runtime is shared and cached). In the load
+    phase `_preload_progress_detail` shows
+    `config.NODE_PACKAGES_UPDATING_TEXT` -- the same line a dictation start
+    shows -- plus "You can start recording now; transcription waits for
+    this model." while that is the runtime's latest line, and goes back to
+    "Loading ... into memory" with the next line (packages updated, or
+    "Starting ONNX runtime" after a failure). No Cancel sentence: npm
+    cannot be aborted. Only the 600 ms poll paints it, so its rules -- no
+    paint over a live session, Done or Error, or a line being read -- hold.
   - Measured on HomeBase, 4.3.0 -> 4.3.1 lock in a throwaway copy: 11-13 s
     in all with a warm npm cache (npm 9.2-9.3 s, staged probe 0.24-0.41 s,
     renames 0.01 s, deleting the old 466 MB tree 1.5-1.9 s); first install

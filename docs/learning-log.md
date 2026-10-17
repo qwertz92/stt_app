@@ -3,6 +3,104 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17: review of the package back-off and the preload line
+
+One review round (Sonnet) over the two entries below found no P1 or P2; the
+P3/P4 findings fixed on the spot:
+- **Only a failure of npm or of what it installed backs off**
+  (`_UpdateFailed.back_off`). The first version recorded every failure, so a
+  user who closed the editor holding `node_modules` open, or installed npm,
+  still waited a day. A cause on this PC now retries at the next start, and its
+  notice says so ("at its next start"). This narrows the lead's wording ("after
+  a failed update") to the failures a retry within the day would only repeat.
+- **One failed probe no longer overrides the back-off.** A slow, loaded PC can
+  time a working tree's import probe out once, which then forced the npm run
+  the back-off exists to spare; `_check_js_runtime` now looks twice before it
+  forces.
+- **A record that crashed the sync now counts as none**: a failure time with
+  more than ~309 digits (`OverflowError` in `float()`) and JSON nested deeper
+  than the parser descends (`RecursionError`, which `except ValueError` does not
+  catch). Both crashed every Cohere/Granite start until someone deleted the
+  file -- the opposite of "a damaged record never blocks an update".
+- The preload worker clears its cancel hook and its progress callback in two
+  separate `try` blocks, so a failing first clear no longer skips the second.
+- Untested guards got tests: a retired preload's update line neither shows nor
+  replaces the current one's, and another checkout's record neither holds this
+  one back nor is deleted by its success.
+- The tests for the first three fixes failed first (7 failures), then passed.
+  The guard tests passed from the start, since the guards existed; removing
+  the generation check on write, on read, or the record's root comparison
+  each made its test fail.
+- Left as they are: an old tree that passes the import probe but no longer
+  suits a pulled runner can fail Cohere/Granite at transcription time for up
+  to the day (reasoned, recorded in `known-limitations.md`); after an npm
+  failure the update line stays until the runner's next line, about a second;
+  a first install that fails retries at every preload (no tree to fall back
+  on, by design); Cancel during npm takes effect only once npm ends.
+
+## 2026-10-17: the startup preload shows the JavaScript package update
+
+The second open question of the source-checkout package update, decided by the
+lead on the owner's behalf together with the back-off below.
+- **The startup preload shows "Updating the JavaScript packages ..."** instead
+  of "Loading '<model>' into memory." while npm runs. With "Keep ONNX model
+  loaded" on (the default) the first runner starts in the preload, and the
+  preload worker gave the transcriber no progress callback, so the update was
+  invisible there for 11 s to over a minute.
+- The worker now records the runtime's progress lines per generation
+  (`_note_preload_progress`); the 600 ms poll, the only writer of the preload
+  line, shows the update line while it is the latest one and falls back to the
+  load line with the next one (packages updated, or "Starting ONNX runtime"
+  after a failure). Nothing new paints the overlay, so the poll's rules -- no
+  paint over a live session, Done, Error or a line being read -- hold
+  unchanged. No Cancel sentence on that line: npm cannot be aborted. The text
+  is one constant (`config.NODE_PACKAGES_UPDATING_TEXT`) for the dictation
+  start and the preload, and the worker's `finally` clears the progress
+  callback with the cancel check, because the runtime is shared and cached.
+- The test drives `_preload_model_worker` with a transcriber that reports the
+  update; before the change it saw "Loading 'cohere-transcribe-03-2026' into
+  memory." while the update ran. An existing test caught the first draft's
+  renamed log line ("Failed to clear the preload transcriber hooks"): it
+  checks that a failed clear is logged as a cancel-hook failure, so the line
+  names both hooks.
+
+## 2026-10-17: a failed JavaScript package update backs off for a day
+
+One of the open questions left by the source-checkout package update (entry
+"a source checkout updates its JavaScript packages by itself", further down)
+was decided by the lead on the owner's behalf: his work PC is slow, Cohere is
+his main model there, and whether its network reaches the npm registry is
+unknown. Quitting during an update stays as it is (npm finishes on its own,
+`docs/agents/known-limitations.md`).
+- **A failed update waits 24 h before npm runs again for the same lock.**
+  Before, every start retried, and each retry delayed that session's first
+  Cohere start by as long as npm takes to fail -- 71 s measured against an
+  unreachable registry, up to the 600 s bound for a connection that hangs.
+  The record (`app_paths.node_packages_back_off_path()`) names the checkout,
+  the lock's SHA-256, the time and the reason. A changed lock tries at once,
+  since the next `git pull` may be the fix. Every failure records, the cheap
+  ones too (npm not found): one rule to explain instead of a list of
+  exceptions, and a tree that does not load is never held back anyway --
+  `_check_js_runtime` probes after a backed-off sync and runs the update
+  regardless when the import fails, because such a tree leaves the models
+  unusable whatever happens. A damaged record, a record from another lock or
+  checkout, or a failure time in the future (a clock set back would otherwise
+  stretch the wait) counts as none; the record is disposable, so the next
+  failure writes over it.
+- **The tray notice says when the next try comes** ("the app tries again
+  after 2026-10-18 14:05", local time), and a session that is held back still
+  gets its one notice with the stored reason: the user learns once per
+  session that the models run on old packages, not only on the day of the
+  failure.
+- Tests were written first and failed for the stated reason: 14 failures for
+  the back-off (the API did not exist, a second start ran npm again, a
+  damaged record path, the notice text). A real run on HomeBase, in a
+  throwaway checkout with a working 4.3.0 tree, the current lock and an npm
+  that could reach no registry: the first start failed in 1.9 s, wrote the
+  record and notified "... tries again after 2026-10-18 19:58"; the second
+  ran no npm (0.2 s), notified again with the stored reason, and 4.3.0 stayed
+  in use.
+
 ## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
 
 Round 2 of the independent review (main `35cd764`) found no P1 or P2 and five
