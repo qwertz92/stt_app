@@ -3075,17 +3075,26 @@ def test_the_queue_title_counts_transcriptions_and_waiting_inserts_apart(items, 
 
 
 def _real_undelivered_labels():
-    """Both labels the controller sends for one waiting insert, as it sends them."""
+    """The labels the controller sends for one waiting insert, as it sends them:
+    not inserted, possibly inserted and from an earlier session."""
+    text = "Please send the quarterly report to the whole team by Friday afternoon"
+    created_at = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
     entry = _UndeliveredInsert(
-        row_id=-1,
-        text="Please send the quarterly report to the whole team by Friday afternoon",
-        may_have_pasted=False,
-        created_at=datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC),
+        row_id=-1, text=text, may_have_pasted=False, created_at=created_at
     )
     not_inserted = DictationController._undelivered_row_label(entry)
     entry.may_have_pasted = True
     possibly_inserted = DictationController._undelivered_row_label(entry)
-    return not_inserted, possibly_inserted
+    earlier_session = DictationController._undelivered_row_label(
+        _UndeliveredInsert(
+            row_id=-2,
+            text=text,
+            may_have_pasted=False,
+            created_at=created_at,
+            from_earlier_session=True,
+        )
+    )
+    return not_inserted, possibly_inserted, earlier_session
 
 
 def test_a_waiting_insert_row_moves_nothing_against_a_transcription_row():
@@ -3118,10 +3127,11 @@ def test_a_waiting_insert_row_moves_nothing_against_a_transcription_row():
     plain_rows = _queue_row_parts(overlay)
     plain_heights = [row.height() for row, _label, _button in plain_rows]
     plain_button = plain_rows[0][2].size()
-    not_inserted, possibly_inserted = _real_undelivered_labels()
+    not_inserted, possibly_inserted, earlier_session = _real_undelivered_labels()
     assert len(possibly_inserted) > len(not_inserted), "precondition"
+    assert earlier_session.startswith("From earlier session"), earlier_session
 
-    for waiting in (not_inserted, possibly_inserted):
+    for waiting in (not_inserted, possibly_inserted, earlier_session):
         overlay.set_transcription_queue(
             [
                 (2, "#1 · 12:00:05 · local · parakeet-tdt-0.6b-v3"),
@@ -3232,12 +3242,13 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
         DictationController._queue_job_label(job, rank=rank, total=len(jobs))
         for rank, job in enumerate(jobs, start=1)
     ]
-    _not_inserted, possibly_inserted = _real_undelivered_labels()
+    _not_inserted, possibly_inserted, earlier_session = _real_undelivered_labels()
     overlay.set_transcription_queue(
         [
             (1, labels[0]),
             (2, labels[1]),
             (-1, possibly_inserted, QUEUE_ROW_KIND_UNDELIVERED),
+            (-2, earlier_session, QUEUE_ROW_KIND_UNDELIVERED),
         ]
     )
     QtWidgets.QApplication.processEvents()
@@ -3249,6 +3260,7 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
     assert "Pending insert" in painted[0], painted
     assert "Pending insert" in painted[1], painted
     assert painted[2].startswith("Possibly inserted"), painted
+    assert painted[3].startswith("From earlier session"), painted
     overlay.close()
 
 

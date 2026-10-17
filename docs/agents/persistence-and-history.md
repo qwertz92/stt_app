@@ -145,12 +145,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   pointing at it; nothing after a successful move (the mtime update, the
   prune, which skips an archive file that vanished since its listing) can
   stop the history write, since the notice no longer offers a moved file; a
-  history write that fails moves it back, so the next start offers it again. A transcript it saved is also listed as not
-  inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
+  history write that fails moves it back, so the next start offers it again. A transcript it saved is also listed as
+  waiting to be inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
   controller's Qt thread (`unfinished_transcript_saved`, queued from the
   notice's worker) records an `_UndeliveredInsert` row with the entry and
   the recording's time, which the re-paste pastes at the current caret and
-  the not-inserted count includes (`docs/agents/text-insertion.md`). "Keep files and close"
+  the not-inserted count includes (`docs/agents/text-insertion.md`). Its
+  row says "From earlier session", not "Not inserted" (owner's decision
+  2026-10-17: no insert was ever attempted), and the notice's text and
+  final status say so. "Keep files and close"
   moves files to the recordings folder under their own name, which the
   archive prune (`recording_<stamp>.wav` only) never deletes; a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.

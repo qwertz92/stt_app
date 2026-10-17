@@ -230,12 +230,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   (`_QUEUE_ROW_BUTTON_CAPTIONS`), so kinds never differ in button width;
   every row label is one line (`ElidingLabel`, the whole label in its
   tooltip), and the controller puts each row's status ("Pending insert",
-  "Not inserted", "Possibly inserted, check the window") before the
-  provider, model or preview, so eliding never hides it; a transcription
-  row names the language its recording was made in (`EN`, `DE`, `Auto`: the
-  job's own snapshot, not the current selection) as a short code right after
-  the time, before the provider (2026-10-09); a label that
-  changes in place never changes a row's height
+  "Not inserted", "Not in a text field", "Possibly inserted, check the
+  window", and "From earlier session" for a transcript the startup notice
+  of unfinished recordings saved -- no insert was ever attempted for it,
+  owner's decision 2026-10-17; it keeps the recording's time and counts in
+  the badge like the others) before the time and text (an undelivered row
+  quotes those only; the language code and model below are a transcription
+  row's), so eliding never hides it; a transcription row names the language
+  its recording was made in (`EN`, `DE`, `Auto`: the job's own snapshot, not
+  the current selection) as a short code right after the time, before the
+  provider (2026-10-09); a label that changes in place never changes a row's
+  height
   (wrapped, the long "Possibly inserted, check the window" label grew rows
   from 32 to 40 px and the overlay from 230 to 246 px). The undelivered row
   differs by colour only

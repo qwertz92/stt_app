@@ -362,8 +362,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   that moment (Known limitations: the tail row).
   A transcript the startup notice of unfinished recordings saved to history
   becomes such a row too (`_list_unfinished_transcript`, 2026-10-09, owner's
-  idea): never pasted on its own, listed "Not inserted" with the recording's
-  time, pasted by the re-paste at the current caret like any failed row.
+  idea): never pasted on its own, pasted by the re-paste at the current
+  caret like any failed row, counted by the badge, and listed with the
+  recording's time as "From earlier session" (`_UndeliveredInsert.
+  from_earlier_session`; owner's decision 2026-10-17 -- it read "Not
+  inserted" although no insert was ever attempted). A status that the row
+  earns later wins: a failed re-paste whose keystroke went out marks it
+  "Possibly inserted, check the window" as any other row.
 - **A paste that reports success has its target checked, report-only**
   (2026-10-03, `paste_target_check.PasteTargetCheck`, wired in `main.py`;
   the controller's `paste_target_check` argument defaults to None = no

@@ -160,7 +160,8 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.table.itemSelectionChanged.connect(self._update_buttons)
 
         note = QtWidgets.QLabel(
-            "Transcripts go to History and wait on the overlay as not inserted, "
+            'Transcripts go to History and wait on the overlay as "From earlier '
+            'session" rows, counted as not inserted, '
             f'for the re-paste hotkey or the tray\'s "{TRAY_REPASTE_ACTION_LABEL}". '
             "Show in folder opens Explorer with the recordings selected, so you "
             "can listen to them first; this window stays open.\n"
@@ -373,7 +374,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         else:
             self._set_status(
                 f"{done} transcribed into History and listed on the overlay as "
-                "not inserted."
+                "from an earlier session."
             )
         self._update_buttons()
 

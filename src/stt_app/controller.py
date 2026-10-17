@@ -353,6 +353,11 @@ class _UndeliveredInsert:
     # but never joined to failed rows by the re-paste, and dropped by the
     # next paste that goes out (`_drop_superseded_doubtful_rows`).
     outside_text_field: bool = False
+    # A transcript the startup notice of unfinished recordings saved: no insert
+    # was ever attempted for it, so its row says so instead of "Not inserted"
+    # (owner's decision 2026-10-17). Insertable like a failed paste, joined to
+    # the others by the re-paste and counted by the badge.
+    from_earlier_session: bool = False
     # The transcripts `text` joins, each with its history entry (or None),
     # oldest first: one for a single result, several for a coalesced paste.
     # An edit of one of those entries rewrites its part and `text`
@@ -1292,13 +1297,14 @@ class DictationController(QtCore.QObject):
         entry: TranscriptHistoryEntry | None,
         recorded_at: datetime | None,
     ) -> None:
-        """List a transcript from the startup notice as not inserted.
+        """List a transcript from the startup notice as waiting to be inserted.
 
         A row like a failed paste's: the queue panel and the not-inserted
         count show it, the re-paste joins it with the others and retires it
         once pasted, Dismiss drops it, an edit of its entry reaches it. Its
-        time is the recording's own (local wall clock, as the file name
-        says).
+        status reads "From earlier session", not "Not inserted": no insert
+        was ever attempted for it (owner's decision 2026-10-17). Its time is
+        the recording's own (local wall clock, as the file name says).
         """
         self._record_undelivered_insert(
             text,
@@ -1309,6 +1315,7 @@ class DictationController(QtCore.QObject):
                 else datetime.now().astimezone()
             ),
             history_entry=entry,
+            from_earlier_session=True,
         )
 
     def _retain_unfinished_audio(self, recording: UnfinishedRecording) -> str:
@@ -4266,6 +4273,8 @@ class DictationController(QtCore.QObject):
             status = "Possibly inserted, check the window"
         elif entry.outside_text_field:
             status = "Not in a text field"
+        elif entry.from_earlier_session:
+            status = "From earlier session"
         else:
             status = "Not inserted"
         timestamp = entry.created_at.strftime("%H:%M:%S")
@@ -4341,6 +4350,7 @@ class DictationController(QtCore.QObject):
         created_at: datetime,
         history_entry: TranscriptHistoryEntry | None,
         outside_text_field: bool = False,
+        from_earlier_session: bool = False,
         parts: Sequence[tuple[TranscriptHistoryEntry | None, str]] = (),
     ) -> _UndeliveredInsert | None:
         """Keep a failed or doubtful paste listed until inserted or dismissed.
@@ -4358,15 +4368,17 @@ class DictationController(QtCore.QObject):
             may_have_pasted=may_have_pasted,
             created_at=created_at,
             outside_text_field=outside_text_field,
+            from_earlier_session=from_earlier_session,
             parts=tuple(parts) or ((history_entry, transcript),),
         )
         self._undelivered_inserts.append(entry)
         self._logger.info(
             "undelivered_insert_recorded row=%d may_have_pasted=%s "
-            "outside_text_field=%s chars=%d waiting=%d",
+            "outside_text_field=%s from_earlier_session=%s chars=%d waiting=%d",
             -self._undelivered_row_counter,
             may_have_pasted,
             outside_text_field,
+            from_earlier_session,
             len(transcript),
             len(self._insertable_undelivered()),
         )

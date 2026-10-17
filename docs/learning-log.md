@@ -9778,7 +9778,7 @@ on and the overlay green, the first ~10 s were not captured.
 
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 
-Owner's decision on the overlay's wording (`docs/agents/overlay.md`,
+Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,
 `docs/agents/text-insertion.md`).
 - **A transcript that exists but was not (or maybe not) inserted is no
   longer the red Error.** The Insert offer -- a failed paste, a queued paste
@@ -9815,6 +9815,17 @@ Owner's decision on the overlay's wording (`docs/agents/overlay.md`,
   lighter orange (`#b35900`) fails the row-label check, `#d98200` the white
   text, and dropping the words from the reservation fails the three-size
   header test.
+- **Rows made by the startup notice read "From earlier session".** A
+  transcript saved by the notice of unfinished recordings was listed as
+  "Not inserted" (bf89a24) although no insert was ever attempted. The row
+  now has `from_earlier_session`; its status is the first words of the row
+  as before, the recording's time follows, it counts in the badge and
+  F10 pastes it. A status the row earns later wins (a failed re-paste whose
+  keystroke went out: "Possibly inserted, check the window"). The row never
+  held a language code or model -- an unfinished recording has neither, and
+  every undelivered row quotes time and text only -- so none was added. The
+  notice's own text and final status said "not inserted"; they say what the
+  row says now.
 - **Not done.** A failed streaming session that keeps its partial text in
   history ("Partial transcript (saved to history)") stays red: it is a
   failed session, not an insert that did not land. Whether it should be a
