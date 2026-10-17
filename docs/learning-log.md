@@ -3,6 +3,76 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
+
+An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and
+four smaller points. Each was reproduced first, by a test that failed for the
+stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
+`docs/agents/overlay.md`).
+- **P2: the Retry after a restart sent a language its engine does not offer.**
+  `transcribe_unfinished_recording` pinned `recording.language_mode` without the
+  "does the engine offer it" check `_retry_settings` has. Reproduced with the
+  restart's three realistic cases, the worker saw the recorded language: Canary
+  with a recording made in `auto` (its `_normalize_language_mode` falls back to
+  the first language of its list, `de`, so English speech is translated into
+  German), Cohere with `auto` (`_language_arg` forces `de`) and Granite CTC
+  (English only) with `de`. With recordings retention off the WAV is deleted
+  once the transcript is in History, so the wrong transcript was all that was
+  left. Fix: `_pin_recorded_language` is the one rule both roads use; where the
+  language is not offered the selected one runs and the log line is the same
+  `retry_recorded_language_not_offered`. The notice reported only "Transcribed,
+  in History" per row, so the row now says which language ran: `Transcribed, in
+  History (English; Auto not offered)`, from `unfinished_recording_language_note`
+  through `UnfinishedRecordingsDialog(language_note=)`. Not a changed return
+  value of `transcribe_unfinished_recording`: it is unpacked as `(ok, text)` by
+  the dialog's worker and a dozen tests.
+- **P4: a quit during a fallback retry wrote the fallback language into the
+  unfinished file's name.** `_keep_unfinished_recordings` took the job's
+  snapshot, which for a fallback retry is the selected language, and the next
+  start would have pinned that for good. It writes the recorded language where
+  the process knows it and the job's snapshot only for a recording it never
+  named.
+- **P3: the duplicate guard compared engine and model only.** A retry after
+  the user changed the custom vocabulary, a region, an endpoint or the key was
+  refused as "the same audio to the same provider", although the running
+  request had gone out with the old values: four cases (vocabulary, Deepgram
+  region, Azure endpoint, custom endpoint) answered `False` before the fix, as
+  did a replaced key and a changed selected language for a recording with no
+  known language. The comparison is now the request: `_transcriber_identity`
+  (what the provider's runtime is built from) plus the language plus a
+  credentials generation, because a replaced key is in no settings field. Not
+  over-triggered: a changed opacity and history size still count as a
+  duplicate (own test). The key part over-counts on purpose -- any provider's
+  key change allows a retry -- since a missed key change refuses the retry the
+  user needs, while an extra allowed one costs a request the user chose.
+  The notice now says what to do: "A retry of this recording is already
+  running with the same settings; cancel it first to retry again."
+- **P4: the duplicate notice painted a red Error over the running retry.**
+  `show_overlay_error` paints when no session owns the overlay, which is the
+  case while the retry runs if a newer dictation was cancelled meanwhile
+  (`_active_request_token` is None). The Error carries a Retry button, the very
+  press just refused. Reproduced with that sequence (the tray got nothing, the
+  overlay got an Error). The notice is now `busy_overlay_error` always -- the
+  tray -- and the overlay is untouched.
+- **P3 (older than the Retry work): a double click on Retry cancelled the
+  retry.** Retry and Cancel share one overlay slot at identical geometry, so
+  the second click of a double click landed on the Cancel that the first click's
+  Processing had put there. Reproduced with a real `OverlayUI`: Retry click,
+  `set_state("Processing")`, Cancel click 0.2 s later emitted `cancel_requested`.
+  A Cancel click within `QApplication.doubleClickInterval()` after the slot left
+  Retry is now dropped (logged); a later one works, and so does a Cancel that
+  did not follow Retry (negative control). The test fakes the clock and the
+  interval, so it does not depend on how fast the machine is. An existing test
+  (`test_overlay_control_signals_are_emitted`) clicked Retry and then Cancel
+  at once; it now clicks Cancel first, since that sequence is exactly what the
+  guard drops. Also checked once with real mouse events routed by position
+  through the shown overlay (a throwaway test, not kept: two left clicks 60 ms
+  apart at the Retry button's centre, then one after the interval): Retry's and
+  Cancel's centres are the same point (120, 49) at the default font; without the
+  guard the second click emitted `cancel_requested`, with it only the later
+  click did. Not done: the same on a real desktop with a mouse, at other font
+  sizes.
+
 ## 2026-10-17: severity wins over the not-inserted warning
 
 Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.

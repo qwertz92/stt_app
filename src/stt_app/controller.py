@@ -241,6 +241,9 @@ class _TranscriptionJob:
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
+    # `DictationController._credentials_generation` when the job was
+    # submitted: a key replaced since then makes a retry a different request.
+    credentials_generation: int = 0
     # False for a job with no recording id -- bytes the managed store never
     # received (a retry whose retained identity is unknown, a road whose
     # persist was refused) or a slot it could not name: its terminal marks
@@ -955,6 +958,11 @@ class DictationController(QtCore.QObject):
         # used for the overlay queue display, per-job target insertion, and
         # cooperative cancellation. A token is "live" while its job is present.
         self._jobs: dict[int, _TranscriptionJob] = {}
+        # Counts every reported key change (`invalidate_transcriber_
+        # credentials`): a replaced key is not in the settings, and a job
+        # remembers the count it was submitted under, which is how a retry
+        # tells whether the running one signed with the same credentials.
+        self._credentials_generation = 0
         self._deferred_background_results: list[tuple[_TranscriptionJob, str]] = []
         # True while a foreground result is between clearing its session state
         # and writing its own overlay state; a background report must not paint
@@ -1134,8 +1142,9 @@ class DictationController(QtCore.QObject):
         cancelled. One recording reached by two roads (a retry running for
         the slot's bytes) is written once. Each is written with the language
         it was made in, which the next start's transcription uses
-        (`transcribe_unfinished_recording`); "" when this process does not
-        know it.
+        (`transcribe_unfinished_recording`): the recorded one where this
+        process knows it, a job's own snapshot where it never named the
+        recording, "" for a failure held without either.
         """
         now = datetime.now()  # noqa: DTZ005 (local wall clock, as the queue rows show it)
         candidates: list[tuple[bytes, str, datetime, str]] = []
@@ -1151,7 +1160,15 @@ class DictationController(QtCore.QObject):
                         payload[0],
                         job.source_recording_id,
                         job.created_at,
-                        job.settings.language_mode,
+                        # The language the recording was made in, where known:
+                        # a retry that fell back to the selected language ran
+                        # under that one (`_pin_recorded_language`), and the
+                        # next start would pin the fallback for good. The
+                        # job's own for a recording this process never named.
+                        self._recorded_language_by_recording_id.get(
+                            job.source_recording_id
+                        )
+                        or job.settings.language_mode,
                     )
                 )
         for wav_bytes, recording_id in (
@@ -1261,8 +1278,12 @@ class DictationController(QtCore.QObject):
         settings = replace(self._settings, mode="batch")
         if recording.language_mode:
             # The Retry after a restart: the language it was made in, not the
-            # selection of the moment (owner decision 2026-10-17).
-            settings = replace(settings, language_mode=recording.language_mode)
+            # selection of the moment (owner decision 2026-10-17), where the
+            # engine and model selected now offer it; the startup notice names
+            # the language that ran otherwise (`unfinished_recording_language_note`).
+            settings, _pinned = self._pin_recorded_language(
+                settings, recording.language_mode, recording.recording_id
+            )
         try:
             text = (
                 self._executor.submit(
@@ -1316,6 +1337,23 @@ class DictationController(QtCore.QObject):
         )
         self.unfinished_transcript_saved.emit(text, entry, recording.recorded_at)
         return True, text
+
+    def unfinished_recording_language_note(self, recording: UnfinishedRecording) -> str:
+        """What the startup notice tells about the language a transcription of
+        `recording` runs in, when it is not the one the recording was made in:
+        "English; Auto not offered" -- the selected language that is used, and
+        the recorded one the engine and model selected now do not offer. ""
+        when the recorded language is used or none is known. The decision is
+        `_pin_recorded_language`'s; this asks it without logging a second line.
+        """
+        recorded = recording.language_mode
+        if not recorded or self._recorded_language_offered(self._settings, recorded):
+            return ""
+        selected = self._settings.language_mode
+        return (
+            f"{LANGUAGE_MODE_LABELS.get(selected, selected)}; "
+            f"{LANGUAGE_MODE_LABELS.get(recorded, recorded)} not offered"
+        )
 
     @QtCore.Slot(str, object, object)
     def _list_unfinished_transcript(
@@ -1463,7 +1501,13 @@ class DictationController(QtCore.QObject):
         cost a multi-gigabyte reload for a credential it never touches.
         Selecting that provider later changes ``settings.engine``, which the
         identity does see.
+
+        Every report is counted (``_credentials_generation``), whichever
+        provider it names: a retry then knows its running predecessor was
+        signed with a key that has been replaced since. Over-counting only
+        allows a retry the user may not have needed to repeat.
         """
+        self._credentials_generation += 1
         with self._transcriber_cache_lock:
             cached_key = self._transcriber_cache_key
         if cached_key is None:
@@ -4225,6 +4269,7 @@ class DictationController(QtCore.QObject):
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
             source_recording_id=source_recording_id,
+            credentials_generation=self._credentials_generation,
             marks_last_recording=marks_last_recording,
             source_audio_path=str(source_audio_path or "").strip(),
         )
@@ -9431,57 +9476,101 @@ class DictationController(QtCore.QObject):
         the user picked for the engine in use. The overlay says which applied.
         """
         settings = replace(self._settings)
-        recorded = self._recorded_language_by_recording_id.get(
-            self._last_failed_recording_id, ""
-        )
+        recording_id = self._last_failed_recording_id
+        recorded = self._recorded_language_by_recording_id.get(recording_id, "")
         if not recorded:
             return settings, "Retrying transcription with current settings..."
-        model = self._selected_model_name(settings)
+        settings, pinned = self._pin_recorded_language(settings, recorded, recording_id)
         recorded_label = LANGUAGE_MODE_LABELS.get(recorded, recorded)
-        if recorded not in language_modes_for_selection(
-            settings.engine, model, "batch"
-        ):
-            self._logger.info(
-                "retry_recorded_language_not_offered recording_id=%s language=%s "
-                "engine=%s model=%s selected=%s",
-                self._last_failed_recording_id,
-                recorded,
-                settings.engine,
-                model,
-                settings.language_mode,
-            )
-            selected_label = LANGUAGE_MODE_LABELS.get(
-                settings.language_mode, settings.language_mode
-            )
+        if pinned:
             return settings, (
-                "Retrying transcription with the current engine and model, which "
-                f"do not offer the recorded language ({recorded_label}); using "
-                f"the selected language ({selected_label})..."
+                "Retrying transcription with the current engine and model "
+                f"(recorded language: {recorded_label})..."
             )
-        return replace(settings, language_mode=recorded), (
-            "Retrying transcription with the current engine and model "
-            f"(recorded language: {recorded_label})..."
+        selected_label = LANGUAGE_MODE_LABELS.get(
+            settings.language_mode, settings.language_mode
+        )
+        return settings, (
+            "Retrying transcription with the current engine and model, which "
+            f"do not offer the recorded language ({recorded_label}); using "
+            f"the selected language ({selected_label})..."
+        )
+
+    def _recorded_language_offered(self, settings: AppSettings, recorded: str) -> bool:
+        """Whether the engine and model `settings` select offer the language a
+        recording was made in. Batch, the only mode a retry runs in."""
+        return recorded in language_modes_for_selection(
+            settings.engine, self._selected_model_name(settings), "batch"
+        )
+
+    def _pin_recorded_language(
+        self, settings: AppSettings, recorded: str, recording_id: str
+    ) -> tuple[AppSettings, bool]:
+        """`settings` transcribing in the language a recording was made in, and
+        True -- or `settings` as given, and False when the engine and model
+        selected now do not offer that language.
+
+        The one rule both roads of a retry share, the in-process one
+        (`_retry_settings`) and the one after a restart
+        (`transcribe_unfinished_recording`). A language the engine does not
+        offer is never passed on: the provider's own normalization would
+        substitute one -- for Canary the first language of its list, so the
+        audio is translated, for Cohere German, for Granite CTC (English
+        only) an English decoding of whatever was spoken -- and a wrong
+        transcript in History is worse than the language the user selected
+        for this engine, which is what stays. Logged, once per decision.
+        """
+        if self._recorded_language_offered(settings, recorded):
+            return replace(settings, language_mode=recorded), True
+        self._logger.info(
+            "retry_recorded_language_not_offered recording_id=%s language=%s "
+            "engine=%s model=%s selected=%s",
+            recording_id,
+            recorded,
+            settings.engine,
+            self._selected_model_name(settings),
+            settings.language_mode,
+        )
+        return settings, False
+
+    def _request_identity(
+        self, settings: AppSettings, credentials_generation: int
+    ) -> tuple[_TranscriberIdentity, str, int]:
+        """What a provider receives for one batch request: everything its
+        runtime is built from, the language it is asked for and the
+        credentials it signs with. Two retries of one recording that agree on
+        all three are the same request."""
+        return (
+            self._transcriber_identity(settings),
+            settings.language_mode,
+            credentials_generation,
         )
 
     def _running_retry_of_the_slot(
         self, settings: AppSettings
     ) -> _TranscriptionJob | None:
-        """The job still working on the retry slot's recording with the engine
-        and model `settings` would use, if there is one.
+        """The job still working on the retry slot's recording with the very
+        request `settings` would send (`_request_identity`), if there is one.
 
         The recording is the slot's own: the same audio bytes under the same
         recording id, which is how `_retire_retry_audio_delivered_by` tells a
         failure's retry from any other delivery. A job being stopped does not
         count -- the user cancelled it, or a retry with other settings
         replaced it -- and neither does a finished result waiting for its
-        paste, whose delivery retires the slot.
+        paste, whose delivery retires the slot. Engine and model are part of
+        the request, and so are the vocabulary, region, endpoint, key and
+        language: a retry the user changed one of is not what the running one
+        was sent with, and waiting for that one would be the wrong answer.
         """
         slot = (self._last_failed_wav_bytes, self._last_failed_recording_id)
-        model = self._selected_model_name(settings)
+        wanted = self._request_identity(settings, self._credentials_generation)
         for job in self._jobs.values():
             if job.aborting or job.insertion_deferred:
                 continue
-            if (job.engine, job.model) != (settings.engine, model):
+            if (
+                self._request_identity(job.settings, job.credentials_generation)
+                != wanted
+            ):
                 continue
             payload = self._request_audio_by_token.get(job.token)
             if payload is not None and (payload[0], job.source_recording_id) == slot:
@@ -9516,8 +9605,11 @@ class DictationController(QtCore.QObject):
         if running is not None:
             # The same audio to the same provider twice costs money twice
             # and returns the same text twice (owner decision 2026-10-17).
-            # Told, never a silent no-op: the tray, since the overlay shows
-            # the retry that is running.
+            # Told, never a silent no-op: on the tray always, never through
+            # `show_overlay_error`. Without a live session that paints a red
+            # Error with a Retry button over the retry that is running (the
+            # overlay then belongs to nobody, e.g. after a newer dictation was
+            # cancelled), and the notice itself names what to do instead.
             self._logger.info(
                 "retry_ignored_duplicate token=%d recording_id=%s engine=%s model=%s",
                 running.token,
@@ -9525,9 +9617,9 @@ class DictationController(QtCore.QObject):
                 running.engine,
                 running.model,
             )
-            self.show_overlay_error(
+            self.busy_overlay_error.emit(
                 "A retry of this recording is already running with the same "
-                "engine and model."
+                "settings; cancel it first to retry again."
             )
             return False
         # Stop any still-running transcription before retrying; if it finishes

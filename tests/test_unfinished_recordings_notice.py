@@ -48,7 +48,7 @@ def _history_entry(text, recording_id):
     )
 
 
-def _offer(stores, tmp_path, transcribe=None):
+def _offer(stores, tmp_path, transcribe=None, language_note=None):
     last, history, unfinished = stores
     return main_module._offer_unfinished_recordings(
         last_recording_store=last,
@@ -56,6 +56,7 @@ def _offer(stores, tmp_path, transcribe=None):
         unfinished_store=unfinished,
         transcribe=transcribe or (lambda _recording, _progress: (True, "text")),
         keep_dir=tmp_path / "recordings",
+        language_note=language_note,
     )
 
 
@@ -173,7 +174,15 @@ def test_nothing_unfinished_shows_nothing(app, stores, tmp_path):
     assert _offer(stores, tmp_path) is None
 
 
-def _dialog(tmp_path, unfinished, *, transcribe=None, reveal=None, confirm=None):
+def _dialog(
+    tmp_path,
+    unfinished,
+    *,
+    transcribe=None,
+    reveal=None,
+    confirm=None,
+    language_note=None,
+):
     return UnfinishedRecordingsDialog(
         recordings=unfinished.list_recordings(),
         store=unfinished,
@@ -181,6 +190,7 @@ def _dialog(tmp_path, unfinished, *, transcribe=None, reveal=None, confirm=None)
         keep_dir=tmp_path / "recordings",
         reveal=reveal or (lambda _paths: True),
         confirm_delete=confirm or (lambda _parent, _count: True),
+        language_note=language_note,
     )
 
 
@@ -238,6 +248,52 @@ def test_transcribe_all_reports_each_row_and_keeps_a_failure_actionable(
     assert dialog.transcribe_selected_button.isEnabled()
     dialog.table.selectRow(0)
     assert not dialog.transcribe_selected_button.isEnabled()
+    dialog.close()
+
+
+def test_a_row_says_which_language_ran_when_the_recorded_one_was_not_offered(
+    app, stores, tmp_path
+):
+    """The Retry after a restart falls back to the selected language where the
+    engine does not offer the recorded one (`transcribe_unfinished_recording`);
+    the row says so, since the transcript is in History and the user judges it
+    by the language it was made in."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1", stamp="2026-10-08T10:00:00")
+    _keep(unfinished, "b2", stamp="2026-10-08T11:00:00")
+    notes = {"a1": "English; Auto not offered", "b2": ""}
+    dialog = _dialog(
+        tmp_path,
+        unfinished,
+        language_note=lambda recording: notes[recording.recording_id],
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    cells = [dialog.table.item(row, 3) for row in range(2)]
+    assert [cell.text() for cell in cells] == [
+        "Transcribed, in History (English; Auto not offered)",
+        "Transcribed, in History",
+    ]
+    assert cells[0].toolTip() == cells[0].text()
+    dialog.close()
+
+
+def test_the_startup_offer_hands_the_language_note_to_its_notice(app, stores, tmp_path):
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    dialog = _offer(
+        stores, tmp_path, language_note=lambda _recording: "German; Auto not offered"
+    )
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    assert dialog.table.item(0, 3).text() == (
+        "Transcribed, in History (German; Auto not offered)"
+    )
     dialog.close()
 
 

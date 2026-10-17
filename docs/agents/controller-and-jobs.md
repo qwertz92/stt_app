@@ -122,29 +122,52 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     runs it too, so a retry delivered behind a newer recording resolves its
     failure. Retry still takes the slot only.
   - **A second Retry is ignored while the first retry of the same recording
-    still runs with the same engine and model** (owner decision 2026-10-17:
+    still runs with the same request** (owner decision 2026-10-17:
     the same audio to the same provider twice costs money twice and returns
     the same text twice; before, the second press stopped the first job and
     started another, and a remote request already sent still finished into
     history, so the provider was billed twice and history got two entries).
     `_running_retry_of_the_slot(settings)` scans `_jobs` for a job that is not
-    aborting and not a finished result waiting for its paste, whose engine and
-    model are the ones the new retry would use and whose request audio and
+    aborting and not a finished result waiting for its paste, whose request
+    equals the one the new retry would send and whose request audio and
     `source_recording_id` equal the slot's own -- the identity
     `_retire_retry_audio_delivered_by` uses, so the same bytes under another
     recording id are another recording. Being derived from `_jobs`, the block
     ends with the job: delivered, failed or cancelled, it leaves the registry
     and Retry works again (a failed retry is promoted to the slot again; after a
     success the slot is retired and the older failure behind it comes forward).
-    The ignored press logs `retry_ignored_duplicate`, returns `False` and tells
-    the user through `show_overlay_error` -- the tray while the retry owns the
-    overlay -- "A retry of this recording is already running with the same
-    engine and model."; the overlay is not repainted, since it shows the retry.
-    Another engine or model is another request and stops the running one as
-    before. A job being stopped does not count, so Cancel, then Retry, works;
-    a retry that went behind a newer dictation still counts. Tests:
-    `test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model`
-    and its neighbours in `tests/test_controller_queue.py`.
+  - **"The same request" is `_request_identity`, not engine and model alone**
+    (review 2026-10-17; the first version compared only those two, so a retry
+    after the user changed the vocabulary, a region, an endpoint or the key was
+    refused as a duplicate although the running request had gone out with the
+    old values). It is `_transcriber_identity(settings)` -- everything
+    `create_transcriber` bakes into the runtime, per engine, so engine, model,
+    custom vocabulary where the model takes one, Azure endpoint, region, the
+    custom endpoint's URL, API style and key command, silence-gate threshold,
+    key presence -- plus `language_mode` (the identity leaves it out on purpose,
+    but the request carries it) plus `_credentials_generation`. A key value is
+    in no settings field, so `invalidate_transcriber_credentials` (the Settings
+    dialog's report of a replaced key) counts up a generation and each job
+    remembers the one it was submitted under; any provider's key change counts,
+    which can only allow a retry, never block one. Settings that no provider
+    receives (opacity, history size, hotkeys) stay out of it: such a retry is
+    still a duplicate. A changed request is another request: it stops the
+    running job as an engine change always did, and the late result of that job
+    goes to history only. A job being stopped does not count, so Cancel, then
+    Retry, works; a retry that went behind a newer dictation still counts.
+  - **The ignored press is answered on the tray, never on the overlay**: it
+    logs `retry_ignored_duplicate`, returns `False` and emits
+    `busy_overlay_error` -- "A retry of this recording is already running with
+    the same settings; cancel it first to retry again." -- the second half says
+    what to do, since the first alone leaves the user with a button that does
+    nothing. It does not go through `show_overlay_error`: that paints a red
+    Error with a Retry button whenever `_overlay_session_active()` is false,
+    which happens while the retry runs (`_active_request_token` is None after a
+    newer dictation was cancelled), and that button is the press just refused.
+    Tests: `test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model`,
+    `test_a_retry_with_other_request_settings_is_allowed_while_the_first_runs`,
+    `test_the_duplicate_notice_never_repaints_an_overlay_no_session_owns` and
+    their neighbours in `tests/test_controller_queue.py`.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints
@@ -296,21 +319,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (`language_modes_for_selection(engine, model, "batch")`, logged as
     `retry_recorded_language_not_offered`). The second is not passed on to the
     provider because each provider's own `_normalize_language_mode` then picks a
-    stand-in -- Canary falls back to the first language of its list, which makes
-    it translate into it instead of transcribing -- while the selection is one
-    the user picked for the engine in use. The language also travels to disk,
-    so the same holds after
-    a restart: `LastRecordingStore.language_mode` and the unfinished recording's
-    file name (`docs/agents/persistence-and-history.md`), which the quit writes
+    stand-in -- Canary falls back to the first language of its list (German),
+    which makes it translate into it instead of transcribing, Cohere forces
+    German for `auto`, Granite CTC (English only) decodes German speech as
+    English -- while the selection is one the user picked for the engine in use.
+    **One helper decides it for both roads**: `_pin_recorded_language(settings,
+    recorded, recording_id)` returns the pinned settings and `True`, or the
+    settings as given and `False` (it writes the log line once);
+    `_retry_settings` words the overlay text from it and
+    `transcribe_unfinished_recording` uses it too. The restart road had its own
+    unchecked pin until the review of 2026-10-17: a recording made in Auto and
+    retried after a restart under Canary was sent as `auto` and came out
+    translated, and with recordings retention off the WAV was deleted after the
+    wrong transcript was saved.
+    The language also travels to disk, so the same holds after a restart:
+    `LastRecordingStore.language_mode` and the unfinished recording's file name
+    (`docs/agents/persistence-and-history.md`), which the quit writes
     (`_keep_unfinished_recordings`) and the startup notice transcribes with
-    (`transcribe_unfinished_recording`). History retranscribe and the Import tab
+    (`transcribe_unfinished_recording`). The file names the language the
+    recording was **made** in, never the one a fallback retry ran under: a job's
+    own snapshot is used only for a recording this process never named
+    (`_recorded_language_by_recording_id` wins), or the next start would pin the
+    fallback for good. Where the fallback applied after a restart the startup
+    notice's row says so -- `Transcribed, in History (English; Auto not
+    offered)`: the language that ran, then the one the engine did not offer.
+    The text comes from `unfinished_recording_language_note(recording)` (the
+    same `_recorded_language_offered` check, no second log line), handed to
+    `UnfinishedRecordingsDialog(language_note=)` and asked right before each
+    row's transcription; the dialog's `(ok, text)` contract is unchanged
+    because many callers unpack it. History retranscribe and the Import tab
     take their settings from their own pickers at the click; that is where a
     wrong language is now corrected, no longer by switching and pressing Retry
     (the Import tab's "Use last recording" starts its language picker from the
     recording's own, `docs/agents/settings-dialog.md`). Tests in
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
     the streaming, dying-stream, failed-retry and unknown-language cases),
-    `tests/test_controller_quit.py`.
+    `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
+    Granite CTC, the note, a quit during a fallback retry),
+    `tests/test_unfinished_recordings_notice.py` (the row text).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

@@ -246,6 +246,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   78x24). It runs after the first `set_state` (stylesheet padding counts only
   then), and `_balance_header_flanks` runs after it. Each entry lists every
   caption its button shows; the Cancel/Retry/Insert slot fits the widest.
+- **A Cancel click right after the slot left Retry is ignored** (review
+  2026-10-17). Retry, Cancel and Insert share one slot at one geometry
+  (`_sync_action_slot`), so a double click on Retry started the retry with its
+  first click -- which paints Processing and puts Cancel under the cursor --
+  and the second click cancelled the retry it had just started. The slot notes
+  when Retry leaves it (`_retry_in_slot`) and arms `_cancel_ignored_until` for
+  `QApplication.doubleClickInterval()` (the system's double-click time, so it
+  follows the user's own setting); `_on_cancel_clicked` drops a click before
+  that, logging `overlay_cancel_ignored reason=double_click_on_retry`, and
+  every later Cancel works, as does a Cancel in any state that did not follow
+  Retry. No layout change: no gap and no second slot, so the one-slot sizing
+  above still holds. Disabling Cancel for the interval instead was not done: the
+  button would flash grey under the cursor in the one moment the user looks at
+  it. Tests: `test_a_second_click_on_retry_lands_on_cancel_and_is_ignored`
+  (clock and interval set by the test), and its negative control
+  `test_cancel_works_at_once_when_the_slot_did_not_just_leave_retry`.
 - **The queue panel has two row kinds** (2026-10-01): `(token, label)` or
   `(token, label, kind)`, kind `QUEUE_ROW_KIND_TRANSCRIPTION` (Cancel) or
   `QUEUE_ROW_KIND_UNDELIVERED` (Dismiss, a transcript that was not
