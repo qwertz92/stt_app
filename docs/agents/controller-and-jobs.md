@@ -188,7 +188,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     design". Tests: `test_a_retry_never_stops_a_job_of_another_recording`,
     `test_a_changed_request_retry_stops_the_running_retry_without_the_overlay_token`,
     `test_a_changed_retry_beside_a_newer_dictation_replaces_only_its_own_job`,
-    `test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it`.
+    `test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it`. Two
+    older tests had pinned the diversion and were rewritten to the new rule:
+    `test_retry_last_transcription_proceeds_beside_another_recordings_job_when_the_microphone_is_closed`
+    (`tests/test_controller_coverage.py`, a job in flight is no longer stopped)
+    and `test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_store`
+    (`tests/test_controller.py`: the newer recording keeps running, its state
+    stays `transcribing` through the retry and its own completion deletes its
+    audio).
   - **The ignored press is answered on the tray, never on the overlay**: it
     logs `retry_ignored_duplicate`, returns `False` and emits
     `busy_overlay_error` -- "A retry of this recording is already running with

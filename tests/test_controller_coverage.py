@@ -4710,10 +4710,13 @@ def test_retry_last_transcription_blocked_while_the_microphone_is_open(microphon
     _ = app
 
 
-def test_retry_last_transcription_stops_a_transcription_in_flight_when_the_microphone_is_closed():
+def test_retry_last_transcription_proceeds_beside_another_recordings_job_when_the_microphone_is_closed():
     """The guard is the microphone's, not the transcription's: with the
-    microphone closed a retry still stops the job in flight (kept in
-    history if it finishes anyway) and submits the failed bytes."""
+    microphone closed a retry submits the failed bytes even though a job is in
+    flight. That job is not the slot's recording (no request audio of the
+    slot's), so the retry leaves it running: it used to stop whatever held the
+    overlay's token, which diverted the newest dictation to history only
+    (review round 2, 2026-10-17; `docs/agents/controller-and-jobs.md`)."""
     overlay = FakeOverlay()
     controller, app, store, submitted = (
         _controller_with_a_retryable_failure_and_a_job_in_flight(overlay)
@@ -4721,7 +4724,7 @@ def test_retry_last_transcription_stops_a_transcription_in_flight_when_the_micro
 
     assert controller.retry_last_transcription() is True
 
-    assert controller._jobs[5].aborting is True
+    assert controller._jobs[5].aborting is False
     retry_token = controller._active_request_token
     assert retry_token != 5 and submitted == [retry_token]
     assert store.transcribing_ids == ["rec-W"]
