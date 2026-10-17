@@ -162,18 +162,50 @@ Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,
   the recorded language only where `language_modes_for_selection(engine, model,
   "batch")` offers it, else keeps the selected one and says so in the overlay
   text and the log (`retry_recorded_language_not_offered`).
-- **Not changed, on purpose.** History retranscribe and the Import tab (also
-  "Use last recording") take language, engine and model from their own visible
-  pickers at the click; that is now the way to correct a wrongly chosen
-  language, since switching and pressing Retry no longer does. The Error text
-  after a failure says so ("...with another service or language"). An older
-  version cannot list an unfinished file whose name carries a language (its
-  name pattern ends at the id); this matters only for a downgrade.
-- **Observed, not part of this change and not tested.** `controller.set_language_mode`
-  and `_sync_overlay_language_options` ask `language_modes_for_selection` with
-  `settings.model_size` even for a remote engine, so the overlay's language list
-  for a remote model with its own list (Azure MAI, Speechmatics Enhanced,
-  Deepgram nova-2) may be the engine's default list instead.
+- **Not changed, on purpose.** History retranscribe and the Import tab take
+  language, engine and model from their own visible pickers at the click; that
+  is now the way to correct a wrongly chosen language, since switching and
+  pressing Retry no longer does. The Error text after a failure says so
+  ("...with another service or language"). An older version cannot list an
+  unfinished file whose name carries a language (its name pattern ends at the
+  id); this matters only for a downgrade.
+- **Follow-up, same day (owner's answer to the open question): the Import tab's
+  "Use last recording" starts its language picker from the recording's own.**
+  Without it the correction path began from the Transcription tab's language,
+  which is the wrong one in exactly the case the owner is correcting.
+  `_preselect_recorded_import_language` acts at the click, only for a managed
+  recording that stored a language, only when the selected import engine and
+  model offer it (the status line says which language was selected, or that the
+  model does not offer it and the choice stands), and never over a language the
+  user picked on the tab since the dialog was populated
+  (`_import_language_chosen`; the selector blocks its signals, so only a real
+  pick sets it, and reopening the dialog clears it). Changing the Import
+  service afterwards rebuilds the picker as before: it is a preselection, not a
+  pin.
+- **Follow-up, same day: the overlay's language list for a remote model was
+  the engine's default list, a real defect (verified, then fixed).** What I
+  had only read in the code was checked by running it: `controller.set_language_mode`
+  and `_sync_overlay_language_options` asked `language_modes_for_selection`
+  with `settings.model_size`, the local model, so a remote engine fell through
+  to its engine-wide list. Measured against the model's own list: Deepgram
+  nova-3 51 languages offered 118, nova-2 34 offered 118, AssemblyAI Universal
+  3.5 Pro 19 offered 100, Azure MAI-Transcribe 1.5 44 offered 61 and MAI-Transcribe 1
+  25 offered 61, and Speechmatics Enhanced and Standard offered Auto, which only
+  Melia 1 has. The overlay menu showed them and `set_language_mode` accepted
+  them; the provider then replaced the language with its own stand-in
+  (`_normalize_language_mode`, Auto for most) without telling the user. The
+  Settings dialog was already right (it asks with the selected remote model,
+  `_language_modes_for_current_selection`; the Import tab's
+  `_import_language_scope` and the retranscribe dialog likewise); only the
+  overlay was too permissive. Fixed in one place, `_offered_language_modes()`,
+  which both controller paths now use. The six model cases fail before and
+  pass after. **Residue, not migrated:** a language someone picked in the
+  overlay from the too-wide list and that the model does not offer is still in
+  `settings.json`; until the next pick the overlay shows the first entry of
+  the model's list while the provider sends its own stand-in for it (Auto for
+  most), and the Settings dialog already shows the first entry when opened (it
+  normalizes its combo). It needs an obscure language on a restricted remote
+  model, so nothing rewrites the setting unasked.
 
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 

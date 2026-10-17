@@ -163,7 +163,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   feeds the Transcription tab, the overlay selector (persists for the next
   recording, disabled while busy, disabled `Lang: Auto` when auto is the only
-  mode) and provider validation. Cohere never exposes Auto.
+  mode) and provider validation. Cohere never exposes Auto. The controller asks
+  it through `_offered_language_modes()` -- the active engine's own model
+  (`_selected_model_name`), never `model_size`, which is the local model:
+  asked with it, every remote model with a list of its own (Deepgram nova-2 and
+  nova-3, AssemblyAI Universal 3.5 Pro, Azure MAI-Transcribe 1 and 1.5,
+  Speechmatics Enhanced and Standard) showed, and `set_language_mode` accepted,
+  the engine's default list (2026-10-17;
+  `test_overlay_language_list_is_the_remote_models_own`).
 - **Concurrent mode + cooperative cancel: a finished transcription is never
   discarded.** `concurrent_transcription_mode` (`insert` default /
   `history` / `cancel`): on a new recording the in-flight job inserts into
@@ -297,9 +304,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     file name (`docs/agents/persistence-and-history.md`), which the quit writes
     (`_keep_unfinished_recordings`) and the startup notice transcribes with
     (`transcribe_unfinished_recording`). History retranscribe and the Import tab
-    (incl. "Use last recording") still take their settings from their own
-    pickers at the click; that is where a wrong language is now corrected, no
-    longer by switching and pressing Retry. Tests in
+    take their settings from their own pickers at the click; that is where a
+    wrong language is now corrected, no longer by switching and pressing Retry
+    (the Import tab's "Use last recording" starts its language picker from the
+    recording's own, `docs/agents/settings-dialog.md`). Tests in
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
     the streaming, dying-stream, failed-retry and unknown-language cases),
     `tests/test_controller_quit.py`.

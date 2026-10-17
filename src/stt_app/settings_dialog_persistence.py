@@ -249,6 +249,8 @@ class _PersistenceMixin:
                 **remote_model_values(settings),
             }
         )
+        # A new visit: the pickers below start from the settings again.
+        self._import_language_chosen = False
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_model_selector()
