@@ -197,9 +197,10 @@ def _download(version: str, dest_zip: Path) -> None:
     )
 
 
-# node.exe alone does not make a usable install: the app runs `npm install`
-# on first ONNX use. An extraction cut short by Ctrl+C, a full disk or an AV
-# quarantine can leave node.exe in place with npm missing.
+# node.exe alone does not make a usable install: a source checkout runs
+# `npm ci` itself on first ONNX use and after a lock change. An extraction cut
+# short by Ctrl+C, a full disk or an AV quarantine can leave node.exe in place
+# with npm missing.
 _REQUIRED_NODE_FILES = (
     "node.exe",
     "npm.cmd",
@@ -351,8 +352,9 @@ def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) 
         configure_corporate_ca(target_dir)
 
     print("\nRestart the app; the GPU/ONNX models (Cohere, Granite) will use it.")
-    print("The app auto-runs 'npm install' on first ONNX use; npm ships in the")
-    print("same folder as node.exe and is located automatically.")
+    print("From a source checkout the app installs (and after an update refreshes)")
+    print("its JavaScript packages itself; npm ships in the same folder as")
+    print("node.exe and is located automatically.")
     return 0
 
 

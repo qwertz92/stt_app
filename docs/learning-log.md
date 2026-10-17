@@ -26,7 +26,12 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   open and refuse every new recording. The Retry is refused with a tray note
   until the finalize has ended instead (before, it stopped the finalize, which
   is the diversion again). Not tested on a real stream: the refusal is shown
-  with the fake streaming transcriber.
+  with the fake streaming transcriber. Two older tests had pinned the
+  diversion as intended behaviour ("a retry stops the transcription in flight";
+  "the newer recording is marked canceled by the retry") and failed once the
+  rule changed; I only found them when the wider test files ran after the
+  merge, so they were rewritten in a follow-up commit rather than with the
+  change.
 - **P3: a fallback retry left no lasting trace.** The recorded language was not
   offered, so the transcript came out in another language than the speech; the
   Processing line that said so was overwritten by the first provider progress
@@ -83,6 +88,133 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   the global `time.monotonic`, which every other reader of the clock in the
   process saw; it now patches the module-local `overlay_ui.monotonic`
   (`from time import monotonic`).
+
+## 2026-10-17 (round 2 on the not-inserted warning: three P4s)
+
+The second review of the severity rule (`d507947`) found no P1 to P3 and three
+P4s. Each was reproduced first by a test that failed for the stated reason
+(`tests/test_controller_not_inserted_warning.py`; `docs/agents/overlay.md`,
+`docs/agents/text-insertion.md`).
+- **The preload progress poll turned a red failure orange again.** The poll
+  refreshes an Error on screen only when it is the offer the painter itself
+  wrote, which it knows from `_offer_painted = ("Error", painted)`. The red
+  variant of the severity rule set the same record, so a failure painted over
+  a pending offer (a refused start, a setting that was not saved, a hotkey
+  that did not register) looked like an offer to refresh: while a preload ran,
+  the next poll, at most 600 ms later, repainted the progress line in orange
+  over it and the failure text was gone before it could be read. Reproduced
+  with a running preload and three failures: all three were repainted, three
+  times in three polls. Fix: `_paint_status_keeping_offer` records the paint
+  only when it is informational (`None` for a failure), so the poll treats a
+  failure like any other result it must not paint over. The preload's start
+  line is informational, so it is still refreshed, and so is the progress
+  line after a failure is replaced; a test pins both. Not a flag next to the
+  tuple: the record has exactly one reader (`_offer_painted_is_on_screen`)
+  and "nothing recorded" already means "not the painter's to refresh".
+- **The single-writer guard could not see `warning=None`.** `FakeOverlay`
+  refuses an Insert offer painted without the `warning` key, which stopped a
+  writer that forgot it, but since the red variant passes `warning=None` a
+  second writer that passed `None` itself satisfied the check. A source-level
+  test (`test_only_the_one_writer_names_the_insert_action`) parses
+  `controller.py` and requires `OVERLAY_ERROR_ACTION_INSERT` to be named in
+  `_paint_not_inserted` and nowhere else. Negative control: one extra
+  reference at module level made it fail with the message naming the helper;
+  removed again.
+- **A background failure hid a pending offer** (older than the warning work).
+  `_report_background_failure` painted a plain Error when no session owned the
+  overlay, with no transcript and no Insert. A queued job failing while an
+  earlier job's insert offer was pending (an offer stays pending until a new
+  recording starts, an insert succeeds or Clear is pressed) took Copy and
+  Insert off the screen, and the "Still not inserted" text came back only
+  with the next status writer. It now goes
+  through `_paint_status_keeping_offer("Error", ...)` when an offer is
+  pending: red, the offer kept, like every other failure over an offer. The
+  trade-off is the overlay's single action slot: Insert and Retry cannot both
+  show, so the failure's Retry button gives way to Insert. Its text says
+  "use Retry transcription in the tray menu" instead of "use Retry", since
+  the audio is kept and the tray's entry reaches it; the tray notification
+  keeps the old wording because it names no button. Chosen over keeping Retry
+  because the offered text is the user's own pending words, while Retry has
+  the tray as a second road. With no offer pending nothing changed (the
+  existing test for that case still passes).
+
+## 2026-10-17 (second review of the Deepgram cap: the sender ends the stream itself)
+
+Structural change first: the sender no longer logs and keeps waiting at the cap;
+it ends the stream, through the failure path a failed send already takes, and
+returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
+... Deepgram closes after its own 10 s" part of the entry below.
+- **The finding (P3, reproduced by the lead on a fake server)**: at the cap the
+  sender only logged and `continue`d, so the dead-microphone error still
+  depended on Deepgram closing the socket. A vendor window longer than 10 s
+  after audio (the NET-0002 window has no documented length), or a proxy that
+  holds the TCP connection, would leave the overlay on "Listening" until the
+  hotkey; and when the socket did close, the user read the vendor's close
+  reason ("WebSocket connection closed unexpectedly.") although the app knew
+  the cause.
+- **The fix**: the first wait past `_STREAM_KEEPALIVE_MAX_GAP_S` (the 11th 3 s
+  wait, 33 s after the last block; ten KeepAlives went out before it) logs a
+  WARNING, records a `TranscriptionError` through
+  `_record_stream_error(..., notify=True)` and returns. The user reads
+  "Deepgram streaming failed: The microphone delivered no audio for more than
+  30 seconds, so the stream was ended." -- the number is `int` of the constant,
+  and "Deepgram streaming failed:" is the prefix `_format_stream_error` puts on
+  every streaming failure, so the lead's suggested "... so the Deepgram stream
+  was ended" would have said Deepgram twice. There is no resuming after the cap
+  (the earlier "audio after the cap restarts the count" behaviour is gone): the
+  stream is over and the recording is kept for Retry.
+- **Checked end to end, not assumed.** Reading: the provider's callback is the
+  controller's `_on_runtime_error`, which emits `stream_runtime_failed`; the
+  slot `_on_stream_runtime_failed` ignores a retired session's token and a
+  failure after the stop (the finalize reports that one), otherwise runs
+  `_on_transcription_failed` (capture stopped, audio persisted and held for
+  Retry, recording marked failed, red Error with the Retry guidance). Exactly
+  once because `_stream_error_reported` latches per session, `_on_close` only
+  notifies when no error was recorded yet, and the controller clears the
+  session token on teardown. A stop that begins first clears the callback
+  (`stop_stream` does it before anything else), so a cap landing during a stop
+  is recorded but not reported, and the stop raises it when it has no text; the
+  drain finds the sender thread dead (`_drain_stream_sender` checks
+  `send_thread.is_alive()`) and gives up without waiting for it, so the stop
+  does not hang (the test bounds it at 3 s; it does not measure how fast). An
+  abort sets the session to retiring, so the cap finds no matching session and
+  stays quiet. Run for real: a controller test
+  (`test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording`)
+  with the real `DeepgramTranscriber` on its fake socket and the real sender
+  thread (the socket stays open and silent, a cap of 120 ms) sees one
+  `stream_runtime_failed`, the capture stopped, the audio saved for Retry with
+  one failure mark, one red Error carrying the message, the socket closed by
+  the teardown, and no second report after the socket's own close. It was
+  written after the fix, so its red state is shown by mutation instead: with
+  the cap recording the error but not notifying (what the old log-and-continue
+  amounted to for the controller) it waits its 10 s for the Error and fails.
+  Calling Retry in that test would send the RIFF stub to the real Deepgram
+  batch endpoint through the patched factory, so it asserts the kept audio
+  (`_last_failed_wav_bytes`, the store's save and failure mark) instead.
+- **Tests that pin the number (P4)**: the old boundary test measured
+  `keepalive_times[-1] - 0.1` against the module's own constant, which passes
+  for a cap of 40 s and (by exact arithmetic only) for `>=`. The new one counts:
+  exactly ten KeepAlives, the end at the 11th wait, and the bound written as
+  `AUDIO_INPUT_BUFFER_S + 10.0` in the test, not read from the constant. Whole
+  multiples of 3.0 are exact in floating point, so no tolerance decides it. The
+  real-thread tests use a cap of 0.12 s on a 0.05 s interval (no float tie) and
+  hold the first block inside its send until the interval is shortened, so a
+  late test thread cannot let the sender write its silence frame first. Mutation
+  checks on the real source, each restored byte for byte afterwards: `>=` for
+  `>` fails the boundary test and the cap-during-stop test (the end comes at the
+  10th wait); a cap of `AUDIO_INPUT_BUFFER_S + 20.0` fails the same two (the end
+  comes at 42 s); `notify=False` fails the boundary test, both real-thread tests
+  and the controller test; `continue` for `return` at the cap fails all four
+  provider tests (the sender keeps waiting and the loop reaches the sentinel at
+  300 s).
+- **Doc claim corrected (P4)**: `remote-providers.md` said the silence frame
+  "stops with the cap", and commit `cacca52` said the cap stops "the silence
+  frame". Both are vacuous: the silence frame goes out only at the first empty
+  wait of a session that has sent no audio, never again, so a cap cannot stop
+  something that is already over. The entry now says that, and that the frame
+  does not reset the count (a session that never got a block would hit the same
+  cap 33 s after its sender started; the first-callback watchdog aborts such a
+  start at 12 s, long before).
 
 ## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
 
@@ -10216,3 +10348,110 @@ on and the overlay green, the first ~10 s were not captured.
   warm stream inherited its predecessor's last callback time, read as a
   60 s stall. Lesson: a wait added on the Qt thread changes every input
   path that queues behind it, not just the one that called it.
+
+## 2026-10-17: a source checkout updates its JavaScript packages by itself
+
+- **Owner complaint.** The work PC runs the app from a git checkout with
+  plain Python and pip (uv and installers are blocked there). The
+  2026-10-10 release changed `package-lock.json` (Transformers.js 4.3.0 ->
+  4.3.1, sharp 0.35.4 -> 0.35.5 for an advisory), so after `git pull` the
+  Cohere/Granite runtime needed `npm ci --omit=dev` by hand -- an npm
+  command he does not know and should not have to. The installed app was
+  never affected: `build_windows_release.ps1` runs `npm ci --omit=dev` and
+  `stt_app.spec` copies `node_modules` into the bundle (and refuses to build
+  without it).
+- **What existed.** Since the first ONNX models, `_ensure_js_runtime_available`
+  ran `npm install` in the checkout when the Transformers.js import probe
+  failed. A changed lock never made the probe fail (4.3.0 imports fine), so
+  it never ran; and run in place, `npm install` could rewrite the checkout's
+  own lock, which then blocks the next `git pull`.
+- **Decision (lead): the app keeps `node_modules` in step itself, for
+  source runs only.** `transcriber/_node_packages.py`: drift is the lock
+  against npm's record `node_modules/.package-lock.json` (version and
+  integrity, 0.02 s, no network while in step); an update runs `npm ci` in
+  `.node_modules_update`, checks the staged tree, then swaps it in with two
+  renames. The old in-place repair became the same staged install.
+- **Measured, and what it changed in the design** (HomeBase, throwaway
+  copy, never the repo's tree):
+  - A failed `npm ci` against an unreachable registry gave up after 71 s and
+    left a half-deleted `node_modules` (`npm warn cleanup Failed to remove
+    some directories`, EPERM): in place, every proxy hiccup would have
+    broken a model that worked. Hence the staging folder.
+  - Windows renamed `node_modules` while a node child that had imported
+    Transformers.js had five DLLs mapped from it (onnxruntime binding and
+    DLL, sharp, two libvips). The rename does not protect a running child,
+    so every runner child holds an OS lock file (its presence) for its
+    lifetime, in the app and in the benchmark worker alike, and an update
+    waits while one is held.
+  - A presence cannot cover a runner of an older build, which is exactly
+    what runs after a `git pull` until the app restarts, while the
+    benchmark worker it spawns already imports the new code. A write-open
+    of a DLL, though, is refused for exactly the five files a live child
+    has mapped and for none once it exited, so the update also checks that
+    (0.45 s walk, only when due), before npm and right before the swap. A
+    live node child without a presence then deferred the update in 0.83 s.
+  - npm's record lists only what it installed (42 entries here); the lock
+    lists 27 more, all optional: 25 sharp builds for other platforms and two
+    helpers of its WebAssembly build. Counting their absence as drift would
+    have run npm, and reached the network, at every start.
+  - Update 4.3.0 -> 4.3.1 with a warm npm cache: 11.2 s in all (npm 9.3 s,
+    staged probe 0.24 s, renames 0.01 s, deleting the old 466 MB tree
+    1.5 s), 12.6 s with the final code's two DLL checks; Transformers.js
+    4.3.1 imported afterwards. A first install with an empty cache
+    (151 MB) took 17.8 s. The failure run took 72.7 s, kept the tree in use
+    (it still imported) and produced the tray notice once.
+- **Review round 1 (Opus) found one P2, fixed with a test that failed
+  first.** npm exits 0 when it cannot fetch an optional package. Without
+  `@img/sharp-win32-x64` -- a proxy that blocks one tarball is enough --
+  the staged tree passed `lock_drift`, which cannot tell this platform's
+  sharp binary from the 25 others that are rightly absent, and passed the
+  import probe, because Node resolved the binary from the old tree one
+  folder up; the swap then deleted the only tree sharp loaded from. The
+  staged tree must now hold every package the tree in use has that the lock
+  still lists (`dev` packages of a developer's full install excepted:
+  `--omit=dev` leaves them out on purpose, and counting them would refuse
+  every update in that checkout -- hypothetical today, since `package.json`
+  has no devDependencies). Reproduced for real on HomeBase in the
+  throwaway copy with an `.npmrc` saying `optional=false`, which makes npm
+  skip every optional package and still exit 0: the d8a394c code swapped
+  in a tree with only `@img/colour` and the runner's import then failed
+  inside sharp, whose error asked for the win32-x64 binary
+  (`npm install --os=win32 --cpu=x64 sharp`); the fixed code refused it
+  ("npm did not install @img/sharp-win32-x64", 22 s), kept 4.3.1, which
+  still imported, and sent the notice once. Without that `.npmrc` the fixed
+  code updated 4.3.1 -> 4.3.0 and back with no false refusal (35 s and
+  13 s; npm itself 30 s and 11 s while other agents loaded the machine).
+  Blocking the `@img` scope's registry instead did not reproduce it: npm
+  then refuses the non-optional `@img/colour` too (`EALLOWREMOTE`) and
+  fails outright. Smaller fixes from the same round: a rename retries for 30 s
+  instead of 2 s (the reviewer measured that one open file anywhere inside
+  refuses a directory rename, and a virus scanner opens each freshly
+  extracted file); the tray notice fits Windows' 255 characters whole (it
+  was 256 with a long reason, which cost it its final full stop); a notice
+  raised
+  before the tray registered its handler waits for it instead of being
+  dropped (the startup preload runs first); older npm's `npm ERR!` lines
+  name the error too.
+- **Review round 2 (Sonnet) over those fixes: no P1 or P2.** It fed the
+  real records of the real lock installed by npm 10.9.9, 11.19.0 and
+  12.0.2 (`ci --omit=dev` and plain `install`, 42 keys each) to
+  `_dropped_packages` in all 36 pairs: no false refusal. Its P3, fixed with
+  a test that failed first: a tree in use installed for another platform
+  (from WSL into the Windows checkout, or copied from x64 to ARM64) holds
+  that platform's sharp binaries, which npm here rightly skips, so every
+  update was refused -- the repair for exactly such a tree included. The
+  refusal now applies only while the tree in use still loads (one more
+  0.25 s probe, only when a package is missing); a tree that does not load
+  protects nothing. Also from that round: a first install had no test, the
+  30 s rename retry can stretch a stuck stranded tree to about 90 s per
+  dictation (recorded in known limitations), and `FileExistsError` no
+  longer waits out the retry.
+- **Lessons.** A repair that waits for a symptom (the import failing) never
+  sees a change that leaves the old state working; compare against the
+  declared state instead. "The OS will refuse while files are in use" needs
+  measuring before it carries a safety argument, and for the exact kind of
+  use: on Windows a mapped DLL does not stop a directory rename, one open
+  file handle inside does, and a write-open of a mapped DLL is refused. And
+  an import probe run from a staging folder inside the checkout proves
+  nothing about what the staged tree lacks: Node's module resolution climbs
+  up into the tree in use.

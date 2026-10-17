@@ -464,8 +464,58 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   - A microphone that stops delivering after its first block is not noticed
     by the capture (the first-callback watchdog watches the first block only;
     the device listener defers its refresh while a recording runs), so a
-    dying microphone ends a Deepgram stream only through Deepgram's own close:
-    about 40 s after the last block (the sender bridges a gap for at most 30 s,
-    `_STREAM_KEEPALIVE_MAX_GAP_S`, then Deepgram's 10 s window), against ~10 s
-    before the KeepAlive existed. Not checked for the other streaming engines
-    (AssemblyAI, local): this entry does not claim whether they notice it.
+    dying microphone ends a Deepgram stream only through the Deepgram sender
+    itself: it ends the stream about 33 s after the last block (it bridges a
+    gap for at most 30 s, `_STREAM_KEEPALIVE_MAX_GAP_S`, and the 11th 3 s
+    wait is the cap), independent of Deepgram, against ~10 s before the
+    KeepAlive existed, when Deepgram's own close was the detector. The user
+    reads "Deepgram streaming failed: The microphone delivered no audio for
+    more than 30 seconds, so the stream was ended." Not checked for the other
+    streaming engines (AssemblyAI, local): this entry does not claim whether
+    they notice it.
+- **A source checkout's JavaScript package update** (2026-10-17,
+  `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
+  - A failed update is tried again at every app start, and each try delays
+    that session's first Cohere/Granite start by as long as npm takes to
+    fail: 71 s for an unreachable registry (npm's own retries, measured),
+    up to the 600 s bound for a connection that hangs. Retrying is what lets
+    a passing network problem heal without the user; a back-off (remember
+    the failed lock and wait a day) needs an owner decision, ~1 h.
+  - The update cannot be cancelled, and a quit during it ends only by the
+    15 s quit watchdog; npm then keeps running in its job until it finishes,
+    and the next start removes `.node_modules_update` (or, while npm still
+    writes there, reports "a folder left by an earlier update could not be
+    removed" once and tries again a start later). `run_bounded` has no
+    cancel hook; adding one is ~2 h. Reasoned, not measured: should that
+    removal succeed between two of the orphan's writes, a second npm runs
+    in the same folder beside it; the staged checks and Windows refusing
+    to rename a folder with an open file in it are what keep a mixed tree
+    out of `node_modules` then.
+  - With "Keep ONNX model loaded" on, the update runs inside the startup
+    preload, whose overlay line stays "Loading selected model..." for the
+    11 s to 72 s it takes: the preload worker gives the transcriber no
+    progress callback, so "Updating the JavaScript packages ..." appears
+    only when a dictation starts the runner. Wiring the preload's progress
+    through is ~1 h with tests.
+  - The benchmark worker is a process of its own; if its first runner start
+    is the one that finds the drift, that case's load time includes npm.
+  - A rename that keeps failing for its 30 s (a file inside held open for
+    good) throws the staged tree away although it was verified, and the
+    next start runs npm again; keeping it for a later swap is ~1 h. While
+    the second rename retries, `node_modules` is absent for up to 30 s
+    (60 s if the way back retries too); Cohere/Granite starts in this
+    process wait on `_JS_RUNTIME_LOCK` meanwhile, and the overlay keeps
+    the "Updating the JavaScript packages" line. A stranded
+    `node_modules.previous` that can never be moved back costs three
+    30 s restore attempts per runner start -- 88.5 s measured in review
+    with every rename refused -- and is not cached, so each Cohere/Granite
+    dictation repeats it. Renaming the staged tree once inside the staging
+    folder before moving the live one, and a per-session retry budget,
+    would bound both (~1-2 h with tests). Rare: it needs a rename Windows
+    refuses for good.
+  - A runner of an older build (or of a crashed app) holds no presence and
+    is seen only by its loaded DLLs, so in the fraction of a second between
+    its start and its import of Transformers.js an update can still swap
+    the tree; that runner then loads the new tree, or, inside the two
+    renames' milliseconds, fails to start once with "runtime failed to
+    load". Not reproduced; closing it needs the old build's cooperation.

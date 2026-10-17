@@ -281,8 +281,95 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - The override nests the package under
     `node_modules/@huggingface/transformers/node_modules/`, which Node resolves
     first; `benchmark_environment._node_package_version` reads there first.
-  - A running source-tree app holds its Node child's native DLLs; run
-    `npm ci --omit=dev` only with the app closed.
+  - A running source-tree app holds its Node child's native DLLs; a manual
+    `npm ci --omit=dev` belongs with the app closed. The app keeps its own
+    checkout in step without one (next entry).
+- **A source checkout keeps `node_modules` in step with `package-lock.json`
+  by itself; the installed app never runs npm** (2026-10-17, owner
+  complaint: after `git pull` brought the 2026-10-10 lock, the work PC's
+  checkout needed an npm command he should not have to know).
+  `transcriber/_node_packages.py`, called from
+  `local_webgpu_asr._ensure_js_runtime_available` before each runner start
+  (once per session for the probe cache key).
+  - Source run only: `_find_source_package_root` answers None when
+    `sys.frozen` is set (a `dist/` build inside a checkout must not replace
+    the checkout's tree), and needs `package.json` named `stt-app` next to
+    `package-lock.json` and `.git` (a wheel in a foreign project's tree never
+    runs npm there). The bundle gets its tree from `stt_app.spec`.
+  - Drift is the lock against npm's own record,
+    `node_modules/.package-lock.json`, by version and integrity, not
+    `resolved` (a registry mirror records its own URL), skipping `dev` and
+    absent `optional` entries (sharp's other-platform binaries are in the
+    lock, never installed: counting them would run npm at every start).
+    Two JSON reads, 0.02 s; no npm, no network while in step.
+  - The update never touches the tree in use until it is complete: `npm ci
+    --omit=dev --no-audit --no-fund --no-update-notifier` in
+    `.node_modules_update` (beside `node_modules`, same volume, git-ignored)
+    through `run_bounded` (600 s, tree kill, no console window), then the
+    staged tree must pass `lock_drift`, must hold every package the tree in
+    use has that the lock still lists (`_dropped_packages`), and must pass
+    the import probe from the staging folder; then two renames swap it in
+    and the old tree is deleted. The second check exists because npm exits
+    0 when it could not fetch an optional package: without
+    `@img/sharp-win32-x64` the staged tree passed `lock_drift` (it cannot
+    tell this platform's binary from another's) and the probe, which
+    resolved the binary from the old tree one folder up, and the swap
+    deleted the only tree sharp loaded from (review of d8a394c; reproduced
+    on HomeBase with an `.npmrc` saying `optional=false`). `dev` packages a
+    developer's full install has are not counted: `--omit=dev` leaves them
+    out on purpose. And the refusal applies only while the tree in use
+    loads (`_loads(probe, root)`): a tree installed for another platform
+    (from WSL, or copied from x64 to ARM64) holds binaries npm here rightly
+    skips, does not load, and protects nothing -- refusing for it failed
+    every update, the repair included (review of 9a09c99). A rename
+    retries 60 x 0.5 s: Windows refuses to rename a
+    folder while any file in it is open (WinError 5, measured in review
+    with one file open three levels down), virus scanners open freshly
+    extracted files, and giving up throws the verified staged tree away. A
+    failed second rename moves the old tree back, and `_discard_staging`
+    never deletes a stranded `node_modules.previous` while `node_modules`
+    is missing. In place, a failed `npm ci` (registry unreachable, 71 s)
+    left a half-deleted tree.
+  - Never under a live runner, in any process of the user: every runner
+    child holds a `RunnerPresence` (an OS lock file under
+    `locks/node-runners`, `file_lock.is_lock_held` reads it) from before its
+    `Popen` until `_terminate_process` sees it exit; an update with a held
+    presence is deferred to the next start. Registration and the update
+    both run under `package_root_lock` (cross-process) inside
+    `_JS_RUNTIME_LOCK` (in-process), so neither can slip between the
+    other's check and act. Measured: Windows renames `node_modules` while a
+    node child has five DLLs mapped from it (onnxruntime binding and DLL,
+    sharp, two libvips) -- a mapped DLL is no open file handle -- so the
+    rename protects nothing; the benchmark worker is a second process that
+    starts runners.
+  - A runner without a presence -- started by an older build that still
+    runs after `git pull` while the benchmark worker already runs the new
+    code, or left by a crashed app -- is caught by its loaded DLLs:
+    Windows refuses a write-open of exactly the files a live child maps
+    (measured: those five, none after it exited), so
+    `loaded_native_modules` (a 0.45 s walk, only when an update is due)
+    defers the update before npm and again right before the renames.
+  - A failure keeps the old tree, logs `node_modules_update_failed` with
+    npm's output, and, once the old tree has loaded, sends one tray notice
+    per session (`node_packages_notice_text`, via
+    `set_node_packages_notice_handler` ->
+    `DictationController.node_packages_not_updated`). The text fits
+    `config.TRAY_MESSAGE_MAX_CHARS` whole -- the reason is shortened, never
+    the sentence that the models still work -- and a notice raised before
+    `main` registers the handler (the startup preload runs from
+    `controller.initialize()`, and "npm was not found" fails in
+    milliseconds) waits and is delivered at registration; success logs
+    `node_modules_updated` with the version changes. A tree that does not
+    load although the record says in step is reinstalled once the same
+    staged way (this replaced the in-place `npm install` repair, which
+    could also rewrite the checkout's lock). An update that was tried is not
+    repeated in the session.
+  - Measured on HomeBase, 4.3.0 -> 4.3.1 lock in a throwaway copy: 11-13 s
+    in all with a warm npm cache (npm 9.2-9.3 s, staged probe 0.24-0.41 s,
+    renames 0.01 s, deleting the old 466 MB tree 1.5-1.9 s); first install
+    with an empty cache (151 MB downloaded) 17.8 s; failure with an
+    unreachable registry 72.7 s, old tree kept and importing; a live node
+    child without a presence deferred it in 0.83 s with no npm run.
 - **Python dependencies are exact pins, updated 2026-10-03 and measured
   through their code** (locked: onnxruntime 1.30.0, onnxruntime-genai 0.17.1,
   huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.0; direct

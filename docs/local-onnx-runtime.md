@@ -24,6 +24,9 @@ The Cohere and Granite models use a separate out-of-process stack:
 
 The helper is a child process by design. If the JavaScript runtime crashes, the
 main app can report the error and continue instead of taking down the UI.
+Its JavaScript packages are bundled with the installed app; a source checkout
+keeps them in step with `package-lock.json` by itself (see "Keeping the
+JavaScript packages current in a source checkout" below).
 
 Nemotron uses a separate in-process Python path through ONNX Runtime GenAI. It
 does not use the Node helper. ORT GenAI owns the cache-aware FastConformer/RNNT
@@ -72,6 +75,59 @@ declares `adm-zip ^0.5.16`, a range with a known vulnerability
 (GHSA-vwc7-r8mq-g2x9), and would need a second override. The pin is re-measured
 whenever Transformers.js pins a newer ONNX Runtime or `onnxruntime-node` 1.31
 appears, and removed as soon as the newer version is not slower.
+
+### Keeping the JavaScript packages current in a source checkout
+
+The installed app bundles `node_modules` (`stt_app.spec` copies it, and the
+release build runs `npm ci --omit=dev` first); it never runs npm. A source
+checkout installs its packages from `package-lock.json`, so a release that
+changes the lock -- 2026-10-10 moved Transformers.js 4.3.0 to 4.3.1 and sharp
+0.35.4 to 0.35.5 for a security advisory -- would otherwise need an npm
+command after every such `git pull`. Since 2026-10-17 the app does it itself
+(`src/stt_app/transcriber/_node_packages.py`):
+
+1. Before the first Cohere/Granite runner of a session starts (the startup
+   preload, normally), it compares `package-lock.json` with npm's own record
+   of the installed tree, `node_modules/.package-lock.json`, by version and
+   integrity. That is two file reads (0.02 s); when they agree nothing else
+   happens and nothing touches the network. sharp's binaries for other
+   platforms are in the lock as optional packages and are never installed
+   here, so their absence is not a difference.
+2. When they differ, it runs `npm ci --omit=dev` in `.node_modules_update`
+   beside `node_modules` (git ignores it), checks that the staged tree
+   matches the lock, still holds every package that a tree in use which
+   loads has and the lock lists (npm skips an optional package it cannot
+   download, such as sharp's Windows binary, and still reports success),
+   and imports
+   Transformers.js, and only then replaces
+   `node_modules` with two renames and deletes the old tree. Measured on
+   HomeBase with the 2026-10-10 change: 11-13 s in all with a warm npm cache
+   (npm 9.2 s, deleting the old 466 MB tree 1.5-1.9 s); a first install with an
+   empty cache, downloading 151 MB, took 17.8 s.
+3. If that fails -- an unreachable registry made npm give up after 71 s -- the
+   tree in use stays untouched, the models start on it, the log gets
+   `node_modules_update_failed` with npm's output, and the tray says once
+   what failed. The next app start tries again. Run in place, `npm ci` would
+   first have deleted the working tree: the same failed run left a
+   half-deleted `node_modules` behind.
+4. No update replaces the tree while any runner child is alive, in the app
+   or in its benchmark worker: Windows lets `node_modules` be renamed even
+   while a running child has onnxruntime's and sharp's DLLs mapped from it
+   (measured), so every runner holds a lock file under
+   `%APPDATA%\stt_app\locks\node-runners` for its lifetime, and an update
+   waits for the next start while one is held. A runner that holds no such
+   file -- one an older app version started before the `git pull`, or one a
+   crashed app left behind -- still has those DLLs loaded, and Windows
+   refuses to open a loaded DLL for writing; the update checks that too,
+   before npm and again right before the swap (measured: a live node child
+   deferred it in 0.83 s, no npm run).
+
+The update runs on the thread that starts the runner (a preload or
+transcription worker, never the UI thread). During the startup preload its
+time counts as loading the model; a transcription that runs the update itself
+(with "Keep ONNX model loaded" off there is no preload) shows "Updating the
+JavaScript packages ..." as its progress. It cannot be cancelled; npm is ended
+after 10 minutes at most.
 
 ## Runtime Formats
 

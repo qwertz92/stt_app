@@ -2363,6 +2363,10 @@ TRAY_CANCEL_ACTION_LABEL = "Cancel current action"
 # The tray menu's re-paste entry, named by the reports of transcripts that are
 # still waiting to be inserted, which is what that entry inserts first.
 TRAY_REPASTE_ACTION_LABEL = "Insert transcript again"
+# The longest tray notification text Windows shows (`NOTIFYICONDATAW.szInfo`
+# holds 256 characters with its terminator); `win_tray_icon` cuts anything
+# longer, and a text composed for the tray is sized to fit whole.
+TRAY_MESSAGE_MAX_CHARS = 255
 # The two kinds of row the overlay's queue panel shows: a transcription still
 # running or queued (its button cancels it), and a finished transcript whose
 # paste failed or may have failed (its button dismisses the row; the text

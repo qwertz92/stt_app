@@ -109,11 +109,15 @@ _STREAM_KEEPALIVE_INTERVAL_S = 3.0
 # watchdog's hard limit, a stop's backlog wait). Past the buffer the audio is
 # lost anyway, and 10 s more is margin for a late sender thread and for a
 # stall that ends just after the buffer overflowed. Beyond that the microphone
-# is dead, not slow: the sender stops writing KeepAlives (and the silence
-# frame), Deepgram's close fires after its own 10 s, and the existing
-# streaming-failure path runs. Real audio after the cap, if the socket is
-# still open, is sent as usual and ends the gap. Gaps are counted in whole
-# waits (`_STREAM_KEEPALIVE_INTERVAL_S` each), not from a clock.
+# is dead, not slow, and the sender ends the stream itself at the first wait
+# past the cap -- the eleventh, 33 s after the last block -- through the
+# failure path a failed send takes, with a message that names the cause.
+# Waiting for Deepgram to close the socket instead would have made the end
+# depend on the vendor (a longer window than 10 s after audio, or a proxy that
+# keeps the TCP connection open, leaves the overlay on "Listening" for good),
+# and the user would read the vendor's close reason instead of what the app
+# knows. Gaps are counted in whole waits (`_STREAM_KEEPALIVE_INTERVAL_S`
+# each), not from a clock.
 _STREAM_KEEPALIVE_MAX_GAP_S = AUDIO_INPUT_BUFFER_S + 10.0
 # The stream is opened as 16-bit linear PCM (`encoding=linear16`: 2 bytes per
 # sample) at the capture's sample rate and channel count; the one silence
@@ -779,13 +783,12 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         sent no audio yet, the first such wait writes one frame of silence
         (`_STREAM_SILENCE_FRAME`) instead; a session that has sent audio never
         gets silence. One gap is bridged for at most
-        `_STREAM_KEEPALIVE_MAX_GAP_S`: past it neither is written, and real
-        audio that arrives later ends the gap and is sent as usual.
+        `_STREAM_KEEPALIVE_MAX_GAP_S`: the first wait past it ends the stream
+        through the same failure path as a failed send, and the sender returns.
         """
         audio_sent = False
         idle_announced = False
         idle_s = 0.0  # whole waits since the last real audio frame
-        cap_logged = False
         while True:
             try:
                 item = send_queue.get(timeout=_STREAM_KEEPALIVE_INTERVAL_S)
@@ -802,18 +805,23 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 ):
                     return
             if item is _STREAM_KEEPALIVE_DUE and idle_s > _STREAM_KEEPALIVE_MAX_GAP_S:
-                if not cap_logged:
-                    cap_logged = True
-                    logger.warning(
-                        "Deepgram streaming: no audio for more than %.0f s, "
-                        "longer than the capture's input buffer can account "
-                        "for; the microphone has probably stopped delivering. "
-                        "KeepAlive frames stop here so that Deepgram closes the "
-                        "stream and the streaming error reaches the user. "
-                        "Logged once per gap.",
-                        _STREAM_KEEPALIVE_MAX_GAP_S,
-                    )
-                continue
+                logger.warning(
+                    "Deepgram streaming: no audio for %.0f s, longer than the "
+                    "capture's input buffer can account for; the microphone has "
+                    "probably stopped delivering. Ending the stream.",
+                    idle_s,
+                )
+                self._record_stream_error(
+                    generation,
+                    ws,
+                    TranscriptionError(
+                        "The microphone delivered no audio for more than "
+                        f"{int(_STREAM_KEEPALIVE_MAX_GAP_S)} seconds, so the "
+                        "stream was ended."
+                    ),
+                    notify=True,
+                )
+                return
             try:
                 if item is _STREAM_KEEPALIVE_DUE and not audio_sent:
                     idle_announced = True
@@ -843,7 +851,6 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
                     audio_sent = True
                     idle_s = 0.0
-                    cap_logged = False
             except Exception as exc:
                 self._record_stream_error(
                     generation,

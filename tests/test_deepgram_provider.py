@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import itertools
 import json
 import logging
@@ -1127,16 +1128,88 @@ class _TimedSocket:
         self.frames.append((self._clock.now, payload, opcode))
 
 
-def _run_the_sender_to_its_sentinel(t, send_queue: _ClockedQueue) -> _TimedSocket:
-    """Run the provider's own sender loop on the test thread."""
+def _run_the_sender_to_its_sentinel(
+    t, send_queue: _ClockedQueue, on_error=None
+) -> _TimedSocket:
+    """Run the provider's own sender loop on the test thread.
+
+    `on_error` is the failure callback `start_stream` would have been given.
+    """
     ws = _TimedSocket(send_queue)
     with t._stream_lock:
         t._stream_generation = 1
         t._stream_ws = ws
         t._stream_send_queue = send_queue
         t._stream_state = "active"
+        t._stream_on_error = on_error
     t._stream_send_worker(1, ws, send_queue, threading.Event(), _FakeWebSocketModule)
     return ws
+
+
+def _cap_error(cap_s: float) -> str:
+    """What the user reads when one gap in the audio reaches the cap: the
+    provider's usual "failed:" prefix, then the cause the app itself knows. The
+    number is the cap in whole seconds, read from the constant."""
+    return (
+        "Deepgram streaming failed: The microphone delivered no audio for more "
+        f"than {int(cap_s)} seconds, so the stream was ended."
+    )
+
+
+# The real cap, 30 s at the time of writing: the capture's buffer plus 10 s.
+_CAP_ERROR = _cap_error(AUDIO_INPUT_BUFFER_S + 10.0)
+
+# The shortened cap of the real-thread tests. Its message says "0 seconds",
+# which is what a derived number does with 0.12.
+_SHORT_GAP_CAP_S = 0.12
+_SHORT_GAP_CAP_ERROR = _cap_error(_SHORT_GAP_CAP_S)
+
+
+@contextlib.contextmanager
+def _a_short_gap_after_the_first_block(monkeypatch):
+    """A gap of three 50 ms waits after the first audio block, with a cap of
+    `_SHORT_GAP_CAP_S` (120 ms): two KeepAlives, then the end (0.12 is no
+    multiple of 0.05, so no float tie decides it). Yields `begin_the_gap`, to
+    be called once the
+    block has been pushed: it waits until the sender is inside that block's
+    send, shortens the interval, and lets the send finish, so the sender reads
+    the short interval for its first wait however late the test thread is
+    (the first wait is 30 s long, so no idle frame can precede the block)."""
+    send_started = threading.Event()
+    release_send = threading.Event()
+    _FakeWebSocketApp.binary_send_started = send_started
+    _FakeWebSocketApp.release_binary_send = release_send
+    monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 30.0)
+    monkeypatch.setattr(
+        deepgram_provider, "_STREAM_KEEPALIVE_MAX_GAP_S", _SHORT_GAP_CAP_S
+    )
+
+    def begin_the_gap() -> None:
+        assert send_started.wait(timeout=2.0)
+        monkeypatch.setattr(deepgram_provider, "_STREAM_KEEPALIVE_INTERVAL_S", 0.05)
+        release_send.set()
+
+    try:
+        yield begin_the_gap
+    finally:
+        release_send.set()
+        _FakeWebSocketApp.binary_send_started = None
+        _FakeWebSocketApp.release_binary_send = None
+
+
+def _open_a_stream_and_send_one_block_before_a_gap(monkeypatch, t, on_error):
+    """Open a session on the fake socket, send one audio block, then let the
+    short gap of `_a_short_gap_after_the_first_block` run. Returns the socket
+    and the sender thread."""
+    _FakeWebSocketApp.instances = []
+    monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+    with _a_short_gap_after_the_first_block(monkeypatch) as begin_the_gap:
+        t.start_stream(on_error=on_error)
+        ws = _FakeWebSocketApp.instances[-1]
+        send_thread = t._stream_send_thread
+        t.push_audio_chunk(b"audio")
+        begin_the_gap()
+    return ws, send_thread
 
 
 class TestDeepgramKeepAlive:
@@ -1181,55 +1254,142 @@ class TestDeepgramKeepAlive:
         ]
         assert len(announcements) == 1, [r.getMessage() for r in announcements]
 
-    def test_a_gap_longer_than_the_capture_buffer_is_not_bridged_forever(self, caplog):
-        """A microphone that stops delivering mid-dictation must still end the
-        stream: nothing in the capture notices it (the watchdog watches only
-        the first block), so Deepgram's own close is the detector -- and a
-        KeepAlive that never stops would hold it open until the hotkey."""
+    def test_a_gap_is_bridged_for_the_buffer_plus_ten_seconds_then_the_sender_ends_the_stream(
+        self, caplog
+    ):
+        """A microphone that stops delivering mid-dictation must end the
+        stream, and the sender does it itself: nothing else in the app notices
+        (the capture's watchdog watches only the first block), and waiting for
+        Deepgram's close would depend on a vendor window or on a proxy that
+        holds the connection open. The pinned numbers are the cap's value and
+        its boundary: ten KeepAlives, the end at the eleventh wait, 33 s after
+        the last block. The assertions use the capture's buffer plus 10 s, not
+        the module's own constant, so a changed constant is caught here, and
+        whole multiples of 3.0, which are exact in floating point."""
         t = DeepgramTranscriber(api_key="key")
         send_queue = _ClockedQueue([(0.1, b"before"), (300.0, _SENTINEL)])
+        errors: list[str] = []
 
         with caplog.at_level(logging.INFO):
-            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+            ws = _run_the_sender_to_its_sentinel(t, send_queue, on_error=errors.append)
 
-        keepalive_times = [
-            at for at, payload, _opcode in ws.frames if payload == _KEEPALIVE_FRAME
-        ]
-        assert [payload for _at, payload, _opcode in ws.frames] == [
-            b"before",
-            *[_KEEPALIVE_FRAME] * len(keepalive_times),
-        ], "a frame followed the last KeepAlive"
-        bridged_s = keepalive_times[-1] - 0.1
+        interval_s = deepgram_provider._STREAM_KEEPALIVE_INTERVAL_S
+        payloads = [payload for _at, payload, _opcode in ws.frames]
+        assert payloads == [b"before", *[_KEEPALIVE_FRAME] * 10], (
+            "the gap was not bridged for exactly ten KeepAlives"
+        )
+        bridged_s = payloads.count(_KEEPALIVE_FRAME) * interval_s
+        # The first get returned the audio; every later one ran out.
+        silent_s = (len(send_queue.timeouts_asked) - 1) * interval_s
         # At least the capture's buffer: a gap that short can be a starved
-        # callback thread whose audio is still on its way.
-        assert bridged_s >= AUDIO_INPUT_BUFFER_S
-        assert bridged_s <= deepgram_provider._STREAM_KEEPALIVE_MAX_GAP_S
+        # callback thread whose audio is still on its way. At most the buffer
+        # plus the margin; the end comes at the first wait past that.
+        assert AUDIO_INPUT_BUFFER_S <= bridged_s <= AUDIO_INPUT_BUFFER_S + 10.0
+        assert silent_s > AUDIO_INPUT_BUFFER_S + 10.0
+        assert silent_s - interval_s <= AUDIO_INPUT_BUFFER_S + 10.0
+        # Reported once, with the cause the app knows; the sender then stopped
+        # (the sentinel was never read).
+        assert errors == [_CAP_ERROR]
+        assert isinstance(t._stream_error, TranscriptionError)
         warnings = [
             r for r in _deepgram_log_records(caplog) if r.levelno == logging.WARNING
         ]
         assert len(warnings) == 1, [r.getMessage() for r in warnings]
+        assert "microphone" in warnings[0].getMessage()
 
-    def test_audio_after_the_cap_is_sent_and_bridging_starts_over(self, caplog):
-        """If the socket outlived the gap, the stream goes on as before: the
-        cap only stops the KeepAlives of one gap, and real audio ends that gap."""
+    def test_a_capped_gap_reports_once_and_a_closing_socket_adds_nothing(
+        self, monkeypatch
+    ):
+        """On real threads: the cap's report is the only one, whatever the socket
+        does after it -- Deepgram's own close, or the abort that the controller's
+        failure handling runs."""
         t = DeepgramTranscriber(api_key="key")
-        send_queue = _ClockedQueue(
-            [(0.1, b"first"), (100.0, b"second"), (200.0, _SENTINEL)]
+        errors: list[str] = []
+
+        try:
+            ws, send_thread = _open_a_stream_and_send_one_block_before_a_gap(
+                monkeypatch, t, errors.append
+            )
+            _wait_for(lambda: errors)
+            _wait_for(lambda: not send_thread.is_alive())
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"audio",
+                _KEEPALIVE_FRAME,
+                _KEEPALIVE_FRAME,
+            ]
+
+            ws.close()  # the server's close arrives after the sender gave up
+
+            assert errors == [_SHORT_GAP_CAP_ERROR]
+        finally:
+            t.abort_stream()
+        assert errors == [_SHORT_GAP_CAP_ERROR]
+
+    def test_a_stop_after_the_cap_neither_hangs_nor_loses_the_cause(self, monkeypatch):
+        t = DeepgramTranscriber(api_key="key")
+        errors: list[str] = []
+        outcome: list[TranscriptionError | str] = []
+
+        def stop() -> None:
+            try:
+                outcome.append(t.stop_stream())
+            except TranscriptionError as exc:
+                outcome.append(exc)
+
+        try:
+            _ws, send_thread = _open_a_stream_and_send_one_block_before_a_gap(
+                monkeypatch, t, errors.append
+            )
+            _wait_for(lambda: errors)
+            _wait_for(lambda: not send_thread.is_alive())
+
+            stopper = threading.Thread(target=stop)
+            stopper.start()
+            stopper.join(timeout=3.0)
+
+            assert not stopper.is_alive(), "the stop hung on the sender that had ended"
+        finally:
+            t.abort_stream()
+        assert len(outcome) == 1
+        assert isinstance(outcome[0], TranscriptionError)
+        assert str(outcome[0]) == _SHORT_GAP_CAP_ERROR
+        assert errors == [_SHORT_GAP_CAP_ERROR], (
+            "the stop reported the failure a second time"
         )
 
-        with caplog.at_level(logging.INFO):
-            ws = _run_the_sender_to_its_sentinel(t, send_queue)
+    def test_a_cap_that_lands_during_a_stop_is_recorded_but_not_reported(self):
+        """`stop_stream` clears the failure callback first, because the close it
+        provokes is not a failure; a cap that fires after that point must find
+        no callback to report to and leave the cause for the stop to raise."""
+        t = DeepgramTranscriber(api_key="key")
+        errors: list[str] = []
+        waits: list[None] = []
 
-        payloads = [payload for _at, payload, _opcode in ws.frames]
-        resumed_at = payloads.index(b"second")
-        first_gap = payloads[1:resumed_at]
-        second_gap = payloads[resumed_at + 1 :]
-        assert first_gap and set(first_gap) == {_KEEPALIVE_FRAME}
-        assert second_gap == first_gap, "the second gap was not bridged afresh"
-        warnings = [
-            r for r in _deepgram_log_records(caplog) if r.levelno == logging.WARNING
+        def the_stop_begins_at_the_capped_wait() -> None:
+            waits.append(None)
+            if len(waits) == 11:
+                # The first thing `stop_stream` does, under the lock.
+                with t._stream_lock:
+                    t._stream_state = "retiring"
+                    t._stream_on_error = None
+
+        send_queue = _ClockedQueue(
+            [(0.1, b"before"), (300.0, _SENTINEL)],
+            on_timeout=the_stop_begins_at_the_capped_wait,
+        )
+
+        ws = _run_the_sender_to_its_sentinel(t, send_queue, on_error=errors.append)
+
+        assert len(waits) == 11, "the cap did not end the sender at the eleventh wait"
+        assert [payload for _at, payload, _opcode in ws.frames] == [
+            b"before",
+            *[_KEEPALIVE_FRAME] * 10,
         ]
-        assert len(warnings) == 2, "one warning per gap that reached the cap"
+        assert errors == []
+        assert isinstance(t._stream_error, TranscriptionError)
+        assert str(t._stream_error) == _CAP_ERROR.removeprefix(
+            "Deepgram streaming failed: "
+        )
 
     def test_the_silence_frame_is_a_tenth_of_a_second_of_the_streams_format(
         self, monkeypatch
