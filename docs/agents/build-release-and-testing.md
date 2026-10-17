@@ -80,6 +80,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-
     the dry run, then `create_release.py` tags the current `main` without a
     commit. The tag-match step is skipped in a dry run; the script runs the
     same check (`verify_release`) before it pushes.
+  - **The dry run costs no Actions minutes**: the repository is public
+    (checked 2026-10-17 with the unauthenticated GitHub API,
+    `"private": false`), and only private repositories consume minutes, so
+    there is nothing to ration and no reason to skip it for a small release.
   - Order of a release: `release_check_*.py` scripts, dry run on `main`,
     green, `create_release.py`.
 - **`scripts/setup_node_windows.py`**: numeric `major.minor.patch` only,
