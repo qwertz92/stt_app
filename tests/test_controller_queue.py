@@ -3853,20 +3853,126 @@ def test_a_language_switch_never_changes_or_reloads_queued_work(
     controller.shutdown()
 
 
-def test_retry_uses_the_language_selected_now(monkeypatch, tmp_path):
-    """Retry means "again with what is selected now", so a wrong language can
-    be fixed by switching and retrying; only queued first attempts are pinned."""
-    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+def test_retry_uses_the_language_the_recording_was_made_in(monkeypatch, tmp_path):
+    """Owner decision 2026-10-17 (it was "the language selected now" before):
+    a retry transcribes the recording in the language it was made in. Engine
+    and model stay the current ones -- a user switches provider after a
+    provider failure -- and the language selection itself is not touched."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"
     )
     token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller.set_language_mode("de")
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    assert retry_job.engine == "groq"
+    assert controller.settings.language_mode == "de"
+    assert overlay.states[-1][0] == "Processing"
+    assert "English" in overlay.states[-1][1], overlay.states[-1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_dictations_retry_uses_its_language_too(monkeypatch, tmp_path):
+    """A streaming recording is retried as a batch job; the language is the one
+    its stream was started with."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    token = _record_and_stop(controller)
+    assert controller._jobs[token].mode == "streaming"
     controller._on_transcription_failed("boom", request_token=token)
     controller.set_language_mode("de")
 
     assert controller.retry_last_transcription() is True
 
     retry_job = controller._jobs[controller._active_request_token]
-    assert retry_job.settings.language_mode == "de"
+    assert retry_job.mode == "batch"
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_dying_streams_recording_is_retried_in_its_language(monkeypatch, tmp_path):
+    """The stream's runtime fails while the microphone is open: the road that
+    keeps the audio for Retry has no job, only the session's own settings."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    assert controller._streaming_recording is True
+    controller.set_language_mode("de")
+    assert controller.settings.language_mode == "de"
+
+    controller._on_transcription_failed("socket closed")
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_retry_keeps_the_recordings_language(monkeypatch, tmp_path):
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller.set_language_mode("de")
+    assert controller.retry_last_transcription() is True
+    controller._on_transcription_failed(
+        "boom again", request_token=controller._active_request_token
+    )
+    controller.set_language_mode("fr")
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_of_a_recording_with_no_known_language_uses_the_current_one(
+    monkeypatch, tmp_path
+):
+    """Audio the store never received (no id) or an id this process has no
+    language for: nothing to pin, so the language selected now applies."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller.set_language_mode("de")
+    for recording_id in ("", "from-an-earlier-run"):
+        controller._hold_failed_audio_for_retry(b"RIFF-unknown", recording_id)
+
+        assert controller.retry_last_transcription() is True
+
+        retry_job = controller._jobs[controller._active_request_token]
+        assert retry_job.settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_recordings_language_is_stored_with_its_audio(monkeypatch, tmp_path):
+    """Retry after a restart reads it from the managed last recording."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    _record_and_stop(controller)
+    controller.set_language_mode("de")
+    _record_and_stop(controller)
+
+    state = controller._last_recording_store.load()
+
+    assert state is not None and state.language_mode == "de"
     controller.shutdown()
     _ = app
 

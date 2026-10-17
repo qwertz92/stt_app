@@ -246,12 +246,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     purpose: they describe where text goes now, not how audio was made.
     Tests: `test_each_queued_recording_is_transcribed_in_the_language_it_was_recorded_in`
     and `test_a_language_switch_never_changes_or_reloads_queued_work`.
-  - **Retry and re-transcription use what is selected now**, unchanged:
-    `retry_last_transcription` resubmits the kept bytes under
-    `replace(self._settings)` ("Retrying transcription with current settings...")
-    and the History retranscribe / Import take their settings at the click. That
-    is how a wrong language is fixed (switch, then Retry); only a first attempt
-    is pinned to its recording. Pinned by `test_retry_uses_the_language_selected_now`.
+  - **Retry transcribes in the language the recording was made in; engine and
+    model stay the current ones** (owner decision 2026-10-17, replacing the
+    2026-10-09 rule that Retry used what is selected now; a user switches
+    provider after a provider failure and retries, but the audio was spoken in
+    one language). `retry_last_transcription` resubmits the kept bytes under
+    `replace(self._settings)` with `language_mode` set to
+    `_recorded_language_by_recording_id[_last_failed_recording_id]`, which
+    `_persist_last_recording_audio(wav_bytes, language_mode)` fills where a
+    recording's id is born -- the stop (batch and streaming), the watchdog abort,
+    a dying stream, a cancel -- from the recording's own snapshot
+    (`_open_recording_language`; the stream's `_active_stream_settings`).
+    A streaming session is retried as a batch job in its stream's language. The
+    overlay says "(recorded language: X)". Unknown -- no id because the store
+    refused the write, an id from an earlier run -- keeps the language selected
+    now, as before. A language the current engine does not offer is not replaced
+    here: the engine's own `_normalize_language_mode` applies, as for any job
+    (auto for most). The language also travels to disk, so the same holds after
+    a restart: `LastRecordingStore.language_mode` and the unfinished recording's
+    file name (`docs/agents/persistence-and-history.md`), which the quit writes
+    (`_keep_unfinished_recordings`) and the startup notice transcribes with
+    (`transcribe_unfinished_recording`). History retranscribe and the Import tab
+    (incl. "Use last recording") still take their settings from their own
+    pickers at the click; that is where a wrong language is now corrected, no
+    longer by switching and pressing Retry. Tests in
+    `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
+    the streaming, dying-stream, failed-retry and unknown-language cases),
+    `tests/test_controller_quit.py`.
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

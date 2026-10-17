@@ -4013,11 +4013,15 @@ class _StoreWhoseSaveRaisesOnce(LastRecordingStore):
         self._refuse = bytes(refuse)
         self.refused = 0
 
-    def save_recording(self, wav_bytes, *, keep_after_success):
+    def save_recording(self, wav_bytes, *, keep_after_success, language_mode=""):
         if bytes(wav_bytes) == self._refuse and not self.refused:
             self.refused += 1
             raise OSError("disk full")
-        return super().save_recording(wav_bytes, keep_after_success=keep_after_success)
+        return super().save_recording(
+            wav_bytes,
+            keep_after_success=keep_after_success,
+            language_mode=language_mode,
+        )
 
 
 def test_w16_a_retry_after_a_refused_save_spares_the_recording_the_store_holds(

@@ -44,6 +44,7 @@ from .config import (
     FALLBACK_HOTKEYS,
     HOTKEY_RECLAIM_INTERVAL_MS,
     INSERT_TARGET_CURRENT_WINDOW,
+    LANGUAGE_MODE_LABELS,
     LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
@@ -671,6 +672,12 @@ class DictationController(QtCore.QObject):
         # When each recording a job was registered for ended, by recording id,
         # so a failure kept for Retry is kept at quit under its own time.
         self._recorded_at_by_recording_id: dict[str, datetime] = {}
+        # The language selection each recording was made under, by recording
+        # id, written where the id is born (`_persist_last_recording_audio`).
+        # Retry pins it (owner decision 2026-10-17) and a quit keeps it with
+        # the recordings it writes. The retry slot holds audio and an id only,
+        # and the job that recorded it is gone by the time it is retried.
+        self._recorded_language_by_recording_id: dict[str, str] = {}
 
         self._settings: AppSettings = self._settings_store.load()
         self._warm_up_speech_check()
@@ -1015,7 +1022,9 @@ class DictationController(QtCore.QObject):
         self._cancel_preload_generation(self._preload_generation)
         self._terminate_preload_download_process()
         capture_wav = b""
+        capture_language = ""
         if self._audio_capture is not None:
+            capture_language = self._open_recording_language()
             try:
                 # No backlog wait at quit (`AudioCapture.stop`).
                 capture_wav = self._audio_capture.stop(drain=False) or b""
@@ -1054,7 +1063,7 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         # Before the jobs below are marked aborting and their audio dropped.
         try:
-            self._keep_unfinished_recordings(capture_wav)
+            self._keep_unfinished_recordings(capture_wav, capture_language)
         except BaseException:
             self._logger.exception("Failed to keep the unfinished recordings")
         for job in list(self._jobs.values()):
@@ -1104,7 +1113,9 @@ class DictationController(QtCore.QObject):
             except BaseException:
                 self._logger.exception("Failed to shut down the %s executor", name)
 
-    def _keep_unfinished_recordings(self, capture_wav: bytes) -> None:
+    def _keep_unfinished_recordings(
+        self, capture_wav: bytes, capture_language: str
+    ) -> None:
         """Write every recording without a transcript to the unfinished store.
 
         The open capture, each job still transcribing, and the failures held
@@ -1114,29 +1125,40 @@ class DictationController(QtCore.QObject):
         transcript is finished and only waits for its paste is not one of
         them -- its text is in history -- and neither is a job the user
         cancelled. One recording reached by two roads (a retry running for
-        the slot's bytes) is written once.
+        the slot's bytes) is written once. Each is written with the language
+        it was made in, which the next start's transcription uses
+        (`transcribe_unfinished_recording`); "" when this process does not
+        know it.
         """
         now = datetime.now()  # noqa: DTZ005 (local wall clock, as the queue rows show it)
-        candidates: list[tuple[bytes, str, datetime]] = []
+        candidates: list[tuple[bytes, str, datetime, str]] = []
         if capture_wav:
-            candidates.append((capture_wav, "", now))
+            candidates.append((capture_wav, "", now, capture_language))
         for job in self._jobs.values():
             if job.aborting or job.insertion_deferred:
                 continue
             payload = self._request_audio_by_token.get(job.token)
             if payload is not None:
-                candidates.append((payload[0], job.source_recording_id, job.created_at))
+                candidates.append(
+                    (
+                        payload[0],
+                        job.source_recording_id,
+                        job.created_at,
+                        job.settings.language_mode,
+                    )
+                )
         for wav_bytes, recording_id in (
             (self._last_failed_wav_bytes, self._last_failed_recording_id),
             *self._older_failed_audio,
         ):
             if wav_bytes:
                 recorded_at = self._recorded_at_by_recording_id.get(recording_id, now)
-                candidates.append((wav_bytes, recording_id, recorded_at))
+                language = self._recorded_language_by_recording_id.get(recording_id, "")
+                candidates.append((wav_bytes, recording_id, recorded_at, language))
         seen_ids: set[str] = set()
         seen_unnamed: list[bytes] = []
         kept = failed = 0
-        for wav_bytes, recording_id, recorded_at in candidates:
+        for wav_bytes, recording_id, recorded_at, language_mode in candidates:
             if recording_id:
                 if recording_id in seen_ids:
                     continue
@@ -1150,6 +1172,7 @@ class DictationController(QtCore.QObject):
                     wav_bytes,
                     recording_id=recording_id or uuid4().hex,
                     recorded_at=recorded_at,
+                    language_mode=language_mode,
                 )
             except (OSError, ValueError):
                 failed += 1
@@ -1229,6 +1252,10 @@ class DictationController(QtCore.QObject):
         if not os.path.isfile(path):
             return False, "The recording is no longer available."
         settings = replace(self._settings, mode="batch")
+        if recording.language_mode:
+            # The Retry after a restart: the language it was made in, not the
+            # selection of the moment (owner decision 2026-10-17).
+            settings = replace(settings, language_mode=recording.language_mode)
         try:
             text = (
                 self._executor.submit(
@@ -2595,7 +2622,9 @@ class DictationController(QtCore.QObject):
             # holds retryable, as the dying stream's road does. Written
             # unconditionally, a timeout with no late bytes emptied that
             # failure's only copy.
-            persisted = self._persist_last_recording_audio(wav_bytes)
+            persisted = self._persist_last_recording_audio(
+                wav_bytes, self._open_recording_language()
+            )
             self._hold_failed_audio_for_retry(
                 wav_bytes, self._last_persisted_recording_id if persisted else ""
             )
@@ -2954,7 +2983,9 @@ class DictationController(QtCore.QObject):
                 return
             finally:
                 self._stopping_capture = None
-            persisted = self._persist_last_recording_audio(wav_bytes)
+            persisted = self._persist_last_recording_audio(
+                wav_bytes, self._open_recording_language()
+            )
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
             # The job's recording is the one this persist wrote, under the
             # id the write handed back. Registered from the store's slot, a
@@ -3362,7 +3393,15 @@ class DictationController(QtCore.QObject):
         )
         return self._last_recording_store.selectable_path(archived_dir)
 
-    def _persist_last_recording_audio(self, wav_bytes: bytes) -> bool:
+    def _persist_last_recording_audio(
+        self, wav_bytes: bytes, language_mode: str
+    ) -> bool:
+        """Store the recording as the managed last recording.
+
+        `language_mode` is the selection the recording was made under: stored
+        beside the audio (a Retry after a restart reads it) and remembered by
+        the id the store hands back, which is how an in-memory Retry finds it.
+        """
         self._last_persisted_recording_id = ""
         if not wav_bytes:
             return False
@@ -3370,14 +3409,29 @@ class DictationController(QtCore.QObject):
             state = self._last_recording_store.save_recording(
                 wav_bytes,
                 keep_after_success=self._settings.save_last_wav,
+                language_mode=language_mode,
             )
             self._last_persisted_recording_id = str(
                 getattr(state, "recording_id", "") or ""
             ).strip()
+            if self._last_persisted_recording_id:
+                self._recorded_language_by_recording_id[
+                    self._last_persisted_recording_id
+                ] = language_mode
             return True
         except Exception:
             self._logger.exception("Failed to persist last recording audio")
             return False
+
+    def _open_recording_language(self) -> str:
+        """The language selection the open recording was started under: its
+        own snapshot, the current selection when none was taken."""
+        snapshot = (
+            self._active_stream_settings
+            if self._streaming_recording
+            else self._active_batch_settings
+        )
+        return (snapshot or self._settings).language_mode
 
     def _save_recording_artifacts(
         self,
@@ -4917,11 +4971,11 @@ class DictationController(QtCore.QObject):
         if retry_available:
             parts = [
                 "Captured audio is preserved in memory.",
-                "Fix provider/settings if needed, then use Retry to transcribe the same recording again with the current settings.",
+                "Fix provider/settings if needed, then use Retry to transcribe the same recording again in its recorded language with the current engine and model.",
             ]
             if last_recording_available:
                 parts.append(
-                    "You can also use History -> Use last recording to transcribe the last recording file with another service."
+                    "You can also use History -> Use last recording to transcribe the last recording file with another service or language."
                 )
             return " ".join(parts)
         if last_recording_available:
@@ -7814,7 +7868,9 @@ class DictationController(QtCore.QObject):
                 # "" when this write failed, and a retry of these bytes then
                 # marks nothing; the store then holds the previous recording,
                 # which this session does not own.
-                owns_last_recording = self._persist_last_recording_audio(wav_bytes)
+                owns_last_recording = self._persist_last_recording_audio(
+                    wav_bytes, partial_settings.language_mode
+                )
                 self._hold_failed_audio_for_retry(
                     wav_bytes, self._last_persisted_recording_id
                 )
@@ -8135,7 +8191,9 @@ class DictationController(QtCore.QObject):
         persisted = (
             preserve_audio
             and bool(wav_bytes)
-            and self._persist_last_recording_audio(wav_bytes)
+            and self._persist_last_recording_audio(
+                wav_bytes, partial_settings.language_mode
+            )
         )
         if persisted:
             session_recording_id = self._last_persisted_recording_id
@@ -9306,17 +9364,30 @@ class DictationController(QtCore.QObject):
                 "transcription."
             )
             return False
+        # The engine and model are the current ones -- a user switches
+        # provider after a provider failure and retries -- but the language is
+        # the one the recording was made in (owner decision 2026-10-17; it
+        # used to be the selection of the moment). A recording this process
+        # has no language for keeps the current selection.
         settings = replace(self._settings)
+        recorded_language = self._recorded_language_by_recording_id.get(
+            self._last_failed_recording_id, ""
+        )
+        detail = "Retrying transcription with current settings..."
+        if recorded_language:
+            settings = replace(settings, language_mode=recorded_language)
+            label = LANGUAGE_MODE_LABELS.get(recorded_language, recorded_language)
+            detail = (
+                "Retrying transcription with the current engine and model "
+                f"(recorded language: {label})..."
+            )
         # Stop any still-running transcription before retrying; if it finishes
         # anyway it is kept in history rather than discarded.
         self._request_job_stop(
             self._active_request_token,
             delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
         )
-        self._overlay.set_state(
-            "Processing",
-            "Retrying transcription with current settings...",
-        )
+        self._overlay.set_state("Processing", detail)
         # The retry names the recording whose bytes it resubmits. Registered
         # from the store's slot, the job took the newest recording's id --
         # the one the stop above had just marked canceled -- and its
@@ -9529,7 +9600,7 @@ class DictationController(QtCore.QObject):
             # leaves the slot to the previous recording, which the unkeyed
             # mark relabelled canceled and the text called "this recording".
             persisted = bool(wav_bytes) and self._persist_last_recording_audio(
-                wav_bytes
+                wav_bytes, self._open_recording_language()
             )
             if persisted:
                 try:

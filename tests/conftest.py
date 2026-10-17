@@ -455,6 +455,8 @@ class FakeLastRecordingStore:
         self.path = Path(path)
         self.recording_id = ""
         self.saved: list[tuple[bytes, bool]] = []
+        # The language selection each saved recording was made under.
+        self.saved_languages: list[str] = []
         self.transcribing: list[tuple[str, str, str]] = []
         self.transcribing_ids: list[str | None] = []
         self.failed: list[str] = []
@@ -468,8 +470,11 @@ class FakeLastRecordingStore:
     def _assign_recording_id(self) -> None:
         self.recording_id = f"rec-{len(self.saved)}"
 
-    def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
+    def save_recording(
+        self, wav_bytes: bytes, *, keep_after_success: bool, language_mode: str = ""
+    ):
         self.saved.append((bytes(wav_bytes), bool(keep_after_success)))
+        self.saved_languages.append(language_mode)
         self._available = bool(wav_bytes)
         self._assign_recording_id()
         return SimpleNamespace(recording_id=self.recording_id)

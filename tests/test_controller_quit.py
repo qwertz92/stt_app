@@ -187,6 +187,42 @@ def test_a_quit_keeps_the_failures_waiting_for_retry_once_each(monkeypatch, tmp_
     _ = app
 
 
+def test_a_quit_keeps_each_recordings_language_with_it(monkeypatch, tmp_path):
+    """Owner decision 2026-10-17: Retry uses the language a recording was made
+    in, also after a restart, so the file a quit writes names it -- the queued
+    jobs by their own snapshot, a failure waiting for Retry by what was
+    recorded for it, the open capture by the session's -- and "" (unknown)
+    where this process never knew."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    _record(controller, b"RIFF-english")
+    controller.set_language_mode("de")
+    _record(controller, b"RIFF-german")
+    controller._recorded_language_by_recording_id["failed"] = "fr"
+    controller._hold_failed_audio_for_retry(b"RIFF-failed", "failed")
+    controller._hold_failed_audio_for_retry(b"RIFF-unknown", "")
+    controller.set_language_mode("auto")
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = b"RIFF-open"
+    controller.set_language_mode("es")
+
+    controller.shutdown()
+
+    kept = {
+        item.path.read_bytes(): item.language_mode
+        for item in unfinished.list_recordings()
+    }
+    assert kept == {
+        b"RIFF-english": "en",
+        b"RIFF-german": "de",
+        b"RIFF-failed": "fr",
+        b"RIFF-unknown": "",
+        b"RIFF-open": "auto",
+    }
+    _ = app
+
+
 def test_waiting_to_quit_stops_the_open_recording(monkeypatch, tmp_path):
     controller, app, _overlay, _unfinished, _history = _controller(
         monkeypatch, tmp_path
@@ -263,6 +299,41 @@ def test_a_transcribed_unfinished_recording_goes_to_history_and_its_file_goes(
     assert entry.text == "hello again"
     assert entry.source_recording_id == "kept1"
     assert unfinished.list_recordings() == []
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unfinished_recording_is_transcribed_in_the_language_it_was_made_in(
+    monkeypatch, tmp_path
+):
+    """The startup notice is the Retry after a restart: the file's own language
+    wins over the selection of the moment, and a file that names none (an
+    earlier version's) is transcribed in the selection."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="de"
+    )
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-english",
+        recording_id="known1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="en",
+    )
+    known = unfinished.find("known1")
+    unknown = _kept_recording(unfinished, recording_id="unknown1")
+
+    assert controller.transcribe_unfinished_recording(known)[0] is True
+    assert controller.transcribe_unfinished_recording(unknown)[0] is True
+
+    assert seen == ["en", "de"]
+    assert controller.settings.language_mode == "de"
     controller.shutdown()
     _ = app
 
