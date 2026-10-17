@@ -63,6 +63,68 @@ class LockHeldInThisProcess(RuntimeError):
     """Raised when this process already holds the lock it is asking for."""
 
 
+def _lock_without_waiting(handle) -> bool:
+    """Take the lock on an open lock file; False when another handle holds it.
+
+    Any other failure raises the `OSError` as it came.
+    """
+    try:
+        if os.name == "nt":  # pragma: no cover - platform split
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        else:  # pragma: no cover - platform split
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except OSError as exc:
+        # Measured: Windows `LK_NBLCK` reports a held lock as EACCES (13),
+        # POSIX `flock` as EAGAIN (and EACCES on some systems). EDEADLK is
+        # listed because POSIX may report a self-deadlock that way; on
+        # Windows it is the same value as EACCES.
+        if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
+            return False
+        raise
+
+
+def _unlock(handle) -> None:
+    if os.name == "nt":  # pragma: no cover - platform split
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:  # pragma: no cover - platform split
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def is_lock_held(path: Path) -> bool:
+    """Whether some handle -- in this process or another -- holds `path`'s lock.
+
+    A held lock means its owner is alive, because the OS drops a lock with
+    the process that held it. Asking takes the lock for a moment and gives
+    it back at once. A file that is gone is not held; one that cannot be
+    opened or locked for any other reason counts as held, so a caller
+    waiting for "nobody holds it" errs on the side of waiting.
+    """
+    key = os.path.normcase(str(path))
+    with _HELD_LOCK:
+        if key in _HELD_RESOURCES:
+            return True
+    try:
+        # Not "a+b": a file that is gone must stay gone. Write access is what
+        # a Windows byte-range lock needs.
+        handle = open(path, "r+b")  # noqa: SIM115 (closed below)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    try:
+        if not _lock_without_waiting(handle):
+            return True
+        _unlock(handle)
+        return False
+    except OSError:
+        return True
+    finally:
+        handle.close()
+
+
 class CrossProcessLock:
     """An exclusive, OS-enforced lock on one resource.
 
@@ -100,19 +162,8 @@ class CrossProcessLock:
         handle = self._handle
         assert handle is not None
         try:
-            if os.name == "nt":  # pragma: no cover - platform split
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
-            else:  # pragma: no cover - platform split
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return True
+            return _lock_without_waiting(handle)
         except OSError as exc:
-            # Measured: Windows `LK_NBLCK` reports a held lock as EACCES (13),
-            # POSIX `flock` as EAGAIN (and EACCES on some systems). EDEADLK is
-            # listed because POSIX may report a self-deadlock that way; on
-            # Windows it is the same value as EACCES.
-            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
-                return False
             raise FileLockUnavailable(f"Locking {self._path} failed: {exc}") from exc
 
     def acquire(
@@ -179,11 +230,7 @@ class CrossProcessLock:
             self._close_handle()
             return
         try:
-            if os.name == "nt":  # pragma: no cover - platform split
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-            else:  # pragma: no cover - platform split
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            _unlock(handle)
         except OSError as exc:
             logger.warning(
                 "model_download_lock release failed resource=%s error=%s",

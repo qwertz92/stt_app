@@ -608,6 +608,11 @@ class DictationController(QtCore.QObject):
     # inserter's retries. Emitted from the restore's timer thread; the queued
     # connection carries it to the tray on the Qt thread.
     clipboard_restore_failed = QtCore.Signal(str)
+    # A source checkout's JavaScript packages could not be brought in step
+    # with package-lock.json, and Cohere/Granite run on the previous ones.
+    # Emitted once per session from the thread that starts the Node runner
+    # (`local_webgpu_asr.set_node_packages_notice_handler`, wired in `main`).
+    node_packages_not_updated = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)

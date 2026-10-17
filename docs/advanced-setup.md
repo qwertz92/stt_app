@@ -361,16 +361,26 @@ Manual equivalent, if you prefer:
 setx STT_APP_NODE_PATH "C:\Users\<you>\programs\node-v24.21.0-win-x64\node.exe"
 ```
 
-Then **restart the app**. On the first GPU/ONNX transcription it runs
-`npm install` automatically; npm ships next to `node.exe` and is located from
-`STT_APP_NODE_PATH`, so it works even when Node is not on `PATH`.
+Then **restart the app**. Running from a git checkout, it installs the
+JavaScript packages itself before the first GPU/ONNX model starts, and after a
+`git pull` that changed `package-lock.json` it updates them by itself the same
+way -- there is no npm command to run. npm ships next to `node.exe` and is
+located from `STT_APP_NODE_PATH`, so this works even when Node is not on
+`PATH`. The update installs into a separate folder (`.node_modules_update`)
+and replaces `node_modules` only once the new packages load; if it fails (for
+example a proxy blocks the npm registry), the models keep running on the
+previous packages, a tray notification says what failed, and the app tries
+again at its next start. The installed app bundles its packages and never runs
+npm.
 
 **npm behind a TLS-intercepting proxy.** Node/npm ship their own CA list and
 ignore the Windows certificate store, so behind Zscaler `npm install` fails with
 `UNABLE_TO_GET_ISSUER_CERT_LOCALLY` (pip works because Python trusts the OS
 store). `setup_node_windows.py` handles this automatically: it exports the
 Windows ROOT/CA certificates to `corporate-ca-bundle.pem` and sets
-`NODE_EXTRA_CA_CERTS`. To do it manually, or if `npm install` still fails:
+`NODE_EXTRA_CA_CERTS`. To do it manually, or if the package install still
+fails (the tray notification or the log line `node_modules_update_failed`
+names npm's error code):
 
 ```powershell
 :: export the OS trust store and point Node at it (no admin)

@@ -439,3 +439,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     Deepgram session before the burst arrives. Not reproduced; sending
     `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
     (~1-2 h with tests).
+- **A source checkout's JavaScript package update** (2026-10-17,
+  `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
+  - A failed update is tried again at every app start, and each try delays
+    that session's first Cohere/Granite start by as long as npm takes to
+    fail: 71 s for an unreachable registry (npm's own retries, measured),
+    up to the 600 s bound for a connection that hangs. Retrying is what lets
+    a passing network problem heal without the user; a back-off (remember
+    the failed lock and wait a day) needs an owner decision, ~1 h.
+  - The update cannot be cancelled, and a quit during it ends only by the
+    15 s quit watchdog; npm then keeps running in its job until it finishes,
+    and the next start removes `.node_modules_update` (or, while npm still
+    writes there, reports "a folder left by an earlier update could not be
+    removed" once and tries again a start later). `run_bounded` has no
+    cancel hook; adding one is ~2 h.
+  - A runner of an older build (or of a crashed app) holds no presence and
+    is seen only by its loaded DLLs, so in the fraction of a second between
+    its start and its import of Transformers.js an update can still swap
+    the tree; that runner then loads the new tree, or, inside the two
+    renames' milliseconds, fails to start once with "runtime failed to
+    load". Not reproduced; closing it needs the old build's cooperation.

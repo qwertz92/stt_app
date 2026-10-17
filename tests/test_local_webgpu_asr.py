@@ -768,7 +768,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: None,
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -844,7 +844,7 @@ def test_granite_4_1_2b_transcriber_passes_q4_precision_to_node(
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: None,
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -896,7 +896,7 @@ def test_webgpu_transcriber_closes_process_when_startup_response_fails(
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: None,
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -968,7 +968,7 @@ def test_webgpu_transcriber_restarts_after_auto_cpu_fallback(
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: None,
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -1083,7 +1083,9 @@ def test_a_cancel_stops_waiting_for_the_child_and_kills_it(monkeypatch, tmp_path
     )
     monkeypatch.setattr(LocalOnnxWebGpuTranscriber, "_read_json_message", fake_read)
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess, "Popen", lambda command, **kwargs: process
@@ -1113,7 +1115,7 @@ def test_a_cancel_before_the_request_starts_no_child(monkeypatch, tmp_path):
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: started.append(runner),
+        lambda node_path, runner, **_kwargs: started.append(runner),
     )
 
     def _no_child(*_args, **_kwargs):
@@ -1209,7 +1211,9 @@ def test_a_cancel_reaches_the_real_reader_and_kills_the_child(monkeypatch, tmp_p
         LocalOnnxWebGpuTranscriber, "_start_reader_threads", answer_handshake
     )
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess, "Popen", lambda command, **kwargs: process
@@ -1266,7 +1270,7 @@ def test_protocol_timeout_kills_child_and_next_request_starts_fresh(
     monkeypatch.setattr(
         local_webgpu_asr,
         "_ensure_js_runtime_available",
-        lambda node_path, runner: None,
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -1674,12 +1678,12 @@ def _runner_imports() -> set[str]:
 def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
     """Probing an undeclared package makes the repair unreachable.
 
-    The probe's failure branch runs `npm install`, which installs exactly what
-    `package.json` asks for. `@huggingface/tokenizers` and `onnxruntime-node`
-    resolve today only because npm hoists them out of
+    The probe's failure branch reinstalls the packages (a staged `npm ci`),
+    which installs exactly what the lock asks for. `@huggingface/tokenizers`
+    and `onnxruntime-node` resolve today only because npm hoists them out of
     `@huggingface/transformers`; probing for them meant that if that hoist ever
-    changed, every ONNX dictation would end in "run npm install" and the
-    reinstall could never fix it.
+    changed, every ONNX dictation would end in "the runtime is not available"
+    and the reinstall could never fix it.
     """
     root = Path(__file__).resolve().parents[1]
     declared = set(
@@ -1836,7 +1840,9 @@ def test_a_machine_without_a_gpu_stops_restarting_the_child(monkeypatch, tmp_pat
         lambda self, state, deadline: messages.pop(0),
     )
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(local_webgpu_asr.subprocess, "Popen", _spawn)
 
@@ -1908,7 +1914,9 @@ def test_a_gpu_that_comes_back_re_arms_the_retry(monkeypatch, tmp_path):
         lambda self, state, deadline: messages.pop(0),
     )
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner, **_kwargs: None,
     )
     monkeypatch.setattr(local_webgpu_asr.subprocess, "Popen", _spawn)
 
@@ -1999,7 +2007,9 @@ def _started_command(monkeypatch, tmp_path, **kwargs) -> list[str]:
         lambda self, state, deadline: {"ok": True, "device": "cpu"},
     )
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,
@@ -2093,7 +2103,9 @@ def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(monkeypatch, tm
         },
     )
     monkeypatch.setattr(
-        local_webgpu_asr, "_ensure_js_runtime_available", lambda node, runner: None
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node, runner, **_kwargs: None,
     )
     monkeypatch.setattr(
         local_webgpu_asr.subprocess,

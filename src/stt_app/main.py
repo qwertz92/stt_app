@@ -44,6 +44,10 @@ from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcriber.base import transcript_has_gap
+from .transcriber.local_webgpu_asr import (
+    NODE_PACKAGES_NOTICE_TITLE,
+    set_node_packages_notice_handler,
+)
 from .transcript_history import TranscriptHistoryStore
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .unfinished_recordings_dialog import UnfinishedRecordingsDialog
@@ -182,6 +186,21 @@ def _connect_tray_notifications(tray_icon, controller) -> None:
 
     controller.busy_overlay_error.connect(_notify_busy_overlay_error)
     controller.clipboard_restore_failed.connect(_notify_clipboard_restore_failure)
+
+    def _notify_node_packages_not_updated(message: str) -> None:
+        # The models still work; this is the one place the user learns that
+        # the update after a `git pull` did not happen and why.
+        tray_icon.showMessage(
+            NODE_PACKAGES_NOTICE_TITLE,
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    controller.node_packages_not_updated.connect(_notify_node_packages_not_updated)
+    # Called from the worker thread that starts the Node runner; the signal
+    # carries it to the Qt thread.
+    set_node_packages_notice_handler(controller.node_packages_not_updated.emit)
 
 
 def run() -> int:
