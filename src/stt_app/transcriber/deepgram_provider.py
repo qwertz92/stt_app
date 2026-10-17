@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..config import (
     AUDIO_BLOCK_DURATION_MS,
+    AUDIO_CHANNELS,
     AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
     DEEPGRAM_API_HOSTS,
@@ -78,15 +79,29 @@ _STREAM_KEEPALIVE_DUE = object()
 #   `no_audio_timeout`). Its NET-0001 checklist contradicts the page above:
 #   "Using `KeepAlive` messages alone will not prevent closure; you must send
 #   at least one audio message", after "Ensure audio is sent within 10 seconds
-#   of opening the connection". Not verified live (no key here): a stall
-#   longer than 10 s from the very start, before any audio went out, is
-#   exactly the case that sentence would still lose.
+#   of opening the connection". Not verified live (no key here), so both
+#   readings are covered: when the first wait runs out in a session that has
+#   sent no audio at all (a start stall -- the case that sentence would lose),
+#   the sender writes one frame of digital silence, `_STREAM_SILENCE_FRAME`,
+#   instead of the first KeepAlive, and KeepAlives from then on. Silence is
+#   never written once audio has gone out.
 #
 # 3 s is the page's example and the low end of its 3-5 s: the sender thread
 # can be late under the same CPU load that starves the capture, and the
 # margin to 10 s is what absorbs it. Steady audio never reaches the interval,
 # so no KeepAlive is sent while audio flows.
 _STREAM_KEEPALIVE_INTERVAL_S = 3.0
+# The stream is opened as 16-bit linear PCM (`encoding=linear16`: 2 bytes per
+# sample) at the capture's sample rate and channel count; the one silence
+# frame is built from the same constants, a tenth of a second long (about 3 kB
+# of billed audio), so it decodes as the stream the URL declared.
+_STREAM_BYTES_PER_SAMPLE = 2
+_STREAM_SILENCE_FRAME_S = 0.1
+_STREAM_SILENCE_FRAME = bytes(
+    round(AUDIO_SAMPLE_RATE * _STREAM_SILENCE_FRAME_S)
+    * AUDIO_CHANNELS
+    * _STREAM_BYTES_PER_SAMPLE
+)
 # The microphone hands over one block per callback, and a callback thread that
 # was starved delivers everything PortAudio buffered meanwhile -- up to
 # AUDIO_INPUT_BUFFER_S -- as one burst of `put_nowait` calls, far faster than
@@ -443,7 +458,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             "model": self._model,
             "encoding": "linear16",
             "sample_rate": str(AUDIO_SAMPLE_RATE),
-            "channels": "1",
+            "channels": str(AUDIO_CHANNELS),
             "interim_results": "true",
             "smart_format": "true",
         }
@@ -736,9 +751,13 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         the queue stayed empty for a whole interval, so a KeepAlive can never
         overlap an audio frame, and it is gone -- the sentinel ends the loop --
         before `Finalize` and `CloseStream` are sent (the sender barrier in
-        `_drain_stream_sender`), so none follows them.
+        `_drain_stream_sender`), so none follows them. In a session that has
+        sent no audio yet, the first such wait writes one frame of silence
+        (`_STREAM_SILENCE_FRAME`) instead; a session that has sent audio never
+        gets silence.
         """
-        keepalive_announced = False
+        audio_sent = False
+        idle_announced = False
         while True:
             try:
                 item = send_queue.get(timeout=_STREAM_KEEPALIVE_INTERVAL_S)
@@ -754,9 +773,23 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 ):
                     return
             try:
-                if item is _STREAM_KEEPALIVE_DUE:
-                    if not keepalive_announced:
-                        keepalive_announced = True
+                if item is _STREAM_KEEPALIVE_DUE and not audio_sent:
+                    idle_announced = True
+                    logger.info(
+                        "Deepgram streaming: no audio %.0f s after the connection "
+                        "opened; sending one frame of digital silence, then "
+                        "KeepAlive frames while the gap lasts. Logged once per "
+                        "session.",
+                        _STREAM_KEEPALIVE_INTERVAL_S,
+                    )
+                    ws.send(
+                        _STREAM_SILENCE_FRAME,
+                        opcode=websocket.ABNF.OPCODE_BINARY,
+                    )
+                    audio_sent = True
+                elif item is _STREAM_KEEPALIVE_DUE:
+                    if not idle_announced:
+                        idle_announced = True
                         logger.info(
                             "Deepgram streaming: no audio for %.0f s, sending "
                             "KeepAlive frames to hold the connection open. "
@@ -766,6 +799,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     ws.send(_control_message("KeepAlive"))
                 else:
                     ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
+                    audio_sent = True
             except Exception as exc:
                 self._record_stream_error(
                     generation,

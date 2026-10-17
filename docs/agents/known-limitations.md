@@ -437,15 +437,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     receives nothing for 10 s, and Deepgram's Audio Keep Alive page says a
     KeepAlive every 3-5 s prevents it, so the sender writes one every 3 s in
     which it had no audio to send (`docs/agents/remote-providers.md`).
-    Deepgram's troubleshooting page contradicts that page for the case that
-    matters here: under 1011 `NET-0001` it says KeepAlive messages "alone
-    will not prevent closure; you must send at least one audio message".
-    If that is right, a start stall longer than 10 s before the first audio
-    block went out (the watchdog allows 12 s) still loses the Deepgram
-    session. The user then sees "Deepgram streaming failed: WebSocket
-    connection closed unexpectedly." and the audio is kept as the first
-    entry of `docs/agents/streaming.md` describes. One live run with a
-    Deepgram key settles it: open a stream, send only KeepAlives for 15 s,
-    then audio. If it fails, the cover is one short frame of digital silence
-    sent while no real audio has gone out yet, at the price of billed audio
-    seconds, which is the owner's call.
+    Deepgram's troubleshooting page contradicts that page for a stream that
+    has sent no audio yet: under 1011 `NET-0001` it says KeepAlive messages
+    "alone will not prevent closure; you must send at least one audio
+    message". The fallback is in place: such a session gets one 0.1 s frame
+    of digital silence before its first KeepAlive (about 3 kB, billed as
+    0.1 s of audio, once per start stall), which satisfies both readings, so
+    a start stall of up to 12 s (the watchdog's limit) should not lose the
+    session. What stays unverified is the whole mechanism against the real
+    service: no Deepgram key was available. One live run with a key shows it
+    holds: start a streaming dictation and make the microphone deliver nothing
+    for 12 s (or open a stream and send nothing but the sender's frames), then
+    speak. The same run with the silence frame removed would show whether
+    KeepAlive alone suffices, and the frame could then be dropped. If the
+    session still dies, the user sees "Deepgram streaming failed: WebSocket
+    connection closed unexpectedly." and the audio is kept as the first entry
+    of `docs/agents/streaming.md` describes.

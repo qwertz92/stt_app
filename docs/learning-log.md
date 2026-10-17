@@ -56,13 +56,22 @@ Agents and developers: use this as a knowledge base for past issues and solution
   tests drive the real loop with a queue that carries a fake clock (a 14 s
   gap costs no real time), and the overlap and ordering cases with real
   threads and a 50 ms interval.
-- **Open, needs a Deepgram key**: whether the contradicting sentence is
-  right. If it is, a start stall longer than 10 s before the first audio
-  block still loses the session, and the cover is one frame of digital
-  silence (billed). Kept as an "unverified live" entry in
-  `docs/agents/known-limitations.md` with the one-run check. Lesson: a
-  vendor's own pages can disagree; read the troubleshooting page and not
-  only the feature page before calling a protocol question answered.
+- **Follow-up the same day (lead's decision)**: since nobody could check the
+  contradicting sentence without a key and the cover costs about 0.1 s of
+  billed audio per start stall, the sender covers both readings. When its
+  first 3 s wait runs out in a session that has sent no audio at all, it
+  writes one 0.1 s frame of PCM16 zeros (built from the same sample rate,
+  channel count and linear16 sample width as the connection URL, and a test
+  reads those from the URL) as a binary frame instead of the first
+  KeepAlive, then KeepAlives. Once audio has gone out it never writes
+  silence, so a gap inside a dictation still gets KeepAlives only.
+- **Still open, needs a Deepgram key**: whether the contradicting sentence is
+  right, i.e. whether the silence frame is needed at all. Kept as an
+  "unverified live" entry in `docs/agents/known-limitations.md` with the
+  one-run check. Lesson: a vendor's own pages can disagree; read the
+  troubleshooting page and not only the feature page before calling a
+  protocol question answered, and when two readings cannot be told apart,
+  prefer the cheap behaviour that satisfies both.
 
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
