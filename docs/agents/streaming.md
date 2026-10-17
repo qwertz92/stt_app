@@ -74,9 +74,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   wait, both up to 12 s -- does not make Deepgram close the socket at its
   10 s limit; no KeepAlive can overlap an audio frame or follow the barrier.
   A session that has sent no audio at all gets one 0.1 s frame of digital
-  silence before its first KeepAlive, never once audio has gone out
-  (`docs/agents/remote-providers.md` has the vendor facts, the reason, and
-  why the sender and not a timer).
+  silence before its first KeepAlive, never once audio has gone out. One gap
+  is bridged for at most 30 s (the capture's 20 s input buffer plus 10 s),
+  so a microphone that dies mid-dictation still ends the stream through
+  Deepgram's own close and this entry's first rule, instead of an overlay
+  that stays on "Listening" (`docs/agents/remote-providers.md` has the vendor
+  facts, the reasons, and why the sender and not a timer).
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single
