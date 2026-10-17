@@ -40,8 +40,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   "Not inserted" (the paste failed or its target is no text field: Insert
   offered) or "Check window" (the keystroke went out and only the cleanup
   failed: no Insert, never pasted twice). Red and "Error" stay for failures
-  that left no transcript (Retry, no action). Why: nothing failed that Retry
-  could redo and the text is safe in history, so the red "Error" over a
+  that left no transcript (Retry, no action) and for a real failure painted
+  over a pending offer (the severity bullet below). Why: nothing failed that
+  Retry could redo and the text is safe in history, so the red "Error" over a
   working Insert said more than had happened.
   - **Appearance, not a state**, like "Starting": `state` stays "Error", so
     the controls (Insert, Copy, Edit, Clear), the scroll-to-top, the
@@ -51,11 +52,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     colour differ; `warning` is ignored for any other state.
   - **One writer**: `DictationController._paint_not_inserted` picks the word
     and the action from one flag (`may_have_pasted`) and is the only
-    `set_state` call that offers Insert; its five callers are
-    `_paint_insert_offer`, both arms of `_paint_status_keeping_offer` and
-    both arms of the failed paste in `_insert_text_at_target`.
-    `tests/conftest.py`'s `FakeOverlay` refuses an Insert offer without a
-    warning, so a sixth writer fails every test that reaches it.
+    `set_state` call that offers Insert. It has four call sites:
+    `_paint_insert_offer`, one in `_paint_status_keeping_offer` (it covers
+    both of that function's wordings, "Still not inserted" and "Possibly
+    inserted already") and the two arms of the failed paste in
+    `_insert_text_at_target`. It always passes `warning` -- a word, or None
+    for the red Error below -- and `tests/conftest.py`'s `FakeOverlay`
+    refuses an Insert offer whose call leaves `warning` out, so a fifth
+    writer fails every test that reaches it.
+  - **Severity wins over the warning** (lead's decision 2026-10-17): the
+    orange belongs to the offer's own state. A status painted over a pending
+    offer by `_paint_status_keeping_offer` is decided by what it is. A real
+    failure -- state "Error": a hotkey that did not register, a failed model
+    preload, a setting that was not saved (`show_overlay_error`), a refused
+    recording start, a failed Edit or Retry -- is the red "Error" label and
+    colour, and the offer rides along unchanged: the "Still not inserted" /
+    "Possibly inserted already" detail, the transcript, Copy, Edit and
+    Insert (`_paint_not_inserted(failure=True)`, `warning=None`). Without
+    this the failure was painted orange "Not inserted" and read as nothing
+    but the offer. An informational line (Idle, Done, Processing: the idle
+    hotkey line, the preload's progress, "Transcription canceled.") and an
+    error about the insert itself (`show_overlay_error(..., about_insert=
+    True)`: "No window to insert into", the re-paste refusals, "waiting
+    transcripts were dismissed") keep the orange. The next status that is
+    not a failure turns it orange again. The overlay needs nothing for it:
+    red plus Insert is the Error state it always had, so the controls are
+    the same (the warning's own overlay test compares them with and without
+    `warning`) and the three-size geometry test includes that case.
   - **Why two words, and why these**: "Not inserted" is true for the offer;
     for a keystroke that went out it would be false (the detail says "most
     likely inserted"), so that one reads "Check window", the queue row's

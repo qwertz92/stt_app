@@ -73,6 +73,92 @@ stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
   click did. Not done: the same on a real desktop with a mouse, at other font
   sizes.
 
+## 2026-10-17: severity wins over the not-inserted warning
+
+Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.
+- **The defect.** `_paint_status_keeping_offer` painted every status over a
+  pending Insert offer through `_paint_not_inserted`, so a failure that has
+  nothing to do with the insert -- a hotkey that did not register (the idle
+  line), a model preload that failed, a setting that was not saved
+  (`show_overlay_error`), a refused recording start -- came out as orange
+  "Not inserted" with the failure's text as the first line of the detail.
+  The orange read as the offer and the failure looked like a footnote.
+  Reproduced first with eight new tests (four failures, each with and
+  without a keystroke that may have gone out) plus an end-to-end test on
+  the real overlay: all nine failed, the "about the offer" ones passed.
+- **The rule.** What is painted over the offer decides its colour. State
+  "Error" is a real failure: red "Error" label and colour, and the offer
+  rides along unchanged (the "Still not inserted" / "Possibly inserted
+  already" detail, the transcript, Copy, Edit, Insert unless the keystroke
+  may have gone out): `_paint_not_inserted(failure=True)` passes
+  `warning=None`. Informational states (Idle, Done, Processing) keep the
+  orange, and so do errors about the insert itself, which the insert path
+  marks with `show_overlay_error(..., about_insert=True)` (seven sites in
+  the re-paste code: no window, waiting rows gone, may already be inserted,
+  no transcript, recording start/stop in the way, held for the stream, the
+  insert's own error text).
+- **Why red is the default and the marked sites are the exceptions.** The
+  insert path is a short, known list; the sources of failures are open-ended
+  (every new settings save, hotkey or preload line). A default of orange
+  would hide the next one; a default of red shows an unmarked insert refusal
+  as a red Error over its working offer, which is merely loud. A refused
+  Retry and a failed Edit are red under the default too: they report on
+  Retry and Edit, not on the insert. Say so if they should be orange.
+- **The guard still bites.** `FakeOverlay` used to demand a truthy
+  `warning` on an Insert offer, which red cannot give. It now demands that
+  the key is present: the one writer always passes it (a word, or None for
+  red), a writer that bypasses the helper leaves it out and fails every test
+  that reaches it.
+- **Nothing moved, controls unchanged.** Red plus Insert is the plain Error
+  state the overlay always had. The overlay test that compares the controls
+  with and without `warning` covers it, and the three-size header geometry
+  test (9, 11.25, 13.5 pt) now includes the red+Insert case: one label
+  rectangle, one overlay width. 1,082 tests of the controller and overlay
+  files pass.
+- **Docs drift fixed.** `overlay.md` and `text-insertion.md` said the helper
+  has five callers and named "both arms of `_paint_status_keeping_offer`";
+  it has four call sites (the status painter is one call with two wordings).
+
+## 2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead microphone)
+
+- **The finding (P3, the lead's review of 20703c0..99970e1)**: before the
+  KeepAlive, a microphone whose callback thread stopped delivering after the
+  first block (a driver wedge) made Deepgram close the socket after ~10 s,
+  and the user saw the red streaming error. With a KeepAlive that never
+  stops, the sender bridged forever and the overlay stayed on "Listening"
+  until the hotkey. Checked before accepting it: nothing else in the app
+  notices such a microphone. The first-callback watchdog in `controller.py`
+  watches only the first block, `audio_capture.py` registers no
+  stream-finished callback, and the device listener only defers its refresh
+  while a recording runs. So Deepgram's close was the detector, and the
+  KeepAlive had silently removed it.
+- **The fix**: the sender bridges one gap for at most
+  `_STREAM_KEEPALIVE_MAX_GAP_S` = `AUDIO_INPUT_BUFFER_S` + 10 s (30 s), counted
+  in whole 3 s waits since the last real audio frame. Past it, it writes
+  neither KeepAlive nor silence frame and logs one WARNING per gap; Deepgram
+  closes after its own 10 s (about 40 s after the last block instead of ~10 s)
+  and the streaming-failure path runs. The sender keeps waiting, so real audio
+  after the cap on a still-open socket is sent normally and starts a fresh
+  30 s. Why 30 s: the capture holds 20 s for a starved callback thread and
+  delivers it as a burst, so a shorter gap can be a slow microphone; the
+  longest wait the app creates itself is 12 s; past the buffer the audio is
+  lost anyway. The detection delay is recorded in `known-limitations.md`.
+- **Doc follow-up**: the troubleshooting page's NET-0002 checklist ("Unlike
+  NET-0001, KeepAlive messages do reset this timeout") is now cited as the
+  vendor evidence that a KeepAlive-only gap after audio holds, with the note
+  that the page gives no window length (re-read the same day, no number). The
+  live-check description has its second case: speak, 12 s of nothing, speak.
+- **Two test follow-ups**: the overlap and Finalize-ordering tests used a
+  50 ms interval and failed whenever the main thread was 50 ms late between
+  `start_stream()` and the first push, because the sender then wrote its
+  idle frame first (reproduced with an inserted `sleep(0.12)`). They now
+  start with a 30 s first wait and shrink it while the audio is held inside
+  the send, so no delay of the main thread matters (re-run with the 0.12 s
+  sleep inserted: all 89 pass). And the release test's fake `subprocess.run`
+  now honours `check=True` like the real one, so an audit call that stops
+  passing `check=False` fails the failing-audit test with a
+  `CalledProcessError`.
+
 ## 2026-10-17: a transcript that was not inserted is a warning, not an error
 
 Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,

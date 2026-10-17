@@ -223,13 +223,17 @@ class FakeOverlay:
 
     def set_state(self, state, detail="", **kwargs):
         # The real overlay paints the red Error for an Insert offer unless told
-        # it is a warning: the offer's transcript exists, so it is never an
-        # error (owner's decision 2026-10-17). Every writer goes through
-        # `DictationController._paint_not_inserted`; one that does not fails
-        # here, in every test that reaches it.
+        # it is a warning: the offer's transcript exists, so it is not an
+        # error unless something else failed meanwhile (owner's decision
+        # 2026-10-17; severity wins, lead's decision the same day). Every
+        # writer goes through `DictationController._paint_not_inserted`,
+        # which always passes `warning` -- a word, or None for that red
+        # Error. A writer that leaves it out fails here, in every test that
+        # reaches it.
         offers_insert = kwargs.get("error_action") == OVERLAY_ERROR_ACTION_INSERT
-        assert not offers_insert or kwargs.get("warning"), (
-            f"an Insert offer painted without its warning: {state!r} {detail!r}"
+        assert not offers_insert or "warning" in kwargs, (
+            "an Insert offer painted without deciding its warning: "
+            f"{state!r} {detail!r}"
         )
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))

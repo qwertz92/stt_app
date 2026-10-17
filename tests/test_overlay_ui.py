@@ -3532,7 +3532,12 @@ def test_a_not_inserted_transcript_is_a_warning_and_a_failure_without_one_stays_
         QtWidgets.QApplication.processEvents()
         assert overlay._state_label.text() == "Error"
         assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+        # The red Error that carries the offer (a real failure arrived over
+        # a pending Insert offer) has the very same controls.
         assert _control_state(overlay) == warned
+        if action == OVERLAY_ERROR_ACTION_INSERT:
+            assert warned["insert"] == (True, False), "Insert is offered"
+            assert warned["retry"][1] and warned["cancel"][1]
 
     # The next plain Error is red again, not left orange.
     overlay.set_state("Error", "Transcription failed.")
@@ -3585,6 +3590,8 @@ _STATE_WORD_CASES = [
     ("Processing", {}),
     ("Done", {}),
     ("Error", {}),
+    # A real failure over a pending offer: red, with the offer's Insert.
+    ("Error", {"error_action": OVERLAY_ERROR_ACTION_INSERT, "warning": None}),
     (
         "Error",
         {

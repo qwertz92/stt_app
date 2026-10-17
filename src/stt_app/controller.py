@@ -6916,7 +6916,8 @@ class DictationController(QtCore.QObject):
                 # Never end a user's F10 silently.
                 self.show_overlay_error(
                     "The waiting transcripts were dismissed or inserted in the "
-                    "meantime, so nothing was inserted."
+                    "meantime, so nothing was inserted.",
+                    about_insert=True,
                 )
                 return
             # Rebuilt from the rows as they are now: some may have gone, and
@@ -7385,6 +7386,7 @@ class DictationController(QtCore.QObject):
         may_have_pasted: bool,
         rows: Sequence[_UndeliveredInsert],
         entry: TranscriptHistoryEntry | None,
+        failure: bool = False,
     ) -> None:
         """The one writer of a transcript that exists but is not (surely) in
         its window: every Insert offer and every "check the window" report.
@@ -7399,7 +7401,22 @@ class DictationController(QtCore.QObject):
         window, so "Check window" and no Insert; otherwise "Not inserted"
         with Insert. ``rows`` and ``entry`` are what an edit of
         ``transcript`` reaches (`_edit_reaches`).
+
+        ``failure``: a real failure arrived while the offer is pending (a
+        hotkey that did not register, a model that did not load, a setting
+        that was not saved). Severity wins (lead's decision 2026-10-17): it
+        is painted as the red Error, but the offer -- the transcript, Copy,
+        Insert (unless ``may_have_pasted``), the detail -- is kept exactly,
+        so the failure never costs the transcript. ``warning`` is always
+        passed, None for that red Error: the writer has decided, which is
+        what `FakeOverlay` checks for an Insert offer.
         """
+        if failure:
+            warning = None
+        elif may_have_pasted:
+            warning = OVERLAY_WARNING_CHECK_WINDOW
+        else:
+            warning = OVERLAY_WARNING_NOT_INSERTED
         self._overlay.set_state(
             "Error",
             detail,
@@ -7410,11 +7427,7 @@ class DictationController(QtCore.QObject):
                 else OVERLAY_ERROR_ACTION_INSERT
             ),
             editable=self._edit_reaches(transcript, rows, entry),
-            warning=(
-                OVERLAY_WARNING_CHECK_WINDOW
-                if may_have_pasted
-                else OVERLAY_WARNING_NOT_INSERTED
-            ),
+            warning=warning,
         )
 
     # -- Paste target check ---------------------------------------------------
@@ -8426,7 +8439,12 @@ class DictationController(QtCore.QObject):
         self._paint_status_keeping_offer("Error", detail)
 
     def _paint_status_keeping_offer(
-        self, state: str, detail: str, *, compact: bool | None = None
+        self,
+        state: str,
+        detail: str,
+        *,
+        compact: bool | None = None,
+        about_insert: bool = False,
     ) -> None:
         """Write a status that is not a session result, keeping the offer.
 
@@ -8465,6 +8483,18 @@ class DictationController(QtCore.QObject):
         out (measured: nine writers offering a duplicate paste), while a
         different transcript's post-paste failure hid the button of a tail
         that had never reached a window.
+
+        Severity (lead's decision 2026-10-17): with an offer pending the
+        status is painted over it, and its own kind decides the colour. A
+        ``state`` of "Error" is a real failure -- a hotkey that did not
+        register, a preload that failed, a setting that was not saved, a
+        refused recording start -- and is painted as the red Error, the
+        offer (transcript, Copy, Insert, "Still not inserted") kept intact:
+        orange "Not inserted" hid it. Every other state is informational
+        and keeps the orange warning, and so does an Error that is about
+        the insert itself (``about_insert``: "No window to insert into",
+        the re-paste refusals), because the transcript's own state is what
+        it reports.
         """
         pending = self._insert_action_text
         if not pending:
@@ -8487,6 +8517,7 @@ class DictationController(QtCore.QObject):
             may_have_pasted=self._insert_offer_may_have_pasted,
             rows=self._insert_action_rows,
             entry=self._insert_action_entry,
+            failure=state == "Error" and not about_insert,
         )
         self._offer_painted = ("Error", painted)
 
@@ -8844,7 +8875,8 @@ class DictationController(QtCore.QObject):
             self.show_overlay_error(
                 "The last transcript may already have been inserted, so it is "
                 "not inserted again. Check the window; the transcript is in "
-                "history."
+                "history.",
+                about_insert=True,
             )
             return
         self._repaste(text)
@@ -8897,7 +8929,9 @@ class DictationController(QtCore.QObject):
         hold the user was told about already.
         """
         if not text.strip():
-            self.show_overlay_error("No transcript available to insert yet.")
+            self.show_overlay_error(
+                "No transcript available to insert yet.", about_insert=True
+            )
             return
         what = (
             "the transcripts that were not inserted"
@@ -8917,7 +8951,7 @@ class DictationController(QtCore.QObject):
             hint = self._undelivered_hint()
             if hint:
                 message = f"{message} {hint}"
-            self.show_overlay_error(message)
+            self.show_overlay_error(message, about_insert=True)
             return
         if self._stream_still_delivering() and self._streaming_window_has_focus():
             # Live inserts write at that caret while the microphone is open,
@@ -8942,7 +8976,8 @@ class DictationController(QtCore.QObject):
                 )
                 self.show_overlay_error(
                     f"{held} when the streaming dictation into this window has "
-                    "finished."
+                    "finished.",
+                    about_insert=True,
                 )
             return
         wait_s = self._paste_pace_wait_s()
@@ -8988,7 +9023,8 @@ class DictationController(QtCore.QObject):
             # "Listening" overlay to the front for an error the tray carried.
             self.show_overlay_error(
                 "No window to insert into. Click into the window you want the "
-                "transcript in, then try again."
+                "transcript in, then try again.",
+                about_insert=True,
             )
             return
         # A foreground transcription in flight owns the overlay: the paste
@@ -9044,7 +9080,7 @@ class DictationController(QtCore.QObject):
                     entry.may_have_pasted = True
                 self._update_queue_overlay()
             if session:
-                self.show_overlay_error(self._last_insert_error_text)
+                self.show_overlay_error(self._last_insert_error_text, about_insert=True)
             else:
                 self._reveal_overlay_result(is_error=True)
             return
@@ -9126,7 +9162,7 @@ class DictationController(QtCore.QObject):
         self._reveal_overlay_result(is_error=False)
         QtCore.QTimer.singleShot(OVERLAY_NOTICE_MS, self.show_idle_status)
 
-    def show_overlay_error(self, message: str) -> None:
+    def show_overlay_error(self, message: str, *, about_insert: bool = False) -> None:
         """Surface a transient error on the overlay without exposing the
         overlay widget to callers (kept so main.py does not reach into
         ``_overlay`` directly).
@@ -9134,7 +9170,10 @@ class DictationController(QtCore.QObject):
         Through the offer-keeping painter: "No window to insert into" is
         what the overlay's own Insert answers when the user has not clicked
         into a document yet, and painted plainly it hid the button the user
-        was about to press again.
+        was about to press again. ``about_insert`` marks such an answer of
+        the insert path: over a pending offer it stays the orange warning,
+        where any other error is the red Error
+        (`_paint_status_keeping_offer`).
 
         Never over a live session. Painted while a recording or a
         transcription owned the overlay, an unrelated refusal -- the opacity
@@ -9149,7 +9188,7 @@ class DictationController(QtCore.QObject):
             self._logger.warning("overlay_error_while_session_active %s", text)
             self.busy_overlay_error.emit(text)
             return
-        self._paint_status_keeping_offer("Error", text)
+        self._paint_status_keeping_offer("Error", text, about_insert=about_insert)
         self._reveal_overlay_result(is_error=True)
 
     def _reveal_overlay_result(self, *, is_error: bool) -> None:
