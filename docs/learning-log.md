@@ -3,6 +3,48 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (the History retranscription crash: a worker held the closed dialog)
+
+Owner's report: History (from the overlay) > Retranscribe, the dialog closed
+during the run, then another entry of the same recording deleted -- crash.
+Reproduced with a probe driving the real `HistoryDialog` and
+`RetranscribeDialog` with a fake controller, the app kept alive on last-window
+close as in `main.py` (`docs/agents/persistence-and-history.md`):
+- **Cause 1 (the owner's sequence):** PySide6's `QDialog.exec()` hands the
+  dialog back to Python ownership, so it dies with its last Python reference
+  although it has a parent. The worker closure captured `self`; after Close it
+  held the last reference, and the end of the run destroyed the dialog on the
+  worker thread: "QObject::killTimer: Timers cannot be stopped from another
+  thread" (its elapsed timer still ran), then "Fatal Python error: Aborted" or
+  an access violation (2 of 4 runs; every run printed the warnings). History
+  staying open is what makes the worker the last owner; closing History first
+  deletes the child on the GUI thread instead.
+- **Cause 2:** a progress emit on the dialog while History's
+  `WA_DeleteOnClose` deleted it raised `TypeError(' only accepts 0
+  argument(s), 1 given!')`, which `_emit`'s `RuntimeError` guard let through,
+  and the process aborted (2 of 4 runs at one progress line per ms).
+- **Not a cause:** deleting the other entry. `delete_entries` never touched
+  audio and still does not (now logged, and documented); the transcript was
+  always saved by the controller on the worker thread.
+- A first probe version reported a "starved" worker after History closed; that
+  was the probe's own app quitting on last-window close. Probes of Qt
+  lifetime must set `setQuitOnLastWindowClosed(False)` like `main.py`.
+- **Fix:** `gui_thread.GuiThreadReporter` (weak reference, one dispatcher owned
+  by the application, call queued to the GUI thread and dropped for a dead
+  receiver); `RetranscribeDialog` hands the worker only the reporter, History
+  a module-level callable with the controller and its own reporter, which
+  refreshes the list when the run ends (`produced_transcript` and the post-exec
+  reload went, the refresh covers both cases). A failed `Thread.start` now
+  ends the run with a message instead of a dialog stuck in "Transcribing...".
+  Both ends of a History retranscription and every history delete are logged.
+  After the fix: 6/6 and 8/8 probe runs clean, entry saved, 963 progress
+  reports to the deleted dialog dropped.
+- Tests fail without the fix for the stated reason (the closed dialog is kept
+  alive by the run): the dialog-level test and the History-level test of the
+  owner's sequence; the latter first used `findChild`, which (measured) kept
+  the child alive through its parent and failed even with the fix, so it looks
+  the dialog up through `topLevelWidgets()`.
+
 ## 2026-10-23 (a crash leaves a trace: crash.log, exception hooks, the previous session in diagnostics)
 
 Owner's report: after a crash and a restart only post-restart logs existed,
