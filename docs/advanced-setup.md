@@ -879,7 +879,20 @@ A short delay after SendInput prevents race conditions where the target app read
 
 - Settings: `%APPDATA%\stt_app\settings.json` (JSON with validation and normalization)
 - Secrets (API keys): Windows Credential Manager via `keyring`
-- Logs: `%APPDATA%\stt_app\logs\dictation.log` (rotating, max 1 MB)
+- Logs: `%APPDATA%\stt_app\logs\dictation.log`. A restart appends to it;
+  past 1 MB it is renamed to `dictation.log.1` (then `.2`, `.3`, the oldest
+  deleted), so the backups are older by size, not by session, and a recent
+  session's start can already be in `dictation.log.1`.
+- Crash traces: `%APPDATA%\stt_app\logs\crash.log`. A crash inside Qt or
+  another native component ends the app before the log can record anything;
+  the stacks of every thread are written here instead, and the next start
+  copies them into `dictation.log` with the line `previous_session_end`. That
+  line also appears, without stacks, when the previous run ended without a
+  clean quit for another reason (killed, Windows restart, power loss). "Copy
+  diagnostics" then includes the previous run as well.
+- While the app runs, Explorer may show `dictation.log` with the size and date
+  of an earlier time: Windows updates those for a file held open only when it
+  is closed. Open the file to see its current content.
 
 ### Project structure
 

@@ -33,7 +33,7 @@ from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process
-from .logger import AppLogger
+from .logger import AppLogger, CrashLog, start_crash_reporting
 from .model_download_coordinator import request_download_shutdown
 from .overlay_ui import OverlayUI
 from .paste_target_check import PasteTargetCheck
@@ -75,29 +75,29 @@ def _set_windows_app_user_model_id() -> None:
         pass
 
 
-def _arm_quit_watchdog(log_path, logger):
-    """End a quit that never finishes, and leave the reason in the log.
+def _arm_quit_watchdog(crash_log: CrashLog | None, logger) -> None:
+    """End a quit that never finishes, and leave the reason in the crash log.
 
     A quit once removed the tray icon and then kept the process alive until
     Ctrl+C (2026-10-03), and nothing in the log said where it hung. Neither
     Ctrl+C nor Python code can rescue that: a thread blocked in native code
     never sees the signal, and once interpreter finalization starts no other
     Python thread runs. faulthandler's timer is a native thread, so it still
-    writes every Python stack into the log and exits the process.
+    writes every Python stack and exits the process.
 
-    Returns the open log stream (it must stay open until the process ends),
-    or None when the log cannot be opened.
+    The stacks go to the crash log, which is open for the whole session. They
+    used to go to a second handle opened on `dictation.log`, and Windows does
+    not rename a file another handle holds open: a log rotation during the
+    quit failed, and the logging handler then dropped every later line. The
+    next start copies the dump into the log (`start_crash_reporting`).
     """
     logger.info("app_quit_started watchdog_s=%s", QUIT_WATCHDOG_TIMEOUT_S)
-    try:
-        stream = open(log_path, "a", encoding="utf-8")  # noqa: SIM115 - held to exit
-    except OSError:
-        logger.warning("app_quit_watchdog_unavailable log=%s", log_path)
-        return None
+    if crash_log is None:
+        logger.warning("app_quit_watchdog_unavailable reason=no_crash_log")
+        return
     faulthandler.dump_traceback_later(
-        QUIT_WATCHDOG_TIMEOUT_S, repeat=False, file=stream, exit=True
+        QUIT_WATCHDOG_TIMEOUT_S, repeat=False, file=crash_log.stream, exit=True
     )
-    return stream
 
 
 def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
@@ -237,6 +237,11 @@ def run() -> int:
     # Marks where a session begins. "Copy diagnostics" cuts here so the copied
     # text covers exactly the current run instead of an arbitrary line count.
     logger.info("%s version=%s", SESSION_START_LOG_MARKER, __version__)
+    # Before anything that can crash: native crashes and uncaught exceptions
+    # must leave a trace, and the log says how the previous session ended.
+    crash_log = start_crash_reporting(
+        app_logger.log_path.parent, logger, version=__version__
+    )
 
     settings_store = SettingsStore()
     secret_store = KeyringSecretStore()
@@ -361,12 +366,7 @@ def run() -> int:
     QtCore.QTimer.singleShot(0, _show_unfinished_recordings)
 
     # Before any shutdown work, so that a step that hangs is still bounded.
-    quit_watchdog_streams = []
-    app.aboutToQuit.connect(
-        lambda: quit_watchdog_streams.append(
-            _arm_quit_watchdog(app_logger.log_path, logger)
-        )
-    )
+    app.aboutToQuit.connect(lambda: _arm_quit_watchdog(crash_log, logger))
     # First: a hand-registered icon must be removed explicitly, or a dead icon
     # stays in the tray until the user hovers over it. Doing it before the
     # shutdown work below also makes it disappear immediately instead of after
@@ -398,7 +398,6 @@ def run() -> int:
         "history_dialog_presenter": history_dialog_presenter,
         "signal_timer": signal_timer,
         "instance_lock": instance_lock,
-        "quit_watchdog_streams": quit_watchdog_streams,
     }
 
     exit_code = app.exec()
@@ -410,6 +409,8 @@ def run() -> int:
         if not thread.daemon and thread is not threading.main_thread()
     ]
     logger.info("app_exec_returned code=%s non_daemon_threads=%s", exit_code, lingering)
+    if crash_log is not None:
+        crash_log.mark_clean_exit()
     return exit_code
 
 

@@ -210,6 +210,14 @@ class TranscriptHistoryStore:
         return self.delete_entries([entry])
 
     def delete_entries(self, entries: list[TranscriptHistoryEntry]) -> int:
+        """Remove ``entries`` from history; their audio files stay.
+
+        A retranscription links the same file as the entry it repeats, so a
+        file can belong to several entries, and the archive's own retention
+        (`recordings_max_count`) is what removes recordings. Logged without
+        text, so a log shows that a delete happened (owner's crash report of
+        2026-10-23 had none).
+        """
         if not entries:
             return 0
         with self._lock:
@@ -225,6 +233,7 @@ class TranscriptHistoryStore:
                 removed += 1
             if removed > 0:
                 self.save(current)
+                _LOGGER.info("history_entries_deleted count=%d", removed)
             return removed
 
     def update_entry_text(self, entry: TranscriptHistoryEntry, text: str) -> int:

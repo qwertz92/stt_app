@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import functools
+import logging
 from collections.abc import Callable
 from dataclasses import replace
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .app_paths import resolve_recordings_dir
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
+from .gui_thread import GuiThreadReporter
 from .history_audio import (
     open_directory,
     resolve_history_audio_path,
@@ -40,6 +44,8 @@ from .ui_feedback import (
     restore_vertical_scrollbar,
     set_button_feedback_state,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
 _TABLE_TEXT_PREVIEW_CHARS = 180
@@ -512,19 +518,23 @@ class HistoryDialog(QtWidgets.QDialog):
             entry=entry,
             audio_path=audio_path,
             base_settings=self._controller.settings,
-            transcribe=self._transcribe_audio_file,
+            transcribe=functools.partial(
+                _retranscribe_and_report,
+                self._controller,
+                GuiThreadReporter(self),
+            ),
             parent=self,
         )
         dialog.exec()
-        if dialog.produced_transcript:
-            self.reload(force=True)
 
-    def _transcribe_audio_file(self, path, settings, progress_callback):
-        return self._controller.transcribe_audio_file(
-            path,
-            settings_override=settings,
-            progress_callback=progress_callback,
-        )
+    def _on_retranscription_finished(self) -> None:
+        """Show a retranscription's new entry, whenever the run ends.
+
+        The run outlives its dialog: closed mid-run, the dialog is gone when
+        the controller saves the transcript, so the list refreshes from here
+        rather than from the dialog.
+        """
+        self.reload(force=True)
 
     def _report_missing_audio(self) -> None:
         QtWidgets.QMessageBox.information(
@@ -879,6 +889,44 @@ class HistoryDialog(QtWidgets.QDialog):
             self._history_store,
             on_cleared=lambda: self.reload(force=True),
         )
+
+
+def _retranscribe_and_report(
+    controller,
+    history_reporter: GuiThreadReporter,
+    path,
+    settings,
+    progress_callback,
+):
+    """Run one retranscription on the worker thread, then refresh History.
+
+    Module level and handed the controller and a reporter rather than the
+    dialog, because it runs on the worker thread, which must hold no Qt
+    widget (`gui_thread`). The controller saves the transcript to history
+    before this returns, whatever became of either dialog.
+
+    Both ends are logged (no text): the owner's crash of 2026-10-23 happened
+    on this path, and the log showed nothing of it.
+    """
+    _LOGGER.info(
+        "history_retranscription_started engine=%s language=%s audio=%s",
+        settings.engine,
+        settings.language_mode,
+        Path(str(path)).name,
+    )
+    ok, text = False, ""
+    try:
+        ok, text = controller.transcribe_audio_file(
+            path,
+            settings_override=settings,
+            progress_callback=progress_callback,
+        )
+        return ok, text
+    finally:
+        _LOGGER.info(
+            "history_retranscription_finished ok=%s chars=%d", ok, len(text or "")
+        )
+        history_reporter.post("_on_retranscription_finished")
 
 
 def _normalize_history_limit(value: int) -> int:
