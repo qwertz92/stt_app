@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
+
+Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
+smaller points in my round-2 commits, each reproduced by the reviewer with real
+futures and again by a test here that failed for the stated reason before its
+fix (`docs/agents/controller-and-jobs.md`).
+- **P2: the "kept" recording of a fallback retry survived neither the next
+  start nor the next dictation, although the tray promised it.** Round 2 kept
+  the managed recording itself, marked failed like a gap transcript's. That is
+  one slot: the next dictation replaces its WAV, and the next start finds the
+  failed recording recoverable, finds the retry's History entry by its
+  recording id (`main._last_recording_already_transcribed`) and completes it --
+  `_complete_unless_gap` spares only a gap marker -- which deletes the WAV with
+  "keep last recording" and "save all recordings" off, their defaults. My
+  tests checked the state right after the delivery and never the next start,
+  and I took the gap transcript as precedent without checking that it has the
+  same hole for the next dictation. The fix is the one the restart road
+  already uses: at delivery the audio is saved as an unfinished recording and
+  moved to the recordings folder under its own name (`save` and `move_to` of
+  `UnfinishedRecordingStore`, the pair `_retain_unfinished_audio` uses), a
+  name that no recordings count prunes, and `job.source_audio_path` links it
+  from the History entry, which is what Retranscribe resolves. The managed
+  slot completes as for any success, so `mark_failed`, the slot-matching check
+  and the "newer recording replaced it" wording are gone. The notice is one
+  sentence pointing to Retranscribe in History, and says the audio could not
+  be kept where the write failed. Tests cover the entry's link and the
+  copy's bytes, the next start (`_offer_unfinished_recordings` offers nothing
+  and the link still resolves), the next dictation, the failed write, and a
+  recording that fell back nowhere (no copy, no link, no notice).
+
 ## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
 
 Round 2 of the independent review (main `35cd764`) found no P1 or P2 and five
@@ -50,6 +80,9 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   restart road has no tray notice per row, because the dialog row already
   names the language (see the row-wording bullet below) and a toast per row on
   top of an open window would be noise; say so if a toast there is wanted too.
+  (Superseded for the in-process road by round 3, entry above: marking the
+  managed recording failed kept nothing past the next start; the audio is now
+  copied to the recordings folder and linked from the History entry.)
 - **P4, reproduced: the fallback named a language that did not run.** When the
   recorded language was not offered, a retry used "the selected language" as it
   stood in the settings. A selection the engine does not offer either stays

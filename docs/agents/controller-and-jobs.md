@@ -382,33 +382,46 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     retried after a restart under Canary was sent as `auto` and came out
     translated, and with recordings retention off the WAV was deleted after the
     wrong transcript was saved.
-    **A fallback retry keeps its recording and tells the tray** (review round
-    2, 2026-10-17). The overlay's "do not offer the recorded language" line is
+    **A fallback retry keeps its audio in the recordings folder, links it from
+    its History entry and tells the tray** (review rounds 2 and 3,
+    2026-10-17). The overlay's "do not offer the recorded language" line is
     overwritten by the first provider progress line, History stores no
-    language, and with "keep last recording" off the managed WAV was deleted
-    after the success, so Import's "Use last recording" could not redo the
-    audio in the right language. The job carries `language_fallback_from` (the
-    recorded language; `_retry_settings` returns it as its third value and
-    `retry_last_transcription` passes it on). On delivery
-    `_mark_last_recording_completed` marks the recording failed instead of
-    completed while the managed slot still holds it -- the mechanism a gap
-    transcript already uses, no new one (`Transcribed in German because Auto
-    is not offered by the model; the recording was kept.`) -- and
-    `_tell_language_fallback` sends one `busy_overlay_error` tray notice that
-    names the language that ran and where the audio can be redone ("Import
-    Audio > Use last recording"). Where a newer recording took the slot
-    (`_current_last_recording_id()` differs from the job's) the audio is not
-    reachable from there; the notice says so instead of promising it, and
-    nothing is marked or relabelled. An empty transcript sends nothing. After
-    a restart `transcribe_unfinished_recording` keeps the file as the settings
-    keep any recording (`_retain_unfinished_audio`) and, where they would
-    delete it, in place the way a gap transcript's file stays, so History's
-    Retranscribe offers it again with a language to pick; the startup notice's
-    row is the surface there (no tray notice per row, on top of a dialog that
-    already names the language). Tests: `test_a_fallback_retry_keeps_its_recording_and_says_which_language_ran`,
-    `test_a_fallback_retry_of_a_replaced_recording_says_it_is_not_kept`,
-    `test_a_retry_in_the_recorded_language_completes_its_recording_as_before`
-    (negative control) and `test_a_fallback_language_keeps_the_recording_like_a_gap_does`.
+    language, and the managed WAV was deleted after the success with "keep last
+    recording" off, so the audio could not be redone in the right language.
+    Round 2 kept the managed recording itself (marked failed, as a gap
+    transcript's is); that was no copy at all: it is one slot, the next
+    dictation replaces it, and the next start completes it -- deleting the WAV
+    -- as soon as a History entry with its id exists (`main._complete_unless_gap`
+    spares only a gap marker), so the tray promised audio that was gone by the
+    next start (reproduced by the round-3 review with real futures). Now the
+    job carries `language_fallback_from` (the recorded language; `_retry_settings`
+    returns it as its third value and `retry_last_transcription` passes it on),
+    and `_on_transcription_ready` calls `_keep_audio_of_a_fallback_retry`
+    before either road writes its History entry: the audio is saved as an
+    unfinished recording and moved to the recordings folder under its own
+    name (`UnfinishedRecordingStore.save` and `move_to`, the pair
+    `_retain_unfinished_audio` uses), a name no recordings count prunes
+    (`_ARCHIVED_RECORDING_NAME_RE` does not match it), and
+    `job.source_audio_path` carries the path into the entry, which is what
+    History's Retranscribe resolves (`history_audio.resolve_history_audio_path`).
+    The managed slot then completes as for any success. Recordings that fell
+    back nowhere are kept or not as the retention settings say, unchanged. One
+    `busy_overlay_error` tray notice names the language that ran and points to
+    "Retranscribe... in History"; where the copy could not be written it says
+    "The audio could not be kept (see the log)" instead of promising it. A
+    move that fails leaves the file in the unfinished folder and links that
+    path (the next start offers it there, a second transcript at worst).
+    After a restart `transcribe_unfinished_recording` keeps the file as the
+    settings keep any recording (`_retain_unfinished_audio`) and, where they
+    would delete it, in place the way a gap transcript's file stays, so
+    History's Retranscribe offers it again with a language to pick; the startup
+    notice's row is the surface there (no tray notice per row, on top of a
+    dialog that already names the language). Tests:
+    `test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it`,
+    `test_the_kept_audio_survives_the_next_start_and_the_next_dictation`,
+    `test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept`, the
+    negative control `test_a_retry_in_the_recorded_language_keeps_no_extra_copy`
+    and, for the restart road, `test_a_fallback_language_keeps_the_recording_like_a_gap_does`.
     The language also travels to disk, so the same holds after a restart:
     `LastRecordingStore.language_mode` and the unfinished recording's file name
     (`docs/agents/persistence-and-history.md`), which the quit writes

@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -36,6 +37,7 @@ from speech_fixtures import (
     wav_bytes,
 )
 
+import stt_app.main as main_module
 from stt_app.config import (
     CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
@@ -45,7 +47,12 @@ from stt_app.config import (
     QUEUE_ROW_KIND_UNDELIVERED,
     SILENCE_GATE_THRESHOLD_MIN,
 )
-from stt_app.controller import _join_transcripts, _TranscriptionJob
+from stt_app.controller import (
+    _ARCHIVED_RECORDING_NAME_RE,
+    _join_transcripts,
+    _TranscriptionJob,
+)
+from stt_app.history_audio import resolve_history_audio_path
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -3995,20 +4002,23 @@ def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_ei
     _ = app
 
 
-def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded, newer):
+def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded):
     """A dictation recorded in `recorded` failed; the engine is switched to
-    Canary (no Auto, German selected) and the Retry delivers. `newer`: another
-    dictation was recorded after the failure, so the managed slot holds that
-    one. Returns the controller, the app, the tray messages and the id of the
-    recording the slot holds at the end."""
-    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
-        monkeypatch, tmp_path, mode="insert", language_mode=recorded
+    Canary (no Auto, German selected) and the Retry delivers. Returns the
+    controller, the app, the tray messages, the history store, the failed
+    recording's audio and the recordings folder (a setting, so that nothing
+    is written outside the test's folder)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        language_mode=recorded,
+        recordings_dir=str(recordings),
     )
     token = _record_and_stop(controller)
     controller._on_transcription_failed("boom", request_token=token)
-    if newer:
-        _record_and_stop(controller)
-    slot_id = controller._last_recording_store.load().recording_id
+    audio = controller._last_failed_wav_bytes
     controller._settings = replace(
         controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
     )
@@ -4018,76 +4028,131 @@ def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded, newe
     controller._on_transcription_ready(
         "hallo", request_token=controller._active_request_token
     )
-    return controller, app, tray, slot_id
+    return controller, app, tray, history, audio, recordings
 
 
-def test_a_fallback_retry_keeps_its_recording_and_says_which_language_ran(
+def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
     monkeypatch, tmp_path
 ):
     """The recorded language was not offered, so the transcript is in another
-    language than the speech. Nothing of that survived the first progress line,
-    and with "keep last recording" off the WAV was deleted after the success:
-    Import's "Use last recording" could not redo it in the right language. The
-    recording is kept the way a transcript with a gap is (marked failed, which
-    keeps the file), and one tray notice names the language that ran."""
-    controller, app, tray, slot_id = _a_retry_under_canary_that_finished(
-        monkeypatch, tmp_path, recorded="auto", newer=False
+    language than the speech. Nothing of that survived the first progress
+    line, and the managed recording is one slot: it is deleted by the next
+    start (its transcript is in History) and replaced by the next dictation.
+    The audio is therefore kept in the recordings folder, where no count
+    prunes it, and the History entry links it: Retranscribe takes a language
+    there. The managed slot completes as for any success."""
+    controller, app, tray, history, audio, recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
     )
-    store = controller._last_recording_store
 
-    state = store.load()
-    assert state is not None, "completing it would have deleted the recording"
-    assert (state.recording_id, state.status) == (slot_id, "failed")
-    assert state.error == (
-        "Transcribed in German because Auto is not offered by the model; "
-        "the recording was kept."
-    )
-    assert store.selectable_path() is not None
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == audio
+    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert resolve_history_audio_path(entry) == kept
+    assert controller._last_recording_store.load() is None, "completed as usual"
     assert tray == [
         (
             "The retry ran in German because Auto is not offered by the current "
-            "engine and model. The recording is kept: Import Audio > Use last "
-            "recording transcribes it again in another language."
+            "engine and model. The audio is kept: Retranscribe... in History runs "
+            "it in another language."
         )
     ]
     controller.shutdown()
     _ = app
 
 
-def test_a_fallback_retry_of_a_replaced_recording_says_it_is_not_kept(
+def test_the_kept_audio_survives_the_next_start_and_the_next_dictation(
     monkeypatch, tmp_path
 ):
-    """A newer dictation took the managed slot, so the older recording's audio
-    is no longer anywhere Import can reach it; the notice says that instead of
-    promising it, and the newer recording's state is left alone."""
-    controller, app, tray, slot_id = _a_retry_under_canary_that_finished(
-        monkeypatch, tmp_path, recorded="auto", newer=True
+    """Both ways the managed slot's copy was lost: the next start finds the
+    failed recording recoverable with its transcript already in History and
+    completes it (deleting the WAV), and the next dictation replaces it."""
+    controller, app, _tray, history, audio, _recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
     )
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.is_file(), "the entry links a copy that exists"
+    store = controller._last_recording_store
 
-    state = controller._last_recording_store.load()
-    assert state is not None and state.recording_id == slot_id
-    assert state.status == "transcribing" and state.error == ""
-    assert len(tray) == 1
-    assert tray[0].startswith("The retry ran in German because Auto is not offered")
-    assert "no longer offers it" in tray[0]
-    assert "is kept" not in tray[0]
+    shown = main_module._offer_unfinished_recordings(
+        last_recording_store=store,
+        history_store=history,
+        unfinished_store=controller._unfinished_recording_store,
+        transcribe=lambda _recording, _progress: (True, "text"),
+        keep_dir=tmp_path / "keep",
+    )
+    assert shown is None, "nothing is offered a second time"
+    assert resolve_history_audio_path(entry, store) == kept
+
+    _record_and_stop(controller)
+
+    assert kept.read_bytes() == audio
+    assert resolve_history_audio_path(entry, store) == kept
     controller.shutdown()
     _ = app
 
 
-def test_a_retry_in_the_recorded_language_completes_its_recording_as_before(
+def test_a_retry_in_the_recorded_language_keeps_no_extra_copy(monkeypatch, tmp_path):
+    """Negative control: English is offered by Canary, so nothing fell back.
+    Retention settings decide as before: no copy, no link, no notice, and the
+    managed recording is completed (deleted unless kept)."""
+    controller, app, tray, history, _audio, recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="en")
+    )
+
+    [entry] = history.load()
+    assert entry.source_audio_path == ""
+    assert not recordings.exists()
+    assert tray == []
+    store = controller._last_recording_store
+    assert store.load() is None and store.selectable_path() is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept(
     monkeypatch, tmp_path
 ):
-    """Negative control: English is offered by Canary, so nothing fell back,
-    the recording is completed (deleted unless kept) and no notice is sent."""
-    controller, app, tray, _slot_id = _a_retry_under_canary_that_finished(
-        monkeypatch, tmp_path, recorded="en", newer=False
+    """The notice promises nothing the disk refused: the delivery goes on
+    without the copy, and the line names the language and says the audio is
+    not kept."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        language_mode="auto",
+        recordings_dir=str(recordings),
     )
-    store = controller._last_recording_store
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
 
-    assert store.load() is None
-    assert store.selectable_path() is None
-    assert tray == []
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    assert controller.retry_last_transcription() is True
+
+    controller._on_transcription_ready(
+        "hallo", request_token=controller._active_request_token
+    )
+
+    [entry] = history.load()
+    assert entry.text == "hallo" and entry.source_audio_path == ""
+    assert tray == [
+        (
+            "The retry ran in German because Auto is not offered by the current "
+            "engine and model. The audio could not be kept (see the log)."
+        )
+    ]
     controller.shutdown()
     _ = app
 
