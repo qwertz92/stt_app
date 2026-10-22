@@ -426,6 +426,11 @@ class FakeCapture:
 
     def __init__(self, *args, **kwargs):
         self.chunk_callback = kwargs.get("chunk_callback")
+        self.first_audio_callback = kwargs.get("first_audio_callback")
+        # A warm stream that was delivering at the attach, so the overlay
+        # invites speech at once. A capture still waiting for its first block
+        # sets this False and calls `deliver_first_block`.
+        self.is_delivering_audio = True
         self.started = False
         self.stopped = False
         self._wav_bytes = b"RIFF"
@@ -440,6 +445,12 @@ class FakeCapture:
 
     def backlog_wait_expected(self):
         return False
+
+    def deliver_first_block(self):
+        """The microphone's first block, as `AudioCapture` announces it."""
+        self.is_delivering_audio = True
+        if self.first_audio_callback is not None:
+            self.first_audio_callback()
 
     def stop(self, *, drain=True):
         self.stopped = True

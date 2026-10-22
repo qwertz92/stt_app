@@ -33,6 +33,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   owner saw a green overlay while his first seconds were missing (2026-10-09).
   The state stays "Listening" for every control and check; only label and
   colour differ. "Speak now" and the remote "You can speak now" are green.
+  - **Green waits for the microphone, not for `capture.start()`**
+    (2026-10-23, second owner report of first words missing while he
+    believed the overlay was green): `DictationController._invite_speech`
+    holds the ready-to-speak text under "Starting" until
+    `AudioCapture.is_delivering_audio` (a block arrived, or a warm stream
+    that was delivering at the attach) and the capture's first block paints
+    it (`_on_capture_audio_started`, a delayed writer: it paints only for
+    the capture still running and never over live streaming text). The
+    first-callback watchdog's 2 s stage changes the held "Starting" detail
+    to "No audio from the microphone yet. Wait for 'Speak now'." -- same
+    overlay size as the start text at 9 / 11.25 / 13.5 pt (measured). Cost:
+    a healthy cold start turns green about 0.1-0.2 s later (its first block,
+    measured on HomeBase), and a starved start stays slate until its burst
+    although its audio was buffered; a delivering warm stream is green at
+    once, as before. Details: `docs/agents/audio-capture.md`.
 - **A transcript that exists but was not (surely) inserted is a warning, not
   the red Error** (owner's decision 2026-10-17): `set_state("Error", ...,
   warning=OVERLAY_WARNING_NOT_INSERTED | OVERLAY_WARNING_CHECK_WINDOW)`

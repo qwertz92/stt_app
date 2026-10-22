@@ -2487,3 +2487,106 @@ def test_the_level_of_a_second_the_recording_did_not_reach_is_a_dash(
         capture.stop()
 
     assert "level_dbfs_by_second=-40/-/-" in caplog.text
+
+
+def test_the_first_block_of_each_capture_is_announced_once(monkeypatch):
+    """The overlay invites speech only once the microphone has delivered
+    (2026-10-23), and the controller learns of the first block through this
+    callback. Once per capture, also across a restart, and never for a block
+    of a capture already stopped."""
+    clock = _Clock()
+    announced: list[int] = []
+    capture, callback = _cold_capture(
+        monkeypatch, clock, first_audio_callback=lambda: announced.append(1)
+    )
+
+    callback(_block(), 1600, None, None)
+    callback(_block(), 1600, None, None)
+    assert announced == [1]
+    capture.stop()
+    callback(_block(), 1600, None, None)  # a late block of the stopped capture
+    assert announced == [1]
+
+    capture.start()
+    restarted = FakeInputStream.instances[-1].kwargs["callback"]
+    restarted(_block(), 1600, None, None)
+    assert announced == [1, 1]
+    capture.stop()
+
+
+def test_a_cold_capture_delivers_audio_only_once_a_block_came(monkeypatch):
+    """`start()` returning is no proof: on HomeBase the first block of a cold
+    stream came 103-175 ms later, and a device that starts late, or a
+    callback thread that is starved, sends nothing for seconds."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+
+    assert capture.is_delivering_audio is False
+    callback(_block(), 1600, None, None)
+    assert capture.is_delivering_audio is True
+    capture.stop()
+
+
+@pytest.mark.parametrize(
+    ("silent_s", "delivering"),
+    [(0.05, True), (0.25, True), (1.0, False)],
+    ids=["delivering", "one block late", "stalled"],
+)
+def test_a_warm_capture_delivers_audio_if_its_stream_just_called_back(
+    monkeypatch, silent_s, delivering
+):
+    """A warm stream that called back within 2.5 block lengths before the
+    attach is delivering: its next block is this recording's. One silent
+    for longer is stalled, or dead, until a block comes."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)
+    clock.now += silent_s
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    assert capture.is_delivering_audio is delivering
+    warm._dispatch(_block(), 1600, None, None)
+    assert capture.is_delivering_audio is True
+    capture.stop()
+    warm.close()
+
+
+def test_a_warm_stream_that_never_called_back_is_not_delivering(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    assert capture.is_delivering_audio is False
+    capture.stop()
+    warm.close()
+
+
+def test_the_first_block_announcement_runs_outside_the_capture_lock(monkeypatch):
+    """The controller's slot reads `is_delivering_audio`, which takes the
+    capture's lock; a slot run directly from the announcement (a signal
+    emitted on the receiver's own thread) deadlocked when it was made
+    under that lock."""
+    clock = _Clock()
+    seen: list[bool] = []
+    holder: dict = {}
+    capture, callback = _cold_capture(
+        monkeypatch,
+        clock,
+        first_audio_callback=lambda: seen.append(holder["capture"].is_delivering_audio),
+    )
+    holder["capture"] = capture
+    worker = threading.Thread(
+        target=callback, args=(_block(), 1600, None, None), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive(), "the announcement deadlocked on the capture lock"
+    assert seen == [True]
+    capture.stop()

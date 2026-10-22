@@ -26,8 +26,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   opening happens outside the state lock; callbacks are
   generation-scoped (a retained one cannot feed the next recording); cleanup
   always attempts `close()` even when `stop()` fails. The ready-to-speak text
-  waits for `capture.start()` to succeed; a streaming session is published
-  before it so a first callback inside it is kept.
+  waits until the microphone is known to deliver
+  (`AudioCapture.is_delivering_audio`, 2026-10-23): a block has arrived for
+  this capture, or the warm stream called back within
+  `AUDIO_STEADY_MAX_GAP_BLOCKS` (2.5) block lengths before the attach. Until
+  then the overlay stays "Starting" and the capture's first block
+  (`first_audio_callback`, called outside the capture's lock, ->
+  `capture_audio_started` -> `_on_capture_audio_started`) paints it.
+  `capture.start()` returning proved nothing: a cold stream's first block
+  came 103-175 ms later on HomeBase, a late device or a starved callback
+  thread sends nothing for seconds, and a warm stream silent at the attach is
+  stalled or dead. A streaming session is published before `start()` so a
+  first callback inside it is kept.
 - **Device selection and changes**:
   - `input_device_name` (empty = default) resolves to an index only at open
     (`audio_devices.resolve_input_device`); a missing selected microphone
@@ -150,7 +160,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   buffer, so a burst just before it still holds everything). The 2 s abort
   was the field report "a recording stops on its own right away and a red
   error appears" on a laptop at 100% CPU. A stream reported inactive aborts
-  at once. The overlay keeps "Speak now" (the audio is buffered). The abort
+  at once. An overlay that has not invited speech yet stays "Starting" and
+  its detail becomes "No audio from the microphone yet. Wait for 'Speak
+  now'." (2026-10-23; the overlay is 470x144 / 503x144 / 558x154 px at 9 /
+  11.25 / 13.5 pt with either Starting text, measured); one that said
+  "Speak now" (a warm stream delivering at the attach, stalled since) keeps
+  it, as that stream's audio waits in the buffer. Until 2026-10-23 every
+  start said "Speak now" here, on the grounds that the audio is buffered --
+  true for a starved callback thread, false for a device that starts late
+  or a stream that is dead but reported running. The abort
   itself is unchanged: late bytes are kept for Retry, never submitted; only
   late bytes write the retry slot (persisted, marked failed under the id the
   persist returned); without them the Error offers no Retry. Snapshot

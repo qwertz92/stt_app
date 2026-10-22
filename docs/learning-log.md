@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: "Speak now" waits for the microphone's first block
+
+Second half of the same report (entry below): the green said "Speak now"
+once `capture.start()` returned, which proves nothing about the microphone.
+- **What the green claimed and what held.** Painted after the attach or the
+  cold `start()`, it was true for a healthy stream and for a starved callback
+  thread (the audio waits in the 20 s buffer), and false for a device that
+  delivers late or a stream that is dead but reported running: the overlay
+  was green and nothing was recorded, for up to the watchdog's 12 s.
+- **Now** `_invite_speech` holds the text under "Starting" until
+  `AudioCapture.is_delivering_audio` -- a block arrived for this capture, or
+  the warm stream called back within 2.5 block lengths before the attach --
+  and the first block paints it. A delivering warm stream (the owner's
+  setting) is green at once, as before; a healthy cold start about
+  0.1-0.2 s later; a starved start stays slate until its burst, and its
+  watchdog stage says "No audio from the microphone yet". Same overlay size
+  for both Starting texts at 9 / 11.25 / 13.5 pt (measured with real
+  widgets).
+- **The announcement runs outside the capture's lock**: the slot reads
+  `is_delivering_audio`, which takes it, and a signal emitted on the
+  receiver's own thread runs the slot directly -- under the lock that was a
+  deadlock (the regression test hangs without the change; verified by
+  moving the call back).
+- **Decision for the owner, not taken here**: the 2026-10-10 fix kept
+  "Speak now" through a starved start because the audio is buffered. That
+  is still true for a starved thread; the change trades a slower invitation
+  in that case for never showing green while nothing records. If starts on
+  the work laptop now sit on "Starting" for seconds, the log shows which
+  case it is (`audio_capture_callback_slow`, `first_callback_ms`).
+
 ## 2026-10-23: first words missing with the warm stream: what the log could not say
 
 Owner report from the slow work laptop (Defender XDR, often 100% CPU, run

@@ -1081,6 +1081,7 @@ class AudioCapture:
         warm_stream: WarmMicrophoneStream | None = None,
         device_key: str = SYSTEM_DEFAULT_INPUT_DEVICE,
         device_resolver: Callable[[], int | None] | None = None,
+        first_audio_callback: Callable[[], None] | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
@@ -1088,6 +1089,10 @@ class AudioCapture:
         self.vad = vad
         self.auto_stop_callback = auto_stop_callback
         self.chunk_callback = chunk_callback
+        # Called on the PortAudio thread with the first block of each
+        # capture: the controller invites speech only once the microphone
+        # has delivered (`is_delivering_audio`).
+        self.first_audio_callback = first_audio_callback
         self._logger = logger
         self._warm_stream = warm_stream
         self._device_key = device_key
@@ -1126,6 +1131,27 @@ class AudioCapture:
     @property
     def has_received_audio(self) -> bool:
         return self.callback_count > 0
+
+    @property
+    def is_delivering_audio(self) -> bool:
+        """Whether the microphone is known to deliver for this capture.
+
+        A block has arrived, or the warm stream it attached to had called
+        back within `AUDIO_STEADY_MAX_GAP_BLOCKS` block lengths before the
+        attach, so its next block is this recording's. `start()` returning
+        is no proof: a cold stream's first block came 103-175 ms later on
+        HomeBase (2026-10-23), a device that starts late or a starved
+        callback thread sends nothing for seconds, and a warm stream silent
+        at the attach is stalled or dead. The overlay says "Speak now" only
+        once this holds (owner report 2026-10-23: first words missing while
+        he believed the overlay was green).
+        """
+        with self._lock:
+            if self._callback_count > 0:
+                return True
+            gap_s = self._timing.warm_attach_gap_s
+        block_s = self.block_size / self.sample_rate
+        return gap_s is not None and gap_s <= AUDIO_STEADY_MAX_GAP_BLOCKS * block_s
 
     @property
     def uses_warm_stream(self) -> bool:
@@ -1537,61 +1563,78 @@ class AudioCapture:
         else:
             mono = data.reshape(-1)
 
-        with self._lock:
-            if generation is not None and (
-                not self._accepting_audio or generation != self._capture_generation
-            ):
-                return
-            cutoff = self._drain_cutoff_frames
-            if cutoff is not None and self._timing.frames >= cutoff:
-                return
-            # The first flag of a recording is logged; the rest are counted
-            # in `audio_capture_stats`. A log write per block runs on the
-            # PortAudio thread, which an overflow says is behind already.
-            if status and not self._status_logged and self._logger is not None:
-                self._status_logged = True
-                self._logger.warning(
-                    "Audio stream status: %s (later flags of this recording "
-                    "are counted in the stop's capture stats)",
-                    status,
+        first_block = False
+        try:
+            with self._lock:
+                if generation is not None and (
+                    not self._accepting_audio or generation != self._capture_generation
+                ):
+                    return
+                cutoff = self._drain_cutoff_frames
+                if cutoff is not None and self._timing.frames >= cutoff:
+                    return
+                # The first flag of a recording is logged; the rest are counted
+                # in `audio_capture_stats`. A log write per block runs on the
+                # PortAudio thread, which an overflow says is behind already.
+                if status and not self._status_logged and self._logger is not None:
+                    self._status_logged = True
+                    self._logger.warning(
+                        "Audio stream status: %s (later flags of this recording "
+                        "are counted in the stop's capture stats)",
+                        status,
+                    )
+                self._timing.record_block(
+                    now, mono.size, status, float(np.dot(mono, mono))
                 )
-            self._timing.record_block(now, mono.size, status, float(np.dot(mono, mono)))
-            if self._drain_owed_s is not None:
-                # The deficit may have settled with this block.
-                self._drain_cutoff_frames = self._drain_cutoff_locked()
-            self._chunks.append(np.copy(mono))
-            self._callback_count += 1
-            self._audio_arrived.notify_all()
-            if self.chunk_callback is not None:
+                if self._drain_owed_s is not None:
+                    # The deficit may have settled with this block.
+                    self._drain_cutoff_frames = self._drain_cutoff_locked()
+                self._chunks.append(np.copy(mono))
+                self._callback_count += 1
+                self._audio_arrived.notify_all()
+                first_block = self._callback_count == 1
+                if self.chunk_callback is not None:
+                    try:
+                        self.chunk_callback(self._to_pcm16_bytes(mono))
+                    except Exception:
+                        if self._logger is not None:
+                            self._logger.exception("Streaming chunk callback failed")
+
+                if self.vad is None:
+                    return
+
+                decision = self.vad.process_chunk(mono)
+                if (
+                    decision.should_stop
+                    and self.auto_stop_callback is not None
+                    and not self._auto_stop_fired
+                ):
+                    self._auto_stop_fired = True
+                    try:
+                        threading.Thread(
+                            target=self.auto_stop_callback,
+                            name="stt_app_vad_auto_stop",
+                            daemon=True,
+                        ).start()
+                    except (RuntimeError, MemoryError):
+                        # Latched *after* the thread exists: a start that fails
+                        # used to leave the flag set, so auto-stop was silently
+                        # off for the rest of the recording. The next block
+                        # tries again; the guard above logs the failure once.
+                        self._auto_stop_fired = False
+                        raise
+        finally:
+            # Outside `_lock`: the controller's callback emits a Qt signal,
+            # and a slot connected directly -- an emit on the receiver's
+            # own thread -- would read `is_delivering_audio` and deadlock on
+            # the lock this thread holds. In `finally`, so a VAD failure
+            # raised above cannot swallow the one announcement.
+            if first_block and self.first_audio_callback is not None:
                 try:
-                    self.chunk_callback(self._to_pcm16_bytes(mono))
+                    self.first_audio_callback()
                 except Exception:
                     if self._logger is not None:
-                        self._logger.exception("Streaming chunk callback failed")
-
-            if self.vad is None:
-                return
-
-            decision = self.vad.process_chunk(mono)
-            if (
-                decision.should_stop
-                and self.auto_stop_callback is not None
-                and not self._auto_stop_fired
-            ):
-                self._auto_stop_fired = True
-                try:
-                    threading.Thread(
-                        target=self.auto_stop_callback,
-                        name="stt_app_vad_auto_stop",
-                        daemon=True,
-                    ).start()
-                except (RuntimeError, MemoryError):
-                    # Latched *after* the thread exists: a start that fails
-                    # used to leave the flag set, so auto-stop was silently
-                    # off for the rest of the recording. The next block
-                    # tries again; the guard above logs the failure once.
-                    self._auto_stop_fired = False
-                    raise
+                        self._logger.exception("First audio callback failed")
 
     def _to_wav_bytes(self, audio: np.ndarray) -> bytes:
         pcm = self._to_pcm16_array(audio)

@@ -223,8 +223,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   connects on a worker, buffers audio in `_stream_preconnect_chunks`
   (`STREAMING_PRECONNECT_BUFFER_MAX_BYTES`, newest dropped with a warning)
   and flushes it in order (`_flush_preconnect_buffer`) before signalling.
-  Overlay: "Connecting to the speech service. You can speak now." Start
-  failures arrive via a queued signal.
+  Overlay: "Connecting to the speech service. You can speak now." once the
+  microphone delivers (`_invite_speech`, `docs/agents/overlay.md`); a
+  handshake that completes first replaces the held text with "Streaming
+  active. ...". Start failures arrive via a queued signal.
   - Each flush push waits up to `STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S`
     (5 s; F09): Deepgram's queue held 32 chunks (now about 23 s, still
     less than the 62.5 s buffer) and a burst of
