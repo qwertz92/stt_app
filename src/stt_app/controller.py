@@ -62,6 +62,7 @@ from .config import (
     PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
+    RECORDING_START_SLOW_MS,
     RECORDINGS_MAX_COUNT_UNLIMITED,
     REMOTE_BATCH_MAX_PART_SECONDS,
     RETRY_OLDER_FAILURES_MAX,
@@ -663,6 +664,10 @@ class DictationController(QtCore.QObject):
     # (text, history entry, recorded at). Emitted from the notice's worker
     # thread; the queued connection lists it on the Qt thread.
     unfinished_transcript_saved = QtCore.Signal(str, object, object)
+    # A recording's microphone delivered its first block: emitted from the
+    # PortAudio thread (`AudioCapture.first_audio_callback`); the queued
+    # connection paints the "Speak now" that waited for it.
+    capture_audio_started = QtCore.Signal()
 
     def __init__(
         self,
@@ -923,6 +928,20 @@ class DictationController(QtCore.QObject):
         # backlog returned: record-hotkey presses stamped no later were made
         # during that wait (`toggle_recording_from_hotkey`).
         self._stop_wait_ended_ms: int | None = None
+        # The record hotkey's `MSG.time` while its press is being handled,
+        # and, for the recording start it led to, that press time and the
+        # `message_clock_ms()` at which the start began: what
+        # `recording_start_timing` measures the wait from the press to the
+        # running capture with (speech in it is not recorded). None for a
+        # start that did not come from the hotkey.
+        self._hotkey_press_ms: int | None = None
+        self._start_press_ms: int | None = None
+        self._start_handled_ms: int | None = None
+        # The ready-to-speak text of the current capture, held until its
+        # microphone is known to deliver (`_invite_speech`); None once painted.
+        # Left behind by a capture that ended first, and cleared by the next
+        # start: every reader also checks `_audio_capture`.
+        self._speak_now_pending: str | None = None
         self._active_session_mode = "batch"
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
@@ -1015,6 +1034,7 @@ class DictationController(QtCore.QObject):
         self.paste_target_checked.connect(self._on_paste_target_checked)
         self.audio_devices_refreshed.connect(self.refresh_overlay_microphone_options)
         self.unfinished_transcript_saved.connect(self._list_unfinished_transcript)
+        self.capture_audio_started.connect(self._on_capture_audio_started)
 
     @property
     def settings(self) -> AppSettings:
@@ -1797,7 +1817,11 @@ class DictationController(QtCore.QObject):
             # A later press: the wait is over for good, and the wrapping
             # clock must not compare against a mark weeks old.
             self._stop_wait_ended_ms = None
-        self.toggle_recording()
+        self._hotkey_press_ms = message_time_ms
+        try:
+            self.toggle_recording()
+        finally:
+            self._hotkey_press_ms = None
 
     def _toggle_recording(self) -> None:
         if self._recording_start_in_progress:
@@ -1875,6 +1899,8 @@ class DictationController(QtCore.QObject):
                 "running; choose Quit in the tray again to quit."
             )
         self._recording_start_in_progress = True
+        self._start_press_ms = self._hotkey_press_ms
+        self._start_handled_ms = message_clock_ms()
         try:
             start_target_handle = self._window_focus_helper.capture_target_window()
             start_target_signature = self._capture_target_signature(
@@ -1933,10 +1959,11 @@ class DictationController(QtCore.QObject):
             # at the top of this method it went with every *refused* start
             # too (see `_refuse_recording_start`).
             self._retire_insert_offer()
-            # Do not invite the user to speak until the microphone has actually
-            # started. Opening a cold device (or a remote streaming session) can
-            # take seconds on a locked-down machine, and audio spoken before
-            # ``capture.start()`` completes is irretrievably lost.
+            # Do not invite the user to speak until the microphone delivers
+            # (`_invite_speech`). Opening a cold device (or a remote streaming
+            # session) can take seconds on a locked-down machine, and audio
+            # spoken before the capture runs is irretrievably lost.
+            self._speak_now_pending = None
             self._set_listening_overlay(
                 "Starting dictation. Please wait for the 'Speak now' message.",
                 starting=True,
@@ -1979,6 +2006,8 @@ class DictationController(QtCore.QObject):
                 # and leave it None otherwise.
                 self._apply_concurrent_mode_to_jobs_in_flight()
         finally:
+            self._start_press_ms = None
+            self._start_handled_ms = None
             pending_toggles = self._pending_toggle_after_start_count
             self._pending_toggle_after_start_count = 0
             self._recording_start_in_progress = False
@@ -1992,6 +2021,53 @@ class DictationController(QtCore.QObject):
     def _set_listening_overlay(self, detail: str, *, starting: bool = False) -> None:
         self._overlay.set_state("Listening", detail, compact=True, starting=starting)
         self._overlay.ensure_compact_size()
+
+    def _invite_speech(self, detail: str) -> None:
+        """Paint the ready-to-speak `detail` once the microphone delivers.
+
+        "Speak now" in green claims that what is said from now on is
+        recorded, which `capture.start()` returning does not prove: a cold
+        stream's first block came 103-175 ms later on HomeBase, a device that
+        starts late or a starved callback thread sends nothing for seconds,
+        and a warm stream silent at the attach is stalled or dead (owner
+        report 2026-10-23: first words missing while he believed the overlay
+        was green). So the text waits, under "Starting", until
+        `AudioCapture.is_delivering_audio` holds -- at once for a warm stream
+        that was delivering at the attach -- and the capture's first block
+        (`_on_capture_audio_started`) paints it. A later text for the same
+        start (the handshake's completion) replaces the one held. Nothing is
+        painted without a capture: nothing would record what it invites.
+        """
+        capture = self._audio_capture
+        if capture is None:
+            return
+        if not capture.is_delivering_audio:
+            self._speak_now_pending = detail
+            return
+        self._speak_now_pending = None
+        self._set_listening_overlay(detail)
+
+    @QtCore.Slot()
+    def _on_capture_audio_started(self) -> None:
+        """A recording's first block arrived: paint its held invitation.
+
+        A delayed writer, so it re-checks: a capture still running whose own
+        block it was (a stale signal of a stopped capture finds the next one
+        still silent, or `_audio_capture` None), and no live text a streaming
+        session has painted meanwhile.
+        """
+        detail = self._speak_now_pending
+        capture = self._audio_capture
+        if detail is None or capture is None or not capture.is_delivering_audio:
+            return
+        self._speak_now_pending = None
+        if self._streaming_recording and (
+            self._stream_text_state.live_text
+            or self._stream_text_state.last_partial_text
+        ):
+            return
+        with self._overlay_batch():
+            self._set_listening_overlay(detail)
 
     def _start_batch_recording(
         self,
@@ -2036,7 +2112,7 @@ class DictationController(QtCore.QObject):
 
         self._audio_capture = capture
         self._arm_audio_callback_watchdog(capture)
-        self._set_listening_overlay(
+        self._invite_speech(
             " ".join(
                 part
                 for part in (
@@ -2302,7 +2378,7 @@ class DictationController(QtCore.QObject):
             self._stream_text_state.live_text
             or self._stream_text_state.last_partial_text
         ):
-            self._set_listening_overlay(
+            self._invite_speech(
                 "Streaming active. Speak now, press hotkey to finalize."
             )
 
@@ -2495,7 +2571,7 @@ class DictationController(QtCore.QObject):
         ):
             with self._stream_preconnect_lock:
                 still_connecting = self._stream_preconnect_chunks is not None
-            self._set_listening_overlay(
+            self._invite_speech(
                 # Honest about the handshake, and explicit that speaking now is
                 # safe -- the audio is being buffered, not thrown away.
                 "Connecting to the speech service. You can speak now."
@@ -2598,25 +2674,63 @@ class DictationController(QtCore.QObject):
         On locked-down machines opening the microphone can take seconds; this
         makes the culprit visible in the log so 'my first words are cut off'
         reports can be verified and the keep_microphone_warm option suggested.
+
+        A warm stream opens nothing, yet drops every block until the capture
+        attaches, so the Qt thread's own delay counts too: from the record
+        hotkey's `MSG.time` to the start of its handling
+        (`press_to_handle_ms`, the press waiting behind other work) and to
+        this moment, the capture running (`press_to_capture_ms`). Owner
+        report 2026-10-23: first words missing from the WAV with the warm
+        stream on, on a laptop at 100% CPU; the log had no figure for that
+        span. `n/a` for a start not made with the hotkey.
         """
         capture_ms = round((time.perf_counter() - capture_started_at) * 1000)
         warm, _callback_count = self._audio_capture_runtime_context(capture)
-        level = logging.WARNING if capture_ms >= 500 else logging.INFO
+        press_to_handle_ms = self._ms_since_start_press(self._start_handled_ms)
+        press_to_capture_ms = self._ms_since_start_press(message_clock_ms())
+        late_capture = (
+            press_to_capture_ms is not None
+            and press_to_capture_ms >= RECORDING_START_SLOW_MS
+        )
+        level = (
+            logging.WARNING
+            if capture_ms >= RECORDING_START_SLOW_MS or late_capture
+            else logging.INFO
+        )
+        notes = []
+        if capture_ms >= RECORDING_START_SLOW_MS and not warm:
+            notes.append(
+                "slow microphone open; speech before this point is lost — "
+                "consider enabling keep_microphone_warm"
+            )
+        if late_capture:
+            notes.append(
+                "speech between the hotkey press and this point was not recorded"
+            )
         self._logger.log(
             level,
-            "recording_start_timing mode=%s beep_ms=%d capture_start_ms=%d "
+            "recording_start_timing mode=%s press_to_handle_ms=%s "
+            "press_to_capture_ms=%s beep_ms=%d capture_start_ms=%d "
             "warm_stream=%s%s",
             mode,
+            "n/a" if press_to_handle_ms is None else press_to_handle_ms,
+            "n/a" if press_to_capture_ms is None else press_to_capture_ms,
             beep_ms,
             capture_ms,
             warm,
-            (
-                " (slow microphone open; speech before this point is lost — "
-                "consider enabling keep_microphone_warm)"
-                if capture_ms >= 500 and not warm
-                else ""
-            ),
+            f" ({'; '.join(notes)})" if notes else "",
         )
+
+    def _ms_since_start_press(self, now_ms: int | None) -> int | None:
+        """Milliseconds from the record hotkey press that started this
+        recording to `now_ms` on the message clock; None without a press, off
+        Windows, or for a mark before the press."""
+        press = self._start_press_ms
+        if press is None or now_ms is None:
+            return None
+        if not message_time_not_after(press, now_ms):
+            return None
+        return (now_ms - press) % TICK_COUNT_MODULUS
 
     def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
         self._audio_callback_watchdog_capture = capture
@@ -2646,8 +2760,11 @@ class DictationController(QtCore.QObject):
         this did at 2 s, threw away a recording whose audio was on its way:
         the field report "a recording stops on its own right away and a red
         error appears". A stream PortAudio reports stopped is aborted at
-        once, and so is anything still silent at the hard limit. The overlay
-        keeps "Speak now": the audio is buffered, so it stays true.
+        once, and so is anything still silent at the hard limit. An overlay
+        that has not invited speech yet (`_invite_speech`) stays "Starting"
+        and says the microphone has sent nothing; one that said "Speak now"
+        (a warm stream delivering at the attach, stalled since) keeps it,
+        since that stream's audio waits in the buffer.
         """
         capture = self._audio_callback_watchdog_capture
         self._audio_callback_watchdog_capture = None
@@ -2687,6 +2804,14 @@ class DictationController(QtCore.QObject):
                 AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
                 - AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
             )
+            if self._speak_now_pending is not None:
+                # Still "Starting": say what it waits for. The owner asked
+                # whether the app was recording at all (2026-10-23).
+                with self._overlay_batch():
+                    self._set_listening_overlay(
+                        "No audio from the microphone yet. Wait for 'Speak now'.",
+                        starting=True,
+                    )
             return
 
         self._logger.error(
@@ -2790,6 +2915,7 @@ class DictationController(QtCore.QObject):
             device_resolver=lambda name=input_device_name: (
                 audio_devices.resolve_input_device(name)
             ),
+            first_audio_callback=self.capture_audio_started.emit,
         )
 
     def _sync_warm_microphone_stream(self) -> None:

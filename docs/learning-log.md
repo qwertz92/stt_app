@@ -3,6 +3,89 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: "Speak now" waits for the microphone's first block
+
+Second half of the same report (entry below): the green said "Speak now"
+once `capture.start()` returned, which proves nothing about the microphone.
+- **What the green claimed and what held.** Painted after the attach or the
+  cold `start()`, it was true for a healthy stream and for a starved callback
+  thread (the audio waits in the 20 s buffer), and false for a device that
+  delivers late or a stream that is dead but reported running: the overlay
+  was green and nothing was recorded, for up to the watchdog's 12 s.
+- **Now** `_invite_speech` holds the text under "Starting" until
+  `AudioCapture.is_delivering_audio` -- a block arrived for this capture, or
+  the warm stream called back within 2.5 block lengths before the attach --
+  and the first block paints it. A delivering warm stream (the owner's
+  setting) is green at once, as before; a healthy cold start about
+  0.1-0.2 s later; a starved start stays slate until its burst, and its
+  watchdog stage says "No audio from the microphone yet". Same overlay size
+  for both Starting texts at 9 / 11.25 / 13.5 pt (measured with real
+  widgets).
+- **The announcement runs outside the capture's lock**: the slot reads
+  `is_delivering_audio`, which takes it, and a signal emitted on the
+  receiver's own thread runs the slot directly -- under the lock that was a
+  deadlock (the regression test hangs without the change; verified by
+  moving the call back).
+- **A trade-off taken here, for the owner to confirm or reverse**: the
+  2026-10-10 fix (an agent's choice, not the owner's) kept "Speak now"
+  through a starved start because the audio is buffered. That is still
+  true for a starved thread; this change trades a slower invitation in that
+  case for never showing green while nothing records. If starts on the work
+  laptop now sit on "Starting" for seconds, the log shows which case it is
+  (`audio_capture_callback_slow`, `first_callback_ms`).
+- **Review round 1 (Sonnet, read-only): no P1/P2.** Fixed on the spot: a
+  NaN or infinite sample made the new level field raise inside `stop()`
+  (P3: the recording never reached the controller, and a warm stream kept
+  the dead capture attached) -- it now reads `invalid`, and the int16
+  conversion maps non-finite samples to silence/full scale instead of an
+  undefined cast; a test now announces the first block from another thread
+  (every other test did it on the Qt thread, where the connection is
+  direct, so a `DirectConnection` would have passed them all); the
+  stopped-capture case of the announcement test now stops before any block,
+  the only case the generation guard decides. Each new test failed against
+  the code without its fix.
+
+## 2026-10-23: first words missing with the warm stream: what the log could not say
+
+Owner report from the slow work laptop (Defender XDR, often 100% CPU, run
+from source, warm stream on): the first words of a recording are missing,
+also from the saved WAV ("I only hear my voice after about 2 s"), and he
+believes the overlay was green. Investigated from code and measured on
+HomeBase; the laptop itself was not available.
+- **No path paints "Speak now" before the capture runs.** Both start paths
+  paint it after `capture.start()` returned, i.e. after the warm attach or
+  the cold `start()`; before that the overlay is Idle (the press not yet
+  handled) or the slate "Starting". What the green does not cover: a warm
+  stream drops every block while no recording is attached, so whatever is
+  said between the hotkey press and the attach is gone. Nothing bridges
+  that gap on a healthy stream; only a callback thread stalled across the
+  press brings the pre-attach seconds along in its burst (the 2026-10-10
+  limitation, which adds audio rather than losing it).
+- **Measured on HomeBase**: the start path from a press to the attach, with
+  the real overlay and the real warm stream, took 0-16 ms idle (the message
+  clock's resolution) and 0-62 ms under 16 CPU burners, 10 starts each. A
+  main Python thread busy for 2 s delayed the running stream's callbacks by
+  at most 19 ms idle and 102 ms under the burners (largest gap 168 ms), so a
+  busy Qt thread alone does not starve the microphone. Cold starts on seven
+  inputs (MME and WASAPI, 3 runs each): first block 103-175 ms after
+  `start()`, everything since `start()` captured (deficit 0.10 s at the end,
+  one block in flight), no leading digital silence -- but the onboard
+  Realtek input ramps up: first block -96 to -107 dBFS, second -64 to -82,
+  settled near -45 from the third to sixth (0.3-0.5 s). So at home nothing
+  loses two seconds; on the laptop the cause is not known.
+- **The log could not tell the candidates apart**, so it now can:
+  `recording_start_timing` carries `press_to_handle_ms` and
+  `press_to_capture_ms` (from the record hotkey's `MSG.time`; a warning at
+  500 ms, `RECORDING_START_SLOW_MS`, shared with the slow-open warning), and
+  `audio_capture_stats` carries `level_dbfs_by_second` (the level of the
+  first three seconds of the recording; `zero` for digital zeros). A late
+  attach shows as a large `press_to_capture_ms`; seconds that arrived quiet
+  (a device ramp, a headset switching profile, the user starting late) as a
+  low first level with no deficit; seconds that never arrived as a deficit.
+- Not changed by this entry: no pre-roll (the 2026-10-10 decision rests on
+  the start path being short, which the new field now measures in the
+  field).
+
 ## 2026-10-23 (Benchmark History: a scroll bar that never went away)
 
 - **Owner: "Benchmark tab first field has a scrolling bar that never

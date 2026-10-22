@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import warnings
 import wave
 from io import BytesIO
 
@@ -2445,3 +2446,178 @@ def test_a_warm_attach_logs_how_long_the_stream_had_been_silent(monkeypatch, cap
     # Review round 3 F5: the deficit counts the pre-attach audio the burst
     # carried (0.1 s wall + 4.0 s before the attach - 4.2 s received).
     assert "deficit_s=-0.10" in caplog.text
+
+
+def test_the_stats_give_the_level_of_each_of_the_first_three_seconds(
+    monkeypatch, caplog
+):
+    """Owner report 2026-10-23 (slow work laptop, warm stream): "my voice only
+    starts about 2 s into the saved recording". The stats could not say
+    whether those seconds arrived quiet (the microphone delivered audio, but
+    no voice) or did not arrive at all (`audio_s` against `wall_s` says
+    that). The level of each of the first three seconds of the recording
+    tells the first case apart without the WAV; "zero" marks a second of
+    nothing but digital zeros, which a driver inserts and a microphone never
+    produces."""
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        for index in range(1, 26):
+            clock.now = 100.0 + index / 10
+            # 1 s of digital zeros, 1 s at -60 dBFS, then 0.5 s at -20 dBFS.
+            value = 0.0 if index <= 10 else (0.001 if index <= 20 else 0.1)
+            callback(_block(value=value), 1600, None, None)
+        capture.stop()
+
+    stats = [r for r in caplog.records if "audio_capture_stats" in r.getMessage()]
+    assert len(stats) == 1
+    assert "level_dbfs_by_second=zero/-60/-20" in stats[0].getMessage()
+
+
+def test_the_level_of_a_second_the_recording_did_not_reach_is_a_dash(
+    monkeypatch, caplog
+):
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level_short")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        for index in range(1, 6):
+            clock.now = 100.0 + index / 10
+            callback(_block(value=0.01), 1600, None, None)
+        capture.stop()
+
+    assert "level_dbfs_by_second=-40/-/-" in caplog.text
+
+
+def test_the_first_block_of_each_capture_is_announced_once(monkeypatch):
+    """The overlay invites speech only once the microphone has delivered
+    (2026-10-23), and the controller learns of the first block through this
+    callback. Once per capture, also across a restart, and never for a block
+    of a capture already stopped."""
+    clock = _Clock()
+    announced: list[int] = []
+    capture, callback = _cold_capture(
+        monkeypatch, clock, first_audio_callback=lambda: announced.append(1)
+    )
+
+    callback(_block(), 1600, None, None)
+    callback(_block(), 1600, None, None)
+    assert announced == [1]
+    capture.stop()
+
+    capture.start()
+    restarted = FakeInputStream.instances[-1].kwargs["callback"]
+    restarted(_block(), 1600, None, None)
+    assert announced == [1, 1]
+    capture.stop()
+
+    # Stopped before any block: a late one is not this recording's first.
+    capture.start()
+    silent = FakeInputStream.instances[-1].kwargs["callback"]
+    capture.stop()
+    silent(_block(), 1600, None, None)
+    assert announced == [1, 1]
+
+
+def test_a_non_finite_sample_does_not_break_the_stop(monkeypatch, caplog):
+    """Review 2026-10-23 (P3): a NaN or inf from a driver made the level of
+    its second NaN, `round` raised inside `stop()`, and the recording never
+    reached the controller (a warm stream kept the dead capture attached)."""
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level_nan")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        clock.now += 0.1
+        callback(_block(value=float("nan")), 1600, None, None)
+        clock.now += 0.1
+        callback(_block(), 1600, None, None)
+        # Casting a NaN to int16 is undefined; numpy says so with a warning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            wav_bytes = capture.stop()
+
+    assert _wav_frames(wav_bytes) == 2 * 1600
+    assert "level_dbfs_by_second=invalid/-/-" in caplog.text
+    # And the NaN block is silence in the WAV.
+    with wave.open(BytesIO(wav_bytes), "rb") as wav_file:
+        samples = np.frombuffer(wav_file.readframes(1600), dtype=np.int16)
+    assert not samples.any()
+
+
+def test_a_cold_capture_delivers_audio_only_once_a_block_came(monkeypatch):
+    """`start()` returning is no proof: on HomeBase the first block of a cold
+    stream came 103-175 ms later, and a device that starts late, or a
+    callback thread that is starved, sends nothing for seconds."""
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+
+    assert capture.is_delivering_audio is False
+    callback(_block(), 1600, None, None)
+    assert capture.is_delivering_audio is True
+    capture.stop()
+
+
+@pytest.mark.parametrize(
+    ("silent_s", "delivering"),
+    [(0.05, True), (0.25, True), (1.0, False)],
+    ids=["delivering", "one block late", "stalled"],
+)
+def test_a_warm_capture_delivers_audio_if_its_stream_just_called_back(
+    monkeypatch, silent_s, delivering
+):
+    """A warm stream that called back within 2.5 block lengths before the
+    attach is delivering: its next block is this recording's. One silent
+    for longer is stalled, or dead, until a block comes."""
+    clock = _Clock()
+    monkeypatch.setattr(audio_capture_module, "_clock", clock)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm._dispatch(_block(), 1600, None, None)
+    clock.now += silent_s
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    assert capture.is_delivering_audio is delivering
+    warm._dispatch(_block(), 1600, None, None)
+    assert capture.is_delivering_audio is True
+    capture.stop()
+    warm.close()
+
+
+def test_a_warm_stream_that_never_called_back_is_not_delivering(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    assert capture.is_delivering_audio is False
+    capture.stop()
+    warm.close()
+
+
+def test_the_first_block_announcement_runs_outside_the_capture_lock(monkeypatch):
+    """The controller's slot reads `is_delivering_audio`, which takes the
+    capture's lock; a slot run directly from the announcement (a signal
+    emitted on the receiver's own thread) deadlocked when it was made
+    under that lock."""
+    clock = _Clock()
+    seen: list[bool] = []
+    holder: dict = {}
+    capture, callback = _cold_capture(
+        monkeypatch,
+        clock,
+        first_audio_callback=lambda: seen.append(holder["capture"].is_delivering_audio),
+    )
+    holder["capture"] = capture
+    worker = threading.Thread(
+        target=callback, args=(_block(), 1600, None, None), daemon=True
+    )
+    worker.start()
+    worker.join(timeout=2.0)
+
+    assert not worker.is_alive(), "the announcement deadlocked on the capture lock"
+    assert seen == [True]
+    capture.stop()

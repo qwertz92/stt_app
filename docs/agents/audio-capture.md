@@ -15,11 +15,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   as consumers, so capture start is instant on EDR/GPO-hooked stacks where an
   open takes seconds. The controller owns its lifecycle; a capture falls back
   to a cold stream when it is not running. `recording_start_timing` warns
-  above 500 ms. Warm opening happens outside the state lock; callbacks are
+  at `RECORDING_START_SLOW_MS` (500 ms) for a slow open and, since
+  2026-10-23, for a record-hotkey press that waited that long for the
+  running capture: `press_to_handle_ms` (the press's `MSG.time` to the start
+  of its handling, i.e. the press queued behind other Qt work) and
+  `press_to_capture_ms` (to the capture running; `n/a` for a start from the
+  tray, the overlay or a queued toggle). A warm stream drops every block
+  until the attach, so speech in that span is not recorded, warm or cold;
+  without the figure a slow Qt thread looked like a healthy start. Warm
+  opening happens outside the state lock; callbacks are
   generation-scoped (a retained one cannot feed the next recording); cleanup
   always attempts `close()` even when `stop()` fails. The ready-to-speak text
-  waits for `capture.start()` to succeed; a streaming session is published
-  before it so a first callback inside it is kept.
+  waits until the microphone is known to deliver
+  (`AudioCapture.is_delivering_audio`, 2026-10-23): a block has arrived for
+  this capture, or the warm stream called back within
+  `AUDIO_STEADY_MAX_GAP_BLOCKS` (2.5) block lengths before the attach. Until
+  then the overlay stays "Starting" and the capture's first block
+  (`first_audio_callback`, called outside the capture's lock, ->
+  `capture_audio_started` -> `_on_capture_audio_started`) paints it.
+  `capture.start()` returning proved nothing: a cold stream's first block
+  came 103-175 ms later on HomeBase, a late device or a starved callback
+  thread sends nothing for seconds, and a warm stream silent at the attach is
+  stalled or dead. A streaming session is published before `start()` so a
+  first callback inside it is kept.
 - **Device selection and changes**:
   - `input_device_name` (empty = default) resolves to an index only at open
     (`audio_devices.resolve_input_device`); a missing selected microphone
@@ -142,7 +160,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   buffer, so a burst just before it still holds everything). The 2 s abort
   was the field report "a recording stops on its own right away and a red
   error appears" on a laptop at 100% CPU. A stream reported inactive aborts
-  at once. The overlay keeps "Speak now" (the audio is buffered). The abort
+  at once. An overlay that has not invited speech yet stays "Starting" and
+  its detail becomes "No audio from the microphone yet. Wait for 'Speak
+  now'." (2026-10-23; the overlay is 470x144 / 503x144 / 558x154 px at 9 /
+  11.25 / 13.5 pt with either Starting text, measured); one that said
+  "Speak now" (a warm stream delivering at the attach, stalled since) keeps
+  it, as that stream's audio waits in the buffer. Until 2026-10-23 every
+  start said "Speak now" here, on the grounds that the audio is buffered --
+  true for a starved callback thread, false for a device that starts late
+  or a stream that is dead but reported running. The abort
   itself is unchanged: late bytes are kept for Retry, never submitted; only
   late bytes write the retry slot (persisted, marked failed under the id the
   persist returned); without them the Error offers no Retry. Snapshot
@@ -262,7 +288,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   against wall seconds and the deficit (counting a warm burst's pre-attach
   audio, as the stop does), the settled deficit, longest gap, overflow and status
   counts, audio arrived by 1/2/3 s wall (`audio_by_1s_2s_3s`, about
-  0.9/1.9/2.9 when healthy), `warm_attach_gap_ms` (time since the warm
+  0.9/1.9/2.9 when healthy), the RMS level of each of the first three
+  seconds of the recording (`level_dbfs_by_second`, by audio position;
+  `zero` for a second of digital zeros only, which a driver inserts and a
+  microphone never produces; `invalid` for one with a NaN or infinite
+  sample, which must not raise inside `stop()` -- the WAV conversion maps
+  such samples to silence or full scale; added 2026-10-23 so "my voice
+  starts 2 s in" reads from the log: quiet seconds that arrived, against
+  seconds that did not -- the deficit), `warm_attach_gap_ms` (time since
+  the warm
   stream's previous callback at attach) and the stop's wait. The per-block
   "Audio stream status" warning is written once per recording: it runs on
   the PortAudio thread. A refused warm attach logs
