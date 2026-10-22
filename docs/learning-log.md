@@ -22,6 +22,30 @@ are controls, and one test only pins what the docs now say),
   slip in before the mode is during the 25 ms event drain, and a result held then
   counts as finished before the recording started. Checked for the same pattern
   in the gap and import roads: they run after the mode, no change.
+- **P4: a failed copy completed the managed slot.** For a fallback retry whose
+  copy could not be written, `_mark_last_recording_completed` completed the slot
+  and deleted the only audio; the gap and import roads already kept it (failed
+  mark), the fallback road now does too
+  (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`). A fallback that is kept this
+  way lives until the next dictation or restart; the tray says so.
+- **P4: the fallback notice could promise History that did not exist.** It was
+  sent before the History write; with `_append_transcript_history` answering
+  None it still pointed to Retranscribe in History. It is sent by
+  `_announce_language_fallback` after the write on both roads, with three
+  wordings (entry, copy without entry, no copy). `find` answering None after a
+  save is now logged as a warning.
+- **P4: the copy could take a finished transcript down.** The keep call ran
+  before the History write and caught only `OSError` and `ValueError`; anything
+  else escaped `_on_transcription_ready`. `_keep_audio_in_recordings_folder`
+  now catches `Exception` at its two steps (logged with the traceback) and never
+  raises; the import road's file read too.
+- **Docs that had gone stale:** `docs/agents/text-insertion.md` said a pending
+  streaming finalize is stopped by a retry (it is refused); the comment in
+  `_on_transcription_failed` said the deferral "ends in is the token set"
+  (it defers unless the token names a registered retry); the claim that a
+  cancel-mode retry's recording stays for another Retry holds only until a
+  result arrives, and a late result resolves it
+  (`test_in_cancel_mode_a_stopped_retry_keeps_its_audio_until_a_result_arrives`).
 
 ## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
 

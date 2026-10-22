@@ -10319,17 +10319,23 @@ def test_an_imported_last_recording_with_a_gap_is_kept(monkeypatch, tmp_path):
     _ = app
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("disk full"), RuntimeError("unexpected")],
+    ids=["oserror", "runtimeerror"],
+)
 def test_an_imported_last_recording_with_a_gap_stays_managed_when_the_copy_fails(
-    monkeypatch, tmp_path
+    monkeypatch, tmp_path, failure
 ):
-    """The disk refused the copy: nothing is linked, the import still
-    delivers, and the managed recording stays kept (marked failed)."""
+    """The copy failed, by the disk or by anything else: nothing is linked,
+    the import still delivers its transcript, and the managed recording stays
+    kept (marked failed)."""
     controller, app, last_recording_store, recordings, last_path = (
         _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
     )
 
     def _refuse(*_args, **_kwargs):
-        raise OSError("disk full")
+        raise failure
 
     monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
 
