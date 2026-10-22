@@ -97,6 +97,50 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Negative control: letting the stop read `self._settings` instead of the
   start-of-recording snapshot fails both new controller tests.
 
+## 2026-10-23 (review round 4 of the Retry work: the mode waits for the microphone, the copy may fail)
+
+Round 4 over `d009937` found no P1 or P2 (the Retry strand meets the stop rule);
+its P3/P4 findings, fixed with tests that failed against the committed
+controller for the stated reason (18 of the 24 new or changed cases; the rest
+are controls, and one test only pins what the docs now say),
+`docs/agents/controller-and-jobs.md`:
+- **P3: the concurrent mode was applied before the start was known to
+  succeed.** `_apply_concurrent_mode_to_jobs_in_flight` ran near the top of
+  `start_recording`, before the refusals (a model still loading, streaming
+  unavailable, a preload failure) and before the microphone opened, so a refused
+  start or a failed open still demoted (history) or stopped (cancel) every job
+  in flight for a recording that never began. It is applied after
+  `_start_streaming_recording` / `_start_batch_recording` return with the capture
+  set, which both starters do only on success. Reasoned rather than assumed: the
+  Qt thread is blocked while the microphone opens, so the only delivery that can
+  slip in before the mode is during the 25 ms event drain, and a result held then
+  counts as finished before the recording started. Checked for the same pattern
+  in the gap and import roads: they run after the mode, no change.
+- **P4: a failed copy completed the managed slot.** For a fallback retry whose
+  copy could not be written, `_mark_last_recording_completed` completed the slot
+  and deleted the only audio; the gap and import roads already kept it (failed
+  mark), the fallback road now does too
+  (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`). A fallback that is kept this
+  way lives until the next dictation or restart; the tray says so.
+- **P4: the fallback notice could promise History that did not exist.** It was
+  sent before the History write; with `_append_transcript_history` answering
+  None it still pointed to Retranscribe in History. It is sent by
+  `_announce_language_fallback` after the write on both roads, with three
+  wordings (entry, copy without entry, no copy). `find` answering None after a
+  save is now logged as a warning.
+- **P4: the copy could take a finished transcript down.** The keep call ran
+  before the History write and caught only `OSError` and `ValueError`; anything
+  else escaped `_on_transcription_ready`. `_keep_audio_in_recordings_folder`
+  now catches `Exception` at its two steps (logged with the traceback) and never
+  raises; the import road's file read too.
+- **Docs that had gone stale:** `docs/agents/text-insertion.md` said a pending
+  streaming finalize is stopped by a retry (it is refused); the comment in
+  `_on_transcription_failed` said the deferral "ends in is the token set"
+  (it defers unless the token names a registered retry); the claim that a
+  cancel-mode retry's recording stays for another Retry holds only until a
+  result arrives, and a late result resolves it
+  (`test_in_cancel_mode_a_stopped_retry_keeps_its_audio_until_a_result_arrives`).
+
 ## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
 
 The round-3 entry below says a gap transcript has the same hole as the fallback
