@@ -3,6 +3,20 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (the update download had the retranscription's crash on Cancel)
+
+Searched every `threading.Thread` started by a Qt object for the shape of the
+History retranscription crash (a worker capturing a dialog that is `exec()`ed
+or deleted on close). One more had it: `UpdateDownloadDialog` is `exec()`ed by
+`show_update_available_dialog` and its worker captured `self`, so Cancel during
+a download left the worker holding the dialog's last reference until the
+download noticed the cancel, then destroyed it on the worker thread. Same fix:
+plain values and a `GuiThreadReporter`; `_DownloadSignals` went. The test fails
+without the fix (the cancelled dialog stayed alive). The others are safe as
+they stand: the Settings dialog and the unfinished-recordings notice are held
+for the whole session and never deleted on close, so no worker can hold their
+last reference or emit into a deleted one.
+
 ## 2026-10-23 (the History retranscription crash: a worker held the closed dialog)
 
 Owner's report: History (from the overlay) > Retranscribe, the dialog closed

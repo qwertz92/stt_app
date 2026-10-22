@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import gc
+import threading
+import weakref
 from pathlib import Path
 
 from PySide6 import QtWidgets
 
 from stt_app import update_ui
 from stt_app.update_checker import UpdateCheckResult
+from stt_app.update_installer import UpdateDownloadCancelled
 from stt_app.update_ui import UPDATE_DIALOG_STYLESHEET, UpdateDownloadDialog
 
 
@@ -164,3 +168,49 @@ def test_the_download_progress_reports_decimal_megabytes():
 
     assert dialog._status_label.text() == "Downloaded 25.0 of 100.0 MB"
     assert dialog._progress_bar.value() == 25
+
+
+def test_a_cancelled_download_does_not_keep_its_dialog_alive():
+    """The dialog is `exec()`ed, which gives it to Python ownership. A worker
+    that captured it held its last reference after Cancel and destroyed it on
+    the worker thread when the download ended (the History retranscription's
+    crash, `gui_thread`)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_downloader(_result, _destination, *, progress, cancelled):
+        started.set()
+        release.wait(10)
+        progress(1, 2)
+        raise UpdateDownloadCancelled("cancelled")
+
+    dialog = UpdateDownloadDialog(
+        UpdateCheckResult(
+            current_version="0.9.0",
+            latest_version="1.0.0",
+            latest_tag="v1.0.0",
+            update_available=True,
+        ),
+        downloader=_blocking_downloader,
+    )
+    dialog.show()
+    app.processEvents()
+    assert started.wait(5), "the download never started"
+    alive = weakref.ref(dialog)
+    dialog.reject()
+    del dialog
+    keep = None
+    try:
+        gc.collect()
+        app.processEvents()
+        assert alive() is None, "the download worker keeps the closed dialog alive"
+    finally:
+        # Without the fix the last reference must still drop on this thread.
+        keep = alive()
+        release.set()
+        for thread in threading.enumerate():
+            if thread.name == "stt_app_update_download":
+                thread.join(5)
+        app.processEvents()
+        del keep
