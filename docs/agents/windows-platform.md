@@ -112,8 +112,34 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   `RegisterWindowMessageW` returning 0 (= `WM_NULL`) is stored as `None`.
   Unshowable notifications are logged. `scripts/diagnose_tray_flyout.py` and
   `scripts/experiment_native_tray_icon.py` reproduce the measurements.
-- **Tray left-click (`Trigger`) calls `controller.bring_overlay_to_front`**;
-  double-click opens Settings.
+- **Tray left-click (`Trigger`) calls `controller.bring_overlay_to_front` once
+  the double-click interval has passed without a `DoubleClick`; a double-click
+  opens Settings and never surfaces the overlay** (2026-10-23, owner: "the
+  overlay always comes to the front when I open the settings").
+  - **The shell sends one double-click on the icon as `Trigger`,
+    `DoubleClick`, `Trigger`**, 0, 93 and 94 ms apart (measured with this
+    app's own `WindowsTrayIcon` in a throwaway process: icon found with
+    `Shell_NotifyIconGetRect` and the hidden-icons flyout's UI Automation
+    tree, then a real mouse double-click). Acting on every `Trigger` raised the
+    overlay before Settings opened and again right after it.
+  - **`main._create_tray_icon` therefore waits**: `Trigger` starts a
+    single-shot timer of `QApplication.doubleClickInterval()` (the system
+    setting, 500 ms by default) that calls `bring_overlay_to_front`;
+    `DoubleClick` stops it and starts a `QElapsedTimer`; a `Trigger` within one
+    interval of that is the second click's release and is dropped. The cost is
+    that a single click shows the overlay 500 ms late (the "Show overlay" menu
+    item and its hotkey stay immediate); the deliberate single-click reveal
+    stays, because it keeps dictation reachable without a keyboard.
+  - **Done in `main`, not in `WindowsTrayIcon`**, so the `QSystemTrayIcon`
+    fallback is covered as well (it is assumed to deliver the same sequence;
+    that was not measured).
+  - Measured with real widgets (a floating overlay below a normal window, the
+    sequence above fed to the real `_create_tray_icon`): before, the overlay
+    ended topmost above both the settings dialog and the window after two
+    `bring_overlay_to_front` calls; after, dialog, window, overlay, with no
+    call and the overlay not topmost. Tests:
+    `test_a_double_click_opens_settings_and_leaves_the_overlay_alone`,
+    `test_clicks_after_a_double_click_surface_the_overlay_again`.
 - **`tray_middle_click_toggle`** (default on) calls
   `controller.toggle_recording`, reading `controller.settings` at click time.
 - **Taskbar identity**: `main._set_windows_app_user_model_id` sets a stable

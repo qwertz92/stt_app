@@ -3,6 +3,40 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (opening Settings from the tray double-click surfaced the overlay)
+
+- **Owner: "overlay always comes to the front when I open the settings, why?"**
+  Nothing in the settings open path touches the overlay (`open_settings_dialog`
+  and `_present_dialog` in `main.py` were read, as were the dialog's
+  `showEvent` and `reload_from_store`; `settings_dialog*.py` has no overlay
+  call, only comments and hotkey labels). The only caller
+  is the tray's `Trigger` handler (`main._create_tray_icon`,
+  `on_tray_activated`), which calls `controller.bring_overlay_to_front` ->
+  `OverlayUI.reveal_temporarily(OVERLAY_ERROR_REVEAL_MS)`. The question was
+  whether a double-click ever delivers a `Trigger`: it does. Measured with the
+  app's own `WindowsTrayIcon` in a throwaway process, found through
+  `Shell_NotifyIconGetRect` (the hidden-icons chevron's rectangle while the
+  icon is hidden) and the flyout's UI Automation tree, then a real mouse
+  double-click: `Trigger`, `DoubleClick`, `Trigger` at 0, 93 and 94 ms. The
+  first click revealed the overlay before Settings opened, the trailing one
+  right after, over the dialog.
+- **A `Trigger` now waits out the double-click interval** and a `DoubleClick`
+  cancels it; the `Trigger` that trails a `DoubleClick` is dropped. Cost: a
+  single click shows the overlay 500 ms late (system setting). Kept, not
+  removed: the single-click reveal is deliberate (keyboard-free dictation,
+  `windows-platform.md`). Measured with real widgets, a floating overlay below
+  a normal window: before, overlay topmost above the dialog and the window
+  after two reveals; after, dialog, window, overlay with no reveal.
+- **Not changed, and why it matters for the owner:** his stored overlay is
+  Pinned (`overlay_always_on_top` true in his `settings.json`), and a pinned
+  overlay is topmost: above any normal window, the Settings dialog included,
+  with or without a reveal (measured). If the overlay covers Settings while
+  Pinned, no click handling changes that; it is an open design question
+  whether Pinned should step behind a dialog he just opened.
+- Not verified: the fixed handler under a real shell double-click (the second
+  run of the experiment found the taskbar's UI Automation tree empty and was
+  abandoned); the fixed code was driven with the measured sequence in-process.
+
 ## 2026-10-23 (overlay: the Language button stayed locked while jobs ran)
 
 - **Owner: "cannot change the language in the overlay when a transcription is
