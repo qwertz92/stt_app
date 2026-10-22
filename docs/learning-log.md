@@ -3,6 +3,37 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (third review of the Deepgram cap: three test gaps, two doc slips)
+
+The review of `ed5db71` found no P1/P2; test and documentation only, no change
+to `deepgram_provider.py`.
+- **P3: nothing pinned that real audio restarts the idle count** (`idle_s = 0.0`
+  in the sender's audio arm). Replacing it with `pass` kept all 91 other tests
+  green, because the test that resumed audio after the cap went away with the
+  old behaviour. New test `test_real_audio_restarts_the_count_of_a_gap`: a block,
+  7 empty waits, a block, 7 empty waits, a block, the sentinel -> 14 KeepAlives
+  and no error; without the restart the second gap hits the cap at the 11th
+  wait in total. With the mutation it is the only test that fails (the sender
+  ends the stream at the fourth wait of the second gap, so 5 of the 17 expected
+  frames never go out).
+- **P4: the stop-after-the-cap test did not say what the stop must not do or
+  how fast it must be.** It now asserts that no `Finalize` or `CloseStream`
+  follows the sender's last frame and bounds the stop at 1 s instead of 3 s.
+  Mutations on the real source: `if not drained:` -> `if False:` in
+  `_finalize_stream_control` fails the new frame assertion (the socket got
+  Finalize and CloseStream); removing `not send_thread.is_alive()` from the
+  second loop of `_drain_stream_sender` fails the 1 s bound (the stop waits the
+  2 s drain timeout). The old 3 s bound would not have caught the second one: 2 s
+  fits inside it (reasoned, not run).
+- **P4 docs**: the entry "2026-10-17 (second review of the Deepgram cap: the
+  sender ends the stream itself)" said an abort makes the cap find no matching
+  session. `_stream_session_matches_locked` is true for every state but idle, so
+  it stays true while retiring; what silences the cap is `abort_stream`
+  clearing `_stream_on_error` and setting `_stream_send_queue` to `None` (the
+  sender returns at its top-of-loop check). Corrected there. The older entry
+  "2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead
+  microphone)" now carries a line saying the second review supersedes its fix.
+
 ## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
 
 Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
@@ -303,7 +334,8 @@ P4s. Each was reproduced first by a test that failed for the stated reason
 Structural change first: the sender no longer logs and keeps waiting at the cap;
 it ends the stream, through the failure path a failed send already takes, and
 returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
-... Deepgram closes after its own 10 s" part of the entry below.
+... Deepgram closes after its own 10 s" part of the entry "2026-10-17 (review of
+the Deepgram KeepAlive: it must not hide a dead microphone)".
 - **The finding (P3, reproduced by the lead on a fake server)**: at the cap the
   sender only logged and `continue`d, so the dead-microphone error still
   depended on Deepgram closing the socket. A vendor window longer than 10 s
@@ -336,9 +368,15 @@ returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
   is recorded but not reported, and the stop raises it when it has no text; the
   drain finds the sender thread dead (`_drain_stream_sender` checks
   `send_thread.is_alive()`) and gives up without waiting for it, so the stop
-  does not hang (the test bounds it at 3 s; it does not measure how fast). An
-  abort sets the session to retiring, so the cap finds no matching session and
-  stays quiet. Run for real: a controller test
+  does not hang (the test bounds it at 1 s since the third review, which tells
+  it from the 2 s drain timeout a live sender would cost). An abort does not
+  make the session stop matching: `_stream_session_matches_locked` is true
+  for every state but idle, retiring included. The cap stays quiet for two
+  other reasons: `abort_stream` clears `_stream_on_error` first, so
+  `_notify_stream_error` finds no callback, and it sets `_stream_send_queue` to
+  `None`, so the sender returns at its top-of-loop check
+  (`self._stream_send_queue is not send_queue`) before it reaches the cap
+  branch at all. Run for real: a controller test
   (`test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording`)
   with the real `DeepgramTranscriber` on its fake socket and the real sender
   thread (the socket stays open and silent, a cap of 120 ms) sees one
@@ -493,6 +531,11 @@ Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.
   it has four call sites (the status painter is one call with two wordings).
 
 ## 2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead microphone)
+
+Superseded in part by the entry "2026-10-17 (second review of the Deepgram cap:
+the sender ends the stream itself)": at the cap the sender now ends the stream
+itself, where "The fix" below stops writing frames and waits for Deepgram's
+close, and the cap no longer resumes when audio returns.
 
 - **The finding (P3, the lead's review of 20703c0..99970e1)**: before the
   KeepAlive, a microphone whose callback thread stopped delivering after the
