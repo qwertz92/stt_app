@@ -96,6 +96,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
   every state). Decision and rejected alternatives: `docs/agents/overlay.md`.
 - Negative control: letting the stop read `self._settings` instead of the
   start-of-recording snapshot fails both new controller tests.
+- Rechecked after merging main (3c7ffd5): the model-aware list
+  (`_offered_language_modes`) and `set_language_mode`'s validation change
+  nothing here, since the overlay only offers what the controller sends and a
+  list that shrinks mid-recording leaves the recording's own language in the
+  `Next:` tooltip; Retry now pins the recorded language, which the tooltip
+  already promised ("recordings already made ... keep theirs"). Real widgets
+  with the new `Not inserted` / `Check window` warning words: overlay 470x144,
+  button 152x22 at (303, 39) in all nine states measured.
 
 ## 2026-10-23 (review round 4 of the Retry work: the mode waits for the microphone, the copy may fail)
 
