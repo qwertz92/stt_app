@@ -28,18 +28,29 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
+    ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
+    AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
+    AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    DEEPGRAM_NOVA_2_LANGUAGE_MODES,
+    DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
+    ENGINE_LANGUAGE_MODES,
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
+    SPEECHMATICS_LANGUAGE_MODES,
     VALID_ENGINES,
 )
 from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.persistence import backup_path
-from stt_app.settings_store import AppSettings, SettingsStore
+from stt_app.settings_store import (
+    AppSettings,
+    SettingsStore,
+    apply_engine_model_selection,
+)
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
@@ -2085,6 +2096,49 @@ def test_overlay_language_change_rejects_unsupported_cohere_auto():
     _ = app
 
 
+@pytest.mark.parametrize(
+    ("engine", "model", "offered"),
+    [
+        ("deepgram", "nova-3", DEEPGRAM_NOVA_3_LANGUAGE_MODES),
+        ("deepgram", "nova-2", DEEPGRAM_NOVA_2_LANGUAGE_MODES),
+        ("assemblyai", "universal-3-5-pro", ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES),
+        ("azure", "mai-transcribe-1.5", AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES),
+        ("azure", "mai-transcribe-1", AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES),
+        ("speechmatics", "enhanced", SPEECHMATICS_LANGUAGE_MODES),
+    ],
+)
+def test_overlay_language_list_is_the_remote_models_own(engine, model, offered):
+    """A remote engine keeps its model in its own field, `model_size` is the
+    local one. The list used to be asked with `model_size`, so every remote
+    model with a list of its own showed -- and `set_language_mode` accepted --
+    the engine's default, wider one: Deepgram nova-2 offered 118 languages for
+    its 34, and Speechmatics Enhanced offered Auto, which only Melia 1 has."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = apply_engine_model_selection(
+        AppSettings(engine=engine, language_mode="de", hotkey=FALLBACK_HOTKEY),
+        engine,
+        model,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller, _app = make_controller(settings_store=store, overlay=overlay)
+
+    controller.reload_settings()
+
+    assert overlay.language_options[-1] == (tuple(offered), "de")
+    # What the engine's default list had over the model's own.
+    refused = next(
+        mode for mode in ENGINE_LANGUAGE_MODES[engine] if mode not in offered
+    )
+    controller.set_language_mode(refused)
+    assert controller.settings.language_mode == "de"
+    assert store.saved is None
+    controller.set_language_mode("en")
+    assert controller.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
 def test_system_resume_closes_cached_webgpu_runtime():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
@@ -3768,15 +3822,20 @@ class _FailHoldSucceedTranscriber:
 def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_store(
     monkeypatch, tmp_path
 ):
-    """The retry of a failed recording W carries W's own identity.
+    """The retry of a failed recording W carries W's own identity and leaves
+    the newest recording A alone.
 
     `retry_last_transcription` resubmits W's retained bytes, and the job
     used to take its recording id from the store's slot at registration --
-    the newest recording A, whose transcription the retry first stops. The
-    retry's unkeyed transcribing mark then relabelled A's slot, and its
-    completion, keyed by A's id, matched and deleted A's audio and state
-    (`keep_after_success` off) although A never completed under its own
-    name (the wave-14 concurrency lens, on the real store).
+    the newest recording A. The retry's unkeyed transcribing mark then
+    relabelled A's slot, and its completion, keyed by A's id, matched and
+    deleted A's audio and state (`keep_after_success` off) although A never
+    completed under its own name (the wave-14 concurrency lens, on the real
+    store). The retry also used to stop A, because A held the overlay's
+    token, which diverted A to history only (review round 2, 2026-10-17);
+    A is another recording's job and keeps running, and the retry queues
+    behind it. A's state is its own: transcribing while it runs, completed
+    -- and its audio deleted -- by its own job.
     """
     history_store = TranscriptHistoryStore(tmp_path / "history.json")
     recordings = LastRecordingStore(
@@ -3833,11 +3892,14 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
         assert token_retry != token_a
         retry_job = controller._jobs[token_retry]
         assert retry_job.source_recording_id == w_id
-        # The retry's stop marked A canceled; the retry's own transcribing
-        # mark, keyed by W, left that alone.
+        assert controller._jobs[token_a].aborting is False
+        # The retry's own transcribing mark, keyed by W, left A's slot alone.
         after_retry = recordings.load()
         assert after_retry is not None
-        assert (after_retry.recording_id, after_retry.status) == (a_id, "canceled")
+        assert (after_retry.recording_id, after_retry.status) == (
+            a_id,
+            "transcribing",
+        )
 
         release.set()
         _pump_until(
@@ -3849,11 +3911,10 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
 
         assert transcriber.calls == 3
         assert overlay.states[-1] == ("Done", "retry of W succeeded.")
-        final_state = recordings.load()
-        assert final_state is not None
-        assert (final_state.recording_id, final_state.status) == (a_id, "canceled")
-        assert recordings.audio_path.is_file()
-        assert recordings.has_recoverable_recording() is True
+        # A completed under its own name, which deletes its audio; the retry's
+        # completion, keyed by W, found the slot gone (or A's) and left it.
+        assert recordings.load() is None
+        assert not recordings.audio_path.is_file()
         assert [entry.text for entry in history_store.load()] == [
             "transcript A.",
             "retry of W succeeded.",
@@ -4013,11 +4074,15 @@ class _StoreWhoseSaveRaisesOnce(LastRecordingStore):
         self._refuse = bytes(refuse)
         self.refused = 0
 
-    def save_recording(self, wav_bytes, *, keep_after_success):
+    def save_recording(self, wav_bytes, *, keep_after_success, language_mode=""):
         if bytes(wav_bytes) == self._refuse and not self.refused:
             self.refused += 1
             raise OSError("disk full")
-        return super().save_recording(wav_bytes, keep_after_success=keep_after_success)
+        return super().save_recording(
+            wav_bytes,
+            keep_after_success=keep_after_success,
+            language_mode=language_mode,
+        )
 
 
 def test_w16_a_retry_after_a_refused_save_spares_the_recording_the_store_holds(

@@ -15,6 +15,9 @@ from stt_app.config import (
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
     OVERLAY_STATE_COLORS,
+    OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_LABELS,
+    OVERLAY_WARNING_NOT_INSERTED,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
 )
@@ -452,13 +455,83 @@ def test_overlay_control_signals_are_emitted():
         lambda: got.__setitem__("cancel", got["cancel"] + 1)
     )
 
+    # Cancel first: a Cancel right after Retry's slot became Cancel is the
+    # double-click case the next tests cover.
+    overlay.set_state("Listening", "active")
+    overlay._cancel_button.click()
     overlay.set_state("Error", "failed")
     overlay._history_button.click()
     overlay._retry_button.click()
-    overlay.set_state("Listening", "active")
-    overlay._cancel_button.click()
 
     assert got == {"history": 1, "retry": 1, "cancel": 1}
+
+
+def _overlay_with_a_controlled_clock(monkeypatch, interval_ms=400):
+    """A real overlay whose click-timing clock and double-click interval the
+    test sets, so no assertion depends on how fast the machine is."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    clock = {"now": 100.0}
+    # The overlay module's own name for the clock, so nothing else that reads
+    # `time.monotonic` while the test runs sees it.
+    monkeypatch.setattr(overlay_ui_module, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        QtWidgets.QApplication, "doubleClickInterval", staticmethod(lambda: interval_ms)
+    )
+    return OverlayUI(), clock
+
+
+def test_a_second_click_on_retry_lands_on_cancel_and_is_ignored(monkeypatch):
+    """Retry and Cancel share one slot at the same geometry. A double click on
+    Retry starts the retry with its first click, which paints Processing and
+    puts Cancel under the cursor; the second click then cancelled the retry it
+    had just started. Only that click is dropped: a Cancel after the system's
+    double-click interval is a deliberate one and works."""
+    overlay, clock = _overlay_with_a_controlled_clock(monkeypatch, interval_ms=400)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Error", "failed")
+    overlay._retry_button.click()
+    # What the controller does within that click.
+    overlay.set_state("Processing", "Retrying transcription...")
+
+    clock["now"] += 0.2
+    overlay._cancel_button.click()
+    assert canceled == [], "the second click of a double click canceled the retry"
+
+    clock["now"] += 0.3
+    overlay._cancel_button.click()
+    assert canceled == [True], "a deliberate Cancel after the interval was dropped"
+
+
+def test_cancel_works_at_once_when_retry_was_not_clicked(monkeypatch):
+    """The guard answers a click on Retry, not every Cancel."""
+    overlay, _clock = _overlay_with_a_controlled_clock(monkeypatch)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Listening", "active")
+    overlay._cancel_button.click()
+    overlay.set_state("Processing", "working")
+    overlay._cancel_button.click()
+
+    assert canceled == [True, True]
+
+
+def test_cancel_works_at_once_when_the_error_with_retry_was_left_without_a_click(
+    monkeypatch,
+):
+    """The record hotkey pressed over an Error with Retry paints Listening and
+    puts Cancel into Retry's slot, with no click on Retry: a Cancel click within
+    the interval is the user's own, since nobody clicked twice."""
+    overlay, clock = _overlay_with_a_controlled_clock(monkeypatch)
+    canceled: list[bool] = []
+    overlay.cancel_requested.connect(lambda: canceled.append(True))
+    overlay.set_state("Error", "failed")
+    overlay.set_state("Listening", "Listening...")
+
+    clock["now"] += 0.1
+    overlay._cancel_button.click()
+
+    assert canceled == [True]
 
 
 def test_overlay_always_on_top_toggle_updates_state_and_signal():
@@ -2088,6 +2161,26 @@ def test_the_status_text_is_centred_on_the_overlay_in_every_state():
                 error_action=OVERLAY_ERROR_ACTION_NONE,
             ),
         ),
+        (
+            "Not inserted",
+            lambda: overlay.set_state(
+                "Error",
+                "Insertion failed.",
+                error_action=OVERLAY_ERROR_ACTION_INSERT,
+                copy_text="the transcript",
+                warning=OVERLAY_WARNING_NOT_INSERTED,
+            ),
+        ),
+        (
+            "Check window",
+            lambda: overlay.set_state(
+                "Error",
+                "Possibly inserted already.",
+                error_action=OVERLAY_ERROR_ACTION_NONE,
+                copy_text="the transcript",
+                warning=OVERLAY_WARNING_CHECK_WINDOW,
+            ),
+        ),
         ("Copy shows feedback", lambda: overlay._set_copy_button_feedback(True)),
         ("Copy feedback cleared", overlay._reset_copy_button_feedback),
         ("Record hovered", lambda: QtWidgets.QApplication.sendEvent(record, hover)),
@@ -3192,17 +3285,26 @@ def test_the_queue_title_counts_transcriptions_and_waiting_inserts_apart(items, 
 
 
 def _real_undelivered_labels():
-    """Both labels the controller sends for one waiting insert, as it sends them."""
+    """The labels the controller sends for one waiting insert, as it sends them:
+    not inserted, possibly inserted and from an earlier session."""
+    text = "Please send the quarterly report to the whole team by Friday afternoon"
+    created_at = datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC)
     entry = _UndeliveredInsert(
-        row_id=-1,
-        text="Please send the quarterly report to the whole team by Friday afternoon",
-        may_have_pasted=False,
-        created_at=datetime(2026, 10, 1, 12, 0, 0, tzinfo=UTC),
+        row_id=-1, text=text, may_have_pasted=False, created_at=created_at
     )
     not_inserted = DictationController._undelivered_row_label(entry)
     entry.may_have_pasted = True
     possibly_inserted = DictationController._undelivered_row_label(entry)
-    return not_inserted, possibly_inserted
+    earlier_session = DictationController._undelivered_row_label(
+        _UndeliveredInsert(
+            row_id=-2,
+            text=text,
+            may_have_pasted=False,
+            created_at=created_at,
+            from_earlier_session=True,
+        )
+    )
+    return not_inserted, possibly_inserted, earlier_session
 
 
 def test_a_waiting_insert_row_moves_nothing_against_a_transcription_row():
@@ -3235,10 +3337,11 @@ def test_a_waiting_insert_row_moves_nothing_against_a_transcription_row():
     plain_rows = _queue_row_parts(overlay)
     plain_heights = [row.height() for row, _label, _button in plain_rows]
     plain_button = plain_rows[0][2].size()
-    not_inserted, possibly_inserted = _real_undelivered_labels()
+    not_inserted, possibly_inserted, earlier_session = _real_undelivered_labels()
     assert len(possibly_inserted) > len(not_inserted), "precondition"
+    assert earlier_session.startswith("From earlier session"), earlier_session
 
-    for waiting in (not_inserted, possibly_inserted):
+    for waiting in (not_inserted, possibly_inserted, earlier_session):
         overlay.set_transcription_queue(
             [
                 (2, "#1 · 12:00:05 · local · parakeet-tdt-0.6b-v3"),
@@ -3349,12 +3452,13 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
         DictationController._queue_job_label(job, rank=rank, total=len(jobs))
         for rank, job in enumerate(jobs, start=1)
     ]
-    _not_inserted, possibly_inserted = _real_undelivered_labels()
+    _not_inserted, possibly_inserted, earlier_session = _real_undelivered_labels()
     overlay.set_transcription_queue(
         [
             (1, labels[0]),
             (2, labels[1]),
             (-1, possibly_inserted, QUEUE_ROW_KIND_UNDELIVERED),
+            (-2, earlier_session, QUEUE_ROW_KIND_UNDELIVERED),
         ]
     )
     QtWidgets.QApplication.processEvents()
@@ -3366,6 +3470,7 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
     assert "Pending insert" in painted[0], painted
     assert "Pending insert" in painted[1], painted
     assert painted[2].startswith("Possibly inserted"), painted
+    assert painted[3].startswith("From earlier session"), painted
     overlay.close()
 
 
@@ -3494,3 +3599,226 @@ def test_a_starting_dictation_is_not_painted_in_the_listening_green():
     assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
     assert overlay.width() == width
     overlay.close()
+
+
+# -- A transcript that was not (surely) inserted is a warning, not an error ----
+
+
+def _luminance(color: QtGui.QColor) -> float:
+    """WCAG relative luminance of an sRGB colour."""
+
+    def linear(channel: int) -> float:
+        value = channel / 255.0
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+
+    return (
+        0.2126 * linear(color.red())
+        + 0.7152 * linear(color.green())
+        + 0.0722 * linear(color.blue())
+    )
+
+
+def _contrast(first: QtGui.QColor, second: QtGui.QColor) -> float:
+    """WCAG contrast ratio between two colours, 1:1 to 21:1."""
+    bright, dark = sorted((_luminance(first), _luminance(second)), reverse=True)
+    return (bright + 0.05) / (dark + 0.05)
+
+
+def _control_state(overlay) -> dict[str, tuple[bool, bool]]:
+    """(enabled, hidden) of every control a result state decides."""
+    controls = {
+        "copy": overlay._copy_button,
+        "edit": overlay._edit_button,
+        "clear": overlay._clear_button,
+        "retry": overlay._retry_button,
+        "cancel": overlay._cancel_button,
+        "insert": overlay._insert_button,
+    }
+    return {
+        name: (button.isEnabled(), button.isHidden())
+        for name, button in controls.items()
+    }
+
+
+def _painted_container_background(overlay) -> QtGui.QColor:
+    """The container's fill as painted, read in the margin beside the header."""
+    image = overlay._container.grab().toImage()
+    return image.pixelColor(7, image.height() // 2)
+
+
+def test_a_not_inserted_transcript_is_a_warning_and_a_failure_without_one_stays_red():
+    """Owner's decision 2026-10-17: a transcript that exists but was not (or
+    maybe not) inserted is not an error -- the text is safe and Insert, Copy
+    and Edit work -- so it is burnt orange under a word that says what
+    happened. Red and "Error" stay for failures that left no transcript.
+    The state is still Error for every control and check, like "Starting"
+    is still Listening; only the label and the colour differ."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    text = "Insertion failed.\n\nthe transcript"
+
+    overlay.set_state("Error", "Transcription failed.")
+    assert overlay._state_label.text() == "Error"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+
+    for warning, action in (
+        (OVERLAY_WARNING_NOT_INSERTED, OVERLAY_ERROR_ACTION_INSERT),
+        (OVERLAY_WARNING_CHECK_WINDOW, OVERLAY_ERROR_ACTION_NONE),
+    ):
+        overlay.set_state(
+            "Error",
+            text,
+            copy_text="the transcript",
+            error_action=action,
+            editable=True,
+            warning=warning,
+        )
+        QtWidgets.QApplication.processEvents()
+        assert overlay._state_label.text() == warning
+        assert overlay._state_background == OVERLAY_STATE_COLORS["Warning"]
+        assert OVERLAY_STATE_COLORS["Warning"] != OVERLAY_STATE_COLORS["Error"]
+        assert overlay.state == "Error"
+
+        # Every control behaves exactly as in the red Error state it replaces.
+        warned = _control_state(overlay)
+        overlay.set_state(
+            "Error",
+            text,
+            copy_text="the transcript",
+            error_action=action,
+            editable=True,
+        )
+        QtWidgets.QApplication.processEvents()
+        assert overlay._state_label.text() == "Error"
+        assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+        # The red Error that carries the offer (a real failure arrived over
+        # a pending Insert offer) has the very same controls.
+        assert _control_state(overlay) == warned
+        if action == OVERLAY_ERROR_ACTION_INSERT:
+            assert warned["insert"] == (True, False), "Insert is offered"
+            assert warned["retry"][1] and warned["cancel"][1]
+
+    # The next plain Error is red again, not left orange.
+    overlay.set_state("Error", "Transcription failed.")
+    assert overlay._state_label.text() == "Error"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Error"]
+    overlay.close()
+
+
+def test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it():
+    """White text and the amber row labels stay readable (WCAG AA, 4.5:1) on
+    the burnt-orange fill, and the not-inserted badge keeps a luminance
+    contrast of at least 3:1 (WCAG's bar for a graphical object) against the
+    fill it sits on: both are orange, so only their lightness tells them
+    apart. Measured from what is painted, not from the constants."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_transcription_queue(
+        [(-1, 'Not inserted · 12:00:00 · "one"', QUEUE_ROW_KIND_UNDELIVERED)]
+    )
+    overlay.set_not_inserted_badge("1 not inserted · Ctrl+Alt+F10")
+    overlay.set_state(
+        "Error",
+        "Insertion failed.",
+        error_action=OVERLAY_ERROR_ACTION_INSERT,
+        warning=OVERLAY_WARNING_NOT_INSERTED,
+    )
+    QtWidgets.QApplication.processEvents()
+
+    painted = _painted_container_background(overlay)
+    assert painted.name() == OVERLAY_STATE_COLORS["Warning"], "the fill was not painted"
+    role = QtGui.QPalette.ColorRole.WindowText
+    white = overlay._state_label.palette().color(role)
+    row_label = _queue_row_parts(overlay)[0][1]
+    assert _contrast(white, painted) >= 4.5, _contrast(white, painted)
+    assert _contrast(row_label.palette().color(role), painted) >= 4.5
+    assert _contrast(_badge_fill(overlay), painted) >= 3.0, _contrast(
+        _badge_fill(overlay), painted
+    )
+    # The red it replaces had the same property, so nothing was traded away.
+    overlay.set_state("Error", "Transcription failed.")
+    QtWidgets.QApplication.processEvents()
+    assert _contrast(white, _painted_container_background(overlay)) >= 4.5
+    overlay.close()
+
+
+_STATE_WORD_CASES = [
+    ("Idle", {}),
+    ("Listening", {}),
+    ("Processing", {}),
+    ("Done", {}),
+    ("Error", {}),
+    # A real failure over a pending offer: red, with the offer's Insert.
+    ("Error", {"error_action": OVERLAY_ERROR_ACTION_INSERT, "warning": None}),
+    (
+        "Error",
+        {
+            "error_action": OVERLAY_ERROR_ACTION_INSERT,
+            "warning": OVERLAY_WARNING_NOT_INSERTED,
+        },
+    ),
+    (
+        "Error",
+        {
+            "error_action": OVERLAY_ERROR_ACTION_NONE,
+            "warning": OVERLAY_WARNING_CHECK_WINDOW,
+        },
+    ),
+]
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5])
+def test_the_warning_words_move_nothing_in_the_header_at_9_11_and_13_5_pt(point_scale):
+    """The state label reserves the widest state word's width, so adding two
+    wider words must not widen the overlay or shift the header. Checked at
+    the three sizes Windows' Text size gives: every state, warnings
+    included, leaves the label one rectangle, the overlay one width, and
+    paints its word wholly inside that rectangle, centred on the overlay."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            _shown_offscreen(overlay)
+            bold = QtGui.QFont()
+            bold.setBold(True)
+            metrics = QtGui.QFontMetrics(bold)
+            words = {"Idle", "Starting", "Listening", "Processing", "Done", "Error"}
+            words.update(OVERLAY_WARNING_LABELS)
+            widest = max(metrics.horizontalAdvance(word) for word in words)
+            assert overlay._state_label.minimumWidth() >= widest, (
+                "the label reserves less than its widest word needs"
+            )
+            boxes = set()
+            widths = set()
+            for state, kwargs in _STATE_WORD_CASES:
+                overlay.set_state(state, "Some detail.", **kwargs)
+                QtWidgets.QApplication.processEvents()
+                label = overlay._state_label
+                boxes.add(_state_label_box(overlay))
+                widths.add(overlay.width())
+                assert (
+                    overlay._header_widget.sizeHint().width()
+                    <= overlay._controls_widget.sizeHint().width()
+                ), f"{label.text()!r} makes the header wider than the controls row"
+                left, right = _painted_text_span(label)
+                assert left > 0 and right < label.width() - 1, (
+                    f"{label.text()!r} is clipped: glyphs {left}..{right} of "
+                    f"{label.width()} px"
+                )
+                assert (
+                    abs(_painted_status_centre(overlay) - _overlay_centre(overlay))
+                    <= 1.0
+                ), label.text()
+            assert len(boxes) == 1, f"the status label moved between states: {boxes}"
+            assert len(widths) == 1, f"the overlay changed width: {widths}"
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)

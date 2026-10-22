@@ -128,3 +128,8 @@ def provider_connection_tests_path() -> Path:
 
 def insecure_keys_path() -> Path:
     return appdata_root() / "insecure_api_keys.json"
+
+
+def node_packages_back_off_path() -> Path:
+    """The last failed JavaScript package update (`transcriber._node_packages`)."""
+    return appdata_root() / "node_packages_update.json"

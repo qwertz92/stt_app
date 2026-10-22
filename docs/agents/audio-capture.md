@@ -161,7 +161,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   refuses the buffer is reopened with its default (`audio_input_buffer_refused`).
   Consumers of the chunk callback must take a 20 s burst: Deepgram's send
   queue is sized for it (`docs/agents/streaming.md`); AssemblyAI's SDK queue
-  and the local streaming queues are unbounded.
+  and the local streaming queues are unbounded. The gap before such a burst
+  (up to 12 s of no blocks) is bridged on Deepgram's socket by KeepAlive
+  frames from its sender thread (`docs/agents/remote-providers.md`).
 - **`stop` collects a backlog the callback thread still owes** (2026-10-10):
   stopping the stream discards what PortAudio buffered but has not delivered
   (measured: a stop 2 s in, during a 3 s stall, kept 1.1 s; with the wait,

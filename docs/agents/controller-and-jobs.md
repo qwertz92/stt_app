@@ -121,6 +121,94 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     is itself the delivered recording; the background delivery of a result
     runs it too, so a retry delivered behind a newer recording resolves its
     failure. Retry still takes the slot only.
+  - **A second Retry is ignored while the first retry of the same recording
+    still runs with the same request** (owner decision 2026-10-17:
+    the same audio to the same provider twice costs money twice and returns
+    the same text twice; before, the second press stopped the first job and
+    started another, and a remote request already sent still finished into
+    history, so the provider was billed twice and history got two entries).
+    `_running_retry_of_the_slot(settings)` scans `_jobs` for a job that is not
+    aborting and not a finished result waiting for its paste, whose request
+    equals the one the new retry would send and whose request audio and
+    `source_recording_id` equal the slot's own -- the identity
+    `_retire_retry_audio_delivered_by` uses, so the same bytes under another
+    recording id are another recording. Being derived from `_jobs`, the block
+    ends with the job: delivered, failed or cancelled, it leaves the registry
+    and Retry works again (a failed retry is promoted to the slot again; after a
+    success the slot is retired and the older failure behind it comes forward).
+  - **"The same request" is `_request_identity`, not engine and model alone**
+    (review 2026-10-17; the first version compared only those two, so a retry
+    after the user changed the vocabulary, a region, an endpoint or the key was
+    refused as a duplicate although the running request had gone out with the
+    old values). It is `_transcriber_identity(settings)` -- everything
+    `create_transcriber` bakes into the runtime, per engine, so engine, model,
+    custom vocabulary where the model takes one, Azure endpoint, region, the
+    custom endpoint's URL, API style and key command, silence-gate threshold,
+    key presence -- plus `language_mode` (the identity leaves it out on purpose,
+    but the request carries it) plus `_credentials_generation`. A key value is
+    in no settings field, so `invalidate_transcriber_credentials` (the Settings
+    dialog's report of a replaced key) counts up a generation and each job
+    remembers the one it was submitted under; any provider's key change counts,
+    which can only allow a retry, never block one. Settings that no provider
+    receives (opacity, history size, hotkeys) stay out of it: such a retry is
+    still a duplicate. A changed request is another request: it replaces the
+    running one (next bullet). A job being stopped does not count, so Cancel,
+    then Retry, works; a retry that went behind a newer dictation still counts.
+  - **A Retry stops the jobs working on its own recording, and nothing else**
+    (owner decision 2026-10-17, review round 2). `_live_jobs_of_the_slot()` --
+    not aborting, not a finished result waiting for its paste, request audio and
+    `source_recording_id` equal to the slot's, the filter
+    `_running_retry_of_the_slot` applies before it compares requests -- are
+    each stopped with `_request_job_stop(delivery=history)`; a late result of
+    theirs goes to history only. It used to stop `_active_request_token`'s job,
+    which was wrong both ways: a retry R1 that had lost the token (a newer
+    dictation was recorded and cancelled, or is still in flight) kept running
+    beside a changed retry R2, and both delivered -- two history entries, two
+    pastes of one text -- and a Retry of an older failure stopped whatever held
+    the token, which could be the newest dictation: diverted to history only,
+    never pasted. Now the newest dictation is left alone and keeps its
+    `insert` delivery. The retry takes the overlay's token as every submit
+    does: it paints and keeps its "Processing", Cancel on the overlay cancels
+    it (`cancel_current_action` stops the token's job), and the newer job
+    becomes a queued one that delivers by the normal order rules (its paste
+    waits while a foreground job is active, and goes to its own window).
+    The one cost: `_executor` has a single worker, so the retry starts only when
+    the running job has ended -- behind a long local transcription that can be
+    minutes, which the old stop cut short for the newest dictation at the price
+    of discarding its paste. Cancel on that job's queue row frees the worker.
+    **One job cannot be left running: a pending streaming finalize**
+    (`_streaming_recording` with the microphone closed). It owns the session
+    and only its own foreground result clears it; with the token moved to the
+    retry its result would be a background one and the session would stay open,
+    refusing every new recording ("Streaming transcript is still finalizing").
+    Stopping it would be the diversion again, so the Retry is refused with a
+    tray note ("The streaming transcript is still finalizing. Retry the last
+    failed transcription when it has finished.") and works a few seconds later.
+    Before this the comment at the guard said a pending finalize "is stopped by
+    design". Tests: `test_a_retry_never_stops_a_job_of_another_recording`,
+    `test_a_changed_request_retry_stops_the_running_retry_without_the_overlay_token`,
+    `test_a_changed_retry_beside_a_newer_dictation_replaces_only_its_own_job`,
+    `test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it`. Two
+    older tests had pinned the diversion and were rewritten to the new rule:
+    `test_retry_last_transcription_proceeds_beside_another_recordings_job_when_the_microphone_is_closed`
+    (`tests/test_controller_coverage.py`, a job in flight is no longer stopped)
+    and `test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_store`
+    (`tests/test_controller.py`: the newer recording keeps running, its state
+    stays `transcribing` through the retry and its own completion deletes its
+    audio).
+  - **The ignored press is answered on the tray, never on the overlay**: it
+    logs `retry_ignored_duplicate`, returns `False` and emits
+    `busy_overlay_error` -- "A retry of this recording is already running with
+    the same settings; cancel it first to retry again." -- the second half says
+    what to do, since the first alone leaves the user with a button that does
+    nothing. It does not go through `show_overlay_error`: that paints a red
+    Error with a Retry button whenever `_overlay_session_active()` is false,
+    which happens while the retry runs (`_active_request_token` is None after a
+    newer dictation was cancelled), and that button is the press just refused.
+    Tests: `test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model`,
+    `test_a_retry_with_other_request_settings_is_allowed_while_the_first_runs`,
+    `test_the_duplicate_notice_never_repaints_an_overlay_no_session_owns` and
+    their neighbours in `tests/test_controller_queue.py`.
   - **An Error without retry audio of its own offers no Retry**:
     `_on_transcription_failed` starts at `preserved_audio = False`, promotes
     only the job's own or the dying stream's bytes, else paints
@@ -139,7 +227,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   feeds the Transcription tab, the overlay selector (persists for the next
   recording, disabled while busy, disabled `Lang: Auto` when auto is the only
-  mode) and provider validation. Cohere never exposes Auto.
+  mode) and provider validation. Cohere never exposes Auto. The controller asks
+  it through `_offered_language_modes()` -- the active engine's own model
+  (`_selected_model_name`), never `model_size`, which is the local model:
+  asked with it, every remote model with a list of its own (Deepgram nova-2 and
+  nova-3, AssemblyAI Universal 3.5 Pro, Azure MAI-Transcribe 1 and 1.5,
+  Speechmatics Enhanced and Standard) showed, and `set_language_mode` accepted,
+  the engine's default list (2026-10-17;
+  `test_overlay_language_list_is_the_remote_models_own`).
 - **Concurrent mode + cooperative cancel: a finished transcription is never
   discarded.** `concurrent_transcription_mode` (`insert` default /
   `history` / `cancel`): on a new recording the in-flight job inserts into
@@ -153,6 +248,43 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     first. A streaming dictation's live inserts wait for an earlier result
     for their window (`_stream_live_insert_held`, 2026-10-09); the order
     rule and every case it covers: `docs/agents/text-insertion.md`.
+  - **The mode applies to every transcription in flight, not only the job the
+    overlay shows** (review round 3, 2026-10-17).
+    `_apply_concurrent_mode_to_jobs_in_flight` runs when a recording starts
+    and acts on every job still computing -- not aborting, not
+    `insertion_deferred` (a finished result waiting for its paste is not in
+    flight, and its delivery is decided by its own rules). It used to act on
+    `_active_request_token` only. Every older job had met the mode when a
+    later recording started while it held the token, until a Retry took the
+    token without a recording: the dictation that was in flight before it
+    never met the mode (history-only: it still pasted; cancel: the retry was
+    stopped instead of it). A running retry is covered too, deliberately: the
+    mode is about what happens to transcriptions in flight when the user
+    starts dictating again, not about which one the overlay shows, and
+    leaving the retry out would let it paste into its old window during the
+    new dictation in history-only mode, or run on in cancel mode. In cancel
+    mode the retry's late result still goes to History and its recording stays
+    for another Retry. Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
+    `test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry`,
+    the `insert` control and `test_a_new_recording_does_not_touch_a_result_that_is_already_waiting`.
+  - **A finished result waits for a dictation, not for a retry**
+    (`_should_defer_background_insertion`, round 3). The wait for the
+    overlay's job keeps the live session coherent and delivers older results
+    together with the newer one in token order. A retry holding the token
+    (`_TranscriptionJob.is_retry`, set by `retry_last_transcription`) is an
+    older recording's text, not that session: a dictation that finished
+    before it used to sit as "Pending insert" until the retry ended, minutes
+    with a local model. It now pastes at once, and the retry pastes when it
+    is done (the same-window order rules still apply: the finished dictation
+    is older than the retry in token order anyway). Behind a newer dictation
+    nothing changes. Tests: `test_a_finished_dictation_pastes_at_once_while_a_retry_holds_the_overlay`
+    and the control `test_a_finished_dictation_still_waits_for_a_newer_dictation`.
+  - **Canceling a retry says "Retry canceled."** (`_canceled_text`, used by
+    `cancel_current_action` and `cancel_queued_transcription`): the dictation
+    behind it may still be transcribing, and "Transcription canceled." read
+    as if that one had stopped. Clearing the whole queue keeps the general
+    text, since everything stopped. Tests: `test_canceling_a_retry_says_it_was_the_retry`
+    and `test_canceling_a_dictation_still_says_transcription_canceled`.
   - A `_TranscriptionJob` holds the target window, `background_delivery`
     and `aborting`. Foreground = token active, no newer recording, not
     aborting; `_new_recording_active()` excludes `_streaming_recording`.
@@ -181,6 +313,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     otherwise the `_active_request_token` guard holds. Deferred tokens are
     always older than the active one, so delivering them first keeps token
     order; the running transcription delivers itself later, no duplicate.
+    (Exception: while a retry holds the token nothing is deferred for it,
+    see "A finished result waits for a dictation, not for a retry".)
     A `paste_paced` job (held by the restore-window pace, see
     `docs/agents/text-insertion.md`) passes the active-transcription guard
     (a capture still blocks unless immediate mode) and is flushed by the
@@ -220,6 +354,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   recording-start notice and streaming refusal. Clear it in both
   `_on_model_preload_done` and the `on_settings_changed` remote-engine
   cancel branch, or `_current_preload_phase()` answers for a finished one.
+  The worker also keeps the runtime's latest progress line with its
+  generation (`_note_preload_progress`); the load phase shows only the
+  JavaScript package update's line (`local-models-and-downloads.md`), and
+  the worker's `finally` clears the progress callback after the cancel
+  check, each in its own `try`.
 - **A preload must not hide a failed hotkey registration**: the
   `_preload_owns_overlay()` early return in `show_idle_status` sits below
   the four hotkey-error branches (`reload_settings` relies on them).
@@ -254,12 +393,158 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     started, and `set_language_mode` never touches a runtime. Pinned for batch
     and streaming by `test_a_language_pick_during_a_recording_applies_to_the_next_one`;
     reading `self._settings` at the stop instead of the snapshot fails both.
-  - **Retry and re-transcription use what is selected now**, unchanged:
-    `retry_last_transcription` resubmits the kept bytes under
-    `replace(self._settings)` ("Retrying transcription with current settings...")
-    and the History retranscribe / Import take their settings at the click. That
-    is how a wrong language is fixed (switch, then Retry); only a first attempt
-    is pinned to its recording. Pinned by `test_retry_uses_the_language_selected_now`.
+  - **Retry transcribes in the language the recording was made in; engine and
+    model stay the current ones** (owner decision 2026-10-17, replacing the
+    2026-10-09 rule that Retry used what is selected now; a user switches
+    provider after a provider failure and retries, but the audio was spoken in
+    one language). `retry_last_transcription` resubmits the kept bytes under
+    `_retry_settings()`: `replace(self._settings)` with `language_mode` set to
+    `_recorded_language_by_recording_id[_last_failed_recording_id]`, which
+    `_persist_last_recording_audio(wav_bytes, language_mode)` fills where a
+    recording's id is born -- the stop (batch and streaming), the watchdog abort,
+    a dying stream, a cancel -- from the recording's own snapshot
+    (`_open_recording_language`; the stream's `_active_stream_settings`).
+    A streaming session is retried as a batch job in its stream's language. The
+    overlay says "(recorded language: X)". Two cases keep the language selected
+    now, as before, and the overlay says which applied: a recording this process
+    has no language for (the store refused the write, an id from an earlier
+    run), and a language the current engine and model do not offer
+    (`language_modes_for_selection(engine, model, "batch")`, logged as
+    `retry_recorded_language_not_offered`). The second is not passed on to the
+    provider because each provider's own `_normalize_language_mode` then picks a
+    stand-in -- Canary falls back to the first language of its list (German),
+    which makes it translate into it instead of transcribing, Cohere forces
+    German for `auto`, Granite CTC (English only) decodes German speech as
+    English -- while the selection is one the user picked for the engine in use.
+    A saved selection the engine does not offer either (it stays saved when the
+    engine is switched, and the overlay's menu shows the engine's first language
+    instead) is clamped to that first language, the overlay's own rule
+    (`OverlayUI.set_language_options`), so the language named in the overlay
+    text, the log (`using=`) and the startup notice is the one the provider
+    receives. Before the review of 2026-10-17 (round 2) the selection was named
+    as it stood: a stale Afrikaans on Deepgram nova-2 was reported while the
+    provider's own normalization ran Auto.
+    **One helper decides it for both roads**: `_pin_recorded_language(settings,
+    recorded, recording_id)` returns the pinned settings and `True`, or the
+    settings with the language that runs and `False` (the decision is
+    `_language_a_retry_runs_in`; `_pin_recorded_language` writes the log line
+    once); `_retry_settings` words the overlay text from it and
+    `transcribe_unfinished_recording` uses it too. The restart road had its own
+    unchecked pin until the review of 2026-10-17: a recording made in Auto and
+    retried after a restart under Canary was sent as `auto` and came out
+    translated, and with recordings retention off the WAV was deleted after the
+    wrong transcript was saved.
+    **A fallback retry keeps its audio in the recordings folder, links it from
+    its History entry and tells the tray** (review rounds 2 and 3,
+    2026-10-17). The overlay's "do not offer the recorded language" line is
+    overwritten by the first provider progress line, History stores no
+    language, and the managed WAV was deleted after the success with "keep last
+    recording" off, so the audio could not be redone in the right language.
+    Round 2 kept the managed recording itself (marked failed, as a gap
+    transcript's is); that was no copy at all: it is one slot, the next
+    dictation replaces it, and the next start completes it -- deleting the WAV
+    -- as soon as a History entry with its id exists (`main._complete_unless_gap`
+    spares only a gap marker), so the tray promised audio that was gone by the
+    next start (reproduced by the round-3 review with real futures). Now the
+    job carries `language_fallback_from` (the recorded language; `_retry_settings`
+    returns it as its third value and `retry_last_transcription` passes it on),
+    and `_on_transcription_ready` calls `_keep_audio_of_a_fallback_retry`
+    before either road writes its History entry: the audio is saved as an
+    unfinished recording and moved to the recordings folder under its own
+    name (`UnfinishedRecordingStore.save` and `move_to`, the pair
+    `_retain_unfinished_audio` uses), a name no recordings count prunes
+    (`_ARCHIVED_RECORDING_NAME_RE` does not match it), and
+    `job.source_audio_path` carries the path into the entry, which is what
+    History's Retranscribe resolves (`history_audio.resolve_history_audio_path`).
+    The managed slot then completes as for any success. Recordings that fell
+    back nowhere are kept or not as the retention settings say, unchanged. One
+    `busy_overlay_error` tray notice names the language that ran and points to
+    "Retranscribe... in History"; where the copy could not be written it says
+    "The audio could not be kept (see the log)" instead of promising it. A
+    move that fails leaves the file in the unfinished folder and links that
+    path (the next start offers it there, a second transcript at worst).
+    After a restart `transcribe_unfinished_recording` keeps the file as the
+    settings keep any recording (`_retain_unfinished_audio`) and, where they
+    would delete it, in place the way a gap transcript's file stays, so
+    History's Retranscribe offers it again with a language to pick; the startup
+    notice's row is the surface there (no tray notice per row, on top of a
+    dialog that already names the language). Tests:
+    `test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it`,
+    `test_the_kept_audio_survives_the_next_start_and_the_next_dictation`,
+    `test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept`, the
+    negative control `test_a_retry_in_the_recorded_language_keeps_no_extra_copy`
+    and, for the restart road, `test_a_fallback_language_keeps_the_recording_like_a_gap_does`.
+    The language also travels to disk, so the same holds after a restart:
+    `LastRecordingStore.language_mode` and the unfinished recording's file name
+    (`docs/agents/persistence-and-history.md`), which the quit writes
+    (`_keep_unfinished_recordings`) and the startup notice transcribes with
+    (`transcribe_unfinished_recording`). The file names the language the
+    recording was **made** in, never the one a fallback retry ran under: a job's
+    own snapshot is used only for a recording this process never named
+    (`_recorded_language_by_recording_id` wins), or the next start would pin the
+    fallback for good. Where the fallback applied after a restart the startup
+    notice's row says so -- `Transcribed in English, in History (Auto is not
+    offered by this model)`: the language that ran, then the one the engine did
+    not offer; its tooltip adds that the recording is kept and that
+    Retranscribe in History can redo it in another language. The words come
+    from `unfinished_recording_language_note(recording)`, which answers the
+    pair of labels `("English", "Auto")` or `None` (the same
+    `_language_a_retry_runs_in` decision, no second log line), handed to
+    `UnfinishedRecordingsDialog(language_note=)` and asked right before each
+    row's transcription -- outside the transcription's own `try`, through
+    `_language_fallback`, which logs a note that fails and leaves it out (the
+    exception used to become the row's failure, with the audio never sent);
+    the dialog's `(ok, text)` contract is unchanged because many callers
+    unpack it. History retranscribe and the Import tab
+    take their settings from their own pickers at the click; that is where a
+    wrong language is now corrected, no longer by switching and pressing Retry
+    (the Import tab's "Use last recording" starts its language picker from the
+    recording's own, `docs/agents/settings-dialog.md`). Tests in
+    `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
+    the streaming, dying-stream, failed-retry and unknown-language cases, and
+    `test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_either`),
+    `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
+    Granite CTC, the note, a quit during a fallback retry, a stale selection
+    named as what ran),
+    `tests/test_unfinished_recordings_notice.py` (the row text, that the
+    longest wording fits the status column, and a failing note).
+  - **A transcript with a gap marker keeps its audio the same way** (follow-up
+    of the round-3 review, 2026-10-23). `[no text returned for m:ss-m:ss]`
+    (`transcript_has_gap`, `docs/agents/remote-providers.md`) names a stretch
+    the user may need to listen to or transcribe again. Its audio was the
+    managed last recording, kept by marking it failed -- the same single slot
+    the fallback retry's audio had, which the next dictation replaces, so the
+    stretch was gone as soon as the user dictated again (the next start
+    already spared it: `main._complete_unless_gap`). `_on_transcription_ready`
+    now also calls `_keep_audio_of_a_gap_transcript` before either road writes
+    its History entry, for a job that links no file yet
+    (`not job.source_audio_path`): the same copy into the recordings folder
+    (`_keep_audio_in_recordings_folder`, shared with the fallback retry; the
+    file's language tag is the recording's own, from
+    `_recorded_language_by_recording_id`), linked by `job.source_audio_path`,
+    so History's Retranscribe offers it. `_mark_last_recording_completed` then
+    completes the managed slot as for any success, unless the job links no
+    file, which is where the copy could not be written (or the job has no
+    audio or recording id): there the managed recording is marked failed as
+    before, the only copy until the next dictation. A job that links a file
+    already -- "Archive every recording" -- keeps its audio by the settings:
+    no extra copy, and the slot completes. Without a gap nothing changes, and
+    a gap raises no tray notice of its own: the marker is in the pasted text and
+    in History, and the overlay stays Done. The import of the managed last
+    recording (`transcribe_audio_file`, Import tab) does the same
+    (`_keep_audio_of_an_imported_last_recording`: the import's own bytes, or
+    the slot's file, through the same `_keep_audio_in_recordings_folder`), and
+    marks the slot failed only where that copy failed. An import of any other
+    file links the file itself, as before. Tests in
+    `tests/test_controller_queue.py`:
+    `test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it`,
+    `test_the_gap_audio_survives_the_next_dictation_and_the_next_start`, the
+    background road, the archive case, the copy-failed case,
+    `test_a_fallback_retry_with_a_gap_keeps_one_copy` and the negative
+    control `test_a_transcript_without_a_gap_keeps_no_copy`; in
+    `tests/test_controller_coverage.py` the two import cases
+    (`test_an_imported_last_recording_with_a_gap_is_kept` and its copy-failed
+    twin).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

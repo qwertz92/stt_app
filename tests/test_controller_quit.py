@@ -7,6 +7,7 @@ import concurrent.futures
 import logging
 import os
 import time
+from dataclasses import replace
 from datetime import datetime
 
 import pytest
@@ -20,11 +21,13 @@ from conftest import (
     make_controller,
 )
 
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import CANARY_MODEL_SIZE, FALLBACK_HOTKEY, GRANITE_CTC_MODEL_SIZE
 from stt_app.controller import PendingQuitWork
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
 from stt_app.unfinished_recordings import UnfinishedRecordingStore
+
+COHERE_MODEL_SIZE = "cohere-transcribe-03-2026"
 
 
 class _DeferredExecutor:
@@ -187,6 +190,68 @@ def test_a_quit_keeps_the_failures_waiting_for_retry_once_each(monkeypatch, tmp_
     _ = app
 
 
+def test_a_quit_keeps_each_recordings_language_with_it(monkeypatch, tmp_path):
+    """Owner decision 2026-10-17: Retry uses the language a recording was made
+    in, also after a restart, so the file a quit writes names it -- the queued
+    jobs by their own snapshot, a failure waiting for Retry by what was
+    recorded for it, the open capture by the session's -- and "" (unknown)
+    where this process never knew."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    _record(controller, b"RIFF-english")
+    controller.set_language_mode("de")
+    _record(controller, b"RIFF-german")
+    controller._recorded_language_by_recording_id["failed"] = "fr"
+    controller._hold_failed_audio_for_retry(b"RIFF-failed", "failed")
+    controller._hold_failed_audio_for_retry(b"RIFF-unknown", "")
+    controller.set_language_mode("auto")
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = b"RIFF-open"
+    controller.set_language_mode("es")
+
+    controller.shutdown()
+
+    kept = {
+        item.path.read_bytes(): item.language_mode
+        for item in unfinished.list_recordings()
+    }
+    assert kept == {
+        b"RIFF-english": "en",
+        b"RIFF-german": "de",
+        b"RIFF-failed": "fr",
+        b"RIFF-unknown": "",
+        b"RIFF-open": "auto",
+    }
+    _ = app
+
+
+def test_a_quit_during_a_fallback_retry_keeps_the_recorded_language(
+    monkeypatch, tmp_path
+):
+    """A retry whose engine does not offer the recorded language runs in the
+    selected one (`_retry_settings`). The file a quit writes for it still names
+    the language the recording was made in: the job's own is the fallback's,
+    and the next start would pin that for good."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="auto"
+    )
+    token = _record(controller, b"RIFF-auto")
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+    assert controller.retry_last_transcription() is True
+    retry = controller._jobs[controller._active_request_token]
+    assert retry.settings.language_mode == "de", "the fallback did not run"
+
+    controller.shutdown()
+
+    [kept] = unfinished.list_recordings()
+    assert kept.language_mode == "auto"
+    _ = app
+
+
 def test_waiting_to_quit_stops_the_open_recording(monkeypatch, tmp_path):
     controller, app, _overlay, _unfinished, _history = _controller(
         monkeypatch, tmp_path
@@ -267,6 +332,189 @@ def test_a_transcribed_unfinished_recording_goes_to_history_and_its_file_goes(
     _ = app
 
 
+def test_an_unfinished_recording_is_transcribed_in_the_language_it_was_made_in(
+    monkeypatch, tmp_path
+):
+    """The startup notice is the Retry after a restart: the file's own language
+    wins over the selection of the moment, and a file that names none (an
+    earlier version's) is transcribed in the selection."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="de"
+    )
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-english",
+        recording_id="known1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="en",
+    )
+    known = unfinished.find("known1")
+    unknown = _kept_recording(unfinished, recording_id="unknown1")
+
+    assert controller.transcribe_unfinished_recording(known)[0] is True
+    assert controller.transcribe_unfinished_recording(unknown)[0] is True
+
+    assert seen == ["en", "de"]
+    assert controller.settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("model_size", "recorded", "label"),
+    [
+        # Canary and Cohere never offer Auto: Canary would translate into its
+        # first language instead of transcribing, Cohere would be forced to
+        # German. Granite CTC decodes English only, whatever was spoken.
+        pytest.param(CANARY_MODEL_SIZE, "auto", "Auto", id="canary has no auto"),
+        pytest.param(COHERE_MODEL_SIZE, "auto", "Auto", id="cohere has no auto"),
+        pytest.param(
+            GRANITE_CTC_MODEL_SIZE, "de", "German", id="granite ctc is english only"
+        ),
+    ],
+)
+def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_it(
+    monkeypatch, tmp_path, caplog, model_size, recorded, label
+):
+    """The restart's Retry runs under the engine and model selected now. A
+    recorded language they do not offer would reach the provider's own
+    normalization, which substitutes one; the language selected now is one
+    the user picked for this engine (`_retry_settings` decides the same way
+    for the in-process Retry). The startup notice is told which language ran."""
+    caplog.set_level(logging.INFO)
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    controller._settings = replace(controller._settings, model_size=model_size)
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode=recorded,
+    )
+    recording = unfinished.find("spoken1")
+
+    assert controller.transcribe_unfinished_recording(recording)[0] is True
+
+    assert seen == ["en"]
+    assert "retry_recorded_language_not_offered recording_id=spoken1" in caplog.text
+    assert controller.unfinished_recording_language_note(recording) == (
+        "English",
+        label,
+    )
+    assert controller.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unfinished_recording_names_the_language_that_ran_not_a_stale_selection(
+    monkeypatch, tmp_path
+):
+    """The saved selection is not offered by the engine either (Deepgram
+    nova-2 has no Afrikaans): the provider's own normalization runs Auto, so
+    that is what is requested and what the startup notice names."""
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="af"
+    )
+    controller._settings = replace(
+        controller._settings, engine="deepgram", deepgram_model="nova-2"
+    )
+    controller._executor = _DoneExecutor()
+    seen = []
+
+    def _worker(_path, settings, _progress):
+        seen.append(settings.language_mode)
+        return "text"
+
+    monkeypatch.setattr(controller, "_transcribe_import_worker", _worker)
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="af",
+    )
+    recording = unfinished.find("spoken1")
+
+    assert controller.transcribe_unfinished_recording(recording)[0] is True
+
+    assert seen == ["auto"]
+    assert controller.unfinished_recording_language_note(recording) == (
+        "Auto",
+        "Afrikaans",
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_an_unfinished_recording_in_an_offered_language_needs_no_note(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, unfinished, _history = _controller(
+        monkeypatch, tmp_path, language_mode="en"
+    )
+    unfinished.save(
+        b"RIFF-spoken",
+        recording_id="spoken1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="de",
+    )
+
+    note = controller.unfinished_recording_language_note
+    assert note(unfinished.find("spoken1")) is None
+    assert note(_kept_recording(unfinished, recording_id="unknown1")) is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_language_keeps_the_recording_like_a_gap_does(monkeypatch, tmp_path):
+    """The recorded language was not offered, so the transcript is in another
+    language than the speech. The WAV was deleted after the success (recording
+    retention off): nothing was left to retranscribe in the right language. It
+    stays, History's entry points at it (Retranscribe there takes a language),
+    and a recording that fell back nowhere is deleted as before."""
+    controller, app, _overlay, unfinished, history = _controller(
+        monkeypatch, tmp_path, language_mode="de"
+    )
+    controller._settings = replace(controller._settings, model_size=CANARY_MODEL_SIZE)
+    controller._executor = _DoneExecutor()
+    monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hallo")
+    for recording_id, language in (("fell1", "auto"), ("plain1", "en")):
+        unfinished.save(
+            b"RIFF-spoken",
+            recording_id=recording_id,
+            recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+            language_mode=language,
+        )
+    fell = unfinished.find("fell1")
+    plain = unfinished.find("plain1")
+
+    assert controller.transcribe_unfinished_recording(fell)[0] is True
+    assert controller.transcribe_unfinished_recording(plain)[0] is True
+
+    assert fell.path.is_file()
+    assert not plain.path.exists()
+    entries = {entry.source_recording_id: entry for entry in history.load()}
+    assert entries["fell1"].source_audio_path == os.path.abspath(fell.path)
+    assert entries["plain1"].source_audio_path == ""
+    controller.shutdown()
+    _ = app
+
+
 def test_a_transcript_with_a_gap_keeps_its_recording(monkeypatch, tmp_path):
     controller, app, _overlay, unfinished, history = _controller(monkeypatch, tmp_path)
     controller._executor = _DoneExecutor()
@@ -308,16 +556,55 @@ def test_a_transcribed_unfinished_recording_waits_for_the_re_paste(
     assert row.text == "hello again"
     assert row.parts[0][0] == history.load()[0], "an edit must reach the row"
     assert overlay.queue_kinds[-1] == ["undelivered"]
-    # The time the recording was made, as every row shows it.
-    assert "· 00:00:00 ·" in overlay.queue_updates[-1][0][1]
+    # No insert was ever attempted for it, so it is not "Not inserted"
+    # (owner's decision 2026-10-17); the status stays the row's first words,
+    # before the part the one-line row elides, and the time the recording was
+    # made follows it, as every row shows it.
+    label = overlay.queue_updates[-1][0][1]
+    assert label.startswith("From earlier session · 00:00:00 · "), label
+    assert "Not inserted" not in label
+    # Still counted and still pasted by the re-paste.
+    assert overlay.badge.startswith("1 not inserted")
     assert controller.quit_pending_work().not_inserted == 1
 
     controller.repaste_last_transcript()
 
     assert [call[0] for call in controller._text_inserter.calls] == ["hello again"]
     assert controller._undelivered_inserts == []
+    assert overlay.queue_updates[-1] == []
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize(
+    ("changes", "status"),
+    [
+        ({}, "Not inserted"),
+        ({"from_earlier_session": True}, "From earlier session"),
+        ({"outside_text_field": True}, "Not in a text field"),
+        ({"may_have_pasted": True}, "Possibly inserted, check the window"),
+        # A failed re-paste whose keystroke went out marks the row in place;
+        # that is what the user must know, wherever the row came from.
+        (
+            {"from_earlier_session": True, "may_have_pasted": True},
+            "Possibly inserted, check the window",
+        ),
+    ],
+)
+def test_a_waiting_rows_status_is_its_first_words(changes, status):
+    from stt_app.controller import DictationController, _UndeliveredInsert
+
+    row = _UndeliveredInsert(
+        row_id=-1,
+        text="hello again",
+        created_at=datetime.fromisoformat("2026-10-09T09:01:02"),
+        **{"may_have_pasted": False, **changes},
+    )
+
+    assert (
+        DictationController._undelivered_row_label(row)
+        == f'{status} · 09:01:02 · "hello again"'
+    )
 
 
 def test_unfinished_transcripts_are_listed_on_the_qt_thread(monkeypatch, tmp_path):

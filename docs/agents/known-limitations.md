@@ -433,9 +433,97 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     in the second after that stall, before its backlog arrives, can cut the
     backlog off. MME drops the whole of a stall longer than its buffer
     (measured), so nothing of it is on its way later.
-  - Unverified (review F5): Deepgram closes a streaming socket that gets
-    no audio for about 10 s, and the app sends no KeepAlive. A start stall
-    that the watchdog now holds for up to 12 s may therefore lose the
-    Deepgram session before the burst arrives. Not reproduced; sending
-    `{"type": "KeepAlive"}` while no audio was pushed for 5 s would cover it
-    (~1-2 h with tests).
+  - Unverified live (2026-10-17): Deepgram closes a streaming socket that
+    receives nothing for 10 s, and Deepgram's Audio Keep Alive page says a
+    KeepAlive every 3-5 s prevents it, so the sender writes one every 3 s in
+    which it had no audio to send (`docs/agents/remote-providers.md`).
+    Deepgram's troubleshooting page contradicts that page for a stream that
+    has sent no audio yet: under 1011 `NET-0001` it says KeepAlive messages
+    "alone will not prevent closure; you must send at least one audio
+    message". The fallback is in place: such a session gets one 0.1 s frame
+    of digital silence before its first KeepAlive (about 3 kB, billed as
+    0.1 s of audio, once per start stall), which satisfies both readings, so
+    a start stall of up to 12 s (the watchdog's limit) should not lose the
+    session. What stays unverified is the whole mechanism against the real
+    service: no Deepgram key was available. Live runs with a key show it
+    holds (or open a stream and send nothing but the sender's frames, which
+    needs no microphone):
+    1. Before any audio: start a streaming dictation and make the microphone
+       deliver nothing for 12 s, then speak. The same run with the silence
+       frame removed would show whether KeepAlive alone suffices there, and
+       the frame could then be dropped.
+    2. After audio: speak, then 12 s of nothing (the callback thread
+       stalled), then speak again. The vendor's NET-0002 sentence ("KeepAlive
+       messages do reset this timeout") says this holds with KeepAlives alone
+       but gives no window length. If it fails, the cover would be silence
+       frames in the gap.
+
+    If the session dies, the user sees "Deepgram streaming failed: WebSocket
+    connection closed unexpectedly." and the audio is kept as the first entry
+    of `docs/agents/streaming.md` describes.
+  - A microphone that stops delivering after its first block is not noticed
+    by the capture (the first-callback watchdog watches the first block only;
+    the device listener defers its refresh while a recording runs), so a
+    dying microphone ends a Deepgram stream only through the Deepgram sender
+    itself: it ends the stream about 33 s after the last block (it bridges a
+    gap for at most 30 s, `_STREAM_KEEPALIVE_MAX_GAP_S`, and the 11th 3 s
+    wait is the cap), independent of Deepgram, against ~10 s before the
+    KeepAlive existed, when Deepgram's own close was the detector. The user
+    reads "Deepgram streaming failed: The microphone delivered no audio for
+    more than 30 seconds, so the stream was ended." Not checked for the other
+    streaming engines (AssemblyAI, local): this entry does not claim whether
+    they notice it.
+- **A source checkout's JavaScript package update** (2026-10-17,
+  `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
+  - A failure of npm or of what it installed waits 24 h before npm runs
+    again for the same lock (`UPDATE_BACK_OFF_S`), so a network problem
+    that passed within minutes, or a proxy fixed in `.npmrc`, still leaves
+    the old packages in use until the first start after the day or the next
+    `git pull` that changes the lock. Deleting
+    `%APPDATA%\stt_app\node_packages_update.json` and restarting tries at
+    once; nothing in the app offers that. That is the price of not delaying
+    every start by npm's failure time (71 s measured, up to the 600 s
+    bound). The record holds the last failure only: a failure in a second
+    checkout replaces the first one's, which then retries at its next start.
+  - Reasoned, not measured (review of 75fc685): the lock change whose
+    install failed can be the one the pulled runner needs. The old tree
+    still passes the probe, which only imports Transformers.js, so it is not
+    forced to update, and Cohere/Granite can then fail at transcription
+    time for up to the day, while the tray notice says both models keep
+    working on the previous packages. Before the back-off the next start
+    retried. A probe that runs the pulled runner against the tree would
+    catch it, at the cost of starting it on every check; not estimated.
+  - The update cannot be cancelled, and a quit during it ends only by the
+    15 s quit watchdog; npm then keeps running in its job until it finishes,
+    and the next start removes `.node_modules_update` (or, while npm still
+    writes there, reports "a folder left by an earlier update could not be
+    removed" once and tries again a start later). `run_bounded` has no
+    cancel hook; adding one is ~2 h. Reasoned, not measured: should that
+    removal succeed between two of the orphan's writes, a second npm runs
+    in the same folder beside it; the staged checks and Windows refusing
+    to rename a folder with an open file in it are what keep a mixed tree
+    out of `node_modules` then.
+  - The benchmark worker is a process of its own; if its first runner start
+    is the one that finds the drift, that case's load time includes npm.
+  - A rename that keeps failing for its 30 s (a file inside held open for
+    good) throws the staged tree away although it was verified, and the
+    next start runs npm again (a folder held open is a cause on this PC, so
+    it does not wait the day); keeping it for a later swap is
+    ~1 h. While
+    the second rename retries, `node_modules` is absent for up to 30 s
+    (60 s if the way back retries too); Cohere/Granite starts in this
+    process wait on `_JS_RUNTIME_LOCK` meanwhile, and the overlay keeps
+    the "Updating the JavaScript packages" line. A stranded
+    `node_modules.previous` that can never be moved back costs three
+    30 s restore attempts per runner start -- 88.5 s measured in review
+    with every rename refused -- and is not cached, so each Cohere/Granite
+    dictation repeats it. Renaming the staged tree once inside the staging
+    folder before moving the live one, and a per-session retry budget,
+    would bound both (~1-2 h with tests). Rare: it needs a rename Windows
+    refuses for good.
+  - A runner of an older build (or of a crashed app) holds no presence and
+    is seen only by its loaded DLLs, so in the fraction of a second between
+    its start and its import of Transformers.js an update can still swap
+    the tree; that runner then loads the new tree, or, inside the two
+    renames' milliseconds, fails to start once with "runtime failed to
+    load". Not reproduced; closing it needs the old build's cooperation.

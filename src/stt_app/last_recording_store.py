@@ -50,6 +50,10 @@ class LastRecordingState:
     error: str = ""
     transcription_started_at: str = ""
     completed_at: str = ""
+    # The language selection the recording was made under ("auto", "de", ...),
+    # so a Retry after a restart transcribes it in that language. "" for a
+    # state an earlier version wrote, and for an orphaned file: unknown.
+    language_mode: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> LastRecordingState:
@@ -73,6 +77,7 @@ class LastRecordingState:
                 raw.get("transcription_started_at", "")
             ).strip(),
             completed_at=str(raw.get("completed_at", "")).strip(),
+            language_mode=str(raw.get("language_mode", "")).strip().lower(),
         )
 
 
@@ -185,6 +190,7 @@ class LastRecordingStore:
         wav_bytes: bytes,
         *,
         keep_after_success: bool,
+        language_mode: str = "",
     ) -> LastRecordingState:
         with self._lock:
             atomic_write_bytes(self._audio_path, bytes(wav_bytes))
@@ -194,6 +200,7 @@ class LastRecordingStore:
                 created_at=_utc_now(),
                 status="captured",
                 keep_after_success=bool(keep_after_success),
+                language_mode=str(language_mode or "").strip().lower(),
             )
             self._save_state(state)
             return state

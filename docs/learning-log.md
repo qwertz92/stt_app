@@ -97,6 +97,819 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Negative control: letting the stop read `self._settings` instead of the
   start-of-recording snapshot fails both new controller tests.
 
+## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
+
+The round-3 entry below says a gap transcript has the same hole as the fallback
+retry's audio had, which I had taken as precedent in round 2 without checking
+it. It does: the gap's audio was the managed last recording, kept by marking it
+failed, and that slot is replaced by the next dictation, so the stretch the
+marker names was gone as soon as the user dictated again (the next start already
+spared it, `main._complete_unless_gap`). Closed the way the fallback retry's was
+(`docs/agents/controller-and-jobs.md`, `docs/agents/remote-providers.md`):
+- **A dictation or retry whose transcript has a gap keeps a copy.**
+  `_on_transcription_ready` calls `_keep_audio_of_a_gap_transcript` before
+  either road writes the History entry, for a job that links no file yet. The
+  copy goes into the recordings folder through
+  `_keep_audio_in_recordings_folder` (now shared with the fallback retry and
+  taking the recording's id, time and language instead of a job), the entry
+  links it, and `_mark_last_recording_completed` completes the slot unless no
+  file is linked. With "Archive every recording" the entry already links the
+  archive's file: no second copy, and the slot completes as well. Where the copy
+  cannot be written the managed recording stays marked failed, as before.
+- **The import of the managed last recording does the same**
+  (`_keep_audio_of_an_imported_last_recording`), so the Import tab's gap result
+  is no exception. A fallback retry that also has a gap makes one copy.
+- **Decided not to add a tray notice for a gap.** The marker is in the pasted
+  text and in History, a gap had none before, and a Warning toast per gap is a
+  new surface for the owner to decide; adding it is about ten lines
+  (`busy_overlay_error`, like the fallback retry's). The cost of not having it
+  is that the user does not learn that Retranscribe in History now reaches the
+  audio, and that a copy sits in the recordings folder (no count prunes it,
+  like every file kept there) although "keep last recording" is off.
+- Tests failed before the fix for the stated reason (the entry linked no file;
+  the slot stayed failed): in `tests/test_controller_queue.py` the copy and the
+  link, the next dictation and the next start, the background road, the archive
+  case, the failed copy and the negative controls; in
+  `tests/test_controller_coverage.py` the import road and its failed copy. The
+  older `test_an_imported_last_recording_with_a_gap_is_kept` asserted the
+  opposite (slot failed, nothing linked) and was rewritten.
+
+## 2026-10-23 (third review of the Deepgram cap: three test gaps, two doc slips)
+
+The review of `ed5db71` found no P1/P2; test and documentation only, no change
+to `deepgram_provider.py`.
+- **P3: nothing pinned that real audio restarts the idle count** (`idle_s = 0.0`
+  in the sender's audio arm). Replacing it with `pass` kept all 91 other tests
+  green, because the test that resumed audio after the cap went away with the
+  old behaviour. New test `test_real_audio_restarts_the_count_of_a_gap`: a block,
+  7 empty waits, a block, 7 empty waits, a block, the sentinel -> 14 KeepAlives
+  and no error; without the restart the second gap hits the cap at the 11th
+  wait in total. With the mutation it is the only test that fails (the sender
+  ends the stream at the fourth wait of the second gap, so 5 of the 17 expected
+  frames never go out).
+- **P4: the stop-after-the-cap test did not say what the stop must not do or
+  how fast it must be.** It now asserts that no `Finalize` or `CloseStream`
+  follows the sender's last frame and bounds the stop at 1 s instead of 3 s.
+  Mutations on the real source: `if not drained:` -> `if False:` in
+  `_finalize_stream_control` fails the new frame assertion (the socket got
+  Finalize and CloseStream); removing `not send_thread.is_alive()` from the
+  second loop of `_drain_stream_sender` fails the 1 s bound (the stop waits the
+  2 s drain timeout). The old 3 s bound would not have caught the second one: 2 s
+  fits inside it (reasoned, not run).
+- **P4 docs**: the entry "2026-10-17 (second review of the Deepgram cap: the
+  sender ends the stream itself)" said an abort makes the cap find no matching
+  session. `_stream_session_matches_locked` is true for every state but idle, so
+  it stays true while retiring; what silences the cap is `abort_stream`
+  clearing `_stream_on_error` and setting `_stream_send_queue` to `None` (the
+  sender returns at its top-of-loop check). Corrected there. The older entry
+  "2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead
+  microphone)" now carries a line saying the second review supersedes its fix.
+
+## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
+
+Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
+smaller points in my round-2 commits, each reproduced by the reviewer with real
+futures and again by a test here that failed for the stated reason before its
+fix (`docs/agents/controller-and-jobs.md`).
+- **P2: the "kept" recording of a fallback retry survived neither the next
+  start nor the next dictation, although the tray promised it.** Round 2 kept
+  the managed recording itself, marked failed like a gap transcript's. That is
+  one slot: the next dictation replaces its WAV, and the next start finds the
+  failed recording recoverable, finds the retry's History entry by its
+  recording id (`main._last_recording_already_transcribed`) and completes it --
+  `_complete_unless_gap` spares only a gap marker -- which deletes the WAV with
+  "keep last recording" and "save all recordings" off, their defaults. My
+  tests checked the state right after the delivery and never the next start,
+  and I took the gap transcript as precedent without checking that it has the
+  same hole for the next dictation. The fix is the one the restart road
+  already uses: at delivery the audio is saved as an unfinished recording and
+  moved to the recordings folder under its own name (`save` and `move_to` of
+  `UnfinishedRecordingStore`, the pair `_retain_unfinished_audio` uses), a
+  name that no recordings count prunes, and `job.source_audio_path` links it
+  from the History entry, which is what Retranscribe resolves. The managed
+  slot completes as for any success, so `mark_failed`, the slot-matching check
+  and the "newer recording replaced it" wording are gone. The notice is one
+  sentence pointing to Retranscribe in History, and says the audio could not
+  be kept where the write failed. Tests cover the entry's link and the
+  copy's bytes, the next start (`_offer_unfinished_recordings` offers nothing
+  and the link still resolves), the next dictation, the failed write, and a
+  recording that fell back nowhere (no copy, no link, no notice).
+- **P3: a new recording applied the concurrent mode to the retry instead of
+  the dictation in flight.** `_apply_concurrent_mode_to_active_job` acted on
+  `_active_request_token` only. Until the Retry work every older job had met the
+  mode when a later recording started while it held the token; a Retry takes
+  the token without a recording, so the dictation that was in flight before it
+  (N2) was skipped: history-only, N2 still pasted; cancel, the retry was
+  stopped instead of N2. It is now `_apply_concurrent_mode_to_jobs_in_flight`
+  and acts on every job that is computing (not aborting, not waiting for its
+  paste). Decision, with its reason: the running retry is covered too. The mode
+  is about transcriptions in flight when the user starts dictating again, not
+  about which one the overlay shows, so a retry left out would paste into its
+  old window during the new dictation in history-only mode, or keep running in
+  cancel mode. Alternative: exempt the retry, which would keep it pasting; say
+  so if you want that. A cancel-mode retry's late result still goes to History
+  and its recording stays for another Retry.
+- **P3: a dictation that finished before a running retry waited for it.**
+  `_should_defer_background_insertion` held every finished result while any
+  job held the overlay's token. For a normal newer dictation that is right
+  (the live session, token order, one coalesced paste), but a retry is an
+  older recording's text: N2 sat as "Pending insert" until the retry ended,
+  minutes with a local model. A job now carries `is_retry`; while a retry holds
+  the token nothing is deferred for it, N2 pastes at once and the retry pastes
+  when it is done. Behind a newer dictation nothing changes (the control test
+  pins it). This needed no design change; one field and one condition.
+- **P4: after Cancel on a queued retry the overlay said "Transcription
+  canceled." while the dictation behind it kept transcribing.** The text is now
+  "Retry canceled." for a retry (`_canceled_text`, in `cancel_current_action` and
+  `cancel_queued_transcription`); clearing the whole queue keeps the general
+  text, since everything stopped.
+
+## 2026-10-17: review of the package back-off and the preload line
+
+One review round (Sonnet) over the two entries below found no P1 or P2; the
+P3/P4 findings fixed on the spot:
+- **Only a failure of npm or of what it installed backs off**
+  (`_UpdateFailed.back_off`). The first version recorded every failure, so a
+  user who closed the editor holding `node_modules` open, or installed npm,
+  still waited a day. A cause on this PC now retries at the next start, and its
+  notice says so ("at its next start"). This narrows the lead's wording ("after
+  a failed update") to the failures a retry within the day would only repeat.
+- **One failed probe no longer overrides the back-off.** A slow, loaded PC can
+  time a working tree's import probe out once, which then forced the npm run
+  the back-off exists to spare; `_check_js_runtime` now looks twice before it
+  forces.
+- **A record that crashed the sync now counts as none**: a failure time with
+  more than ~309 digits (`OverflowError` in `float()`) and JSON nested deeper
+  than the parser descends (`RecursionError`, which `except ValueError` does not
+  catch). Both crashed every Cohere/Granite start until someone deleted the
+  file -- the opposite of "a damaged record never blocks an update".
+- The preload worker clears its cancel hook and its progress callback in two
+  separate `try` blocks, so a failing first clear no longer skips the second.
+- Untested guards got tests: a retired preload's update line neither shows nor
+  replaces the current one's, and another checkout's record neither holds this
+  one back nor is deleted by its success.
+- The tests for the first three fixes failed first (7 failures), then passed.
+  The guard tests passed from the start, since the guards existed; removing
+  the generation check on write, on read, or the record's root comparison
+  each made its test fail.
+- Left as they are: an old tree that passes the import probe but no longer
+  suits a pulled runner can fail Cohere/Granite at transcription time for up
+  to the day (reasoned, recorded in `known-limitations.md`); after an npm
+  failure the update line stays until the runner's next line, about a second;
+  a first install that fails retries at every preload (no tree to fall back
+  on, by design); Cancel during npm takes effect only once npm ends.
+
+## 2026-10-17: the startup preload shows the JavaScript package update
+
+The second open question of the source-checkout package update, decided by the
+lead on the owner's behalf together with the back-off below.
+- **The startup preload shows "Updating the JavaScript packages ..."** instead
+  of "Loading '<model>' into memory." while npm runs. With "Keep ONNX model
+  loaded" on (the default) the first runner starts in the preload, and the
+  preload worker gave the transcriber no progress callback, so the update was
+  invisible there for 11 s to over a minute.
+- The worker now records the runtime's progress lines per generation
+  (`_note_preload_progress`); the 600 ms poll, the only writer of the preload
+  line, shows the update line while it is the latest one and falls back to the
+  load line with the next one (packages updated, or "Starting ONNX runtime"
+  after a failure). Nothing new paints the overlay, so the poll's rules -- no
+  paint over a live session, Done, Error or a line being read -- hold
+  unchanged. No Cancel sentence on that line: npm cannot be aborted. The text
+  is one constant (`config.NODE_PACKAGES_UPDATING_TEXT`) for the dictation
+  start and the preload, and the worker's `finally` clears the progress
+  callback with the cancel check, because the runtime is shared and cached.
+- The test drives `_preload_model_worker` with a transcriber that reports the
+  update; before the change it saw "Loading 'cohere-transcribe-03-2026' into
+  memory." while the update ran. An existing test caught the first draft's
+  renamed log line ("Failed to clear the preload transcriber hooks"): it
+  checks that a failed clear is logged as a cancel-hook failure, so the line
+  names both hooks.
+
+## 2026-10-17: a failed JavaScript package update backs off for a day
+
+One of the open questions left by the source-checkout package update (entry
+"a source checkout updates its JavaScript packages by itself", further down)
+was decided by the lead on the owner's behalf: his work PC is slow, Cohere is
+his main model there, and whether its network reaches the npm registry is
+unknown. Quitting during an update stays as it is (npm finishes on its own,
+`docs/agents/known-limitations.md`).
+- **A failed update waits 24 h before npm runs again for the same lock.**
+  Before, every start retried, and each retry delayed that session's first
+  Cohere start by as long as npm takes to fail -- 71 s measured against an
+  unreachable registry, up to the 600 s bound for a connection that hangs.
+  The record (`app_paths.node_packages_back_off_path()`) names the checkout,
+  the lock's SHA-256, the time and the reason. A changed lock tries at once,
+  since the next `git pull` may be the fix. Every failure records, the cheap
+  ones too (npm not found): one rule to explain instead of a list of
+  exceptions, and a tree that does not load is never held back anyway --
+  `_check_js_runtime` probes after a backed-off sync and runs the update
+  regardless when the import fails, because such a tree leaves the models
+  unusable whatever happens. A damaged record, a record from another lock or
+  checkout, or a failure time in the future (a clock set back would otherwise
+  stretch the wait) counts as none; the record is disposable, so the next
+  failure writes over it.
+- **The tray notice says when the next try comes** ("the app tries again
+  after 2026-10-18 14:05", local time), and a session that is held back still
+  gets its one notice with the stored reason: the user learns once per
+  session that the models run on old packages, not only on the day of the
+  failure.
+- Tests were written first and failed for the stated reason: 14 failures for
+  the back-off (the API did not exist, a second start ran npm again, a
+  damaged record path, the notice text). A real run on HomeBase, in a
+  throwaway checkout with a working 4.3.0 tree, the current lock and an npm
+  that could reach no registry: the first start failed in 1.9 s, wrote the
+  record and notified "... tries again after 2026-10-18 19:58"; the second
+  ran no npm (0.2 s), notified again with the stored reason, and 4.3.0 stayed
+  in use.
+
+## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
+
+Round 2 of the independent review (main `35cd764`) found no P1 or P2 and five
+smaller points; each was reproduced by a test that failed for the stated reason
+before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
+- **P3: a Retry stopped whatever held the overlay's token, not the jobs of its
+  own recording.** (a) A changed-request retry R2 left R1 running when R1 had
+  lost the token (a newer dictation was recorded and cancelled, or is still in
+  flight): both delivered, two history entries and two pastes of one text.
+  (b) Older than the Retry work: a Retry for an old failure stopped the newest
+  dictation when that held the token, which then went to history only and was
+  never pasted. Reproduced with the three sequences (R1 `aborting` stayed False;
+  the newest job's `aborting` became True). A Retry now stops every non-aborting
+  job working on the slot's recording (`_live_jobs_of_the_slot`, the filter
+  `_running_retry_of_the_slot` already had) and no other. The retry takes the
+  overlay's token as every submit does, so it keeps its Processing and Cancel
+  cancels it; the newer job becomes a queued one. What it costs: one worker, so
+  the retry starts when the running job ends. One job cannot be left running,
+  a pending streaming finalize: only its foreground result clears
+  `_streaming_recording`, so with the token moved away the session would stay
+  open and refuse every new recording. The Retry is refused with a tray note
+  until the finalize has ended instead (before, it stopped the finalize, which
+  is the diversion again). Not tested on a real stream: the refusal is shown
+  with the fake streaming transcriber. Two older tests had pinned the
+  diversion as intended behaviour ("a retry stops the transcription in flight";
+  "the newer recording is marked canceled by the retry") and failed once the
+  rule changed; I only found them when the wider test files ran after the
+  merge, so they were rewritten in a follow-up commit rather than with the
+  change.
+- **P3: a fallback retry left no lasting trace.** The recorded language was not
+  offered, so the transcript came out in another language than the speech; the
+  Processing line that said so was overwritten by the first provider progress
+  line, History stores no language, and with "keep last recording" off the WAV
+  was deleted after the success, so Import's "Use last recording" could not
+  redo it in the right language. Reproduced on both roads (the managed state
+  was gone after the delivery; no notice; the unfinished file was deleted).
+  Fix with the gap transcript's own mechanism, no new one: the job carries
+  `language_fallback_from`, its delivery marks the recording failed instead of
+  completed (which keeps the file) while the managed slot still holds it, and
+  one `busy_overlay_error` tray notice names the language that ran and where
+  the audio can be redone. Where a newer recording took the slot the notice
+  says the audio is no longer offered instead of promising it. After a restart
+  the file is kept as the settings keep any recording, and in place where they
+  would delete it, so History's Retranscribe still offers it. Decision: the
+  restart road has no tray notice per row, because the dialog row already
+  names the language (see the row-wording bullet below) and a toast per row on
+  top of an open window would be noise; say so if a toast there is wanted too.
+  (Superseded for the in-process road by round 3, entry above: marking the
+  managed recording failed kept nothing past the next start; the audio is now
+  copied to the recordings folder and linked from the History entry.)
+- **P4, reproduced: the fallback named a language that did not run.** When the
+  recorded language was not offered, a retry used "the selected language" as it
+  stood in the settings. A selection the engine does not offer either stays
+  saved when the engine is switched (the overlay's menu only shows the engine's
+  first language instead), so a stale Afrikaans on Deepgram nova-2 was named in
+  the overlay text and the startup notice while the provider's own
+  normalization ran Auto. Reproduced on both roads (`'af' == 'auto'` failed).
+  One decision now serves both: `_language_a_retry_runs_in` returns the language
+  that runs and whether it is the recorded one -- the recorded language where
+  offered, else the selection, else the engine's first language, the overlay's
+  own rule -- so the language named is the language the provider receives.
+  `_recorded_language_offered` is gone (it was the first half of this).
+  The overlay text for the clamped case reads "the selected language (Afrikaans)
+  is not offered either, so using Auto"; the log line says `using=`.
+- **P4, reproduced: the startup notice computed the language note inside the
+  transcription's `try`, and its row did not say which language ran.** A note
+  that raised (the settings could not be read) became the row's failure and the
+  recording was never sent; the dialog's worker now asks through
+  `_language_fallback`, which logs a failing note and leaves it out. The note
+  is a pair of labels (`("English", "Auto")` or `None`) and the row words it:
+  `Transcribed in English, in History (Auto is not offered by this model)`,
+  where it used to say `(English; Auto not offered)`. Measured on the real
+  desktop widgets: the wording is 357 px in the 455 px status column for
+  English/Auto, and 443 px for the longest language label twice (Haitian
+  Creole), so it is not elided; a test pins that against the column's width.
+  The tooltip adds that the recording is kept and where to redo it.
+- **P4, reproduced: the Cancel guard armed on every exit of the slot from
+  Retry.** Round 1 armed `_cancel_ignored_until` in `_sync_action_slot` when
+  the slot stopped showing Retry, to drop the second click of a double click.
+  Pressing the record hotkey from an Error with Retry (-> Listening, Cancel
+  where Retry was) armed it too, so a real Cancel click within 500 ms was
+  dropped; the test paints that and failed with `[] == [True]`. The guard is
+  now armed by the click itself (`_retry_button.clicked` ->
+  `_on_retry_clicked`), the `_retry_in_slot` flag is gone, and a refused Retry
+  needs no special case (the overlay stays on Error). The test also patched
+  the global `time.monotonic`, which every other reader of the clock in the
+  process saw; it now patches the module-local `overlay_ui.monotonic`
+  (`from time import monotonic`).
+
+## 2026-10-17 (round 2 on the not-inserted warning: three P4s)
+
+The second review of the severity rule (`d507947`) found no P1 to P3 and three
+P4s. Each was reproduced first by a test that failed for the stated reason
+(`tests/test_controller_not_inserted_warning.py`; `docs/agents/overlay.md`,
+`docs/agents/text-insertion.md`).
+- **The preload progress poll turned a red failure orange again.** The poll
+  refreshes an Error on screen only when it is the offer the painter itself
+  wrote, which it knows from `_offer_painted = ("Error", painted)`. The red
+  variant of the severity rule set the same record, so a failure painted over
+  a pending offer (a refused start, a setting that was not saved, a hotkey
+  that did not register) looked like an offer to refresh: while a preload ran,
+  the next poll, at most 600 ms later, repainted the progress line in orange
+  over it and the failure text was gone before it could be read. Reproduced
+  with a running preload and three failures: all three were repainted, three
+  times in three polls. Fix: `_paint_status_keeping_offer` records the paint
+  only when it is informational (`None` for a failure), so the poll treats a
+  failure like any other result it must not paint over. The preload's start
+  line is informational, so it is still refreshed, and so is the progress
+  line after a failure is replaced; a test pins both. Not a flag next to the
+  tuple: the record has exactly one reader (`_offer_painted_is_on_screen`)
+  and "nothing recorded" already means "not the painter's to refresh".
+- **The single-writer guard could not see `warning=None`.** `FakeOverlay`
+  refuses an Insert offer painted without the `warning` key, which stopped a
+  writer that forgot it, but since the red variant passes `warning=None` a
+  second writer that passed `None` itself satisfied the check. A source-level
+  test (`test_only_the_one_writer_names_the_insert_action`) parses
+  `controller.py` and requires `OVERLAY_ERROR_ACTION_INSERT` to be named in
+  `_paint_not_inserted` and nowhere else. Negative control: one extra
+  reference at module level made it fail with the message naming the helper;
+  removed again.
+- **A background failure hid a pending offer** (older than the warning work).
+  `_report_background_failure` painted a plain Error when no session owned the
+  overlay, with no transcript and no Insert. A queued job failing while an
+  earlier job's insert offer was pending (an offer stays pending until a new
+  recording starts, an insert succeeds or Clear is pressed) took Copy and
+  Insert off the screen, and the "Still not inserted" text came back only
+  with the next status writer. It now goes
+  through `_paint_status_keeping_offer("Error", ...)` when an offer is
+  pending: red, the offer kept, like every other failure over an offer. The
+  trade-off is the overlay's single action slot: Insert and Retry cannot both
+  show, so the failure's Retry button gives way to Insert. Its text says
+  "use Retry transcription in the tray menu" instead of "use Retry", since
+  the audio is kept and the tray's entry reaches it; the tray notification
+  keeps the old wording because it names no button. Chosen over keeping Retry
+  because the offered text is the user's own pending words, while Retry has
+  the tray as a second road. With no offer pending nothing changed (the
+  existing test for that case still passes).
+
+## 2026-10-17 (second review of the Deepgram cap: the sender ends the stream itself)
+
+Structural change first: the sender no longer logs and keeps waiting at the cap;
+it ends the stream, through the failure path a failed send already takes, and
+returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
+... Deepgram closes after its own 10 s" part of the entry "2026-10-17 (review of
+the Deepgram KeepAlive: it must not hide a dead microphone)".
+- **The finding (P3, reproduced by the lead on a fake server)**: at the cap the
+  sender only logged and `continue`d, so the dead-microphone error still
+  depended on Deepgram closing the socket. A vendor window longer than 10 s
+  after audio (the NET-0002 window has no documented length), or a proxy that
+  holds the TCP connection, would leave the overlay on "Listening" until the
+  hotkey; and when the socket did close, the user read the vendor's close
+  reason ("WebSocket connection closed unexpectedly.") although the app knew
+  the cause.
+- **The fix**: the first wait past `_STREAM_KEEPALIVE_MAX_GAP_S` (the 11th 3 s
+  wait, 33 s after the last block; ten KeepAlives went out before it) logs a
+  WARNING, records a `TranscriptionError` through
+  `_record_stream_error(..., notify=True)` and returns. The user reads
+  "Deepgram streaming failed: The microphone delivered no audio for more than
+  30 seconds, so the stream was ended." -- the number is `int` of the constant,
+  and "Deepgram streaming failed:" is the prefix `_format_stream_error` puts on
+  every streaming failure, so the lead's suggested "... so the Deepgram stream
+  was ended" would have said Deepgram twice. There is no resuming after the cap
+  (the earlier "audio after the cap restarts the count" behaviour is gone): the
+  stream is over and the recording is kept for Retry.
+- **Checked end to end, not assumed.** Reading: the provider's callback is the
+  controller's `_on_runtime_error`, which emits `stream_runtime_failed`; the
+  slot `_on_stream_runtime_failed` ignores a retired session's token and a
+  failure after the stop (the finalize reports that one), otherwise runs
+  `_on_transcription_failed` (capture stopped, audio persisted and held for
+  Retry, recording marked failed, red Error with the Retry guidance). Exactly
+  once because `_stream_error_reported` latches per session, `_on_close` only
+  notifies when no error was recorded yet, and the controller clears the
+  session token on teardown. A stop that begins first clears the callback
+  (`stop_stream` does it before anything else), so a cap landing during a stop
+  is recorded but not reported, and the stop raises it when it has no text; the
+  drain finds the sender thread dead (`_drain_stream_sender` checks
+  `send_thread.is_alive()`) and gives up without waiting for it, so the stop
+  does not hang (the test bounds it at 1 s since the third review, which tells
+  it from the 2 s drain timeout a live sender would cost). An abort does not
+  make the session stop matching: `_stream_session_matches_locked` is true
+  for every state but idle, retiring included. The cap stays quiet for two
+  other reasons: `abort_stream` clears `_stream_on_error` first, so
+  `_notify_stream_error` finds no callback, and it sets `_stream_send_queue` to
+  `None`, so the sender returns at its top-of-loop check
+  (`self._stream_send_queue is not send_queue`) before it reaches the cap
+  branch at all. Run for real: a controller test
+  (`test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording`)
+  with the real `DeepgramTranscriber` on its fake socket and the real sender
+  thread (the socket stays open and silent, a cap of 120 ms) sees one
+  `stream_runtime_failed`, the capture stopped, the audio saved for Retry with
+  one failure mark, one red Error carrying the message, the socket closed by
+  the teardown, and no second report after the socket's own close. It was
+  written after the fix, so its red state is shown by mutation instead: with
+  the cap recording the error but not notifying (what the old log-and-continue
+  amounted to for the controller) it waits its 10 s for the Error and fails.
+  Calling Retry in that test would send the RIFF stub to the real Deepgram
+  batch endpoint through the patched factory, so it asserts the kept audio
+  (`_last_failed_wav_bytes`, the store's save and failure mark) instead.
+- **Tests that pin the number (P4)**: the old boundary test measured
+  `keepalive_times[-1] - 0.1` against the module's own constant, which passes
+  for a cap of 40 s and (by exact arithmetic only) for `>=`. The new one counts:
+  exactly ten KeepAlives, the end at the 11th wait, and the bound written as
+  `AUDIO_INPUT_BUFFER_S + 10.0` in the test, not read from the constant. Whole
+  multiples of 3.0 are exact in floating point, so no tolerance decides it. The
+  real-thread tests use a cap of 0.12 s on a 0.05 s interval (no float tie) and
+  hold the first block inside its send until the interval is shortened, so a
+  late test thread cannot let the sender write its silence frame first. Mutation
+  checks on the real source, each restored byte for byte afterwards: `>=` for
+  `>` fails the boundary test and the cap-during-stop test (the end comes at the
+  10th wait); a cap of `AUDIO_INPUT_BUFFER_S + 20.0` fails the same two (the end
+  comes at 42 s); `notify=False` fails the boundary test, both real-thread tests
+  and the controller test; `continue` for `return` at the cap fails all four
+  provider tests (the sender keeps waiting and the loop reaches the sentinel at
+  300 s).
+- **Doc claim corrected (P4)**: `remote-providers.md` said the silence frame
+  "stops with the cap", and commit `cacca52` said the cap stops "the silence
+  frame". Both are vacuous: the silence frame goes out only at the first empty
+  wait of a session that has sent no audio, never again, so a cap cannot stop
+  something that is already over. The entry now says that, and that the frame
+  does not reset the count (a session that never got a block would hit the same
+  cap 33 s after its sender started; the first-callback watchdog aborts such a
+  start at 12 s, long before).
+
+## 2026-10-17 (review of the Retry commits: restart road, duplicate guard, double click)
+
+An independent review of the Retry work (`308e1d2`..`9528e87`) found one P2 and
+four smaller points. Each was reproduced first, by a test that failed for the
+stated reason, and then fixed (`docs/agents/controller-and-jobs.md`,
+`docs/agents/overlay.md`).
+- **P2: the Retry after a restart sent a language its engine does not offer.**
+  `transcribe_unfinished_recording` pinned `recording.language_mode` without the
+  "does the engine offer it" check `_retry_settings` has. Reproduced with the
+  restart's three realistic cases, the worker saw the recorded language: Canary
+  with a recording made in `auto` (its `_normalize_language_mode` falls back to
+  the first language of its list, `de`, so English speech is translated into
+  German), Cohere with `auto` (`_language_arg` forces `de`) and Granite CTC
+  (English only) with `de`. With recordings retention off the WAV is deleted
+  once the transcript is in History, so the wrong transcript was all that was
+  left. Fix: `_pin_recorded_language` is the one rule both roads use; where the
+  language is not offered the selected one runs and the log line is the same
+  `retry_recorded_language_not_offered`. The notice reported only "Transcribed,
+  in History" per row, so the row now says which language ran: `Transcribed, in
+  History (English; Auto not offered)`, from `unfinished_recording_language_note`
+  through `UnfinishedRecordingsDialog(language_note=)`. Not a changed return
+  value of `transcribe_unfinished_recording`: it is unpacked as `(ok, text)` by
+  the dialog's worker and a dozen tests.
+- **P4: a quit during a fallback retry wrote the fallback language into the
+  unfinished file's name.** `_keep_unfinished_recordings` took the job's
+  snapshot, which for a fallback retry is the selected language, and the next
+  start would have pinned that for good. It writes the recorded language where
+  the process knows it and the job's snapshot only for a recording it never
+  named.
+- **P3: the duplicate guard compared engine and model only.** A retry after
+  the user changed the custom vocabulary, a region, an endpoint or the key was
+  refused as "the same audio to the same provider", although the running
+  request had gone out with the old values: four cases (vocabulary, Deepgram
+  region, Azure endpoint, custom endpoint) answered `False` before the fix, as
+  did a replaced key and a changed selected language for a recording with no
+  known language. The comparison is now the request: `_transcriber_identity`
+  (what the provider's runtime is built from) plus the language plus a
+  credentials generation, because a replaced key is in no settings field. Not
+  over-triggered: a changed opacity and history size still count as a
+  duplicate (own test). The key part over-counts on purpose -- any provider's
+  key change allows a retry -- since a missed key change refuses the retry the
+  user needs, while an extra allowed one costs a request the user chose.
+  The notice now says what to do: "A retry of this recording is already
+  running with the same settings; cancel it first to retry again."
+- **P4: the duplicate notice painted a red Error over the running retry.**
+  `show_overlay_error` paints when no session owns the overlay, which is the
+  case while the retry runs if a newer dictation was cancelled meanwhile
+  (`_active_request_token` is None). The Error carries a Retry button, the very
+  press just refused. Reproduced with that sequence (the tray got nothing, the
+  overlay got an Error). The notice is now `busy_overlay_error` always -- the
+  tray -- and the overlay is untouched.
+- **P3 (older than the Retry work): a double click on Retry cancelled the
+  retry.** Retry and Cancel share one overlay slot at identical geometry, so
+  the second click of a double click landed on the Cancel that the first click's
+  Processing had put there. Reproduced with a real `OverlayUI`: Retry click,
+  `set_state("Processing")`, Cancel click 0.2 s later emitted `cancel_requested`.
+  A Cancel click within `QApplication.doubleClickInterval()` after the slot left
+  Retry is now dropped (logged); a later one works, and so does a Cancel that
+  did not follow Retry (negative control). The test fakes the clock and the
+  interval, so it does not depend on how fast the machine is. An existing test
+  (`test_overlay_control_signals_are_emitted`) clicked Retry and then Cancel
+  at once; it now clicks Cancel first, since that sequence is exactly what the
+  guard drops. Also checked once with real mouse events routed by position
+  through the shown overlay (a throwaway test, not kept: two left clicks 60 ms
+  apart at the Retry button's centre, then one after the interval): Retry's and
+  Cancel's centres are the same point (120, 49) at the default font; without the
+  guard the second click emitted `cancel_requested`, with it only the later
+  click did. Not done: the same on a real desktop with a mouse, at other font
+  sizes.
+
+## 2026-10-17: severity wins over the not-inserted warning
+
+Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.
+- **The defect.** `_paint_status_keeping_offer` painted every status over a
+  pending Insert offer through `_paint_not_inserted`, so a failure that has
+  nothing to do with the insert -- a hotkey that did not register (the idle
+  line), a model preload that failed, a setting that was not saved
+  (`show_overlay_error`), a refused recording start -- came out as orange
+  "Not inserted" with the failure's text as the first line of the detail.
+  The orange read as the offer and the failure looked like a footnote.
+  Reproduced first with eight new tests (four failures, each with and
+  without a keystroke that may have gone out) plus an end-to-end test on
+  the real overlay: all nine failed, the "about the offer" ones passed.
+- **The rule.** What is painted over the offer decides its colour. State
+  "Error" is a real failure: red "Error" label and colour, and the offer
+  rides along unchanged (the "Still not inserted" / "Possibly inserted
+  already" detail, the transcript, Copy, Edit, Insert unless the keystroke
+  may have gone out): `_paint_not_inserted(failure=True)` passes
+  `warning=None`. Informational states (Idle, Done, Processing) keep the
+  orange, and so do errors about the insert itself, which the insert path
+  marks with `show_overlay_error(..., about_insert=True)` (seven sites in
+  the re-paste code: no window, waiting rows gone, may already be inserted,
+  no transcript, recording start/stop in the way, held for the stream, the
+  insert's own error text).
+- **Why red is the default and the marked sites are the exceptions.** The
+  insert path is a short, known list; the sources of failures are open-ended
+  (every new settings save, hotkey or preload line). A default of orange
+  would hide the next one; a default of red shows an unmarked insert refusal
+  as a red Error over its working offer, which is merely loud. A refused
+  Retry and a failed Edit are red under the default too: they report on
+  Retry and Edit, not on the insert. Say so if they should be orange.
+- **The guard still bites.** `FakeOverlay` used to demand a truthy
+  `warning` on an Insert offer, which red cannot give. It now demands that
+  the key is present: the one writer always passes it (a word, or None for
+  red), a writer that bypasses the helper leaves it out and fails every test
+  that reaches it.
+- **Nothing moved, controls unchanged.** Red plus Insert is the plain Error
+  state the overlay always had. The overlay test that compares the controls
+  with and without `warning` covers it, and the three-size header geometry
+  test (9, 11.25, 13.5 pt) now includes the red+Insert case: one label
+  rectangle, one overlay width. 1,082 tests of the controller and overlay
+  files pass.
+- **Docs drift fixed.** `overlay.md` and `text-insertion.md` said the helper
+  has five callers and named "both arms of `_paint_status_keeping_offer`";
+  it has four call sites (the status painter is one call with two wordings).
+
+## 2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead microphone)
+
+Superseded in part by the entry "2026-10-17 (second review of the Deepgram cap:
+the sender ends the stream itself)": at the cap the sender now ends the stream
+itself, where "The fix" below stops writing frames and waits for Deepgram's
+close, and the cap no longer resumes when audio returns.
+
+- **The finding (P3, the lead's review of 20703c0..99970e1)**: before the
+  KeepAlive, a microphone whose callback thread stopped delivering after the
+  first block (a driver wedge) made Deepgram close the socket after ~10 s,
+  and the user saw the red streaming error. With a KeepAlive that never
+  stops, the sender bridged forever and the overlay stayed on "Listening"
+  until the hotkey. Checked before accepting it: nothing else in the app
+  notices such a microphone. The first-callback watchdog in `controller.py`
+  watches only the first block, `audio_capture.py` registers no
+  stream-finished callback, and the device listener only defers its refresh
+  while a recording runs. So Deepgram's close was the detector, and the
+  KeepAlive had silently removed it.
+- **The fix**: the sender bridges one gap for at most
+  `_STREAM_KEEPALIVE_MAX_GAP_S` = `AUDIO_INPUT_BUFFER_S` + 10 s (30 s), counted
+  in whole 3 s waits since the last real audio frame. Past it, it writes
+  neither KeepAlive nor silence frame and logs one WARNING per gap; Deepgram
+  closes after its own 10 s (about 40 s after the last block instead of ~10 s)
+  and the streaming-failure path runs. The sender keeps waiting, so real audio
+  after the cap on a still-open socket is sent normally and starts a fresh
+  30 s. Why 30 s: the capture holds 20 s for a starved callback thread and
+  delivers it as a burst, so a shorter gap can be a slow microphone; the
+  longest wait the app creates itself is 12 s; past the buffer the audio is
+  lost anyway. The detection delay is recorded in `known-limitations.md`.
+- **Doc follow-up**: the troubleshooting page's NET-0002 checklist ("Unlike
+  NET-0001, KeepAlive messages do reset this timeout") is now cited as the
+  vendor evidence that a KeepAlive-only gap after audio holds, with the note
+  that the page gives no window length (re-read the same day, no number). The
+  live-check description has its second case: speak, 12 s of nothing, speak.
+- **Two test follow-ups**: the overlap and Finalize-ordering tests used a
+  50 ms interval and failed whenever the main thread was 50 ms late between
+  `start_stream()` and the first push, because the sender then wrote its
+  idle frame first (reproduced with an inserted `sleep(0.12)`). They now
+  start with a 30 s first wait and shrink it while the audio is held inside
+  the send, so no delay of the main thread matters (re-run with the 0.12 s
+  sleep inserted: all 89 pass). And the release test's fake `subprocess.run`
+  now honours `check=True` like the real one, so an audit call that stops
+  passing `check=False` fails the failing-audit test with a
+  `CalledProcessError`.
+
+## 2026-10-17: a transcript that was not inserted is a warning, not an error
+
+Two owner decisions on the overlay's wording (`docs/agents/overlay.md`,
+`docs/agents/text-insertion.md`).
+- **A transcript that exists but was not (or maybe not) inserted is no
+  longer the red Error.** The Insert offer -- a failed paste, a queued paste
+  that failed, a paste into something that is no text field -- and the
+  "possibly inserted, check the window" report were `set_state("Error")`
+  in red under the word "Error", although nothing failed that Retry could
+  redo and the text is in history. `set_state(..., warning=...)` now paints
+  such an Error burnt orange (`#9a4d00`) under "Not inserted" (Insert
+  offered) or "Check window" (the keystroke went out, no Insert). It is an
+  appearance like "Starting", not a new state: the state stays Error, so the
+  controls, the scroll-to-top, the preload poll's and the paste check's
+  "is this still the offer" tests and every test that reads `state ==
+  "Error"` are untouched. Failures with no transcript stay red.
+- **One writer, enforced.** Five places painted the offer with their own
+  `set_state("Error", ...)` (`_paint_insert_offer`, two arms of
+  `_paint_status_keeping_offer`, two arms of the failed paste in
+  `_insert_text_at_target`). They go through `_paint_not_inserted`, which
+  derives the word and the action from one flag so they cannot disagree.
+  `FakeOverlay` in `tests/conftest.py` refuses an Insert offer without the
+  warning: with it in place all 1,044 tests of the controller and overlay
+  files passed, so none of them reaches a sixth writer.
+- **Measured, not guessed.** The label reserves the widest word, and both
+  new words are wider than "Processing" (59 / 75 / 91 px at 9 / 11.25 /
+  13.5 pt): "Not inserted" is 70 / 88 / 107, "Check window" 81 / 100 / 122.
+  Reserving them moves the header's `sizeHint` from 387 / 411 / 459 to
+  409 / 436 / 490 px, still inside the controls row (440 / 473 / 528), which
+  alone sets the overlay's width -- so the overlay stays 470 / 503 / 558 px
+  and the label rectangle 112 / 137 / 160 px in every state. "Not inserted"
+  fits, so the shorter fallback word was not needed. White text on the new
+  fill is 6.11:1, the amber queue-row text 4.52:1, and the not-inserted
+  badge's amber against it 3.41:1 (luminance, from painted pixels; the red
+  scored 6.57 / 4.86 / 3.66). The badge has the least room: 3:1 needs a
+  background of relative luminance 0.145 or less. Negative controls: a
+  lighter orange (`#b35900`) fails the row-label check, `#d98200` the white
+  text, and dropping the words from the reservation fails the three-size
+  header test.
+- **Rows made by the startup notice read "From earlier session".** A
+  transcript saved by the notice of unfinished recordings was listed as
+  "Not inserted" (bf89a24) although no insert was ever attempted. The row
+  now has `from_earlier_session`; its status is the first words of the row
+  as before, the recording's time follows, it counts in the badge and
+  F10 pastes it. A status the row earns later wins (a failed re-paste whose
+  keystroke went out: "Possibly inserted, check the window"). The row never
+  held a language code or model -- an unfinished recording has neither, and
+  every undelivered row quotes time and text only -- so none was added. The
+  notice's own text and final status said "not inserted"; they say what the
+  row says now.
+- **Not done.** A failed streaming session that keeps its partial text in
+  history ("Partial transcript (saved to history)") stays red: it is a
+  failed session, not an insert that did not land. Whether it should be a
+  warning is the owner's call.
+
+## 2026-10-17 (the release script audits npm before it tags)
+
+- **What went wrong on 2026-10-10**: `create_release.py --version 0.12.1`
+  pushed `main` and the tag, and then the "Windows Release" workflow failed
+  at `npm audit --omit=dev --package-lock-only --audit-level=moderate` on a
+  new sharp advisory (GHSA-wq5f-xc86-pv6w; `dc998a9` bumped sharp). The tag
+  stayed, without a release. The audit reads npm's live advisory database,
+  so the same lockfile passes one day and fails the next; the script's own
+  pytest run and a green `quality.yml` push run could not have seen it.
+- **Fix**: the script runs that exact command before the version bump (so
+  nothing needs restoring), also under `--skip-tests`, and stops with a
+  plain message when it fails or when `npm` is not on PATH. A test compares
+  the three copies of the command (script, `windows-release.yml`,
+  `quality.yml`) and the flow is tested with every subprocess faked.
+  Checked for real: `npm audit` through the script's own function answered
+  0 vulnerabilities on this lockfile, an absent npm and a failing npm
+  (a folder without `package-lock.json`) both stopped with the message.
+- **Second lesson, from v0.12.0**: its tag build failed at a test that
+  expected a 1026 px dialog on the runner's 976 px screen. No local check
+  reproduces a fresh runner's screen, so the order of a release is now
+  written down: dry run (`workflow_dispatch`) on `main`, green, then the
+  script. The YAML was read to say exactly what the dispatch run does: every
+  gate and build step, no tag verification, no publish, an uploaded
+  three-day artifact; and a dispatch started on a tag ref would publish.
+  The order is procedure; the script does not check that a dry run
+  happened.
+
+## 2026-10-17 (Deepgram streaming: KeepAlive while no audio goes out)
+
+- **Why**: since 2026-10-10 the capture watchdog waits up to 12 s for audio a
+  starved machine delivers late, and a stop during a stall can wait as long.
+  The Deepgram socket is open and sends nothing for that time, and the
+  review of the starved-capture fix (F5) had left "Deepgram drops the socket
+  after about 10 s and the app sends no KeepAlive" as an unchecked entry in
+  `docs/agents/known-limitations.md`.
+- **Checked against Deepgram's own pages (read 2026-10-17, raw `.md` of each
+  page, not a summary)**: the Audio Keep Alive page confirms the 10 s limit
+  (`NET-0001`), the message (text frame `{"type": "KeepAlive"}`, no reply)
+  and "every 3-5 seconds". The Finalize and CloseStream pages do not mention
+  KeepAlive, and no page says whether a KeepAlive may be sent while audio
+  flows. The troubleshooting page adds a newer `NET-0002` no-audio timeout
+  that KeepAlive does reset -- and, under `NET-0001`, a sentence that
+  contradicts the Audio Keep Alive page ("KeepAlive messages alone will not
+  prevent closure; you must send at least one audio message"). Quotations
+  and URLs are in the comment above `_STREAM_KEEPALIVE_INTERVAL_S` and in
+  `docs/agents/remote-providers.md`.
+- **Implemented in the sender thread**, not a timer: the queue read waits at
+  most 3 s, and an empty wait writes the KeepAlive. No clock is needed, no
+  KeepAlive can overlap an audio frame (one writer), and the sentinel that
+  ends the loop precedes `Finalize`/`CloseStream`, so none follows them. The
+  tests drive the real loop with a queue that carries a fake clock (a 14 s
+  gap costs no real time), and the overlap and ordering cases with real
+  threads and a 50 ms interval.
+- **Follow-up the same day (lead's decision)**: since nobody could check the
+  contradicting sentence without a key and the cover costs about 0.1 s of
+  billed audio per start stall, the sender covers both readings. When its
+  first 3 s wait runs out in a session that has sent no audio at all, it
+  writes one 0.1 s frame of PCM16 zeros (built from the same sample rate,
+  channel count and linear16 sample width as the connection URL, and a test
+  reads those from the URL) as a binary frame instead of the first
+  KeepAlive, then KeepAlives. Once audio has gone out it never writes
+  silence, so a gap inside a dictation still gets KeepAlives only.
+- **Still open, needs a Deepgram key**: whether the contradicting sentence is
+  right, i.e. whether the silence frame is needed at all. Kept as an
+  "unverified live" entry in `docs/agents/known-limitations.md` with the
+  one-run check. Lesson: a vendor's own pages can disagree; read the
+  troubleshooting page and not only the feature page before calling a
+  protocol question answered, and when two readings cannot be told apart,
+  prefer the cheap behaviour that satisfies both.
+
+## 2026-10-17 (Retry keeps the recording's language and is never sent twice)
+
+- **Two owner decisions.** Retry transcribes in the language the recording was
+  made in, with the current engine and model (before: the language selected at
+  the moment of the press, a rule written down on 2026-10-09 and pinned by
+  `test_retry_uses_the_language_selected_now`, now rewritten). And a second
+  Retry is ignored while the first retry of the same recording still runs with
+  the same engine and model: before, the second press stopped the first job
+  and submitted another, and a remote request already sent still finished into
+  history, so the provider was billed twice and history got two entries. The
+  four duplicate-press tests failed before the change for exactly that reason.
+- **Where the language lives, and why in three places.** `Retry` itself has no
+  restart path: `_last_failed_wav_bytes` is memory, so after a restart it
+  answers "No failed transcription to retry". The Retry after a restart is the
+  startup notice of unfinished recordings, which gets its files from a quit
+  (`_keep_unfinished_recordings`) or from the managed last recording
+  (`_adopt_recoverable_last_recording`). So the language is (1) in memory,
+  `_recorded_language_by_recording_id`, filled in `_persist_last_recording_audio`
+  where a recording's id is born, which is what lets a failed retry, an older
+  failure and a streaming dictation keep it; (2) in `last_recording.json`
+  (`language_mode`, additive, old files read as unknown); (3) in the unfinished
+  recording's file name, `unfinished_<stamp>_<id>[.<language>].wav`, because
+  that directory has no index by design. Reading the language off the job or the
+  retry job's settings was rejected: the retry job's settings are the pinned
+  ones and the first job is gone by then.
+- **A language the new engine lacks is not passed on.** Read in the providers,
+  not guessed: their `_normalize_language_mode` replaces an unsupported
+  language with a stand-in, and for Canary that stand-in is the first language
+  of its list, which makes it translate into that language instead of
+  transcribing. A recording made on Auto and retried on Canary with German
+  selected would have come back in English. `_retry_settings` therefore pins
+  the recorded language only where `language_modes_for_selection(engine, model,
+  "batch")` offers it, else keeps the selected one and says so in the overlay
+  text and the log (`retry_recorded_language_not_offered`).
+- **Not changed, on purpose.** History retranscribe and the Import tab take
+  language, engine and model from their own visible pickers at the click; that
+  is now the way to correct a wrongly chosen language, since switching and
+  pressing Retry no longer does. The Error text after a failure says so
+  ("...with another service or language"). An older version cannot list an
+  unfinished file whose name carries a language (its name pattern ends at the
+  id); this matters only for a downgrade.
+- **Follow-up, same day (owner's answer to the open question): the Import tab's
+  "Use last recording" starts its language picker from the recording's own.**
+  Without it the correction path began from the Transcription tab's language,
+  which is the wrong one in exactly the case the owner is correcting.
+  `_preselect_recorded_import_language` acts at the click, only for a managed
+  recording that stored a language, only when the selected import engine and
+  model offer it (the status line says which language was selected, or that the
+  model does not offer it and the choice stands), and never over a language the
+  user picked on the tab since the dialog was populated
+  (`_import_language_chosen`; the selector blocks its signals, so only a real
+  pick sets it, and reopening the dialog clears it). Changing the Import
+  service afterwards rebuilds the picker as before: it is a preselection, not a
+  pin.
+- **Follow-up, same day: the overlay's language list for a remote model was
+  the engine's default list, a real defect (verified, then fixed).** What I
+  had only read in the code was checked by running it: `controller.set_language_mode`
+  and `_sync_overlay_language_options` asked `language_modes_for_selection`
+  with `settings.model_size`, the local model, so a remote engine fell through
+  to its engine-wide list. Measured against the model's own list: Deepgram
+  nova-3 51 languages offered 118, nova-2 34 offered 118, AssemblyAI Universal
+  3.5 Pro 19 offered 100, Azure MAI-Transcribe 1.5 44 offered 61 and MAI-Transcribe 1
+  25 offered 61, and Speechmatics Enhanced and Standard offered Auto, which only
+  Melia 1 has. The overlay menu showed them and `set_language_mode` accepted
+  them; the provider then replaced the language with its own stand-in
+  (`_normalize_language_mode`, Auto for most) without telling the user. The
+  Settings dialog was already right (it asks with the selected remote model,
+  `_language_modes_for_current_selection`; the Import tab's
+  `_import_language_scope` and the retranscribe dialog likewise); only the
+  overlay was too permissive. Fixed in one place, `_offered_language_modes()`,
+  which both controller paths now use. The six model cases fail before and
+  pass after. **Residue, not migrated:** a language someone picked in the
+  overlay from the too-wide list and that the model does not offer is still in
+  `settings.json`; until the next pick the overlay shows the first entry of
+  the model's list while the provider sends its own stand-in for it (Auto for
+  most), and the Settings dialog already shows the first entry when opened (it
+  normalizes its combo). It needs an obscure language on a restricted remote
+  model, so nothing rewrites the setting unasked.
+
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
 - **Owner: Win+V full of screenshots he did not remember taking, while he
@@ -9869,3 +10682,110 @@ on and the overlay green, the first ~10 s were not captured.
   warm stream inherited its predecessor's last callback time, read as a
   60 s stall. Lesson: a wait added on the Qt thread changes every input
   path that queues behind it, not just the one that called it.
+
+## 2026-10-17: a source checkout updates its JavaScript packages by itself
+
+- **Owner complaint.** The work PC runs the app from a git checkout with
+  plain Python and pip (uv and installers are blocked there). The
+  2026-10-10 release changed `package-lock.json` (Transformers.js 4.3.0 ->
+  4.3.1, sharp 0.35.4 -> 0.35.5 for an advisory), so after `git pull` the
+  Cohere/Granite runtime needed `npm ci --omit=dev` by hand -- an npm
+  command he does not know and should not have to. The installed app was
+  never affected: `build_windows_release.ps1` runs `npm ci --omit=dev` and
+  `stt_app.spec` copies `node_modules` into the bundle (and refuses to build
+  without it).
+- **What existed.** Since the first ONNX models, `_ensure_js_runtime_available`
+  ran `npm install` in the checkout when the Transformers.js import probe
+  failed. A changed lock never made the probe fail (4.3.0 imports fine), so
+  it never ran; and run in place, `npm install` could rewrite the checkout's
+  own lock, which then blocks the next `git pull`.
+- **Decision (lead): the app keeps `node_modules` in step itself, for
+  source runs only.** `transcriber/_node_packages.py`: drift is the lock
+  against npm's record `node_modules/.package-lock.json` (version and
+  integrity, 0.02 s, no network while in step); an update runs `npm ci` in
+  `.node_modules_update`, checks the staged tree, then swaps it in with two
+  renames. The old in-place repair became the same staged install.
+- **Measured, and what it changed in the design** (HomeBase, throwaway
+  copy, never the repo's tree):
+  - A failed `npm ci` against an unreachable registry gave up after 71 s and
+    left a half-deleted `node_modules` (`npm warn cleanup Failed to remove
+    some directories`, EPERM): in place, every proxy hiccup would have
+    broken a model that worked. Hence the staging folder.
+  - Windows renamed `node_modules` while a node child that had imported
+    Transformers.js had five DLLs mapped from it (onnxruntime binding and
+    DLL, sharp, two libvips). The rename does not protect a running child,
+    so every runner child holds an OS lock file (its presence) for its
+    lifetime, in the app and in the benchmark worker alike, and an update
+    waits while one is held.
+  - A presence cannot cover a runner of an older build, which is exactly
+    what runs after a `git pull` until the app restarts, while the
+    benchmark worker it spawns already imports the new code. A write-open
+    of a DLL, though, is refused for exactly the five files a live child
+    has mapped and for none once it exited, so the update also checks that
+    (0.45 s walk, only when due), before npm and right before the swap. A
+    live node child without a presence then deferred the update in 0.83 s.
+  - npm's record lists only what it installed (42 entries here); the lock
+    lists 27 more, all optional: 25 sharp builds for other platforms and two
+    helpers of its WebAssembly build. Counting their absence as drift would
+    have run npm, and reached the network, at every start.
+  - Update 4.3.0 -> 4.3.1 with a warm npm cache: 11.2 s in all (npm 9.3 s,
+    staged probe 0.24 s, renames 0.01 s, deleting the old 466 MB tree
+    1.5 s), 12.6 s with the final code's two DLL checks; Transformers.js
+    4.3.1 imported afterwards. A first install with an empty cache
+    (151 MB) took 17.8 s. The failure run took 72.7 s, kept the tree in use
+    (it still imported) and produced the tray notice once.
+- **Review round 1 (Opus) found one P2, fixed with a test that failed
+  first.** npm exits 0 when it cannot fetch an optional package. Without
+  `@img/sharp-win32-x64` -- a proxy that blocks one tarball is enough --
+  the staged tree passed `lock_drift`, which cannot tell this platform's
+  sharp binary from the 25 others that are rightly absent, and passed the
+  import probe, because Node resolved the binary from the old tree one
+  folder up; the swap then deleted the only tree sharp loaded from. The
+  staged tree must now hold every package the tree in use has that the lock
+  still lists (`dev` packages of a developer's full install excepted:
+  `--omit=dev` leaves them out on purpose, and counting them would refuse
+  every update in that checkout -- hypothetical today, since `package.json`
+  has no devDependencies). Reproduced for real on HomeBase in the
+  throwaway copy with an `.npmrc` saying `optional=false`, which makes npm
+  skip every optional package and still exit 0: the d8a394c code swapped
+  in a tree with only `@img/colour` and the runner's import then failed
+  inside sharp, whose error asked for the win32-x64 binary
+  (`npm install --os=win32 --cpu=x64 sharp`); the fixed code refused it
+  ("npm did not install @img/sharp-win32-x64", 22 s), kept 4.3.1, which
+  still imported, and sent the notice once. Without that `.npmrc` the fixed
+  code updated 4.3.1 -> 4.3.0 and back with no false refusal (35 s and
+  13 s; npm itself 30 s and 11 s while other agents loaded the machine).
+  Blocking the `@img` scope's registry instead did not reproduce it: npm
+  then refuses the non-optional `@img/colour` too (`EALLOWREMOTE`) and
+  fails outright. Smaller fixes from the same round: a rename retries for 30 s
+  instead of 2 s (the reviewer measured that one open file anywhere inside
+  refuses a directory rename, and a virus scanner opens each freshly
+  extracted file); the tray notice fits Windows' 255 characters whole (it
+  was 256 with a long reason, which cost it its final full stop); a notice
+  raised
+  before the tray registered its handler waits for it instead of being
+  dropped (the startup preload runs first); older npm's `npm ERR!` lines
+  name the error too.
+- **Review round 2 (Sonnet) over those fixes: no P1 or P2.** It fed the
+  real records of the real lock installed by npm 10.9.9, 11.19.0 and
+  12.0.2 (`ci --omit=dev` and plain `install`, 42 keys each) to
+  `_dropped_packages` in all 36 pairs: no false refusal. Its P3, fixed with
+  a test that failed first: a tree in use installed for another platform
+  (from WSL into the Windows checkout, or copied from x64 to ARM64) holds
+  that platform's sharp binaries, which npm here rightly skips, so every
+  update was refused -- the repair for exactly such a tree included. The
+  refusal now applies only while the tree in use still loads (one more
+  0.25 s probe, only when a package is missing); a tree that does not load
+  protects nothing. Also from that round: a first install had no test, the
+  30 s rename retry can stretch a stuck stranded tree to about 90 s per
+  dictation (recorded in known limitations), and `FileExistsError` no
+  longer waits out the retry.
+- **Lessons.** A repair that waits for a symptom (the import failing) never
+  sees a change that leaves the old state working; compare against the
+  declared state instead. "The OS will refuse while files are in use" needs
+  measuring before it carries a safety argument, and for the exact kind of
+  use: on Windows a mapped DLL does not stop a directory rename, one open
+  file handle inside does, and a write-open of a mapped DLL is refused. And
+  an import probe run from a staging folder inside the checkout proves
+  nothing about what the staged tree lacks: Node's module resolution climbs
+  up into the tree in use.

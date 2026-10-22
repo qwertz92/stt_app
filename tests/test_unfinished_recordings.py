@@ -122,3 +122,66 @@ def test_an_unreadable_wav_is_listed_without_a_length(tmp_path):
 
     assert recording.duration_s is None
     assert recording.size_bytes == 4
+
+
+def test_a_kept_recording_names_the_language_it_was_made_in(tmp_path):
+    """The directory is the whole store, so the language rides in the file
+    name beside the id; the id alone still finds the recording."""
+    store = UnfinishedRecordingStore(tmp_path)
+
+    path = store.save(
+        _wav(1),
+        recording_id="abc123",
+        recorded_at=datetime.fromisoformat("2026-10-09T14:03:12"),
+        language_mode="de",
+    )
+
+    assert path is not None and path.name == "unfinished_20261009_140312_abc123.de.wav"
+    [recording] = store.list_recordings()
+    assert recording.recording_id == "abc123"
+    assert recording.language_mode == "de"
+    found = store.find("abc123")
+    assert found is not None and found.path == path
+    assert (
+        store.save(
+            _wav(1),
+            recording_id="abc123",
+            recorded_at=datetime.fromisoformat("2026-10-10T08:00:00"),
+            language_mode="en",
+        )
+        is None
+    )
+
+
+def test_a_recording_kept_without_a_language_reads_as_unknown(tmp_path):
+    """A file the previous version wrote has no language in its name; so has
+    a recording whose language was never known. Both are listed as before."""
+    store = UnfinishedRecordingStore(tmp_path)
+    (tmp_path / "unfinished_20260101_000000_old1.wav").write_bytes(_wav(1))
+    store.save(
+        _wav(1),
+        recording_id="new1",
+        recorded_at=datetime.fromisoformat("2026-01-02T00:00:00"),
+    )
+
+    languages = {
+        item.recording_id: item.language_mode for item in store.list_recordings()
+    }
+
+    assert languages == {"old1": "", "new1": ""}
+
+
+def test_a_language_that_cannot_stand_in_a_file_name_is_made_safe(tmp_path):
+    store = UnfinishedRecordingStore(tmp_path)
+
+    path = store.save(
+        _wav(1),
+        recording_id="r1",
+        recorded_at=datetime.fromisoformat("2026-01-01T00:00:00"),
+        language_mode="../De t",
+    )
+
+    assert path is not None and path.parent == tmp_path
+    [recording] = store.list_recordings()
+    assert recording.recording_id == "r1"
+    assert recording.language_mode == "de-t"

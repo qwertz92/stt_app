@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 from stt_app.last_recording_store import LastRecordingStore
@@ -173,3 +174,63 @@ def test_selectable_path_keeps_recoverable_managed_recording(tmp_path):
     os.utime(archived, (200, 200))
 
     assert store.selectable_path(archive_dir) == store.audio_path
+
+
+def test_the_language_a_recording_was_made_in_survives_a_restart(tmp_path):
+    """Retry pins the recording's language, also after the app was restarted:
+    a new store instance on the same files answers it, through every mark."""
+    paths = {
+        "audio_path": tmp_path / "last_recording.wav",
+        "state_path": tmp_path / "last_recording.json",
+    }
+    store = LastRecordingStore(**paths)
+    state = store.save_recording(b"RIFF", keep_after_success=False, language_mode="de")
+    assert state.language_mode == "de"
+    store.mark_transcribing(engine="openai", model="gpt-transcribe", mode="batch")
+    store.mark_failed("provider down")
+
+    restarted = LastRecordingStore(**paths).load()
+
+    assert restarted is not None
+    assert restarted.language_mode == "de"
+    assert restarted.status == "failed"
+
+
+def test_a_state_file_from_before_the_language_was_stored_still_loads(tmp_path):
+    """A file the previous version wrote has no `language_mode`: it reads as
+    unknown (""), which Retry answers with the language selected now."""
+    paths = {
+        "audio_path": tmp_path / "last_recording.wav",
+        "state_path": tmp_path / "last_recording.json",
+    }
+    paths["audio_path"].write_bytes(b"RIFF")
+    paths["state_path"].write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "audio_path": str(paths["audio_path"]),
+                "recording_id": "rec-old",
+                "created_at": "2026-10-01T10:00:00+00:00",
+                "status": "failed",
+                "keep_after_success": False,
+                "engine": "openai",
+                "model": "gpt-transcribe",
+                "mode": "batch",
+                "error": "provider down",
+                "transcription_started_at": "",
+                "completed_at": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = LastRecordingStore(**paths)
+
+    state = store.load()
+
+    assert state is not None
+    assert state.recording_id == "rec-old"
+    assert state.language_mode == ""
+    # The next write keeps working and does not invent a language.
+    assert store.mark_failed("again") is True
+    reloaded = store.load()
+    assert reloaded is not None and reloaded.language_mode == ""

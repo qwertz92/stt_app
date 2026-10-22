@@ -44,6 +44,10 @@ from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcriber.base import transcript_has_gap
+from .transcriber.local_webgpu_asr import (
+    NODE_PACKAGES_NOTICE_TITLE,
+    set_node_packages_notice_handler,
+)
 from .transcript_history import TranscriptHistoryStore
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .unfinished_recordings_dialog import UnfinishedRecordingsDialog
@@ -182,6 +186,21 @@ def _connect_tray_notifications(tray_icon, controller) -> None:
 
     controller.busy_overlay_error.connect(_notify_busy_overlay_error)
     controller.clipboard_restore_failed.connect(_notify_clipboard_restore_failure)
+
+    def _notify_node_packages_not_updated(message: str) -> None:
+        # The models still work; this is the one place the user learns that
+        # the update after a `git pull` did not happen and why.
+        tray_icon.showMessage(
+            NODE_PACKAGES_NOTICE_TITLE,
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    controller.node_packages_not_updated.connect(_notify_node_packages_not_updated)
+    # Called from the worker thread that starts the Node runner; the signal
+    # carries it to the Qt thread.
+    set_node_packages_notice_handler(controller.node_packages_not_updated.emit)
 
 
 def run() -> int:
@@ -335,6 +354,7 @@ def run() -> int:
             history_store=history_store,
             unfinished_store=unfinished_recording_store,
             transcribe=controller.transcribe_unfinished_recording,
+            language_note=controller.unfinished_recording_language_note,
             keep_dir=resolve_recordings_dir(controller.settings.recordings_dir),
         )
 
@@ -821,6 +841,7 @@ def _offer_unfinished_recordings(
     unfinished_store: UnfinishedRecordingStore,
     transcribe,
     keep_dir: Path,
+    language_note=None,
 ) -> UnfinishedRecordingsDialog | None:
     """Show the recordings an earlier session did not transcribe, if any.
 
@@ -862,6 +883,7 @@ def _offer_unfinished_recordings(
         store=unfinished_store,
         transcribe=transcribe,
         keep_dir=keep_dir,
+        language_note=language_note,
     )
     if problems:
         dialog.show_problem(" ".join(problems))
@@ -910,6 +932,7 @@ def _adopt_recoverable_last_recording(
             audio,
             recording_id=state_id or f"orphan-{modified_ns}",
             recorded_at=recorded_at,
+            language_mode=str(getattr(state, "language_mode", "") or ""),
         )
     except (OSError, ValueError) as exc:
         return (

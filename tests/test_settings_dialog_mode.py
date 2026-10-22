@@ -3725,6 +3725,106 @@ def test_import_language_options_follow_import_model_constraints():
     _ = app
 
 
+def _import_dialog_with_a_failed_last_recording(language: str, **settings):
+    """An Import tab opened over a failed last recording made in `language`
+    ("" for a state that stores none), on the faster-whisper model `small`."""
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(language_mode="de", model_size="small", **settings)
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    store = LastRecordingStore()
+    store.save_recording(b"RIFF", keep_after_success=False, language_mode=language)
+    store.mark_failed("provider down")
+    return dialog
+
+
+def test_use_last_recording_preselects_the_language_it_was_made_in():
+    """Owner decision 2026-10-17: correcting a wrong language is "open Import,
+    change the language, transcribe", so the tab starts from the recording's
+    own language instead of the Transcription tab's."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _import_dialog_with_a_failed_last_recording("fr")
+    assert dialog.import_language_combo.currentData() == "de"
+
+    assert dialog._select_last_recording_file() is True
+
+    assert dialog.import_language_combo.currentData() == "fr"
+    assert dialog.language_combo.currentData() == "de"
+    assert "French" in dialog.import_result_label.text()
+    _ = app
+
+
+def test_use_last_recording_keeps_the_choice_when_the_model_lacks_its_language():
+    """An English-only import model offers Auto and English: the recorded
+    German is not selectable there, so the tab's choice stands and says why."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _import_dialog_with_a_failed_last_recording("de")
+    dialog.import_model_combo.setCurrentIndex(
+        dialog.import_model_combo.findData("distil-large-v3.5")
+    )
+    assert dialog.import_language_combo.currentData() == "auto"
+
+    assert dialog._select_last_recording_file() is True
+
+    assert dialog.import_language_combo.currentData() == "auto"
+    assert "German" in dialog.import_result_label.text()
+    assert "not offered" in dialog.import_result_label.text()
+    _ = app
+
+
+def test_use_last_recording_without_a_stored_language_changes_nothing():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _import_dialog_with_a_failed_last_recording("")
+
+    assert dialog._select_last_recording_file() is True
+
+    assert dialog.import_language_combo.currentData() == "de"
+    assert "language" not in dialog.import_result_label.text().lower()
+    _ = app
+
+
+def test_use_last_recording_never_overrides_a_language_picked_on_the_tab():
+    """The user changed the language on this tab in this visit; a later click
+    on "Use last recording" must not take it back. Reopening the dialog starts
+    a new visit."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _import_dialog_with_a_failed_last_recording("fr")
+    dialog.import_language_combo.setCurrentIndex(
+        dialog.import_language_combo.findData("en")
+    )
+
+    assert dialog._select_last_recording_file() is True
+
+    assert dialog.import_language_combo.currentData() == "en"
+    assert "French" not in dialog.import_result_label.text()
+
+    dialog.reload_from_store()
+    assert dialog.import_language_combo.currentData() == "de"
+
+    assert dialog._select_last_recording_file() is True
+
+    assert dialog.import_language_combo.currentData() == "fr"
+    _ = app
+
+
+def test_a_preselected_language_can_still_be_changed_and_is_then_the_users():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _import_dialog_with_a_failed_last_recording("fr")
+    dialog._select_last_recording_file()
+    assert dialog.import_language_combo.currentData() == "fr"
+
+    dialog.import_language_combo.setCurrentIndex(
+        dialog.import_language_combo.findData("es")
+    )
+    dialog._select_last_recording_file()
+
+    assert dialog.import_language_combo.currentData() == "es"
+    _ = app
+
+
 def test_settings_combos_keep_native_arrow_rendering():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(

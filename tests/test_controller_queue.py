@@ -10,6 +10,7 @@ import re
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -36,7 +37,9 @@ from speech_fixtures import (
     wav_bytes,
 )
 
+import stt_app.main as main_module
 from stt_app.config import (
+    CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     FALLBACK_HOTKEY,
@@ -44,7 +47,12 @@ from stt_app.config import (
     QUEUE_ROW_KIND_UNDELIVERED,
     SILENCE_GATE_THRESHOLD_MIN,
 )
-from stt_app.controller import _join_transcripts, _TranscriptionJob
+from stt_app.controller import (
+    _ARCHIVED_RECORDING_NAME_RE,
+    _join_transcripts,
+    _TranscriptionJob,
+)
+from stt_app.history_audio import resolve_history_audio_path
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -3905,20 +3913,963 @@ def test_a_language_pick_during_a_recording_applies_to_the_next_one(
     _ = app
 
 
-def test_retry_uses_the_language_selected_now(monkeypatch, tmp_path):
-    """Retry means "again with what is selected now", so a wrong language can
-    be fixed by switching and retrying; only queued first attempts are pinned."""
-    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+def test_retry_uses_the_language_the_recording_was_made_in(monkeypatch, tmp_path):
+    """Owner decision 2026-10-17 (it was "the language selected now" before):
+    a retry transcribes the recording in the language it was made in. Engine
+    and model stay the current ones -- a user switches provider after a
+    provider failure -- and the language selection itself is not touched."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", language_mode="en"
     )
     token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller.set_language_mode("de")
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    assert retry_job.engine == "groq"
+    assert controller.settings.language_mode == "de"
+    assert overlay.states[-1][0] == "Processing"
+    assert "English" in overlay.states[-1][1], overlay.states[-1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_dictations_retry_uses_its_language_too(monkeypatch, tmp_path):
+    """A streaming recording is retried as a batch job; the language is the one
+    its stream was started with."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    token = _record_and_stop(controller)
+    assert controller._jobs[token].mode == "streaming"
     controller._on_transcription_failed("boom", request_token=token)
     controller.set_language_mode("de")
 
     assert controller.retry_last_transcription() is True
 
     retry_job = controller._jobs[controller._active_request_token]
-    assert retry_job.settings.language_mode == "de"
+    assert retry_job.mode == "batch"
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_dying_streams_recording_is_retried_in_its_language(monkeypatch, tmp_path):
+    """The stream's runtime fails while the microphone is open: the road that
+    keeps the audio for Retry has no job, only the session's own settings."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    assert controller._streaming_recording is True
+    controller.set_language_mode("de")
+    assert controller.settings.language_mode == "de"
+
+    controller._on_transcription_failed("socket closed")
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("recorded", "expected"),
+    [
+        # Canary never offers Auto and would translate into English instead of
+        # transcribing: the recorded Auto is not sent, the selected German is.
+        pytest.param("auto", "de", id="recorded language not offered"),
+        pytest.param("en", "en", id="recorded language offered"),
+    ],
+)
+def test_retry_keeps_the_recorded_language_only_where_the_engine_offers_it(
+    monkeypatch, tmp_path, caplog, recorded, expected
+):
+    """The engine the user retries with may not offer the language the audio
+    was recorded in. Passed on, a provider's own normalization picks a
+    stand-in (for Canary the first language of its list, a translation); the
+    language selected now is one the user picked for that engine."""
+    caplog.set_level(logging.INFO)
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode=recorded
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == expected
+    detail = overlay.states[-1][1]
+    if expected == recorded:
+        assert "retry_recorded_language_not_offered" not in caplog.text
+        assert "do not offer" not in detail
+    else:
+        assert "retry_recorded_language_not_offered" in caplog.text
+        assert "do not offer the recorded language (Auto)" in detail
+        assert "selected language (German)" in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_either(
+    monkeypatch, tmp_path
+):
+    """A saved selection the engine does not offer stays saved: the overlay
+    shows the first language of the engine's list and the provider's own
+    normalization runs that one, while the settings still say the stale one. A
+    retry that names the "selected" language then says Afrikaans for a request
+    that ran in Auto. The language that is sent is the one that is named."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="af"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    # Deepgram nova-2 offers neither the recorded Afrikaans nor the saved one.
+    controller._settings = replace(
+        controller._settings, engine="deepgram", deepgram_model="nova-2"
+    )
+    assert controller._settings.language_mode == "af"
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "auto"
+    detail = overlay.states[-1][1]
+    assert "do not offer the recorded language (Afrikaans)" in detail
+    assert "the selected language (Afrikaans) is not offered either" in detail
+    assert "using Auto" in detail
+    assert controller._settings.language_mode == "af", "the saved selection is kept"
+    controller.shutdown()
+    _ = app
+
+
+def _a_retry_under_canary_that_finished(
+    monkeypatch, tmp_path, *, recorded, text="hallo"
+):
+    """A dictation recorded in `recorded` failed; the engine is switched to
+    Canary (no Auto, German selected) and the Retry delivers `text`. Returns the
+    controller, the app, the tray messages, the history store, the failed
+    recording's audio and the recordings folder (a setting, so that nothing
+    is written outside the test's folder)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        language_mode=recorded,
+        recordings_dir=str(recordings),
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    audio = controller._last_failed_wav_bytes
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    assert controller.retry_last_transcription() is True
+    controller._on_transcription_ready(
+        text, request_token=controller._active_request_token
+    )
+    return controller, app, tray, history, audio, recordings
+
+
+def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
+    monkeypatch, tmp_path
+):
+    """The recorded language was not offered, so the transcript is in another
+    language than the speech. Nothing of that survived the first progress
+    line, and the managed recording is one slot: it is deleted by the next
+    start (its transcript is in History) and replaced by the next dictation.
+    The audio is therefore kept in the recordings folder, where no count
+    prunes it, and the History entry links it: Retranscribe takes a language
+    there. The managed slot completes as for any success."""
+    controller, app, tray, history, audio, recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
+    )
+
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == audio
+    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert resolve_history_audio_path(entry) == kept
+    assert controller._last_recording_store.load() is None, "completed as usual"
+    assert tray == [
+        (
+            "The retry ran in German because Auto is not offered by the current "
+            "engine and model. The audio is kept: Retranscribe... in History runs "
+            "it in another language."
+        )
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_the_kept_audio_survives_the_next_start_and_the_next_dictation(
+    monkeypatch, tmp_path
+):
+    """Both ways the managed slot's copy was lost: the next start finds the
+    failed recording recoverable with its transcript already in History and
+    completes it (deleting the WAV), and the next dictation replaces it."""
+    controller, app, _tray, history, audio, _recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
+    )
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.is_file(), "the entry links a copy that exists"
+    store = controller._last_recording_store
+
+    shown = main_module._offer_unfinished_recordings(
+        last_recording_store=store,
+        history_store=history,
+        unfinished_store=controller._unfinished_recording_store,
+        transcribe=lambda _recording, _progress: (True, "text"),
+        keep_dir=tmp_path / "keep",
+    )
+    assert shown is None, "nothing is offered a second time"
+    assert resolve_history_audio_path(entry, store) == kept
+
+    _record_and_stop(controller)
+
+    assert kept.read_bytes() == audio
+    assert resolve_history_audio_path(entry, store) == kept
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_in_the_recorded_language_keeps_no_extra_copy(monkeypatch, tmp_path):
+    """Negative control: English is offered by Canary, so nothing fell back.
+    Retention settings decide as before: no copy, no link, no notice, and the
+    managed recording is completed (deleted unless kept)."""
+    controller, app, tray, history, _audio, recordings = (
+        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="en")
+    )
+
+    [entry] = history.load()
+    assert entry.source_audio_path == ""
+    assert not recordings.exists()
+    assert tray == []
+    store = controller._last_recording_store
+    assert store.load() is None and store.selectable_path() is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept(
+    monkeypatch, tmp_path
+):
+    """The notice promises nothing the disk refused: the delivery goes on
+    without the copy, and the line names the language and says the audio is
+    not kept."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        language_mode="auto",
+        recordings_dir=str(recordings),
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller._settings = replace(
+        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    assert controller.retry_last_transcription() is True
+
+    controller._on_transcription_ready(
+        "hallo", request_token=controller._active_request_token
+    )
+
+    [entry] = history.load()
+    assert entry.text == "hallo" and entry.source_audio_path == ""
+    assert tray == [
+        (
+            "The retry ran in German because Auto is not offered by the current "
+            "engine and model. The audio could not be kept (see the log)."
+        )
+    ]
+    controller.shutdown()
+    _ = app
+
+
+_GAP_TEXT = "erster teil [no text returned for 0:16-0:31] dritter teil"
+
+
+def _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path, **overrides):
+    """A dictation is recorded and its remote transcript comes back with a gap
+    marker (a part that held sound returned no text). Returns the controller,
+    the app, the history store, the recorded audio and the recordings folder (a
+    setting, so that nothing is written outside the test's folder)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        recordings_dir=str(recordings),
+        **overrides,
+    )
+    token = _record_and_stop(controller)
+    audio = controller._request_audio_by_token[token][0]
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token)
+    return controller, app, history, audio, recordings
+
+
+def test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it(
+    monkeypatch, tmp_path
+):
+    """The marker tells the user to listen to the stretch it names. The only
+    copy of the audio was the managed last recording, kept by marking it
+    failed: one slot, replaced by the next dictation. The audio now goes where
+    retained audio goes, the recordings folder, under a name no count prunes,
+    and the History entry links it (Retranscribe); the managed slot completes
+    as for any success."""
+    controller, app, history, audio, recordings = (
+        _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path)
+    )
+
+    [entry] = history.load()
+    assert entry.text == _GAP_TEXT
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == audio
+    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert resolve_history_audio_path(entry) == kept
+    assert controller._last_recording_store.load() is None, "completed as usual"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_gap_audio_survives_the_next_dictation_and_the_next_start(
+    monkeypatch, tmp_path
+):
+    """The hole: the next dictation replaces the managed recording, which was
+    the only audio of the gap. The next start neither offers the recording a
+    second time nor touches the copy."""
+    controller, app, history, audio, _recordings = (
+        _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path)
+    )
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    store = controller._last_recording_store
+
+    shown = main_module._offer_unfinished_recordings(
+        last_recording_store=store,
+        history_store=history,
+        unfinished_store=controller._unfinished_recording_store,
+        transcribe=lambda _recording, _progress: (True, "text"),
+        keep_dir=tmp_path / "keep",
+    )
+    assert shown is None, "nothing is offered a second time"
+    assert kept.read_bytes() == audio
+
+    _record_and_stop(controller)
+
+    assert kept.read_bytes() == audio
+    assert resolve_history_audio_path(entry, store) == kept
+    controller.shutdown()
+    _ = app
+
+
+def test_a_background_gap_transcript_keeps_its_audio_too(monkeypatch, tmp_path):
+    """The older dictation finishes behind a newer one (the background road):
+    the newer recording has replaced the managed slot by then."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", recordings_dir=str(recordings)
+    )
+    older = _record_and_stop(controller)
+    audio = controller._request_audio_by_token[older][0]
+    newer = _record_and_stop(controller)
+    assert newer != older
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=older)
+
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings and kept.read_bytes() == audio
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_audio_is_archived_keeps_no_extra_copy(
+    monkeypatch, tmp_path
+):
+    """Retention settings decide: with "Archive every recording" the entry
+    already links the archive's file, which is the audio kept (the fake
+    capture writes no file, so the name and place are what is checked), and
+    the managed slot completes like any other."""
+    controller, app, history, _audio, recordings = (
+        _a_dictation_whose_transcript_has_a_gap(
+            monkeypatch, tmp_path, save_all_recordings=True
+        )
+    )
+
+    [entry] = history.load()
+    archived = Path(entry.source_audio_path)
+    assert archived.parent == recordings
+    assert _ARCHIVED_RECORDING_NAME_RE.fullmatch(archived.name)
+    assert list(recordings.iterdir()) == [], "no copy beside the archive's file"
+    assert controller._last_recording_store.load() is None, "completed as usual"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_retry_with_a_gap_keeps_one_copy(monkeypatch, tmp_path):
+    """Both reasons to keep the audio at once: the copy the fallback made is
+    the one the entry links, and the gap does not make a second."""
+    controller, app, _tray, history, audio, recordings = (
+        _a_retry_under_canary_that_finished(
+            monkeypatch, tmp_path, recorded="auto", text=_GAP_TEXT
+        )
+    )
+
+    [entry] = history.load()
+    [kept] = list(recordings.iterdir())
+    assert Path(entry.source_audio_path) == kept
+    assert kept.read_bytes() == audio
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcript_without_a_gap_keeps_no_copy(monkeypatch, tmp_path):
+    """Negative control: only a gap changes what is kept."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        recordings_dir=str(recordings),
+    )
+    token = _record_and_stop(controller)
+
+    controller._on_transcription_ready("a plain transcript", request_token=token)
+
+    [entry] = history.load()
+    assert entry.source_audio_path == ""
+    assert not recordings.exists()
+    store = controller._last_recording_store
+    assert store.load() is None and store.selectable_path() is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_copy_failed_keeps_the_managed_recording(
+    monkeypatch, tmp_path
+):
+    """The disk refused the copy: nothing is linked and the delivery goes on,
+    and the managed recording stays kept as before (marked failed)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", recordings_dir=str(recordings)
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+    token = _record_and_stop(controller)
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token)
+
+    [entry] = history.load()
+    assert entry.text == _GAP_TEXT and entry.source_audio_path == ""
+    store = controller._last_recording_store
+    state = store.load()
+    assert state is not None and state.status == "failed"
+    assert store.selectable_path() is not None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_retry_keeps_the_recordings_language(monkeypatch, tmp_path):
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    controller.set_language_mode("de")
+    assert controller.retry_last_transcription() is True
+    controller._on_transcription_failed(
+        "boom again", request_token=controller._active_request_token
+    )
+    controller.set_language_mode("fr")
+
+    assert controller.retry_last_transcription() is True
+
+    retry_job = controller._jobs[controller._active_request_token]
+    assert retry_job.settings.language_mode == "en"
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_of_a_recording_with_no_known_language_uses_the_current_one(
+    monkeypatch, tmp_path
+):
+    """Audio the store never received (no id) or an id this process has no
+    language for: nothing to pin, so the language selected now applies."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller.set_language_mode("de")
+    for recording_id in ("", "from-an-earlier-run"):
+        controller._hold_failed_audio_for_retry(b"RIFF-unknown", recording_id)
+
+        assert controller.retry_last_transcription() is True
+
+        retry_job = controller._jobs[controller._active_request_token]
+        assert retry_job.settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_recordings_language_is_stored_with_its_audio(monkeypatch, tmp_path):
+    """Retry after a restart reads it from the managed last recording."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    _record_and_stop(controller)
+    controller.set_language_mode("de")
+    _record_and_stop(controller)
+
+    state = controller._last_recording_store.load()
+
+    assert state is not None and state.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
+_RETRY_ALREADY_RUNNING = (
+    "A retry of this recording is already running with the same settings; "
+    "cancel it first to retry again."
+)
+
+
+def _a_failed_recording_with_its_retry_running(
+    monkeypatch, tmp_path, **settings_overrides
+):
+    """One dictation failed and its Retry is in flight (a deferred worker)."""
+    controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", **settings_overrides
+    )
+    token = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token)
+    assert controller.retry_last_transcription() is True
+    first_retry = controller._jobs[controller._active_request_token]
+    return controller, app, overlay, history, first_retry
+
+
+def test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and_model(
+    monkeypatch, tmp_path, caplog
+):
+    """Owner decision 2026-10-17: the same audio to the same provider twice
+    costs money twice and makes no sense. The press is answered -- on the
+    tray, since the overlay shows the running retry -- and logged, and nothing
+    is stopped or submitted."""
+    caplog.set_level(logging.INFO)
+    controller, app, overlay, history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    submitted = len(controller._executor.calls)
+    painted = list(overlay.states)
+
+    assert controller.retry_last_transcription() is False
+
+    assert len(controller._executor.calls) == submitted
+    assert list(controller._jobs) == [first.token]
+    assert first.aborting is False
+    assert controller._active_request_token == first.token
+    assert overlay.states == painted
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    assert "retry_ignored_duplicate" in caplog.text
+    assert history.load() == []
+    assert controller._last_failed_wav_bytes, "the slot keeps the recording"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "change",
+    [{"engine": "groq"}, {"model_size": "base"}],
+    ids=["another engine", "another model"],
+)
+def test_a_retry_with_another_engine_or_model_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path, change
+):
+    """The user changed settings meanwhile: that is a different request. The
+    running one is stopped, as a retry always did, and a late result of it
+    goes to history only."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller._settings = replace(controller._settings, **change)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert (second.engine, second.model) != (first.engine, first.model)
+    assert first.aborting is True
+    assert len(controller._executor.calls) == submitted + 1
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("before", "change"),
+    [
+        pytest.param({}, {"custom_vocabulary": "Kubernetes"}, id="vocabulary"),
+        pytest.param({"engine": "deepgram"}, {"deepgram_region": "eu"}, id="region"),
+        pytest.param(
+            {
+                "engine": "azure",
+                "azure_endpoint": "https://a.cognitiveservices.azure.com",
+            },
+            {"azure_endpoint": "https://b.cognitiveservices.azure.com"},
+            id="azure endpoint",
+        ),
+        pytest.param(
+            {"engine": "custom", "custom_endpoint": "https://one.example/v1"},
+            {"custom_endpoint": "https://two.example/v1"},
+            id="custom endpoint",
+        ),
+    ],
+)
+def test_a_retry_with_other_request_settings_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path, before, change
+):
+    """The same request is the same audio to the same provider *as configured*:
+    vocabulary, region and endpoint decide what the provider receives, as the
+    engine and model do. A first retry sent with other values is not the one
+    the user waits for, so the new one replaces it like an engine change does."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path, **before)
+    )
+    controller._settings = replace(controller._settings, **change)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert first.aborting is True
+    assert len(controller._executor.calls) == submitted + 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_after_the_key_was_replaced_is_allowed_while_the_first_runs(
+    monkeypatch, tmp_path
+):
+    """A replaced key never shows in the settings (`invalidate_transcriber_
+    credentials`); a retry running with the old one is not the same request."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path, engine="groq")
+    )
+    assert controller.retry_last_transcription() is False
+
+    controller.invalidate_transcriber_credentials(["groq"])
+
+    assert controller.retry_last_transcription() is True
+    assert first.aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_in_another_selected_language_is_allowed_for_an_unknown_recording(
+    monkeypatch, tmp_path
+):
+    """Where the recording's own language is unknown the selected one decides
+    what the provider is asked for, so a change of it is a different request."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    controller._hold_failed_audio_for_retry(b"RIFF-unknown", "")
+    assert controller.retry_last_transcription() is True
+    first = controller._jobs[controller._active_request_token]
+    assert controller.retry_last_transcription() is False
+
+    controller.set_language_mode("de")
+
+    assert controller.retry_last_transcription() is True
+    assert first.aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_with_an_unrelated_setting_changed_is_still_a_duplicate(
+    monkeypatch, tmp_path
+):
+    """Only what the provider receives counts: a saved opacity or history size
+    is no reason to pay for the same request twice."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller._settings = replace(
+        controller._settings, overlay_opacity_percent=40, history_max_items=7
+    )
+
+    assert controller.retry_last_transcription() is False
+
+    assert first.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_the_duplicate_notice_never_repaints_an_overlay_no_session_owns(
+    monkeypatch, tmp_path
+):
+    """A newer dictation was canceled while the retry kept running: no session
+    owns the overlay (`_active_request_token` is None), which is when
+    `show_overlay_error` paints. A red Error with a Retry button over a retry
+    that is running invites the very click this guard answers, so the notice
+    goes to the tray alone."""
+    controller, app, overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = _record_and_stop(controller)
+    controller.cancel_queued_transcription(newer)
+    assert controller._active_request_token is None
+    assert first.token in controller._jobs and first.aborting is False
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    painted = list(overlay.states)
+
+    assert controller.retry_last_transcription() is False
+
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    assert overlay.states == painted
+    assert first.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_works_again_after_the_first_retry_failed(monkeypatch, tmp_path):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    assert controller.retry_last_transcription() is False
+    controller._on_transcription_failed("still down", request_token=first.token)
+    assert first.token not in controller._jobs
+
+    assert controller.retry_last_transcription() is True
+
+    assert controller._jobs[controller._active_request_token].token != first.token
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_works_again_once_the_first_retry_finished(monkeypatch, tmp_path):
+    """A finished retry resolves its failure, and the older failure behind it
+    comes forward: a different recording, so not a duplicate, although the
+    audio bytes and the engine are the same."""
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    id_a = controller._jobs[token_a].source_recording_id
+    controller._on_transcription_failed("down", request_token=token_a)
+    token_b = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_b)
+    assert controller.retry_last_transcription() is True
+    first = controller._jobs[controller._active_request_token]
+    assert controller.retry_last_transcription() is False
+
+    controller._on_transcription_ready("text of B", request_token=first.token)
+
+    assert first.token not in controller._jobs
+    assert [entry.text for entry in history.load()] == ["text of B"]
+    assert controller.retry_last_transcription() is True
+    assert (
+        controller._jobs[controller._active_request_token].source_recording_id == id_a
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_of_another_failed_recording_is_not_a_duplicate(monkeypatch, tmp_path):
+    """Two recordings can carry the same bytes; the recording is the identity
+    (bytes and id, as the slot retires), not the audio alone."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    token_c = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_c)
+    # Same bytes as the retry in flight, another recording.
+    assert controller._request_audio_by_token[first.token][0] == (
+        controller._last_failed_wav_bytes
+    )
+    assert controller._last_failed_recording_id != first.source_recording_id
+
+    assert controller.retry_last_transcription() is True
+
+    third = controller._jobs[controller._active_request_token]
+    assert third.token not in (first.token, token_c)
+    assert third.source_recording_id != first.source_recording_id
+    assert first.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_running_behind_a_newer_dictation_still_blocks_a_duplicate(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    _record_and_stop(controller)
+    assert first.token in controller._jobs
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+
+    assert controller.retry_last_transcription() is False
+
+    assert first.aborting is False
+    assert tray == [_RETRY_ALREADY_RUNNING]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_canceled_retry_does_not_block_the_next_one(monkeypatch, tmp_path):
+    """Cancel, then Retry again, is a deliberate sequence: the user stopped the
+    first request and wants another."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    controller.cancel_current_action()
+    assert first.aborting is True
+
+    assert controller.retry_last_transcription() is True
+
+    assert controller._jobs[controller._active_request_token].token != first.token
+    controller.shutdown()
+    _ = app
+
+
+def test_a_changed_request_retry_stops_the_running_retry_without_the_overlay_token(
+    monkeypatch, tmp_path
+):
+    """The retry stops the jobs working on its own recording, not whichever job
+    holds the overlay's token. Retry 1 lost the token when a newer dictation was
+    recorded and cancelled; a changed retry then left it running, and both
+    delivered: two history entries and two pastes of one text."""
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = _record_and_stop(controller)
+    controller.cancel_queued_transcription(newer)
+    assert controller._active_request_token is None
+    assert first.aborting is False
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    second = controller._jobs[controller._active_request_token]
+    assert second.token != first.token
+    assert first.aborting is True, "retry 1 keeps running beside its replacement"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_never_stops_a_job_of_another_recording(monkeypatch, tmp_path):
+    """A retry of an older failure used to stop whatever held the active token:
+    the newest dictation, which then went to history only and was never pasted.
+    It is left running; the retry takes the overlay and queues behind it, and
+    Cancel on the overlay cancels the retry."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    id_a = controller._jobs[token_a].source_recording_id
+    controller._on_transcription_failed("down", request_token=token_a)
+    token_b = _record_and_stop(controller)
+    newest = controller._jobs[token_b]
+    assert controller._active_request_token == token_b
+
+    assert controller.retry_last_transcription() is True
+
+    retry = controller._jobs[controller._active_request_token]
+    assert retry.token not in (token_a, token_b)
+    assert retry.source_recording_id == id_a
+    assert newest.aborting is False
+    assert newest.background_delivery == "insert", "the newest dictation was diverted"
+    assert overlay.states[-1][0] == "Processing"
+    controller.cancel_current_action()
+    assert retry.aborting is True
+    assert newest.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_changed_retry_beside_a_newer_dictation_replaces_only_its_own_job(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, _history, first = (
+        _a_failed_recording_with_its_retry_running(monkeypatch, tmp_path)
+    )
+    newer = controller._jobs[_record_and_stop(controller)]
+    assert controller._active_request_token == newer.token
+    controller._settings = replace(controller._settings, engine="groq")
+
+    assert controller.retry_last_transcription() is True
+
+    assert first.aborting is True
+    assert newer.aborting is False
+    assert newer.background_delivery == "insert"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_waits_for_a_streaming_finalize_instead_of_stopping_it(
+    monkeypatch, tmp_path
+):
+    """A pending streaming finalize owns the session (`_streaming_recording`),
+    and only its own result clears it: left running while the retry takes the
+    overlay's token, its result would be handled as a background one and the
+    session would stay open for good (a new recording is refused while it is).
+    It cannot be left running and cannot be stopped without diverting the
+    newest dictation, so the retry is refused until the finalize has ended."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    token_a = _record_and_stop(controller)
+    controller._on_transcription_failed("down", request_token=token_a)
+    controller._settings = replace(controller._settings, mode="streaming")
+    token_b = _record_and_stop(controller)
+    finalize = controller._jobs[token_b]
+    assert finalize.mode == "streaming" and controller._streaming_recording is True
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    submitted = len(controller._executor.calls)
+
+    assert controller.retry_last_transcription() is False
+
+    assert finalize.aborting is False
+    assert controller._active_request_token == token_b
+    assert len(controller._executor.calls) == submitted
+    assert tray and "finaliz" in tray[-1], tray
+    assert controller._last_failed_wav_bytes, "the slot keeps the recording"
     controller.shutdown()
     _ = app
 
@@ -3935,5 +4886,189 @@ def test_queue_rows_name_the_language_each_recording_was_made_in(monkeypatch, tm
 
     labels = [label for _token, label in overlay.queue_updates[-1]]
     assert [label.split(" · ")[-3] for label in labels] == ["EN", "DE", "Auto"]
+    controller.shutdown()
+    _ = app
+
+
+def _a_running_dictation_and_a_retry_that_took_the_overlay(
+    monkeypatch, tmp_path, *, mode
+):
+    """W failed, N2 was dictated after it and is still transcribing, and the
+    Retry of W has taken the overlay's token (R). Returns the controller, the
+    app, the overlay, the inserter, the history and the three tokens."""
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode=mode
+    )
+    token_w = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token_w)
+    token_n2 = _record_and_stop(controller)
+    assert controller.retry_last_transcription() is True
+    token_r = controller._active_request_token
+    assert token_r not in (token_w, token_n2)
+    assert controller._jobs[token_n2].aborting is False
+    return controller, app, overlay, inserter, history, (token_n2, token_r)
+
+
+def test_a_new_recording_applies_history_only_to_every_job_in_flight(
+    monkeypatch, tmp_path
+):
+    """`concurrent_transcription_mode` is about the transcriptions in flight
+    when a recording starts, not about the job the overlay shows. It acted on
+    the overlay's token only, which the Retry had taken: the dictation still
+    transcribing kept inserting although the mode said history only, and the
+    retry was the one demoted."""
+    controller, app, _overlay, inserter, history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="history"
+        )
+    )
+
+    controller.start_recording()
+
+    assert controller._jobs[token_n2].background_delivery == "history"
+    assert controller._jobs[token_r].background_delivery == "history"
+    controller._on_transcription_ready("transcript N2", request_token=token_n2)
+    assert inserter.calls == []
+    assert not controller._deferred_background_results
+    assert [entry.text for entry in history.load()] == ["transcript N2"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry(
+    monkeypatch, tmp_path
+):
+    """Cancel mode stopped the retry instead of the dictation. Both are
+    transcriptions in flight, so both are stopped; a result that still
+    arrives goes to history."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="cancel"
+        )
+    )
+
+    controller.start_recording()
+
+    assert controller._jobs[token_n2].aborting is True
+    assert controller._jobs[token_r].aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_leaves_every_job_alone_in_insert_mode(monkeypatch, tmp_path):
+    """Negative control: `insert` is the default and changes nothing."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+
+    controller.start_recording()
+
+    for token in (token_n2, token_r):
+        job = controller._jobs[token]
+        assert job.background_delivery == "insert" and job.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_does_not_touch_a_result_that_is_already_waiting(
+    monkeypatch, tmp_path
+):
+    """A finished result waiting to be pasted is not in flight: the mode is
+    about compute, and the paste it waits for is decided by its own
+    delivery."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="history"
+        )
+    )
+    waiting = controller._jobs[token_n2]
+    waiting.insertion_deferred = True
+
+    controller.start_recording()
+
+    assert waiting.background_delivery == "insert" and waiting.aborting is False
+    assert controller._jobs[token_r].background_delivery == "history"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finished_dictation_pastes_at_once_while_a_retry_holds_the_overlay(
+    monkeypatch, tmp_path
+):
+    """N2 was recorded after W, so its token is older than the retry's, and it
+    waited for the retry to finish -- minutes with a local model -- before it
+    pasted. The retry is an older recording's text, not the live session the
+    wait keeps coherent: whichever finishes first pastes first, and the retry
+    pastes when it is done."""
+    controller, app, overlay, inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+    processing = overlay.states[-1]
+
+    controller._on_transcription_ready("transcript N2", request_token=token_n2)
+
+    assert [call[0] for call in inserter.calls] == ["transcript N2"]
+    assert not controller._deferred_background_results
+    assert overlay.states[-1] == processing, "the retry keeps the overlay"
+    controller._on_transcription_ready("retry of W", request_token=token_r)
+    assert [call[0] for call in inserter.calls] == ["transcript N2", "retry of W"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finished_dictation_still_waits_for_a_newer_dictation(monkeypatch, tmp_path):
+    """Negative control: behind a newer dictation that holds the overlay a
+    finished older result is still held, so the two paste in recording
+    order."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    token_b = _record_and_stop(controller)
+
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    assert inserter.calls == []
+    assert controller._deferred_background_results
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+    assert [call[0] for call in inserter.calls] == ["transcript A transcript B"]
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("cancel", ["current", "row"])
+def test_canceling_a_retry_says_it_was_the_retry(monkeypatch, tmp_path, cancel):
+    """The dictation behind it is still transcribing; "Transcription
+    canceled." read as if that one had stopped."""
+    controller, app, overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+
+    if cancel == "current":
+        controller.cancel_current_action()
+    else:
+        controller.cancel_queued_transcription(token_r)
+
+    assert overlay.states[-1] == ("Done", "Retry canceled.")
+    assert controller._jobs[token_n2].aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_canceling_a_dictation_still_says_transcription_canceled(monkeypatch, tmp_path):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    _record_and_stop(controller)
+
+    controller.cancel_current_action()
+
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
     controller.shutdown()
     _ = app

@@ -92,6 +92,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/_pcm_audio.py` | Linear resampling (Nemotron, Granite CTC), the quiet-point splitter (Granite CTC passes, remote batch parts) and the 16-bit mono WAV encoder |
 | `transcriber/_audio_parts.py` | Sends a remote batch recording past its engine's limit (`config.remote_batch_part_limit`) as consecutive WAV parts through the provider's own single-request code (OpenAI, Groq, Azure) |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |
+| `transcriber/_node_packages.py` | A source checkout's `node_modules` kept in step with `package-lock.json` before the first runner start: drift check against npm's record, staged `npm ci` and swap, never while a runner child of any process holds its presence lock; a failure of npm waits 24 h for the same lock (`app_paths.node_packages_back_off_path`) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -128,7 +129,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_coordinator.py` | The single download slot; serializes every download path — in-process and, via `file_lock`, across processes |
-| `file_lock.py` | OS-level cross-process advisory lock (`msvcrt.locking` / `fcntl.flock`) that makes the download slot hold across every process of one Windows user |
+| `file_lock.py` | OS-level cross-process advisory lock (`msvcrt.locking` / `fcntl.flock`) that makes the download slot hold across every process of one Windows user; `is_lock_held` tells whether a lock's owner is alive (Node runner presence) |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `local_model_download_worker.py` | Subprocess entry point that downloads one model |
 | `local_model_scan.py` | Local model inventory scan shared by the app and its worker |
@@ -145,8 +146,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `history_audio.py` | Shared history-entry-to-audio resolution plus file-manager reveal/open helpers for both history views |
 | `retranscribe_dialog.py` | Compact language-only retranscription of one history entry's retained audio |
 | `app_paths.py` | Centralized app data/config path helpers |
-| `last_recording_store.py` | Managed last-recording state (path, status, recovery) for Retry and Import |
-| `unfinished_recordings.py` | Recordings a quit left untranscribed: a directory of WAV files named by time and recording id, no index |
+| `last_recording_store.py` | Managed last-recording state (path, status, recovery, the language it was made in) for Retry and Import |
+| `unfinished_recordings.py` | Recordings a quit left untranscribed: a directory of WAV files named by time, recording id and language, no index |
 | `unfinished_recordings_dialog.py` | Startup notice listing those recordings: transcribe all/selected into history, show in folder, delete, keep files |
 | `quit_dialog.py` | The tray's Quit: quits at once, or asks (wait and insert / quit now / don't quit) while work is pending |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
@@ -183,7 +184,7 @@ commit. Entries are written as "rule, then why, then what was measured".
 | [`docs/agents/streaming.md`](docs/agents/streaming.md) | `streaming_text.py`, rolling-window merge, pause/segment logic, stream handshake, finalize and runtime failures |
 | [`docs/agents/controller-and-jobs.md`](docs/agents/controller-and-jobs.md) | `controller.py` job delivery, cancel, retry slot, last-recording marks, preload, runtime lease and cache identity, `quit_dialog.py` |
 | [`docs/agents/persistence-and-history.md`](docs/agents/persistence-and-history.md) | `persistence.py`, any JSON store, `secret_store.py`, transcript history and its audio linkage, `unfinished_recordings*.py` |
-| [`docs/agents/local-models-and-downloads.md`](docs/agents/local-models-and-downloads.md) | local runtimes (faster-whisper, onnx-asr, Granite CTC, Nemotron, Node/ONNX), ONNX device policy, model inventory, download slot and progress, dependency versions |
+| [`docs/agents/local-models-and-downloads.md`](docs/agents/local-models-and-downloads.md) | local runtimes (faster-whisper, onnx-asr, Granite CTC, Nemotron, Node/ONNX), ONNX device policy, model inventory, download slot and progress, dependency versions, a checkout's `node_modules` update |
 | [`docs/agents/remote-providers.md`](docs/agents/remote-providers.md) | `transcriber/*_provider.py`, remote model rosters, batch splitting, provider error text |
 | [`docs/agents/benchmark.md`](docs/agents/benchmark.md) | `local_benchmark.py`, `benchmark_*.py`, the Benchmark tab and windows, benchmark claims in docs |
 | [`docs/agents/windows-platform.md`](docs/agents/windows-platform.md) | `hotkey.py`, `win_tray_icon.py`, update checks/installer, taskbar identity, Win32 `WinDLL` handles |

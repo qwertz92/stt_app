@@ -9,6 +9,7 @@ import pytest
 from PySide6 import QtWidgets
 
 import stt_app.main as main_module
+from stt_app.config import LANGUAGE_MODE_LABELS
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.unfinished_recordings import UnfinishedRecordingStore
@@ -48,7 +49,7 @@ def _history_entry(text, recording_id):
     )
 
 
-def _offer(stores, tmp_path, transcribe=None):
+def _offer(stores, tmp_path, transcribe=None, language_note=None):
     last, history, unfinished = stores
     return main_module._offer_unfinished_recordings(
         last_recording_store=last,
@@ -56,6 +57,7 @@ def _offer(stores, tmp_path, transcribe=None):
         unfinished_store=unfinished,
         transcribe=transcribe or (lambda _recording, _progress: (True, "text")),
         keep_dir=tmp_path / "recordings",
+        language_note=language_note,
     )
 
 
@@ -87,6 +89,27 @@ def test_the_notice_lists_the_quits_recordings_and_the_last_recording(
     assert last.has_recoverable_recording() is False
     assert not last.audio_path.exists(), "keep_after_success off: the copy is the one"
     dialog.close()
+
+
+def test_the_last_recordings_language_goes_with_it_into_the_list(app, stores, tmp_path):
+    """Owner decision 2026-10-17: a retry uses the language the recording was
+    made in. The managed slot is the only place that language is stored
+    after a crash, so the copy into the list must carry it."""
+    last, _history, unfinished = stores
+    last.save_recording(b"RIFF-german", keep_after_success=False, language_mode="de")
+    last.mark_failed("network")
+    _offer(stores, tmp_path).close()
+    # A state without a language (an earlier version's) is kept as unknown.
+    last.save_recording(b"RIFF-older", keep_after_success=False)
+    last.mark_failed("network")
+    _offer(stores, tmp_path).close()
+
+    languages = {
+        item.path.read_bytes(): item.language_mode
+        for item in unfinished.list_recordings()
+    }
+
+    assert languages == {b"RIFF-german": "de", b"RIFF-older": ""}
 
 
 def test_a_slot_that_cannot_be_marked_is_not_copied_twice(
@@ -152,7 +175,15 @@ def test_nothing_unfinished_shows_nothing(app, stores, tmp_path):
     assert _offer(stores, tmp_path) is None
 
 
-def _dialog(tmp_path, unfinished, *, transcribe=None, reveal=None, confirm=None):
+def _dialog(
+    tmp_path,
+    unfinished,
+    *,
+    transcribe=None,
+    reveal=None,
+    confirm=None,
+    language_note=None,
+):
     return UnfinishedRecordingsDialog(
         recordings=unfinished.list_recordings(),
         store=unfinished,
@@ -160,6 +191,7 @@ def _dialog(tmp_path, unfinished, *, transcribe=None, reveal=None, confirm=None)
         keep_dir=tmp_path / "recordings",
         reveal=reveal or (lambda _paths: True),
         confirm_delete=confirm or (lambda _parent, _count: True),
+        language_note=language_note,
     )
 
 
@@ -217,6 +249,110 @@ def test_transcribe_all_reports_each_row_and_keeps_a_failure_actionable(
     assert dialog.transcribe_selected_button.isEnabled()
     dialog.table.selectRow(0)
     assert not dialog.transcribe_selected_button.isEnabled()
+    dialog.close()
+
+
+def test_a_row_says_which_language_ran_when_the_recorded_one_was_not_offered(
+    app, stores, tmp_path
+):
+    """The Retry after a restart falls back to the selected language where the
+    engine does not offer the recorded one (`transcribe_unfinished_recording`);
+    the row says so, since the transcript is in History and the user judges it
+    by the language it was made in."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1", stamp="2026-10-08T10:00:00")
+    _keep(unfinished, "b2", stamp="2026-10-08T11:00:00")
+    notes = {"a1": ("English", "Auto"), "b2": None}
+    dialog = _dialog(
+        tmp_path,
+        unfinished,
+        language_note=lambda recording: notes[recording.recording_id],
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    cells = [dialog.table.item(row, 3) for row in range(2)]
+    assert [cell.text() for cell in cells] == [
+        "Transcribed in English, in History (Auto is not offered by this model)",
+        "Transcribed, in History",
+    ]
+    assert cells[0].toolTip().startswith(cells[0].text())
+    assert "recording is kept" in cells[0].toolTip()
+    assert cells[1].toolTip() == cells[1].text()
+    dialog.close()
+
+
+def test_the_longest_row_text_fits_the_status_column(app, stores, tmp_path):
+    """The row is one line, elided on the right: a language label long enough
+    to push "is not offered by this model" out of the column would hide the
+    very words that tell why the language is another."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    longest = max(LANGUAGE_MODE_LABELS.values(), key=len)
+    dialog = _dialog(
+        tmp_path, unfinished, language_note=lambda _recording: (longest, longest)
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    cell = dialog.table.item(0, 3)
+    table = dialog.table
+    # A cell's text keeps this margin on both sides (Qt's item text layout).
+    margin = table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
+    needed = table.fontMetrics().horizontalAdvance(cell.text()) + 2 * margin
+    assert needed <= table.columnWidth(3), (cell.text(), needed)
+    dialog.close()
+
+
+def test_a_failing_language_note_does_not_fail_the_transcription(
+    app, stores, tmp_path, caplog
+):
+    """The note only describes the transcription; when it cannot be worked out
+    the recording is still transcribed, and the failure is in the log. Asked
+    inside the transcription's own `try`, its exception became the row's
+    failure and the audio was never sent."""
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    transcribed = []
+
+    def _transcribe(recording, _progress):
+        transcribed.append(recording.recording_id)
+        return True, "hello"
+
+    def _broken_note(_recording):
+        raise RuntimeError("settings unreadable")
+
+    dialog = _dialog(
+        tmp_path, unfinished, transcribe=_transcribe, language_note=_broken_note
+    )
+    dialog.show()
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    assert transcribed == ["a1"]
+    assert dialog.table.item(0, 3).text() == "Transcribed, in History"
+    assert "settings unreadable" in caplog.text
+    dialog.close()
+
+
+def test_the_startup_offer_hands_the_language_note_to_its_notice(app, stores, tmp_path):
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1")
+    dialog = _offer(
+        stores, tmp_path, language_note=lambda _recording: ("German", "Auto")
+    )
+
+    dialog.transcribe_all_button.click()
+    _wait_until(app, lambda: "into History and listed" in dialog.status_label.text())
+
+    assert dialog.table.item(0, 3).text() == (
+        "Transcribed in German, in History (Auto is not offered by this model)"
+    )
     dialog.close()
 
 

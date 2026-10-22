@@ -11,7 +11,9 @@ import tempfile
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,7 @@ from ..config import (
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
     PARAKEET_ULTRA_MODEL_SIZE,
+    TRAY_MESSAGE_MAX_CHARS,
     effective_preferred_device,
     language_modes_for_selection,
 )
@@ -43,6 +46,7 @@ from ..model_download_progress import (
 )
 from ..persistence import atomic_write_bytes
 from ..process_tree import no_window_flags
+from . import _node_packages
 from .base import (
     AudioInput,
     ITranscriber,
@@ -71,6 +75,13 @@ class _NodeProcessState:
     stderr_lines: deque[str]
     stderr_lock: threading.Lock = field(
         default_factory=threading.Lock,
+        compare=False,
+        repr=False,
+    )
+    # Held while the child lives, so no process updates `node_modules` under
+    # it (`_node_packages`). None in a packaged app.
+    runner_presence: _node_packages.RunnerPresence | None = field(
+        default=None,
         compare=False,
         repr=False,
     )
@@ -354,7 +365,25 @@ _DEVICE_POLICY_LABELS = {
     "cpu": "CPU only",
 }
 _JS_RUNTIME_READY: set[tuple[str, str]] = set()
+# Orders this process's runner starts with a package update: held while
+# `_ensure_js_runtime_available` checks, updates and announces a runner.
 _JS_RUNTIME_LOCK = threading.Lock()
+# Carries "the packages could not be updated" to the tray once per session.
+# Set by the app (`main._connect_tray_notifications`), after the startup
+# preload may already have raised the notice, which then waits in PENDING.
+# The benchmark worker has none, and its failures are in the log only. Its
+# own lock: the Qt thread sets the handler and must never wait for
+# `_JS_RUNTIME_LOCK`, which an update holds for minutes.
+_NODE_PACKAGES_NOTICE_LOCK = threading.Lock()
+_NODE_PACKAGES_NOTICE_HANDLER: Callable[[str], None] | None = None
+_NODE_PACKAGES_NOTICE_PENDING = ""
+_NODE_PACKAGES_NOTICE_SENT = False
+NODE_PACKAGES_NOTICE_TITLE = "Cohere/Granite packages not updated"
+_NODE_PACKAGES_NOTICE_TEXT = (
+    "Could not update the JavaScript packages that Cohere and Granite run "
+    "on: {reason}. Both models keep working with the previous packages; "
+    "the app tries again {when}."
+)
 
 
 def default_hf_cache_dir() -> str:
@@ -794,15 +823,93 @@ def _npm_beside_node(node_path: str | None) -> str | None:
     return None
 
 
+def _npm_executable(node_path: str | None) -> str | None:
+    return shutil.which("npm") or shutil.which("npm.cmd") or _npm_beside_node(node_path)
+
+
 def _find_source_package_root(runner: Path) -> Path | None:
+    """The source checkout whose `node_modules` the runner imports, or None.
+
+    Only a source checkout is kept in step with its lock: the nearest folder
+    holding `package.json`, `package-lock.json` and `.git`, and the
+    `package.json` must be this app's (`stt-app`), so a wheel installed into
+    some other project's tree never runs npm there. A packaged (frozen) app
+    answers None even inside a checkout -- `dist/` lies in one: its bundled
+    tree never changes and must not be replaced.
+    """
+    if getattr(sys, "frozen", False):
+        return None
     for directory in (runner.parent, *runner.parents):
         if (
             (directory / "package.json").is_file()
             and (directory / "package-lock.json").is_file()
             and (directory / ".git").exists()
         ):
-            return directory
+            try:
+                manifest = json.loads((directory / "package.json").read_text("utf-8"))
+            except (OSError, ValueError):
+                return None
+            if isinstance(manifest, dict) and manifest.get("name") == "stt-app":
+                return directory
+            return None
     return None
+
+
+def set_node_packages_notice_handler(handler: Callable[[str], None] | None) -> None:
+    """Route the one-time "packages not updated" notice (`_check_js_runtime`).
+
+    A notice raised before a handler existed is delivered to this one.
+    """
+    global _NODE_PACKAGES_NOTICE_HANDLER, _NODE_PACKAGES_NOTICE_PENDING
+    with _NODE_PACKAGES_NOTICE_LOCK:
+        _NODE_PACKAGES_NOTICE_HANDLER = handler
+        pending = _NODE_PACKAGES_NOTICE_PENDING if handler is not None else ""
+        if pending:
+            _NODE_PACKAGES_NOTICE_PENDING = ""
+    if pending:
+        _deliver_node_packages_notice(handler, pending)
+
+
+def node_packages_notice_text(reason: str, retry_after: float) -> str:
+    """The tray text for an update that failed while the old tree still loads.
+
+    `retry_after` is when npm runs again (`SyncOutcome.retry_after`, local
+    time on screen), or 0 when the next start tries anyway. The reason is
+    shortened so that the whole text fits the tray's limit and its second
+    sentence -- the models still work, and when the next try comes -- is
+    never cut off.
+    """
+    when = (
+        f"after {datetime.fromtimestamp(retry_after, UTC).astimezone():%Y-%m-%d %H:%M}"
+        if retry_after
+        else "at its next start"
+    )
+    fixed = _NODE_PACKAGES_NOTICE_TEXT.format(reason="", when=when)
+    room = TRAY_MESSAGE_MAX_CHARS - len(fixed)
+    if len(reason) > room:
+        reason = reason[: room - 3].rstrip() + "..."
+    return _NODE_PACKAGES_NOTICE_TEXT.format(reason=reason, when=when)
+
+
+def _deliver_node_packages_notice(handler: Callable[[str], None], text: str) -> None:
+    try:
+        handler(text)
+    except Exception:
+        logger.debug("node_packages_notice_failed", exc_info=True)
+
+
+def _notify_previous_packages_kept(reason: str, retry_after: float) -> None:
+    global _NODE_PACKAGES_NOTICE_PENDING, _NODE_PACKAGES_NOTICE_SENT
+    text = node_packages_notice_text(reason, retry_after)
+    with _NODE_PACKAGES_NOTICE_LOCK:
+        if _NODE_PACKAGES_NOTICE_SENT:
+            return
+        _NODE_PACKAGES_NOTICE_SENT = True
+        handler = _NODE_PACKAGES_NOTICE_HANDLER
+        if handler is None:
+            _NODE_PACKAGES_NOTICE_PENDING = text
+            return
+    _deliver_node_packages_notice(handler, text)
 
 
 def _run_transformers_import_probe(
@@ -816,10 +923,13 @@ def _run_transformers_import_probe(
     which the runner stopped importing when the raw Granite graph paths were
     retired and which `package.json` never declared -- they resolve today only
     because npm hoists them out of `@huggingface/transformers`. Probing for an
-    undeclared package makes the repair unreachable: `npm install` installs
-    what `package.json` asks for, so if the hoist ever changed, the probe
-    would fail, the reinstall would not fix it, and every ONNX dictation would
-    end in "run npm install" forever.
+    undeclared package makes the repair unreachable: the reinstall installs
+    what the lock asks for, so if the hoist ever changed, the probe would
+    fail, the reinstall would not fix it, and every ONNX dictation would end
+    in "the runtime is not available" forever.
+
+    `cwd` is where Node starts resolving: the runner's folder for the tree
+    in use, the staging folder for an update (`_node_packages`).
     """
     return subprocess.run(
         [
@@ -837,68 +947,129 @@ def _run_transformers_import_probe(
     )
 
 
-def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
+def _probe_js_runtime(node_path: str, cwd: Path) -> tuple[bool, str]:
+    """Whether Transformers.js imports from `cwd`, and the failure detail."""
+    try:
+        probe = _run_transformers_import_probe(node_path, cwd)
+    except Exception as exc:
+        return False, str(exc)
+    if probe.returncode == 0:
+        return True, ""
+    return False, (probe.stderr or probe.stdout or "").strip()
+
+
+def _check_js_runtime(
+    node_path: str,
+    runner: Path,
+    source_root: Path | None,
+    progress: Callable[[str], None],
+) -> None:
+    """Probe the runtime once per session; in a checkout, update it first.
+
+    The caller holds `_JS_RUNTIME_LOCK` and, in a checkout, the package
+    root's lock.
+    """
     cache_key = (str(Path(node_path)), str(runner.parent))
-    with _JS_RUNTIME_LOCK:
-        if cache_key in _JS_RUNTIME_READY:
-            return
+    if cache_key in _JS_RUNTIME_READY:
+        return
+    outcome = _node_packages.SyncOutcome()
+    if source_root is not None:
+        npm_path = _npm_executable(node_path)
 
-        probe: subprocess.CompletedProcess[str] | None = None
-        probe_error = ""
-        try:
-            probe = _run_transformers_import_probe(node_path, runner.parent)
-        except Exception as exc:
-            probe_error = str(exc)
+        def sync(*, force: bool) -> _node_packages.SyncOutcome:
+            return _node_packages.sync_node_modules(
+                source_root,
+                npm_path=npm_path,
+                probe=lambda cwd: _run_transformers_import_probe(node_path, cwd),
+                progress=progress,
+                force=force,
+            )
 
-        if probe is not None and probe.returncode == 0:
-            _JS_RUNTIME_READY.add(cache_key)
-            return
-
-        source_root = _find_source_package_root(runner)
-        npm_path = (
-            shutil.which("npm")
-            or shutil.which("npm.cmd")
-            or _npm_beside_node(node_path)
-        )
-        if source_root is not None and npm_path:
-            try:
-                install = subprocess.run(
-                    [npm_path, "install"],
-                    cwd=str(source_root),
-                    text=True,
-                    capture_output=True,
-                    timeout=300,
-                    check=False,
-                    creationflags=no_window_flags(),
-                )
-            except Exception as exc:
-                probe_error = str(exc)
-            else:
-                if install.returncode == 0:
-                    try:
-                        probe = _run_transformers_import_probe(node_path, runner.parent)
-                    except Exception as exc:
-                        probe_error = str(exc)
-                    else:
-                        if probe.returncode == 0:
-                            _JS_RUNTIME_READY.add(cache_key)
-                            return
-                elif install.stderr or install.stdout:
-                    probe_error = (install.stderr or install.stdout).strip()
-
-        detail = probe_error or (
-            (probe.stderr or probe.stdout or "").strip() if probe is not None else ""
-        )
+        outcome = sync(force=False)
+    loads, detail = _probe_js_runtime(node_path, runner.parent)
+    if not loads and outcome.backed_off:
+        # One more look before a failed import overrides the back-off: on a
+        # loaded, slow PC the probe can time out once on a tree that works,
+        # and the update it would trigger costs a full npm failure time
+        # (review of 75fc685).
+        loads, detail = _probe_js_runtime(node_path, runner.parent)
+    if (
+        not loads
+        and source_root is not None
+        and (not outcome.changes or outcome.backed_off)
+    ):
+        # npm's record says the tree is in step, yet it does not load (a
+        # deleted file, an interrupted manual install), or the back-off held
+        # back the update of a tree that does not load either: reinstall it
+        # once, the same staged way. An update that was tried is not repeated.
+        outcome = sync(force=True)
+        if outcome.updated:
+            loads, detail = _probe_js_runtime(node_path, runner.parent)
+    if loads:
+        _JS_RUNTIME_READY.add(cache_key)
+        if outcome.failure:
+            _notify_previous_packages_kept(outcome.failure, outcome.retry_after)
+        return
+    if source_root is None:
         install_hint = (
-            "The app tried to install the JavaScript runtime automatically, but "
-            "the import still failed."
-            if source_root is not None and npm_path
-            else "Install Node.js and run npm install, or use the packaged app with bundled JavaScript dependencies."
+            "The JavaScript packages bundled with the app did not load; "
+            "reinstalling the app restores them."
+            if getattr(sys, "frozen", False)
+            else "Install Node.js and run npm ci --omit=dev in the folder that "
+            "holds package.json, or use the installed app, which bundles its "
+            "JavaScript packages."
         )
-        raise TranscriptionError(
-            "The ONNX JavaScript runtime is not available. "
-            f"{install_hint}" + (f"\n{detail}" if detail else "")
+    elif outcome.failure:
+        install_hint = (
+            f"The app could not install its JavaScript packages: {outcome.failure}."
         )
+    elif outcome.deferred:
+        install_hint = (
+            "The JavaScript packages need a reinstall, which waits until no "
+            "other Cohere/Granite runtime is running (a benchmark, for example)."
+        )
+    elif outcome.updated:
+        install_hint = (
+            "The app reinstalled its JavaScript packages, but the import still failed."
+        )
+    else:
+        install_hint = (
+            "package-lock.json could not be read, so the app could not reinstall "
+            "its JavaScript packages."
+        )
+    raise TranscriptionError(
+        "The ONNX JavaScript runtime is not available. "
+        f"{install_hint}" + (f"\n{detail}" if detail else "")
+    )
+
+
+def _ensure_js_runtime_available(
+    node_path: str,
+    runner: Path,
+    progress: Callable[[str], None] | None = None,
+) -> _node_packages.RunnerPresence | None:
+    """Make sure the runner can import its packages, and announce it.
+
+    In a source checkout `node_modules` is first brought in step with
+    `package-lock.json` (`_node_packages`), before the session's first
+    runner start, and the returned presence must be held for as long as the
+    child runs so that no process updates the tree under it; the caller
+    releases it. None in a packaged app, whose bundled tree never changes.
+    Runs where the runner starts -- a preload or transcription worker,
+    never the Qt thread -- and waits while another process updates.
+    """
+    report = progress or (lambda _text: None)
+    source_root = _find_source_package_root(runner)
+    with _JS_RUNTIME_LOCK:
+        if source_root is None:
+            _check_js_runtime(node_path, runner, None, report)
+            return None
+        try:
+            with _node_packages.package_root_lock(source_root):
+                _check_js_runtime(node_path, runner, source_root, report)
+                return _node_packages.hold_runner_presence()
+        except TimeoutError as exc:
+            raise TranscriptionError(str(exc)) from exc
 
 
 class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
@@ -1235,7 +1406,48 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         snapshot = self._ensure_snapshot()
         node_path = self._node_executable()
         runner = self._runner_file()
-        _ensure_js_runtime_available(node_path, runner)
+        presence = _ensure_js_runtime_available(
+            node_path, runner, progress=self._emit_progress
+        )
+        try:
+            process = self._spawn_runner(node_path, runner, snapshot)
+        except BaseException:
+            if presence is not None:
+                presence.release()
+            raise
+
+        state = _NodeProcessState(
+            process=process,
+            stdout_queue=queue.Queue(maxsize=128),
+            stderr_lines=deque(maxlen=_STDERR_MAX_LINES),
+            runner_presence=presence,
+        )
+        self._process_state = state
+        self._start_reader_threads(state)
+
+        try:
+            ready = self._read_json_message(
+                state,
+                time.monotonic() + self.startup_timeout_s,
+            )
+        except Exception:
+            self._discard_process_locked(state)
+            raise
+        if not bool(ready.get("ok")):
+            detail = str(ready.get("error") or self._stderr_tail(state))
+            self._discard_process_locked(state)
+            raise TranscriptionError(f"ONNX/WebGPU runtime failed to load: {detail}")
+
+        self._set_runtime_status(
+            ready.get("device"),
+            ready.get("gpuAvailable"),
+            ready.get("fallbackErrors"),
+        )
+        self._emit_progress(self.runtime_status_text())
+
+    def _spawn_runner(
+        self, node_path: str, runner: Path, snapshot: Path
+    ) -> subprocess.Popen[str]:
         policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
         measured = ""
         if self.preferred_device:
@@ -1283,34 +1495,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(
                 f"Failed to start ONNX/WebGPU runtime: {exc}"
             ) from exc
-
-        state = _NodeProcessState(
-            process=process,
-            stdout_queue=queue.Queue(maxsize=128),
-            stderr_lines=deque(maxlen=_STDERR_MAX_LINES),
-        )
-        self._process_state = state
-        self._start_reader_threads(state)
-
-        try:
-            ready = self._read_json_message(
-                state,
-                time.monotonic() + self.startup_timeout_s,
-            )
-        except Exception:
-            self._discard_process_locked(state)
-            raise
-        if not bool(ready.get("ok")):
-            detail = str(ready.get("error") or self._stderr_tail(state))
-            self._discard_process_locked(state)
-            raise TranscriptionError(f"ONNX/WebGPU runtime failed to load: {detail}")
-
-        self._set_runtime_status(
-            ready.get("device"),
-            ready.get("gpuAvailable"),
-            ready.get("fallbackErrors"),
-        )
-        self._emit_progress(self.runtime_status_text())
+        return process
 
     def _ensure_process(self) -> None:
         state = self._process_state
@@ -1441,7 +1626,15 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     @staticmethod
     def _terminate_process(state: _NodeProcessState, *, graceful: bool) -> None:
-        process = state.process
+        LocalOnnxWebGpuTranscriber._end_process(state.process, graceful=graceful)
+        # Only once the child is gone: a presence given back while a child
+        # that refused to die still runs would let an update replace the tree
+        # under it. Such a presence stays held until this process exits.
+        if state.runner_presence is not None and state.process.poll() is not None:
+            state.runner_presence.release()
+
+    @staticmethod
+    def _end_process(process: subprocess.Popen[str], *, graceful: bool) -> None:
         if process.poll() is not None:
             return
         if graceful:

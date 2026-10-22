@@ -2363,6 +2363,17 @@ TRAY_CANCEL_ACTION_LABEL = "Cancel current action"
 # The tray menu's re-paste entry, named by the reports of transcripts that are
 # still waiting to be inserted, which is what that entry inserts first.
 TRAY_REPASTE_ACTION_LABEL = "Insert transcript again"
+# The longest tray notification text Windows shows (`NOTIFYICONDATAW.szInfo`
+# holds 256 characters with its terminator); `win_tray_icon` cuts anything
+# longer, and a text composed for the tray is sized to fit whole.
+TRAY_MESSAGE_MAX_CHARS = 255
+# The progress line while a source checkout's JavaScript packages update
+# (`transcriber._node_packages`): a dictation's start shows it as reported,
+# and the startup preload's line shows it in place of "Loading ...".
+NODE_PACKAGES_UPDATING_TEXT = (
+    "Updating the JavaScript packages for Cohere/Granite to match this "
+    "version of the app (once per update, can take a few minutes)."
+)
 # The two kinds of row the overlay's queue panel shows: a transcription still
 # running or queued (its button cancels it), and a finished transcript whose
 # paste failed or may have failed (its button dismisses the row; the text
@@ -2375,6 +2386,18 @@ QUEUE_ROW_KIND_UNDELIVERED = "undelivered"
 # and Retry re-transcribes the last *failed* recording, which may be an
 # entirely different one, pasting it on top.
 OVERLAY_ERROR_ACTION_NONE = "none"
+# A transcript that exists but is not (surely) in its window is a warning, not
+# an error: nothing failed that Retry could redo, and the text is safe in
+# history. The overlay keeps the Error *state* for every control and check but
+# paints it burnt orange under one of these two words instead of the red
+# "Error", which stays for failures that left no transcript. "Not inserted":
+# the paste failed or its target does not look like a text field (Insert is
+# offered). "Check window": the paste keystroke went out and only the cleanup
+# failed, so the text is most likely in the window (no Insert, never pasted
+# twice).
+OVERLAY_WARNING_NOT_INSERTED = "Not inserted"
+OVERLAY_WARNING_CHECK_WINDOW = "Check window"
+OVERLAY_WARNING_LABELS = (OVERLAY_WARNING_NOT_INSERTED, OVERLAY_WARNING_CHECK_WINDOW)
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100
 DEFAULT_OVERLAY_OPACITY_PERCENT = OVERLAY_OPACITY_MAX_PERCENT
@@ -2394,6 +2417,10 @@ OVERLAY_STATE_COLORS = {
     "Processing": "#0d47a1",
     "Done": "#4e342e",
     "Error": "#b71c1c",
+    # The warning of `OVERLAY_WARNING_LABELS` (owner's decision 2026-10-17).
+    # White text on it is 6.1:1; the not-inserted badge's amber (#ffb300) is
+    # 3.4:1 against it, so the badge stays apart from the background.
+    "Warning": "#9a4d00",
 }
 
 LOG_FILE_NAME = "dictation.log"

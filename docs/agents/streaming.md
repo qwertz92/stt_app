@@ -68,7 +68,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   rejected on a healthy socket (`docs/agents/audio-capture.md`). Stop drains audio
   through a sender barrier, sends `Finalize`, waits best-effort for
   `from_finalize`, sends `CloseStream`; all bounded, and a failed path
-  closes the socket without control frames overtaking audio.
+  closes the socket without control frames overtaking audio. The same
+  sender thread writes a `KeepAlive` whenever its queue stayed empty for 3 s
+  (2026-10-17), so a gap in the audio -- a start stall, a stop's backlog
+  wait, both up to 12 s -- does not make Deepgram close the socket at its
+  10 s limit; no KeepAlive can overlap an audio frame or follow the barrier.
+  A session that has sent no audio at all gets one 0.1 s frame of digital
+  silence before its first KeepAlive, never once audio has gone out. One gap
+  is bridged for at most 30 s (the capture's 20 s input buffer plus 10 s):
+  the sender ends the stream itself at the next wait, 33 s after the last
+  block, by recording a `TranscriptionError` through the failure path a
+  failed send takes, so a microphone that dies mid-dictation reaches this
+  entry's first rule once, with a message that names the cause, instead of
+  an overlay that stays on "Listening" -- independent of what Deepgram does
+  with the socket (`docs/agents/remote-providers.md` has the vendor facts,
+  the reasons, and why the sender and not a timer).
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single

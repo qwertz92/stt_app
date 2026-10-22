@@ -23,6 +23,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from stt_app.config import (
     DEFAULT_CANCEL_HOTKEY,
     FALLBACK_HOTKEY,
+    OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_INITIAL_DETAIL,
 )
 from stt_app.controller import DictationController
@@ -221,6 +222,19 @@ class FakeOverlay:
         self.paint_calls = 0
 
     def set_state(self, state, detail="", **kwargs):
+        # The real overlay paints the red Error for an Insert offer unless told
+        # it is a warning: the offer's transcript exists, so it is not an
+        # error unless something else failed meanwhile (owner's decision
+        # 2026-10-17; severity wins, lead's decision the same day). Every
+        # writer goes through `DictationController._paint_not_inserted`,
+        # which always passes `warning` -- a word, or None for that red
+        # Error. A writer that leaves it out fails here, in every test that
+        # reaches it.
+        offers_insert = kwargs.get("error_action") == OVERLAY_ERROR_ACTION_INSERT
+        assert not offers_insert or "warning" in kwargs, (
+            "an Insert offer painted without deciding its warning: "
+            f"{state!r} {detail!r}"
+        )
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))
 
@@ -455,6 +469,8 @@ class FakeLastRecordingStore:
         self.path = Path(path)
         self.recording_id = ""
         self.saved: list[tuple[bytes, bool]] = []
+        # The language selection each saved recording was made under.
+        self.saved_languages: list[str] = []
         self.transcribing: list[tuple[str, str, str]] = []
         self.transcribing_ids: list[str | None] = []
         self.failed: list[str] = []
@@ -468,8 +484,11 @@ class FakeLastRecordingStore:
     def _assign_recording_id(self) -> None:
         self.recording_id = f"rec-{len(self.saved)}"
 
-    def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
+    def save_recording(
+        self, wav_bytes: bytes, *, keep_after_success: bool, language_mode: str = ""
+    ):
         self.saved.append((bytes(wav_bytes), bool(keep_after_success)))
+        self.saved_languages.append(language_mode)
         self._available = bool(wav_bytes)
         self._assign_recording_id()
         return SimpleNamespace(recording_id=self.recording_id)

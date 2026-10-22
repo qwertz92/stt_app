@@ -313,3 +313,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   writers), and `_construct_settings_from_widgets` has no `exec`,
   `processEvents`, `QMessageBox` or `QFileDialog`. Never add one between the
   reads; the history-trim prompt stays before all three.
+- **"Use last recording" starts the Import language from the recording's own**
+  (owner decision 2026-10-17: correcting a wrong language is "open Import,
+  change the language, transcribe"). `_preselect_recorded_import_language`
+  reads `LastRecordingStore.load().language_mode` and, when the selected
+  import engine and model offer it (`_import_language_scope`, the one place
+  that asks `language_modes_for_selection(engine, model, "batch")` for the
+  tab), sets the picker through `_update_import_language_selector(preferred_mode=)`;
+  the status line says which language, or that the model does not offer it
+  and the choice stands. It does nothing for an archived file (its name
+  carries no language), a state without a language, or after the user picked a
+  language on this tab: `_import_language_chosen` is set by
+  `_on_import_language_changed`, which only the user's own pick reaches
+  (the selector blocks its signals), and cleared by `_populate_views`, so a
+  reopened dialog is a new visit. It acts at the click only: changing the
+  Import service or model afterwards rebuilds the picker as before, from what
+  was last used for that pair or the Transcription tab's language. Tests:
+  `test_use_last_recording_*` and `test_a_preselected_language_*` in
+  `tests/test_settings_dialog_mode.py`.

@@ -289,6 +289,10 @@ class SettingsDialog(
             **self._remote_model_values,
         }
         self._import_language_values: dict[tuple[str, str], str] = {}
+        # Whether the user picked a language on the Import tab since the
+        # dialog was last populated (a "visit"): "Use last recording" then
+        # leaves their pick alone instead of preselecting the recording's.
+        self._import_language_chosen = False
         self._active_connection_test_thread: threading.Thread | None = None
         self._active_update_check_thread: threading.Thread | None = None
         self._import_progress_message = ""

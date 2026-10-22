@@ -13,6 +13,7 @@ from .app_paths import recordings_dir
 from .config import (
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
+    LANGUAGE_MODE_LABELS,
     VALID_ENGINES,
 )
 from .dialog_style import styled_message_box
@@ -336,11 +337,49 @@ class _ImportTabMixin:
             self._reset_import_copy_feedback()
             return False
         self._set_selected_import_file(str(path))
+        language_note = self._preselect_recorded_import_language(str(path))
         self.import_result_label.setText(
-            "Last recording loaded. Choose a provider and start transcription."
+            " ".join(
+                part
+                for part in (
+                    "Last recording loaded.",
+                    language_note,
+                    "Choose a provider and start transcription.",
+                )
+                if part
+            )
         )
         self.import_result_label.setStyleSheet("color: #555;")
         return True
+
+    def _preselect_recorded_import_language(self, path: str) -> str:
+        """Start the Import language from the one the last recording was made
+        in (owner decision 2026-10-17), so that correcting a wrong language is
+        "open Import, change the language, transcribe".
+
+        Only a managed recording knows its language (an archived file's name
+        carries none), only when the selected import model offers it, and
+        never over a language the user picked on this tab since the dialog
+        was populated. Returns the sentence the status line adds, "" when
+        there is nothing to say.
+        """
+        if self._import_language_chosen:
+            return ""
+        if not self._last_recording_store.is_managed_audio_path(path):
+            return ""
+        state = self._last_recording_store.load()
+        recorded = str(getattr(state, "language_mode", "") or "")
+        if not recorded:
+            return ""
+        label = LANGUAGE_MODE_LABELS.get(recorded, recorded)
+        _key, offered = self._import_language_scope()
+        if recorded not in offered:
+            return (
+                f"Its recorded language ({label}) is not offered by the selected "
+                "model, so the language stays as chosen."
+            )
+        self._update_import_language_selector(preferred_mode=recorded)
+        return f"Its recorded language ({label}) is selected."
 
     def _transcribe_selected_import_file(self) -> None:
         path = self._selected_import_file_path

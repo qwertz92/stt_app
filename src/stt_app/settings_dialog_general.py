@@ -518,6 +518,19 @@ class _GeneralTabMixin:
     def _import_language_key(engine: str, model: str) -> tuple[str, str]:
         return (str(engine or "").strip().lower(), str(model or "").strip())
 
+    def _import_language_scope(self) -> tuple[tuple[str, str], tuple[str, ...]]:
+        """The Import tab's (engine, model) key and the languages that pair
+        offers for an imported file."""
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        model = str(
+            self.import_model_combo.currentData()
+            or self._import_model_value_for_engine(engine)
+        )
+        return (
+            self._import_language_key(engine, model),
+            language_modes_for_selection(engine, model, "batch"),
+        )
+
     def _update_import_language_selector(
         self,
         *,
@@ -526,13 +539,7 @@ class _GeneralTabMixin:
         if not hasattr(self, "import_language_combo"):
             return
 
-        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
-        model = str(
-            self.import_model_combo.currentData()
-            or self._import_model_value_for_engine(engine)
-        )
-        supported_modes = language_modes_for_selection(engine, model, "batch")
-        key = self._import_language_key(engine, model)
+        key, supported_modes = self._import_language_scope()
         selected_mode = (
             preferred_mode
             or self._import_language_values.get(key)
@@ -1469,14 +1476,11 @@ class _GeneralTabMixin:
     def _on_import_language_changed(self, _index: int = 0) -> None:
         if not hasattr(self, "import_language_combo"):
             return
-        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
-        model = str(
-            self.import_model_combo.currentData()
-            or self._import_model_value_for_engine(engine)
-        )
-        language = str(
+        # Signals are blocked while the selector rebuilds the combo, so this
+        # runs for the user's own pick only: it ends the recorded language's
+        # preselection for this visit (`_preselect_recorded_import_language`).
+        self._import_language_chosen = True
+        key, _supported_modes = self._import_language_scope()
+        self._import_language_values[key] = str(
             self.import_language_combo.currentData() or DEFAULT_LANGUAGE_MODE
-        )
-        self._import_language_values[self._import_language_key(engine, model)] = (
-            language
         )

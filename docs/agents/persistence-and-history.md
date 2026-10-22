@@ -145,15 +145,38 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   pointing at it; nothing after a successful move (the mtime update, the
   prune, which skips an archive file that vanished since its listing) can
   stop the history write, since the notice no longer offers a moved file; a
-  history write that fails moves it back, so the next start offers it again. A transcript it saved is also listed as not
-  inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
+  history write that fails moves it back, so the next start offers it again. A transcript it saved is also listed as
+  waiting to be inserted (owner's idea 2026-10-09): nothing is pasted on its own, but the
   controller's Qt thread (`unfinished_transcript_saved`, queued from the
   notice's worker) records an `_UndeliveredInsert` row with the entry and
   the recording's time, which the re-paste pastes at the current caret and
-  the not-inserted count includes (`docs/agents/text-insertion.md`). "Keep files and close"
+  the not-inserted count includes (`docs/agents/text-insertion.md`). Its
+  row says "From earlier session", not "Not inserted" (owner's decision
+  2026-10-17: no insert was ever attempted), and the notice's text and
+  final status say so. "Keep files and close"
   moves files to the recordings folder under their own name, which the
   archive prune (`recording_<stamp>.wav` only) never deletes; a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.
+- **A recording carries the language it was made in** (owner decision
+  2026-10-17; Retry transcribes in that language, `docs/agents/controller-and-jobs.md`).
+  `LastRecordingState.language_mode` is written by
+  `save_recording(language_mode=)` from the recording's own settings snapshot and
+  rides every later mark of the state (`asdict` writes it back). An additive
+  field, so no schema bump: a file the previous version wrote reads as `""`
+  (unknown, as does orphaned audio without a state), which Retry answers with the
+  language selected now; an older version reading a newer file ignores it.
+  The unfinished-recordings directory has no index, so its copy of that language
+  is in the file name, `unfinished_<stamp>_<id>[.<language>].wav` (neither part
+  can hold a dot; a file without one is as before and reads as unknown), and the
+  startup adoption of the managed slot copies it. The name always holds the
+  language the recording was *made* in, also when a retry of it ran under the
+  selected language, and the startup transcription uses it only where the
+  engine and model selected then offer it (`_pin_recorded_language`; the notice
+  row says when it did not, and the file is kept then -- in place where the
+  settings would delete it -- with its history entry pointing at it, so
+  Retranscribe can redo it in another language). Tests:
+  `tests/test_last_recording_store.py`, `tests/test_unfinished_recordings.py`,
+  `tests/test_unfinished_recordings_notice.py`.
 - **Ctrl+C in either history view copies the whole selection** (explicit
   `QKeySequence.Copy` shortcut; the default copies one cell).
 - **Nothing that only reads may call `appdata_root`** (it creates the folder

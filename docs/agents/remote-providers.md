@@ -238,15 +238,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (adjacent gaps share one marker; start rounded down, end up, so a
     short tail never reads `3:00-3:00`) and logs `remote_audio_part_empty`
     at WARNING; a silent one is skipped. `transcript_has_gap`
-    (`transcriber/base.py`, beside `gap_marker`) makes the controller mark
-    such a recording failed rather than completed, so with `save_last_wav`
-    off the stretch the marker names is not deleted with the rest (found by
-    the review of a1e0b01). Every road that completes a recording asks it:
-    the dictation roads, the import of the managed last recording, and the
-    startup check `main._complete_unless_gap`, which finds the transcript in
-    history and used to complete -- i.e. delete -- the kept recording on the
-    next launch (review of 384f84f). Such a recording has no Retry (its
-    overlay is Done); History and Import reach it.
+    (`transcriber/base.py`, beside `gap_marker`) makes the controller keep
+    such a recording's audio, so with `save_last_wav` off the stretch the
+    marker names is not deleted with the rest (found by the review of
+    a1e0b01). The dictation roads (a dictation or a retry, foreground or
+    background, all through `_on_transcription_ready`) keep it in a copy in
+    the recordings folder that the History entry links
+    (`_keep_audio_of_a_gap_transcript`, `docs/agents/controller-and-jobs.md`),
+    and so does the import of the managed last recording
+    (`transcribe_audio_file`); only where that copy could not be written is
+    the managed recording marked failed instead, which was the first design
+    on every road and keeps the audio only until the next dictation replaces
+    the slot (follow-up of the round-3 review, 2026-10-23). The startup check
+    `main._complete_unless_gap` spares such a failed recording whenever its
+    transcript has a gap: it finds the transcript in history and used to
+    complete -- i.e. delete -- the kept recording on the next launch (review
+    of 384f84f). Such a recording has no Retry (its overlay is Done); History
+    reaches the linked copy and Import the managed recording.
     Failing used to throw away every other part's minutes of speech; skipping
     unmarked would hand back a transcript with a hole that reads complete,
     and the marker is the one channel that reaches the overlay, the document
@@ -310,6 +318,98 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     host only; `wss://api.eu.deepgram.com/v1/listen` is derived from it.
     AssemblyAI's pages say nothing about key or model availability in the EU,
     so whether Universal-3.6 Pro streams there is open.
+- **Deepgram streaming holds its socket open with a KeepAlive while no audio
+  goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
+  capture's audio over up to 12 s late, so the socket is open and silent for
+  that long. Vendor pages read 2026-10-17 (developers.deepgram.com/docs/):
+  `audio-keep-alive`, `stt-troubleshooting-websocket-data-and-net-errors`,
+  `finalize`, `close-stream`. Rules:
+  - **Facts**: the message is the text frame `{"type": "KeepAlive"}` ("sending
+    it as binary may result in incorrect handling"), no reply; "Send a
+    `KeepAlive` message every 3-5 seconds to prevent the 10-second timeout
+    that triggers a `NET-0001` error"; "If no audio data or `KeepAlive`
+    messages are sent within a 10-second window, the connection will close
+    with a `NET-0001` error" (WebSocket close 1011). A newer 1011 `NET-0002`
+    (close reason `no_audio_timeout`) is a no-audio timeout, and the
+    troubleshooting page's NET-0002 checklist says "Unlike NET-0001,
+    KeepAlive messages do reset this timeout" (link markup omitted): the
+    vendor's own evidence that a KeepAlive-only gap *after* audio has gone
+    out holds. The page does not give the NET-0002 window's length (checked
+    again 2026-10-17: no number appears on it). Not stated on any of the four
+    pages: whether a KeepAlive may be sent while audio flows, and how
+    KeepAlive meets `Finalize` or `CloseStream`.
+  - **The sender thread writes it** (`_stream_send_worker`): its queue read
+    waits at most `_STREAM_KEEPALIVE_INTERVAL_S` (3 s, the page's example and
+    the low end of its 3-5 s, so a late sender thread still beats 10 s), and
+    an empty wait is the signal. That keeps three properties without a lock
+    or a clock: audio that keeps coming never reaches the interval, so no
+    KeepAlive is sent while audio flows; a KeepAlive and an audio frame are
+    written by the same thread and cannot overlap; and the sender barrier
+    that precedes `Finalize` and `CloseStream` (the sentinel ends the loop)
+    ends KeepAlives before those are sent. A timer thread would break the
+    second and third; `_send_stream_control`'s helper thread was not reused
+    because it gives up waiting after 1 s while its send may still be in
+    flight. A failed KeepAlive fails the stream like a failed audio send; a
+    session that was retired stops the loop instead of writing to its socket.
+    The first idle moment of a session is logged at INFO.
+  - **A session that has sent no audio yet gets one frame of digital silence
+    instead of its first KeepAlive** (decided 2026-10-17 by the lead session,
+    cheap enough not to wait for a live check). The two vendor pages disagree
+    on whether KeepAlive alone holds a stream open before its first audio:
+    the troubleshooting page's
+    NET-0001 checklist says "you must send at least one audio message". When
+    the sender's first 3 s wait runs out and no audio frame has gone out on
+    the session, it writes `_STREAM_SILENCE_FRAME` -- PCM16 zeros, 0.1 s
+    long, built from `AUDIO_SAMPLE_RATE`, `AUDIO_CHANNELS` and linear16's
+    2 bytes per sample, the same constants as the connection URL's
+    `sample_rate` / `channels` / `encoding` -- as a binary frame from the
+    same sender thread, and KeepAlives from then on. That satisfies both
+    readings for about 3 kB of billed audio (0.1 s) per start stall. Silence
+    is never written once audio has gone out (the sender's `audio_sent`
+    flag): a gap inside a dictation gets KeepAlives only, so nothing is ever
+    inserted into speech. Deepgram's word timings follow the audio sent, not
+    the wall clock (the Audio Keep Alive page's "Word Timings" section), so
+    the 0.1 s only moves timestamps the app does not use.
+  - **One gap is bridged for at most `_STREAM_KEEPALIVE_MAX_GAP_S` (30 s),
+    then the sender ends the stream itself** (2026-10-17, lead's decision,
+    revised the same day: the first version stopped writing and waited for
+    Deepgram to close the socket). Nothing in the app notices a microphone
+    that stops delivering after its first block: the first-callback watchdog
+    watches only the first block, and `_on_audio_device_change_settled`
+    defers its refresh while a recording runs (checked in `controller.py`
+    and `audio_capture.py`, which registers no stream-finished callback).
+    Before the KeepAlive, Deepgram's own close after ~10 s was the only
+    alarm, shown as the red streaming error; an unbounded KeepAlive would
+    have turned that into an overlay that says "Listening" until the hotkey.
+    The bound is `AUDIO_INPUT_BUFFER_S` (20 s: PortAudio holds that much for
+    a merely starved callback thread and delivers it as a burst, so a gap
+    that short can be a slow microphone) plus a 10 s margin; the longest wait
+    the app itself creates is 12 s (the start watchdog's hard limit, a stop's
+    backlog wait), and past the buffer the audio is lost anyway. Counted in
+    whole 3 s waits since the last real audio frame (no clock): ten
+    KeepAlives go out, and the 11th empty wait, **33 s after the last block**,
+    is the cap. There the sender logs a WARNING, records a
+    `TranscriptionError` through `_record_stream_error(..., notify=True)` --
+    the path a failed send takes -- and returns. The user reads "Deepgram
+    streaming failed: The microphone delivered no audio for more than 30
+    seconds, so the stream was ended." (the number is the constant), and the
+    existing streaming-failure path runs (`docs/agents/streaming.md`, first
+    entry): once, because the session's report latch allows one, and the
+    sender is gone, so nothing follows it. The end is independent of
+    Deepgram: ending by silence and waiting for the vendor's close would have
+    made it depend on the NET-0002 window (not documented) or on a proxy that
+    keeps the TCP connection open, and shown the vendor's close reason
+    instead of the cause the app knows. There is no resuming: the stream is
+    over at the cap, and the controller keeps the recording for Retry. The
+    silence frame needs no cap of its own: it goes out only at the first
+    empty wait of a session that has sent no audio, never again. (It does
+    not reset the count, so a session that never gets a block would reach the
+    same cap 33 s after its sender started; the capture's first-callback
+    watchdog aborts such a start at its 12 s hard limit, long before.)
+  - **Not verified live**: no Deepgram key exists here, so whether KeepAlive
+    alone would have been enough is open; the silence frame makes the answer
+    not matter for correctness (`known-limitations.md`, audio capture, has
+    the optional check that would let the frame be dropped).
 - **Diagnostics**: workers log `transcription_timing`. Groq reuses its
   SDK/HTTP client for the cached transcriber's lifetime.
 - **The custom endpoint is one engine with two API styles, free-text model
