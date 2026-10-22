@@ -263,10 +263,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     starts dictating again, not about which one the overlay shows, and
     leaving the retry out would let it paste into its old window during the
     new dictation in history-only mode, or run on in cancel mode. In cancel
-    mode the retry's late result still goes to History and its recording stays
-    for another Retry. Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
+    mode a retry is stopped like any job (`_request_job_stop`, delivery
+    History): until a result arrives, its failed recording is still the retry
+    slot and another Retry can run it; a result that still arrives goes to
+    History only and resolves the failure as any delivery does
+    (`_retire_retry_audio_delivered_by`), so the slot is empty afterwards.
+    Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
     `test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry`,
+    `test_in_cancel_mode_a_stopped_retry_keeps_its_audio_until_a_result_arrives`,
     the `insert` control and `test_a_new_recording_does_not_touch_a_result_that_is_already_waiting`.
+    The mode is applied once the microphone is open, for batch and streaming
+    (`start_recording`, review round 4, 2026-10-23): a start the model's
+    refusal, an unavailable streaming engine or a failed microphone open
+    stops leaves every job in flight alone
+    (`test_a_start_that_does_not_happen_leaves_the_jobs_in_flight_alone`,
+    and the side that applies,
+    `test_a_recording_that_started_applies_the_mode_batch_or_streaming`).
+    Applied at the top of the method it demoted or stopped jobs for a
+    recording that never began. What it costs: the Qt thread is blocked while
+    the microphone opens, so the only moment a result can be delivered between
+    the key press and the mode is the 25 ms event drain
+    (`processEvents`) before the open; that result is held as waiting for its
+    paste (a recording start is in progress), and a waiting result is not in
+    flight, so it counts as finished before the recording started and the mode
+    does not touch it.
   - **A finished result waits for a dictation, not for a retry**
     (`_should_defer_background_insertion`, round 3). The wait for the
     overlay's job keeps the live session coherent and delivers older results
@@ -448,13 +468,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (`_ARCHIVED_RECORDING_NAME_RE` does not match it), and
     `job.source_audio_path` carries the path into the entry, which is what
     History's Retranscribe resolves (`history_audio.resolve_history_audio_path`).
-    The managed slot then completes as for any success. Recordings that fell
-    back nowhere are kept or not as the retention settings say, unchanged. One
-    `busy_overlay_error` tray notice names the language that ran and points to
-    "Retranscribe... in History"; where the copy could not be written it says
-    "The audio could not be kept (see the log)" instead of promising it. A
-    move that fails leaves the file in the unfinished folder and links that
-    path (the next start offers it there, a second transcript at worst).
+    The managed slot then completes as for any success -- except where the
+    copy could not be written (review round 4, 2026-10-23): completing it then
+    deleted the only audio, so the recording is marked failed instead
+    (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`), kept until the next
+    dictation or restart, as for a gap. Recordings that fell back nowhere are
+    kept or not as the retention settings say, unchanged. One
+    `busy_overlay_error` tray notice names the language that ran, sent by
+    `_announce_language_fallback` after the History write was tried (both
+    roads), because only an existing entry makes "Retranscribe... in History"
+    true: with the entry it points there; with the copy but no entry
+    (`_append_transcript_history` answered None) it says the audio is kept in
+    the recordings folder and the transcript could not be saved; with no copy
+    it says "The audio could not be copied (see the log)" and that the last
+    recording is kept only until the next dictation or restart. The copy never
+    takes the transcript down: `_keep_audio_in_recordings_folder` catches
+    whatever the store or the folder raises (`Exception`, logged with its
+    traceback), since it runs before the History write; a saved file that
+    `find` cannot answer for is logged as a warning (it may sit unlinked in
+    the unfinished folder). A move that fails leaves the file in the
+    unfinished folder and links that path (the next start offers it there, a
+    second transcript at worst).
     After a restart `transcribe_unfinished_recording` keeps the file as the
     settings keep any recording (`_retain_unfinished_audio`) and, where they
     would delete it, in place the way a gap transcript's file stays, so
@@ -517,7 +551,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     so History's Retranscribe offers it. `_mark_last_recording_completed` then
     completes the managed slot as for any success, unless the job links no
     file, which is where the copy could not be written (or the job has no
-    audio or recording id): there the managed recording is marked failed as
+    audio or recording id, or the copy raised anything at all, not only
+    `OSError`; review round 4): there the managed recording is marked failed as
     before, the only copy until the next dictation. A job that links a file
     already -- "Archive every recording" -- keeps its audio by the settings:
     no extra copy, and the slot completes. Without a gap nothing changes, and

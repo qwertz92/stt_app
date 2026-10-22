@@ -652,6 +652,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   and the Insert offer are never skipped for a held result with the same
   text: those are other dictations.
 - **`retry_last_transcription` refuses during a recording start, stop or open
-  capture** (via the tray), since it stops the running transcription and
-  paints Processing. A pending streaming finalize is stopped by design, so
-  `_streaming_recording` is not in the guard.
+  capture** (via the tray), since it paints Processing and takes the
+  overlay. A pending streaming finalize is refused too, with its own text
+  ("The streaming transcript is still finalizing. Retry the last failed
+  transcription when it has finished."): the finalize owns the session and only
+  its own result clears it, so a retry that took the overlay's token turned
+  that result into a background one and left the session open for good, and
+  stopping it diverted the newest dictation to history only. The retry stops
+  only the jobs of its own recording (`_live_jobs_of_the_slot`), never another
+  dictation's.
