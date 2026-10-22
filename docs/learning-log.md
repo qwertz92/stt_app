@@ -3,6 +3,39 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (a crash leaves a trace: crash.log, exception hooks, the previous session in diagnostics)
+
+Owner's report: after a crash and a restart only post-restart logs existed,
+and `dictation.log.1` was "completely outdated". Checked in the code and with a
+probe that crashed a session natively and restarted it (throwaway folder):
+- **The log is not overwritten on restart.** `RotatingFileHandler` appends,
+  flushes every record, and rotates only by size (1 MB, three backups). The
+  owner's own `dictation.log` held the sessions of 17 and 22 October, so
+  `dictation.log.1` is simply an older 1 MB chunk. Explorer also shows a stale
+  size and date for the file the running app holds open (measured: the listing
+  said 18 October and 565 kB until a handle was closed, then 23 October and
+  639 kB), which makes the live log look outdated too.
+- **What was really missing:** nothing records a crash in native code (an
+  access violation ends the process before any Python handler runs; the probe's
+  log simply stopped), uncaught exceptions went to a stderr the windowed build
+  does not have, the History retranscription and delete paths log nothing, and
+  "Copy diagnostics" copies only the current session -- after a restart, exactly
+  "only logs after the restart".
+- **Changed** (`docs/agents/controller-and-jobs.md`): `logger.start_crash_reporting`
+  enables faulthandler into `logs\crash.log` for the process lifetime with a
+  start and an end line per session; the next start logs `previous_session_end`
+  with the trace when the previous session did not quit cleanly or left one,
+  and "Copy diagnostics" then starts one session earlier. Uncaught exceptions
+  from any thread, Qt slots and unraisable contexts are logged with their
+  traceback. The quit watchdog writes into `crash.log` instead of a second
+  handle on `dictation.log`, whose rename Windows refuses while that handle is
+  open (a rotation during the quit dropped every later line).
+- Tests: a restart keeps the previous session's lines; a subprocess crashed by
+  `faulthandler._sigsegv()` leaves its stack in `crash.log`, the next start
+  logs it and the diagnostics copy reaches the crashed session; only a session
+  without its end line is reported; the size bound; the three hooks log and
+  hand on.
+
 ## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
 
 The round-3 entry below says a gap transcript has the same hole as the fallback

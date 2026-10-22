@@ -151,7 +151,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `unfinished_recordings_dialog.py` | Startup notice listing those recordings: transcribe all/selected into history, show in folder, delete, keep files |
 | `quit_dialog.py` | The tray's Quit: quits at once, or asks (wait and insert / quit now / don't quit) while work is pending |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
-| `logger.py` | Application logging setup and diagnostics text |
+| `logger.py` | Application logging setup and diagnostics text; `crash.log` (faulthandler for the process lifetime, previous-session report at start) and the uncaught-exception hooks |
 | `ssl_utils.py` | System trust store injection and CA bundle resolution |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
 | `silero_vad.py` | Silero VAD v6 speech check (the graph faster-whisper ships, ONNX Runtime CPU, one thread, built on a background thread with a 60 s retry after a failed load): `check_speech_*` for the batch silence gate, `measure_speech_pcm16` for the streaming post-pause gate; `None` = unmeasured, never gates |

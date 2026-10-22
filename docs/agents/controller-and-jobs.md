@@ -578,7 +578,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   owner close. Resume uses the same admission lock.
 - **A quit is bounded by a native watchdog** (2026-10-03): `main` arms
   `faulthandler.dump_traceback_later(QUIT_WATCHDOG_TIMEOUT_S, exit=True)`
-  into `dictation.log` as the first `aboutToQuit` handler, and logs
+  into the session's `crash.log` (below; until 2026-10-23 a second handle
+  on `dictation.log`, which made a log rotation during the quit fail and the
+  handler drop every later line) as the first `aboutToQuit` handler, and logs
   `app_exec_returned` with every non-daemon thread still alive. Why: a quit
   once removed the tray icon and kept the process alive until Ctrl+C, with
   nothing in the log; Ctrl+C cannot reach a thread blocked in native code,
@@ -587,6 +589,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   The hang's own cause is still unknown; the next one names it in the log.
   The tray's Quit reaches `app.quit` only after the quit window below is
   done, so a deliberate wait is never cut short by this watchdog.
+- **Every crash leaves a trace, and the next start says how the last session
+  ended** (owner's report 2026-10-23: after a crash and a restart the log
+  seemed to hold only post-restart lines). `logger.start_crash_reporting`,
+  called by `main` right after the session marker:
+  - `faulthandler.enable(crash.log, all_threads=True)` for the process
+    lifetime (`logs\crash.log`, held open; `CRASH_LOG_MAX_BYTES` 1 MB, then
+    `crash.log.1` at the next start, one kept). Python logging never sees an
+    access violation in Qt or a C extension. Each session writes a start line;
+    `main` writes an end line after `app_exec_returned`.
+  - At start, the previous section is read back: no end line (a crash, kill,
+    Windows restart or power loss) or any faulthandler output logs one
+    WARNING `previous_session_end clean_quit=yes|no native_trace_lines=N
+    crash_log=...` with the last `CRASH_TRACE_MAX_LINES` (300) trace lines,
+    so `dictation.log` alone tells the story; "Copy diagnostics" then starts
+    at the previous session's marker instead of the current one.
+  - `install_exception_logging` logs `sys.excepthook` (PySide6 reports a
+    slot's exception there), `threading.excepthook` and `sys.unraisablehook`
+    (ctypes callbacks, `__del__`) with the traceback, then calls the replaced
+    hook; idempotent. They went to a stderr the windowed build lacks.
+  - Not changed, and why: `dictation.log` stays `RotatingFileHandler`
+    (append, 1 MB x 3 backups). Verified 2026-10-23 that a restart never
+    truncates it (the owner's file held the sessions of 17 and 22 October);
+    the "outdated" `dictation.log.1` is a size backup. Per-session files would
+    only rename the problem. Faulthandler on Windows also reports a
+    first-chance exception that something later handles (any code with the
+    error bit, except C++ and CLR exceptions), so a dump followed by more
+    activity in the same section is not necessarily the crash, and the
+    WARNING then says `clean_quit=yes`. The size bound applies at each start,
+    so such noise cannot pile up across sessions.
 - **The tray's Quit asks first when work is pending** (owner decision
   2026-10-09; `quit_dialog.QuitCoordinator`). `quit_pending_work()`
   (`PendingQuitWork`) counts an open recording, jobs still transcribing,
