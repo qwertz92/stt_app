@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
@@ -474,9 +474,54 @@ def test_tray_double_click_connected():
     assert tray.receivers(sig) > 0
 
 
-def test_tray_left_click_reveals_overlay():
-    """A single left click must surface the overlay (keyboard-free access)."""
+_DOUBLE_CLICK_INTERVAL_MS = 80
+
+
+@pytest.fixture
+def short_double_click_interval(monkeypatch):
+    """The system's double-click time (500 ms by default) shortened for tests."""
+    monkeypatch.setattr(
+        QtWidgets.QApplication,
+        "doubleClickInterval",
+        lambda: _DOUBLE_CLICK_INTERVAL_MS,
+    )
+
+
+def _wait_past_the_double_click_interval(factor: float = 2.5) -> None:
+    QtTest.QTest.qWait(int(_DOUBLE_CLICK_INTERVAL_MS * factor))
+
+
+def _tray_with_a_recording_settings_dialog(monkeypatch):
+    """A tray over a controller that counts `bring_overlay_to_front`, plus the
+    settings dialogs it opened (a stand-in that only counts `show`)."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    opened = []
+
+    class FakeSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
+        audio_device_refresh_requested = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            opened.append(self)
+
+        def show(self):
+            pass
+
+        def showNormal(self):
+            pass
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+        def prepare_for_first_show(self):
+            return None
+
+    monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
     controller = FakeController()
     tray = _create_tray_icon(
         app=app,
@@ -488,10 +533,62 @@ def test_tray_left_click_reveals_overlay():
         last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
+    return tray, controller, opened
+
+
+def test_tray_left_click_reveals_overlay(short_double_click_interval, monkeypatch):
+    """A single left click must surface the overlay (keyboard-free access) --
+    once it is certain not to be the first half of a double-click."""
+    tray, controller, _opened = _tray_with_a_recording_settings_dialog(monkeypatch)
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.Trigger)
 
+    assert controller.bring_overlay_calls == 0, "answered before the interval ran"
+    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 1
+    _ = tray
+
+
+def test_a_double_click_opens_settings_and_leaves_the_overlay_alone(
+    short_double_click_interval, monkeypatch
+):
+    """Owner: "the overlay always comes to the front when I open the settings".
+
+    The shell sends one double-click on the icon as Trigger, DoubleClick,
+    Trigger (measured 0, 93 and 94 ms with this app's own icon on Windows 11),
+    and a Trigger surfaces the overlay: the first click did it before the
+    dialog opened, the trailing one right after it, over the dialog."""
+    tray, controller, opened = _tray_with_a_recording_settings_dialog(monkeypatch)
+    reason = QtWidgets.QSystemTrayIcon
+
+    tray.activated.emit(reason.Trigger)
+    QtTest.QTest.qWait(_DOUBLE_CLICK_INTERVAL_MS // 4)
+    tray.activated.emit(reason.DoubleClick)
+    tray.activated.emit(reason.Trigger)
+    _wait_past_the_double_click_interval(factor=4)
+
+    assert len(opened) == 1, "the double-click must still open Settings"
+    assert controller.bring_overlay_calls == 0
+    _ = tray
+
+
+def test_clicks_after_a_double_click_surface_the_overlay_again(
+    short_double_click_interval, monkeypatch
+):
+    """The trailing Trigger is dropped by the clock, not for good."""
+    tray, controller, _opened = _tray_with_a_recording_settings_dialog(monkeypatch)
+    reason = QtWidgets.QSystemTrayIcon
+    tray.activated.emit(reason.DoubleClick)
+    tray.activated.emit(reason.Trigger)
+    _wait_past_the_double_click_interval(factor=4)
+    assert controller.bring_overlay_calls == 0
+
+    tray.activated.emit(reason.Trigger)
+    _wait_past_the_double_click_interval()
+    tray.activated.emit(reason.Trigger)
+    _wait_past_the_double_click_interval()
+
+    assert controller.bring_overlay_calls == 2
     _ = tray
 
 

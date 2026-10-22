@@ -937,7 +937,7 @@ def test_the_history_list_rates_a_run_by_its_measured_cases(tmp_path):
     )
     dialog, app = _history_dialog(tmp_path, [entry])
 
-    assert dialog.benchmark_history_list.item(0, 4).text() == "0.500"
+    assert dialog.benchmark_history_list.item(0, 3).text() == "0.500"
     _ = app
 
 

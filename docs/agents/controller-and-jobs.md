@@ -405,6 +405,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     purpose: they describe where text goes now, not how audio was made.
     Tests: `test_each_queued_recording_is_transcribed_in_the_language_it_was_recorded_in`
     and `test_a_language_switch_never_changes_or_reloads_queued_work`.
+  - **A pick during a recording is for the next one** (2026-10-23, the overlay
+    no longer locks its Lang button; `overlay.md`). The running recording's
+    settings are the snapshot above (`_active_batch_settings` /
+    `_active_stream_settings`), so neither its job nor a live stream sees the
+    pick: the stream's runtime was told its language once, when the session
+    started, and `set_language_mode` never touches a runtime. Pinned for batch
+    and streaming by `test_a_language_pick_during_a_recording_applies_to_the_next_one`;
+    reading `self._settings` at the stop instead of the snapshot fails both.
   - **Retry transcribes in the language the recording was made in; engine and
     model stay the current ones** (owner decision 2026-10-17, replacing the
     2026-10-09 rule that Retry used what is selected now; a user switches

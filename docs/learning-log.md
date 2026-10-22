@@ -86,6 +86,108 @@ HomeBase; the laptop itself was not available.
   the start path being short, which the new field now measures in the
   field).
 
+## 2026-10-23 (Benchmark History: a scroll bar that never went away)
+
+- **Owner: "Benchmark tab first field has a scrolling bar that never
+  disappears".** The first field is the Benchmark History list. Cause:
+  `settings_dialog_benchmark._build_benchmark_history_box` set the vertical
+  bar `AlwaysOn` (2026-10-09), so that the bar arriving with the row that
+  outgrew the list could not take 12 px from a column and move it. Cost, never
+  weighed against that gain: a bar with no range beside an empty list, and
+  beside the owner's six runs, where the style's 30 px rows overflowed the
+  147 px viewport of a 860x960 dialog by 33 px (measured with real widgets,
+  not offscreen).
+- **Fix, three parts that only work together.** The policy is Qt's default, as
+  needed. Models moved from the third to the last column, so the 12 px come out
+  of the one stretching column and nothing left of it moves (columns at x
+  0 / 95 / 246 / 294 / 364 with and without the bar). The rows use
+  `compact_table_row_height` (20 px), so six runs need no bar and seven fit.
+  A bar that appeared without the first part would shift four columns by 12 px;
+  one without the second would still show for six runs. Rejected: keep
+  `AlwaysOn` and hide the track (reserved empty space), `ResizeToContents` on
+  Models (as wide as the longest model list).
+- Measured, 860x960: 0 and 6 rows no bar; 20 rows bar 12 px and Models 302 ->
+  290 px, nothing else moved; zero Show, Hide or Resize events on the bar over
+  three rebuilds of an overflowing list. `benchmark.md` has the table.
+- An existing test encoded the old trade-off:
+  `test_no_history_column_changes_width_when_rows_arrive` asserted that no
+  column moves, which is exactly what `AlwaysOn` bought, so it was rewritten
+  with the new rule (only the last column may move, by the bar's width).
+- **Found on the way, fixed in its own commit: every Recorded and Status cell
+  was elided by one pixel.** The screenshot taken to check the fix above showed
+  "2026-10-06 ..." and "Completed with ..." in a default-size dialog, in the
+  state before the fix too (checked with the old module in a scratch copy).
+  The pinned widths counted the item's two margins but not the pixel the grid
+  line takes from each column; the delegate's own `sizeHintForColumn` needed
+  95 / 125 px where the columns were 94 / 124. The old width test used the same
+  formula as the code, so it passed. The new test compares `sizeHintForColumn`
+  with the width, failing at 9, 11.25 and 13.5 pt before the fix.
+
+## 2026-10-23 (opening Settings from the tray double-click surfaced the overlay)
+
+- **Owner: "overlay always comes to the front when I open the settings, why?"**
+  Nothing in the settings open path touches the overlay (`open_settings_dialog`
+  and `_present_dialog` in `main.py` were read, as were the dialog's
+  `showEvent` and `reload_from_store`; `settings_dialog*.py` has no overlay
+  call, only comments and hotkey labels). The only caller
+  is the tray's `Trigger` handler (`main._create_tray_icon`,
+  `on_tray_activated`), which calls `controller.bring_overlay_to_front` ->
+  `OverlayUI.reveal_temporarily(OVERLAY_ERROR_REVEAL_MS)`. The question was
+  whether a double-click ever delivers a `Trigger`: it does. Measured with the
+  app's own `WindowsTrayIcon` in a throwaway process, found through
+  `Shell_NotifyIconGetRect` (the hidden-icons chevron's rectangle while the
+  icon is hidden) and the flyout's UI Automation tree, then a real mouse
+  double-click: `Trigger`, `DoubleClick`, `Trigger` at 0, 93 and 94 ms. The
+  first click revealed the overlay before Settings opened, the trailing one
+  right after, over the dialog.
+- **A `Trigger` now waits out the double-click interval** and a `DoubleClick`
+  cancels it; the `Trigger` that trails a `DoubleClick` is dropped. Cost: a
+  single click shows the overlay 500 ms late (system setting). Kept, not
+  removed: the single-click reveal is deliberate (keyboard-free dictation,
+  `windows-platform.md`). Measured with real widgets, a floating overlay below
+  a normal window: before, overlay topmost above the dialog and the window
+  after two reveals; after, dialog, window, overlay with no reveal.
+- **Not changed, and why it matters for the owner:** his stored overlay is
+  Pinned (`overlay_always_on_top` true in his `settings.json`), and a pinned
+  overlay is topmost: above any normal window, the Settings dialog included,
+  with or without a reveal (measured). If the overlay covers Settings while
+  Pinned, no click handling changes that; it is an open design question
+  whether Pinned should step behind a dialog he just opened.
+- Not verified: the fixed handler under a real shell double-click (the second
+  run of the experiment found the taskbar's UI Automation tree empty and was
+  abandoned); the fixed code was driven with the measured sequence in-process.
+
+## 2026-10-23 (overlay: the Language button stayed locked while jobs ran)
+
+- **Owner: "cannot change the language in the overlay when a transcription is
+  active (have to wait for the queue to empty)".** Cause, verified in the code:
+  `OverlayUI.set_state` set `_language_change_blocked` for Listening and
+  Processing, which disabled the button and made `_select_language` return.
+  The lock dates from 2026-07-06, when a pick reset the cached transcriber;
+  since 2026-08-02 the language is a per-request parameter and every job keeps
+  the snapshot taken when its recording started. The 2026-10-09 entry below
+  ("a queued recording keeps the language it was recorded in") verified the
+  controller and concluded that nothing needed changing -- it never looked at
+  the overlay, whose button was greyed for exactly the time the owner needed
+  it (Processing lasts while any job runs).
+- **The lock is gone; a pick always applies to the next recording** (batch and
+  streaming alike, tested for both at the controller). While a recording is
+  Listening the button reads `Next: German` instead of `Lang: German` when the
+  selection differs from the language the recording began under, with a
+  tooltip naming both; it is pinned at the widest of the two captions, so
+  nothing moves (real widgets: overlay 470x144, button 152x22 at (303, 39) in
+  every state). Decision and rejected alternatives: `docs/agents/overlay.md`.
+- Negative control: letting the stop read `self._settings` instead of the
+  start-of-recording snapshot fails both new controller tests.
+- Rechecked after merging main (3c7ffd5): the model-aware list
+  (`_offered_language_modes`) and `set_language_mode`'s validation change
+  nothing here, since the overlay only offers what the controller sends and a
+  list that shrinks mid-recording leaves the recording's own language in the
+  `Next:` tooltip; Retry now pins the recorded language, which the tooltip
+  already promised ("recordings already made ... keep theirs"). Real widgets
+  with the new `Not inserted` / `Check window` warning words: overlay 470x144,
+  button 152x22 at (303, 39) in all nine states measured.
+
 ## 2026-10-23 (the update download had the retranscription's crash on Cancel)
 
 Searched every `threading.Thread` started by a Qt object for the shape of the
