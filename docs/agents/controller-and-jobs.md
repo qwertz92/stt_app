@@ -500,6 +500,43 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     named as what ran),
     `tests/test_unfinished_recordings_notice.py` (the row text, that the
     longest wording fits the status column, and a failing note).
+  - **A transcript with a gap marker keeps its audio the same way** (follow-up
+    of the round-3 review, 2026-10-23). `[no text returned for m:ss-m:ss]`
+    (`transcript_has_gap`, `docs/agents/remote-providers.md`) names a stretch
+    the user may need to listen to or transcribe again. Its audio was the
+    managed last recording, kept by marking it failed -- the same single slot
+    the fallback retry's audio had, which the next dictation replaces, so the
+    stretch was gone as soon as the user dictated again (the next start
+    already spared it: `main._complete_unless_gap`). `_on_transcription_ready`
+    now also calls `_keep_audio_of_a_gap_transcript` before either road writes
+    its History entry, for a job that links no file yet
+    (`not job.source_audio_path`): the same copy into the recordings folder
+    (`_keep_audio_in_recordings_folder`, shared with the fallback retry; the
+    file's language tag is the recording's own, from
+    `_recorded_language_by_recording_id`), linked by `job.source_audio_path`,
+    so History's Retranscribe offers it. `_mark_last_recording_completed` then
+    completes the managed slot as for any success, unless the job links no
+    file, which is where the copy could not be written (or the job has no
+    audio or recording id): there the managed recording is marked failed as
+    before, the only copy until the next dictation. A job that links a file
+    already -- "Archive every recording" -- keeps its audio by the settings:
+    no extra copy, and the slot completes. Without a gap nothing changes, and
+    a gap raises no tray notice of its own: the marker is in the pasted text and
+    in History, and the overlay stays Done. The import of the managed last
+    recording (`transcribe_audio_file`, Import tab) does the same
+    (`_keep_audio_of_an_imported_last_recording`: the import's own bytes, or
+    the slot's file, through the same `_keep_audio_in_recordings_folder`), and
+    marks the slot failed only where that copy failed. An import of any other
+    file links the file itself, as before. Tests in
+    `tests/test_controller_queue.py`:
+    `test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it`,
+    `test_the_gap_audio_survives_the_next_dictation_and_the_next_start`, the
+    background road, the archive case, the copy-failed case,
+    `test_a_fallback_retry_with_a_gap_keeps_one_copy` and the negative
+    control `test_a_transcript_without_a_gap_keeps_no_copy`; in
+    `tests/test_controller_coverage.py` the two import cases
+    (`test_an_imported_last_recording_with_a_gap_is_kept` and its copy-failed
+    twin).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

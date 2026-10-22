@@ -4002,9 +4002,11 @@ def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_ei
     _ = app
 
 
-def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded):
+def _a_retry_under_canary_that_finished(
+    monkeypatch, tmp_path, *, recorded, text="hallo"
+):
     """A dictation recorded in `recorded` failed; the engine is switched to
-    Canary (no Auto, German selected) and the Retry delivers. Returns the
+    Canary (no Auto, German selected) and the Retry delivers `text`. Returns the
     controller, the app, the tray messages, the history store, the failed
     recording's audio and the recordings folder (a setting, so that nothing
     is written outside the test's folder)."""
@@ -4026,7 +4028,7 @@ def _a_retry_under_canary_that_finished(monkeypatch, tmp_path, *, recorded):
     controller.busy_overlay_error.connect(tray.append)
     assert controller.retry_last_transcription() is True
     controller._on_transcription_ready(
-        "hallo", request_token=controller._active_request_token
+        text, request_token=controller._active_request_token
     )
     return controller, app, tray, history, audio, recordings
 
@@ -4153,6 +4155,195 @@ def test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept(
             "engine and model. The audio could not be kept (see the log)."
         )
     ]
+    controller.shutdown()
+    _ = app
+
+
+_GAP_TEXT = "erster teil [no text returned for 0:16-0:31] dritter teil"
+
+
+def _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path, **overrides):
+    """A dictation is recorded and its remote transcript comes back with a gap
+    marker (a part that held sound returned no text). Returns the controller,
+    the app, the history store, the recorded audio and the recordings folder (a
+    setting, so that nothing is written outside the test's folder)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        recordings_dir=str(recordings),
+        **overrides,
+    )
+    token = _record_and_stop(controller)
+    audio = controller._request_audio_by_token[token][0]
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token)
+    return controller, app, history, audio, recordings
+
+
+def test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it(
+    monkeypatch, tmp_path
+):
+    """The marker tells the user to listen to the stretch it names. The only
+    copy of the audio was the managed last recording, kept by marking it
+    failed: one slot, replaced by the next dictation. The audio now goes where
+    retained audio goes, the recordings folder, under a name no count prunes,
+    and the History entry links it (Retranscribe); the managed slot completes
+    as for any success."""
+    controller, app, history, audio, recordings = (
+        _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path)
+    )
+
+    [entry] = history.load()
+    assert entry.text == _GAP_TEXT
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == audio
+    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert resolve_history_audio_path(entry) == kept
+    assert controller._last_recording_store.load() is None, "completed as usual"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_gap_audio_survives_the_next_dictation_and_the_next_start(
+    monkeypatch, tmp_path
+):
+    """The hole: the next dictation replaces the managed recording, which was
+    the only audio of the gap. The next start neither offers the recording a
+    second time nor touches the copy."""
+    controller, app, history, audio, _recordings = (
+        _a_dictation_whose_transcript_has_a_gap(monkeypatch, tmp_path)
+    )
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    store = controller._last_recording_store
+
+    shown = main_module._offer_unfinished_recordings(
+        last_recording_store=store,
+        history_store=history,
+        unfinished_store=controller._unfinished_recording_store,
+        transcribe=lambda _recording, _progress: (True, "text"),
+        keep_dir=tmp_path / "keep",
+    )
+    assert shown is None, "nothing is offered a second time"
+    assert kept.read_bytes() == audio
+
+    _record_and_stop(controller)
+
+    assert kept.read_bytes() == audio
+    assert resolve_history_audio_path(entry, store) == kept
+    controller.shutdown()
+    _ = app
+
+
+def test_a_background_gap_transcript_keeps_its_audio_too(monkeypatch, tmp_path):
+    """The older dictation finishes behind a newer one (the background road):
+    the newer recording has replaced the managed slot by then."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", recordings_dir=str(recordings)
+    )
+    older = _record_and_stop(controller)
+    audio = controller._request_audio_by_token[older][0]
+    newer = _record_and_stop(controller)
+    assert newer != older
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=older)
+
+    [entry] = history.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings and kept.read_bytes() == audio
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_audio_is_archived_keeps_no_extra_copy(
+    monkeypatch, tmp_path
+):
+    """Retention settings decide: with "Archive every recording" the entry
+    already links the archive's file, which is the audio kept (the fake
+    capture writes no file, so the name and place are what is checked), and
+    the managed slot completes like any other."""
+    controller, app, history, _audio, recordings = (
+        _a_dictation_whose_transcript_has_a_gap(
+            monkeypatch, tmp_path, save_all_recordings=True
+        )
+    )
+
+    [entry] = history.load()
+    archived = Path(entry.source_audio_path)
+    assert archived.parent == recordings
+    assert _ARCHIVED_RECORDING_NAME_RE.fullmatch(archived.name)
+    assert list(recordings.iterdir()) == [], "no copy beside the archive's file"
+    assert controller._last_recording_store.load() is None, "completed as usual"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fallback_retry_with_a_gap_keeps_one_copy(monkeypatch, tmp_path):
+    """Both reasons to keep the audio at once: the copy the fallback made is
+    the one the entry links, and the gap does not make a second."""
+    controller, app, _tray, history, audio, recordings = (
+        _a_retry_under_canary_that_finished(
+            monkeypatch, tmp_path, recorded="auto", text=_GAP_TEXT
+        )
+    )
+
+    [entry] = history.load()
+    [kept] = list(recordings.iterdir())
+    assert Path(entry.source_audio_path) == kept
+    assert kept.read_bytes() == audio
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcript_without_a_gap_keeps_no_copy(monkeypatch, tmp_path):
+    """Negative control: only a gap changes what is kept."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        recordings_dir=str(recordings),
+    )
+    token = _record_and_stop(controller)
+
+    controller._on_transcription_ready("a plain transcript", request_token=token)
+
+    [entry] = history.load()
+    assert entry.source_audio_path == ""
+    assert not recordings.exists()
+    store = controller._last_recording_store
+    assert store.load() is None and store.selectable_path() is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_copy_failed_keeps_the_managed_recording(
+    monkeypatch, tmp_path
+):
+    """The disk refused the copy: nothing is linked and the delivery goes on,
+    and the managed recording stays kept as before (marked failed)."""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", recordings_dir=str(recordings)
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+    token = _record_and_stop(controller)
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token)
+
+    [entry] = history.load()
+    assert entry.text == _GAP_TEXT and entry.source_audio_path == ""
+    store = controller._last_recording_store
+    state = store.load()
+    assert state is not None and state.status == "failed"
+    assert store.selectable_path() is not None
     controller.shutdown()
     _ = app
 
