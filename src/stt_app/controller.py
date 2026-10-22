@@ -49,6 +49,7 @@ from .config import (
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
+    NODE_PACKAGES_UPDATING_TEXT,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
     OVERLAY_ERROR_REVEAL_MS,
@@ -967,6 +968,11 @@ class DictationController(QtCore.QObject):
         # disk. Reporting both as "Downloading" printed a frozen "approx. 100%"
         # for an already complete model.
         self._preload_phase: tuple[int, str] | None = None
+        # The preload runtime's latest progress line, as (generation, text),
+        # under `_preload_result_lock`. Only the JavaScript package update's
+        # line is shown (`_preload_progress_detail`): with "Keep ONNX model
+        # loaded" on, that update runs inside the startup preload.
+        self._preload_runtime_note: tuple[int, str] | None = None
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
         self._active_request_token: int | None = None
@@ -5222,6 +5228,23 @@ class DictationController(QtCore.QObject):
             if generation == self._preload_generation:
                 self._preload_phase = (generation, phase)
 
+    def _note_preload_progress(self, generation: int, text: str) -> None:
+        """Keep the preload runtime's latest line for the progress poll.
+
+        Called on the preload worker; the 600 ms poll on the Qt thread is the
+        only one that paints it, so every overlay rule it applies holds.
+        """
+        with self._preload_result_lock:
+            if generation == self._preload_generation:
+                self._preload_runtime_note = (generation, str(text))
+
+    def _preload_is_updating_packages(self) -> bool:
+        with self._preload_result_lock:
+            return self._preload_runtime_note == (
+                self._preload_generation,
+                NODE_PACKAGES_UPDATING_TEXT,
+            )
+
     def _preload_waits_for_another_model(
         self,
         model_name: str,
@@ -5644,6 +5667,14 @@ class DictationController(QtCore.QObject):
                 "waits for this model."
                 f"{self._preload_abort_hint('abort the preload')}"
             )
+        if phase == _PRELOAD_PHASE_LOAD and self._preload_is_updating_packages():
+            # npm is installing the packages the runner needs, for 11 s to
+            # over a minute; "Loading into memory" hid that, and npm cannot
+            # be aborted, so no Cancel sentence either.
+            return (
+                f"{NODE_PACKAGES_UPDATING_TEXT} You can start recording now; "
+                "transcription waits for this model."
+            )
         if phase == _PRELOAD_PHASE_LOAD:
             # Nothing is being fetched any more. The progress bar measures
             # directory growth, so during the load it printed a frozen
@@ -5787,6 +5818,12 @@ class DictationController(QtCore.QObject):
                 transcriber,
                 lambda: self._preload_generation_was_canceled(generation),
             )
+            # What the runtime reports while it starts, for the progress poll:
+            # a source checkout's JavaScript package update runs here.
+            self._set_transcriber_progress_callback(
+                transcriber,
+                lambda text: self._note_preload_progress(generation, text),
+            )
             # Any local runtime that can preload should: skipping one makes the
             # first dictation pay the full cold load while the overlay has
             # already announced "Model loaded", and a broken install goes
@@ -5895,11 +5932,22 @@ class DictationController(QtCore.QObject):
                 # forever and every dictation would quietly build its own
                 # isolated multi-gigabyte runtime.
                 try:
-                    self._set_transcriber_cancel_check(runtime_lease.transcriber, None)
-                except BaseException:
-                    self._logger.exception(
-                        "Failed to clear the preload transcriber cancel hook"
-                    )
+                    try:
+                        self._set_transcriber_cancel_check(
+                            runtime_lease.transcriber, None
+                        )
+                    except BaseException:
+                        self._logger.exception(
+                            "Failed to clear the preload transcriber cancel hook"
+                        )
+                    try:
+                        self._set_transcriber_progress_callback(
+                            runtime_lease.transcriber, None
+                        )
+                    except BaseException:
+                        self._logger.exception(
+                            "Failed to clear the preload transcriber progress callback"
+                        )
                 finally:
                     runtime_lease.release()
 

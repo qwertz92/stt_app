@@ -369,9 +369,14 @@ located from `STT_APP_NODE_PATH`, so this works even when Node is not on
 `PATH`. The update installs into a separate folder (`.node_modules_update`)
 and replaces `node_modules` only once the new packages load; if it fails (for
 example a proxy blocks the npm registry), the models keep running on the
-previous packages, a tray notification says what failed, and the app tries
-again at its next start. The installed app bundles its packages and never runs
-npm.
+previous packages, a tray notification says what failed and when the app
+tries again. When npm itself failed, that is the first start after 24 hours
+for the same `package-lock.json`, or at once after a `git pull` that changes
+it; a cause on this PC (npm not found, the folder held open by an editor or
+a virus scanner) is tried again at the next start. To try again at once
+after fixing npm's setup (a proxy, `.npmrc`), delete
+`%APPDATA%\stt_app\node_packages_update.json` and restart the app. The
+installed app bundles its packages and never runs npm.
 
 **npm behind a TLS-intercepting proxy.** Node/npm ship their own CA list and
 ignore the Windows certificate store, so behind Zscaler `npm install` fails with

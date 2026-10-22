@@ -28,11 +28,18 @@ comes here (`local_webgpu_asr._find_source_package_root`).
   of a crashed app holds no presence; the DLLs it loaded do refuse a
   write-open (`loaded_native_modules`), checked before npm and again right
   before the swap.
+- **A failure of npm or of what it installed waits a day**
+  (`UPDATE_BACK_OFF_S`) before npm runs again for the same lock, so a
+  network that cannot reach the registry does not delay every start by
+  npm's failure time (71 s measured, up to the 600 s bound). A cause on this
+  PC retries at the next start, a changed lock tries at once, and a tree
+  that does not load is not made to wait (`force`).
 """
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 import os
@@ -45,13 +52,15 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..app_paths import appdata_root
+from ..app_paths import appdata_root, node_packages_back_off_path
+from ..config import NODE_PACKAGES_UPDATING_TEXT
 from ..file_lock import (
     CrossProcessLock,
     FileLockUnavailable,
     is_lock_held,
     lock_path_for,
 )
+from ..persistence import atomic_write_json
 from ..process_tree import run_bounded
 
 logger = logging.getLogger(__name__)
@@ -73,6 +82,9 @@ _RENAME_ATTEMPTS = 60
 _RENAME_PAUSE_S = 0.5
 _REASON_MAX_CHARS = 80
 _DETAIL_MAX_LINES = 20
+# How long a failed update of one lock waits before npm runs for it again
+# (lead's decision on the owner's behalf, 2026-10-17).
+UPDATE_BACK_OFF_S = 24 * 3600.0
 
 
 @dataclass(frozen=True)
@@ -81,20 +93,36 @@ class SyncOutcome:
 
     `failure` is set only when an update was needed and did not happen, in
     words for the user; the tree the runner finds is then the one from
-    before (or none, if there was none).
+    before (or none, if there was none). With `backed_off` no npm ran this
+    time and `failure` is the reason the last try of this lock failed.
+    `retry_after` is when npm runs again for this lock (epoch seconds), or 0
+    when the next start tries anyway.
     """
 
     changes: tuple[str, ...] = ()
     updated: bool = False
     deferred: bool = False
     failure: str = ""
+    backed_off: bool = False
+    retry_after: float = 0.0
 
 
 class _UpdateFailed(Exception):
-    def __init__(self, reason: str, detail: str = "") -> None:
+    """An update that did not happen.
+
+    `back_off` marks a failure of npm or of what it installed -- the kind a
+    network that cannot reach the registry causes, which the next start
+    would only repeat. A cause on this PC (a folder held open, no npm) is
+    left to the next start, since the user may have fixed it by then.
+    """
+
+    def __init__(
+        self, reason: str, detail: str = "", *, back_off: bool = False
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.detail = detail
+        self.back_off = back_off
 
 
 class _UpdateDeferred(Exception):
@@ -440,7 +468,8 @@ def _install_and_swap(
         )
     except subprocess.TimeoutExpired as exc:
         raise _UpdateFailed(
-            f"npm did not finish within {round(NPM_CI_TIMEOUT_S / 60)} minutes"
+            f"npm did not finish within {round(NPM_CI_TIMEOUT_S / 60)} minutes",
+            back_off=True,
         ) from exc
     except OSError as exc:
         raise _UpdateFailed("npm could not be started", str(exc)) from exc
@@ -448,6 +477,7 @@ def _install_and_swap(
         raise _UpdateFailed(
             f"npm reported an error ({_npm_error_summary(result.stderr)})",
             _tail(result.stderr or result.stdout),
+            back_off=True,
         )
     # Both checks also keep the probe below honest: a package missing from
     # the staged tree would resolve from the old tree one folder up.
@@ -458,13 +488,16 @@ def _install_and_swap(
         mismatch, dropped = [str(exc)], []
     if mismatch:
         raise _UpdateFailed(
-            "the new packages do not match package-lock.json", "; ".join(mismatch)
+            "the new packages do not match package-lock.json",
+            "; ".join(mismatch),
+            back_off=True,
         )
     if dropped and _loads(probe, root):
         # npm's warnings say why it skipped them (a blocked download).
         raise _UpdateFailed(
             f"npm did not install {', '.join(dropped)}",
             _tail(result.stderr or result.stdout),
+            back_off=True,
         )
     if dropped:
         # A tree that does not load protects nothing. One installed for
@@ -482,7 +515,9 @@ def _install_and_swap(
         raise _UpdateFailed("the new packages could not be checked", str(exc)) from exc
     if check.returncode != 0:
         raise _UpdateFailed(
-            "the new packages did not load", _tail(check.stderr or check.stdout)
+            "the new packages did not load",
+            _tail(check.stderr or check.stdout),
+            back_off=True,
         )
     live = root / "node_modules"
     previous = staging / _PREVIOUS_TREE_NAME
@@ -513,6 +548,94 @@ def _install_and_swap(
         ) from exc
 
 
+def _lock_identity(root: Path) -> str:
+    """The lock's content hash: a back-off belongs to the lock that failed."""
+    try:
+        return hashlib.sha256((root / "package-lock.json").read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def _back_off(root: Path, lock_identity: str) -> tuple[float, str] | None:
+    """`(retry_after, reason)` while this lock's last failure holds npm back.
+
+    The record only saves a retry, so anything that cannot be read or
+    trusted counts as none: a damaged file, another checkout's or another
+    lock's record, a failure time in the future (a clock set back would
+    otherwise stretch the wait until it caught up).
+    """
+    path = node_packages_back_off_path()
+    record = _read_back_off_record(path)
+    if not isinstance(record, dict) or not lock_identity:
+        return None
+    failed_at = record.get("failed_at")
+    reason = record.get("reason")
+    if (
+        record.get("root") != str(root)
+        or record.get("lock_sha256") != lock_identity
+        or not isinstance(failed_at, (int, float))
+        or isinstance(failed_at, bool)
+        or not isinstance(reason, str)
+    ):
+        return None
+    try:
+        failed_at = float(failed_at)
+    except OverflowError:
+        return None
+    retry_after = failed_at + UPDATE_BACK_OFF_S
+    if not failed_at <= time.time() < retry_after:
+        return None
+    return retry_after, reason
+
+
+def _read_back_off_record(path: Path) -> object:
+    """The parsed record, or None when there is none or it cannot be parsed.
+
+    Valid JSON can still defeat the parser: a deeply nested array raises
+    `RecursionError` (review of 75fc685), and that must not stop the update.
+    """
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError, RecursionError) as exc:
+        logger.warning("node_modules_back_off_unreadable path=%s error=%r", path, exc)
+        return None
+
+
+def _record_back_off(root: Path, lock_identity: str, reason: str) -> float:
+    """Remember a failed update; when npm may run again, or 0 if not saved.
+
+    One record for the last failure: written over by the next one, even a
+    damaged one, because losing it costs one early retry and nothing else.
+    """
+    if not lock_identity:
+        return 0.0
+    failed_at = time.time()
+    record = {
+        "root": str(root),
+        "lock_sha256": lock_identity,
+        "failed_at": failed_at,
+        "reason": reason,
+    }
+    try:
+        atomic_write_json(node_packages_back_off_path(), record)
+    except OSError as exc:
+        logger.warning("node_modules_back_off_not_saved error=%s", exc)
+        return 0.0
+    return failed_at + UPDATE_BACK_OFF_S
+
+
+def _forget_back_off(root: Path) -> None:
+    """Drop the record after a success, unless it is another checkout's."""
+    path = node_packages_back_off_path()
+    record = _read_back_off_record(path)
+    if isinstance(record, dict) and record.get("root") not in (None, str(root)):
+        return
+    with contextlib.suppress(OSError):
+        path.unlink(missing_ok=True)
+
+
 def sync_node_modules(
     root: Path,
     *,
@@ -524,9 +647,11 @@ def sync_node_modules(
     """Bring `root/node_modules` in step with `root/package-lock.json`.
 
     The caller holds `package_root_lock(root)` and starts no runner in this
-    process meanwhile. `force` reinstalls although the record says in step,
-    for a tree that does not load. `probe(cwd)` imports Transformers.js
-    from `cwd`. Never raises for an update that failed: the outcome says so.
+    process meanwhile. `force` is for a tree that does not load: it
+    reinstalls although the record says in step, and does not wait out a
+    back-off, since that tree protects nothing. `probe(cwd)` imports
+    Transformers.js from `cwd`. Never raises for an update that failed: the
+    outcome says so.
     """
     _restore_stranded_tree(root)
     try:
@@ -540,6 +665,24 @@ def sync_node_modules(
         return SyncOutcome()
     changes = changes or ["the installed packages do not load"]
     summary = ", ".join(changes)
+    lock_identity = _lock_identity(root)
+    back_off = None if force else _back_off(root, lock_identity)
+    if back_off is not None:
+        retry_after, reason = back_off
+        logger.info(
+            "node_modules_update_backed_off root=%s retry_after=%s reason=%s "
+            "changes=%s",
+            root,
+            time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(retry_after)),
+            reason,
+            summary,
+        )
+        return SyncOutcome(
+            changes=tuple(changes),
+            failure=reason,
+            backed_off=True,
+            retry_after=retry_after,
+        )
     in_use = _tree_in_use(root)
     if in_use:
         logger.info(
@@ -549,20 +692,30 @@ def sync_node_modules(
             summary,
         )
         return SyncOutcome(changes=tuple(changes), deferred=True)
-    if not npm_path:
-        reason = "npm, which comes with Node.js, was not found"
+
+    def failed(failure: _UpdateFailed) -> SyncOutcome:
         logger.warning(
-            "node_modules_update_failed root=%s reason=%s changes=%s",
+            "node_modules_update_failed root=%s reason=%s back_off=%s changes=%s "
+            "detail=%s",
             root,
-            reason,
+            failure.reason,
+            failure.back_off,
             summary,
+            failure.detail,
         )
-        return SyncOutcome(changes=tuple(changes), failure=reason)
+        retry_after = (
+            _record_back_off(root, lock_identity, failure.reason)
+            if failure.back_off
+            else 0.0
+        )
+        return SyncOutcome(
+            changes=tuple(changes), failure=failure.reason, retry_after=retry_after
+        )
+
+    if not npm_path:
+        return failed(_UpdateFailed("npm, which comes with Node.js, was not found"))
     logger.info("node_modules_update_started root=%s changes=%s", root, summary)
-    progress(
-        "Updating the JavaScript packages for Cohere/Granite to match this "
-        "version of the app (once per update, can take a few minutes)."
-    )
+    progress(NODE_PACKAGES_UPDATING_TEXT)
     started = time.monotonic()
     try:
         _install_and_swap(root, npm_path, probe)
@@ -577,16 +730,10 @@ def sync_node_modules(
             _discard_staging(root)
         return SyncOutcome(changes=tuple(changes), deferred=True)
     except _UpdateFailed as exc:
-        logger.warning(
-            "node_modules_update_failed root=%s reason=%s changes=%s detail=%s",
-            root,
-            exc.reason,
-            summary,
-            exc.detail,
-        )
         with contextlib.suppress(OSError):
             _discard_staging(root)
-        return SyncOutcome(changes=tuple(changes), failure=exc.reason)
+        return failed(exc)
+    _forget_back_off(root)
     removed = False
     with contextlib.suppress(OSError):
         removed = _discard_staging(root)
