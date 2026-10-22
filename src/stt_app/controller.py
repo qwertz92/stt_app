@@ -166,9 +166,11 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
 # look like the recording never happened.
 _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording."
 
-# The last-recording error for a transcript with a gap marker. The recording
-# is kept rather than completed, so the stretch the marker names can still be
-# listened to or transcribed again.
+# The last-recording error for a transcript with a gap marker whose audio no
+# History entry links (the copy in the recordings folder could not be written,
+# `_keep_audio_of_a_gap_transcript`). The recording is kept rather than
+# completed, so the stretch the marker names can still be listened to or
+# transcribed again.
 _GAP_KEPT_RECORDING_MESSAGE = (
     "Part of the recording returned no text; the recording was kept."
 )
@@ -4069,9 +4071,14 @@ class DictationController(QtCore.QObject):
 
         A transcript carrying a gap marker -- a part of a split remote
         recording that held sound came back empty (`transcribe_in_parts`) --
-        is marked failed instead: the marker tells the user to listen to that
-        stretch, and with `keep_after_success` off a completed recording is
-        deleted. Failed keeps it reachable from History and Import.
+        keeps its audio: the marker tells the user to listen to that stretch,
+        and with `keep_after_success` off a completed recording is deleted.
+        The audio is normally a file the History entry links
+        (`_keep_audio_of_a_gap_transcript`, or the archive's), and the
+        recording completes as usual. Where no file is linked -- the copy
+        could not be written -- it is marked failed instead, which keeps the
+        managed recording reachable from Import until the next dictation
+        replaces it.
 
         A job records the managed recording's id when it is registered. An
         older job that finishes after a newer recording was stored -- the
@@ -4086,7 +4093,7 @@ class DictationController(QtCore.QObject):
         """
         if job is not None and not job.marks_last_recording:
             return
-        if transcript_has_gap(text):
+        if transcript_has_gap(text) and not (job is not None and job.source_audio_path):
             self._mark_last_recording_failed(job, _GAP_KEPT_RECORDING_MESSAGE)
             return
         expected = job.source_recording_id if job is not None else None
@@ -4125,14 +4132,7 @@ class DictationController(QtCore.QObject):
         delivery, and History's Retranscribe takes a language. Recordings that
         fell back nowhere are kept or not as the settings say, as before.
         """
-        payload = self._request_audio_by_token.get(job.token)
-        kept = (
-            self._keep_audio_in_recordings_folder(job, payload[0])
-            if payload is not None
-            else ""
-        )
-        if kept:
-            job.source_audio_path = kept
+        kept = self._keep_audio_of_a_job(job)
         ran, recorded = self._language_fallback_labels(job)
         self._logger.info(
             "retry_language_fallback_delivered token=%d recording_id=%s "
@@ -4153,25 +4153,77 @@ class DictationController(QtCore.QObject):
             f"current engine and model. {outcome}"
         )
 
+    def _keep_audio_of_a_gap_transcript(self, job: _TranscriptionJob) -> None:
+        """Keep the audio of a transcript with a gap marker and link it from
+        the History entry the result is about to get.
+
+        The marker names a stretch the user may need to listen to, or have
+        transcribed again. Its audio used to be the managed last recording,
+        kept by marking it failed (`_mark_last_recording_completed`): one slot,
+        which the next dictation replaces. It is kept like a fallback retry's
+        audio (`_keep_audio_of_a_fallback_retry`): in the recordings folder,
+        linked by `job.source_audio_path`, so History's Retranscribe finds it.
+        A job that already links a file -- "Archive every recording" -- has its
+        audio kept by the settings, and the caller does not ask. Where the copy
+        cannot be written nothing is linked, and the managed recording stays
+        the kept audio as before.
+        """
+        kept = self._keep_audio_of_a_job(job)
+        self._logger.info(
+            "gap_transcript_audio_kept token=%d recording_id=%s kept=%s",
+            job.token,
+            job.source_recording_id or "n/a",
+            kept or "no",
+        )
+
+    def _keep_audio_of_a_job(self, job: _TranscriptionJob) -> str:
+        """Copy a job's audio into the recordings folder and link it from the
+        History entry the job is about to write; "" when nothing was kept (the
+        copy failed, or the job has no audio in memory any more)."""
+        payload = self._request_audio_by_token.get(job.token)
+        if payload is None:
+            return ""
+        kept = self._keep_audio_in_recordings_folder(
+            payload[0],
+            recording_id=job.source_recording_id,
+            recorded_at=job.created_at,
+            language_mode=job.language_fallback_from,
+        )
+        if kept:
+            job.source_audio_path = kept
+        return kept
+
     def _keep_audio_in_recordings_folder(
-        self, job: _TranscriptionJob, wav_bytes: bytes
+        self,
+        wav_bytes: bytes,
+        *,
+        recording_id: str,
+        recorded_at: datetime,
+        language_mode: str = "",
     ) -> str:
-        """Where the audio of `job` now lives, "" when it could not be kept.
-        A move that fails leaves the file in the unfinished recordings folder
+        """Where this recording's audio now lives, "" when it could not be kept.
+
+        Saved as an unfinished recording and moved to the recordings folder
+        under that name, which no recordings count prunes. The file's language
+        tag is `language_mode`, else the language the recording was made in. A
+        move that fails leaves the file in the unfinished recordings folder
         and answers that path (logged): the next start offers it there."""
         store = self._unfinished_recording_store
         try:
             store.save(
                 wav_bytes,
-                recording_id=job.source_recording_id,
-                recorded_at=job.created_at,
-                language_mode=job.language_fallback_from,
+                recording_id=recording_id,
+                recorded_at=recorded_at,
+                language_mode=(
+                    language_mode
+                    or self._recorded_language_by_recording_id.get(recording_id, "")
+                ),
             )
-            recording = store.find(job.source_recording_id)
+            recording = store.find(recording_id)
         except (OSError, ValueError):
             self._logger.exception(
-                "Failed to keep the audio of a retry. recording_id=%s",
-                job.source_recording_id,
+                "Failed to keep the audio of a transcript. recording_id=%s",
+                recording_id,
             )
             return ""
         if recording is None:
@@ -4182,9 +4234,9 @@ class DictationController(QtCore.QObject):
             )
         except OSError:
             self._logger.exception(
-                "Failed to move the audio of a retry to the recordings folder. "
-                "recording_id=%s",
-                job.source_recording_id,
+                "Failed to move the audio of a transcript to the recordings "
+                "folder. recording_id=%s",
+                recording_id,
             )
             return os.path.abspath(recording.path)
 
@@ -6771,6 +6823,8 @@ class DictationController(QtCore.QObject):
         if job is not None and job.language_fallback_from:
             # Before either road writes its History entry: the entry links it.
             self._keep_audio_of_a_fallback_retry(job)
+        if job is not None and not job.source_audio_path and transcript_has_gap(text):
+            self._keep_audio_of_a_gap_transcript(job)
         if request_token is not None:
             if not self._is_foreground_transcription(request_token, job):
                 # A newer recording owns the live session, or this job was asked
@@ -10020,20 +10074,25 @@ class DictationController(QtCore.QObject):
                         **conditional_transition,
                     )
                 return False, _EMPTY_MODEL_TRANSCRIPT_MESSAGE
+            kept_path = "" if managed_last_recording else os.path.abspath(path)
+            if managed_last_recording and transcript_has_gap(text):
+                # Kept like a dictation's (`_keep_audio_of_a_gap_transcript`):
+                # the managed recording is one slot the next dictation replaces.
+                kept_path = self._keep_audio_of_an_imported_last_recording(
+                    audio_source, recording_id
+                )
             self._append_transcript_history(
                 text,
                 settings,
                 "import",
                 source_recording_id=recording_id,
-                source_audio_path=(
-                    "" if managed_last_recording else os.path.abspath(path)
-                ),
+                source_audio_path=kept_path,
                 track_for_edit=False,
             )
             if managed_last_recording:
-                if transcript_has_gap(text):
-                    # Kept, like a dictation whose transcript has a gap
-                    # (`_mark_last_recording_completed`).
+                if transcript_has_gap(text) and not kept_path:
+                    # No copy: the managed recording stays the kept audio,
+                    # like a dictation's (`_mark_last_recording_completed`).
                     self._last_recording_store.mark_failed(
                         _GAP_KEPT_RECORDING_MESSAGE,
                         **conditional_transition,
@@ -10054,6 +10113,31 @@ class DictationController(QtCore.QObject):
                         "Failed to persist imported recording failure state"
                     )
             return False, str(exc)
+
+    def _keep_audio_of_an_imported_last_recording(
+        self, audio_source: str | bytes, recording_id: str
+    ) -> str:
+        """The recordings-folder copy of the managed last recording an import
+        just transcribed with a gap, "" when it could not be made. The audio is
+        the import's own bytes (a snapshot of the slot), or the slot's file."""
+        try:
+            wav_bytes = (
+                audio_source
+                if isinstance(audio_source, bytes)
+                else Path(audio_source).read_bytes()
+            )
+        except OSError:
+            self._logger.exception(
+                "Failed to read the last recording to keep it. recording_id=%s",
+                recording_id,
+            )
+            return ""
+        return self._keep_audio_in_recordings_folder(
+            wav_bytes,
+            recording_id=recording_id,
+            recorded_at=self._recorded_at_by_recording_id.get(recording_id)
+            or datetime.now(),  # noqa: DTZ005 (local time on purpose, like the archive's names)
+        )
 
     def _transcribe_import_worker(
         self,

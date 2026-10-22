@@ -238,15 +238,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     (adjacent gaps share one marker; start rounded down, end up, so a
     short tail never reads `3:00-3:00`) and logs `remote_audio_part_empty`
     at WARNING; a silent one is skipped. `transcript_has_gap`
-    (`transcriber/base.py`, beside `gap_marker`) makes the controller mark
-    such a recording failed rather than completed, so with `save_last_wav`
-    off the stretch the marker names is not deleted with the rest (found by
-    the review of a1e0b01). Every road that completes a recording asks it:
-    the dictation roads, the import of the managed last recording, and the
-    startup check `main._complete_unless_gap`, which finds the transcript in
-    history and used to complete -- i.e. delete -- the kept recording on the
-    next launch (review of 384f84f). Such a recording has no Retry (its
-    overlay is Done); History and Import reach it.
+    (`transcriber/base.py`, beside `gap_marker`) makes the controller keep
+    such a recording's audio, so with `save_last_wav` off the stretch the
+    marker names is not deleted with the rest (found by the review of
+    a1e0b01). The dictation roads (a dictation or a retry, foreground or
+    background, all through `_on_transcription_ready`) keep it in a copy in
+    the recordings folder that the History entry links
+    (`_keep_audio_of_a_gap_transcript`, `docs/agents/controller-and-jobs.md`),
+    and so does the import of the managed last recording
+    (`transcribe_audio_file`); only where that copy could not be written is
+    the managed recording marked failed instead, which was the first design
+    on every road and keeps the audio only until the next dictation replaces
+    the slot (follow-up of the round-3 review, 2026-10-23). The startup check
+    `main._complete_unless_gap` spares such a failed recording whenever its
+    transcript has a gap: it finds the transcript in history and used to
+    complete -- i.e. delete -- the kept recording on the next launch (review
+    of 384f84f). Such a recording has no Retry (its overlay is Done); History
+    reaches the linked copy and Import the managed recording.
     Failing used to throw away every other part's minutes of speech; skipping
     unmarked would hand back a transcript with a hole that reads complete,
     and the marker is the one channel that reaches the overlay, the document

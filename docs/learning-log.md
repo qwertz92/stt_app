@@ -3,6 +3,43 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
+
+The round-3 entry below says a gap transcript has the same hole as the fallback
+retry's audio had, which I had taken as precedent in round 2 without checking
+it. It does: the gap's audio was the managed last recording, kept by marking it
+failed, and that slot is replaced by the next dictation, so the stretch the
+marker names was gone as soon as the user dictated again (the next start already
+spared it, `main._complete_unless_gap`). Closed the way the fallback retry's was
+(`docs/agents/controller-and-jobs.md`, `docs/agents/remote-providers.md`):
+- **A dictation or retry whose transcript has a gap keeps a copy.**
+  `_on_transcription_ready` calls `_keep_audio_of_a_gap_transcript` before
+  either road writes the History entry, for a job that links no file yet. The
+  copy goes into the recordings folder through
+  `_keep_audio_in_recordings_folder` (now shared with the fallback retry and
+  taking the recording's id, time and language instead of a job), the entry
+  links it, and `_mark_last_recording_completed` completes the slot unless no
+  file is linked. With "Archive every recording" the entry already links the
+  archive's file: no second copy, and the slot completes as well. Where the copy
+  cannot be written the managed recording stays marked failed, as before.
+- **The import of the managed last recording does the same**
+  (`_keep_audio_of_an_imported_last_recording`), so the Import tab's gap result
+  is no exception. A fallback retry that also has a gap makes one copy.
+- **Decided not to add a tray notice for a gap.** The marker is in the pasted
+  text and in History, a gap had none before, and a Warning toast per gap is a
+  new surface for the owner to decide; adding it is about ten lines
+  (`busy_overlay_error`, like the fallback retry's). The cost of not having it
+  is that the user does not learn that Retranscribe in History now reaches the
+  audio, and that a copy sits in the recordings folder (no count prunes it,
+  like every file kept there) although "keep last recording" is off.
+- Tests failed before the fix for the stated reason (the entry linked no file;
+  the slot stayed failed): in `tests/test_controller_queue.py` the copy and the
+  link, the next dictation and the next start, the background road, the archive
+  case, the failed copy and the negative controls; in
+  `tests/test_controller_coverage.py` the import road and its failed copy. The
+  older `test_an_imported_last_recording_with_a_gap_is_kept` asserted the
+  opposite (slot failed, nothing linked) and was rewritten.
+
 ## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
 
 Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
