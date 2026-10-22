@@ -546,6 +546,17 @@ def _create_tray_icon(
 
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
+    # One double-click on the icon arrives as Trigger, DoubleClick, Trigger
+    # (0, 93 and 94 ms, measured with this app's own icon on Windows 11), so a
+    # Trigger is only a single click once a double-click interval has passed
+    # without a DoubleClick, and the Trigger that trails a DoubleClick is the
+    # second click's release. Acting on every Trigger raised the overlay before
+    # Settings opened and again right after, over the dialog.
+    surface_overlay_timer = QtCore.QTimer(menu)
+    surface_overlay_timer.setSingleShot(True)
+    surface_overlay_timer.timeout.connect(controller.bring_overlay_to_front)
+    last_double_click = QtCore.QElapsedTimer()
+
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
         # First, because for a context-menu click this runs while the
         # user's own window is still in front: the native menu is about to
@@ -554,6 +565,8 @@ def _create_tray_icon(
         # way to find out what was there.
         controller.note_foreground_window()
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
+            surface_overlay_timer.stop()
+            last_double_click.start()
             open_settings_dialog()
             return
         if reason == QtWidgets.QSystemTrayIcon.Trigger:
@@ -561,7 +574,12 @@ def _create_tray_icon(
             # main window, so use it to surface the overlay. Together with the
             # overlay's Record button this makes dictation reachable entirely
             # without a keyboard.
-            controller.bring_overlay_to_front()
+            interval = QtWidgets.QApplication.doubleClickInterval()
+            if last_double_click.isValid() and not last_double_click.hasExpired(
+                interval
+            ):
+                return
+            surface_overlay_timer.start(interval)
             return
         if reason == QtWidgets.QSystemTrayIcon.MiddleClick and bool(
             getattr(controller.settings, "tray_middle_click_toggle", True)

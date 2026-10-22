@@ -12,7 +12,10 @@ from stt_app.benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
-from stt_app.settings_dialog_helpers import _DEFAULT_SETTINGS_DIALOG_SIZE
+from stt_app.settings_dialog_helpers import (
+    _DEFAULT_SETTINGS_DIALOG_SIZE,
+    compact_table_row_height,
+)
 
 # A 1366x768 screen at 100% with a 40 px taskbar leaves 728 px, and the dialog
 # keeps a 48 px screen margin (`_DIALOG_SCREEN_MARGIN`), so it opens at most
@@ -347,10 +350,10 @@ def test_the_history_models_cell_counts_the_models_the_run_measured(tmp_path):
     dialog._refresh_benchmark_history_list()
     table = dialog.benchmark_history_list
 
-    assert table.item(0, 2).text() == "2 models: tiny, base"
-    assert table.item(1, 2).text() == "1 model: tiny"
-    assert table.item(2, 2).text() == "12 models: " + ", ".join(_TWELVE_MODELS)
-    assert table.item(2, 2).toolTip() == "12 models:\n" + "\n".join(_TWELVE_MODELS)
+    assert table.item(0, 5).text() == "2 models: tiny, base"
+    assert table.item(1, 5).text() == "1 model: tiny"
+    assert table.item(2, 5).text() == "12 models: " + ", ".join(_TWELVE_MODELS)
+    assert table.item(2, 5).toolTip() == "12 models:\n" + "\n".join(_TWELVE_MODELS)
     assert table.textElideMode() == QtCore.Qt.ElideRight
     _ = app
 
@@ -360,9 +363,10 @@ def test_the_history_models_cell_counts_the_models_the_run_measured(tmp_path):
 def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp_path):
     """Recorded, Runs, Best RTF and Status were sized to their contents, so
     the first "Completed with errors" took 59 px from the Audio and Models
-    columns (9 pt) and the next date, 20 px more; and the vertical bar that
-    came with the row that outgrew the list took 12 px. Measured at the
-    dialog's minimum width with five very different runs and then 20 rows."""
+    columns (9 pt) and the next date, 20 px more. The vertical bar that comes
+    with the row that outgrew the list takes its 12 px from Models alone, the
+    last column. Measured at the dialog's minimum width with five very
+    different runs and then 20 rows."""
     with _AppFont(point_size) as app:
         dialog, _ = _dialog()
         dialog._benchmark_history_store = BenchmarkHistoryStore(
@@ -417,10 +421,172 @@ def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp
             header.sectionSizeFromContents(c).width()
             for c in range(table.columnCount())
         ]
+        bar_width = table.verticalScrollBar().sizeHint().width()
         dialog.hide()
 
-    assert all(sizes == empty for sizes in seen), seen
-    assert empty[5] >= status_need
+    # Models, the last column, is the one stretching column: the bar that comes
+    # with the row that outgrew the list takes its own width from it and from
+    # nothing else.
+    assert all(sizes[:-1] == empty[:-1] for sizes in seen), seen
+    assert all(empty[-1] - sizes[-1] in (0, bar_width) for sizes in seen), seen
+    assert empty[4] >= status_need
     assert empty[0] >= recorded_need
-    for column in (0, 3, 4, 5):
+    for column in (0, 2, 3, 4):
         assert empty[column] >= header_needs[column], column
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_pinned_history_columns_show_every_value_whole(point_size: float, tmp_path):
+    """The pinned widths were the text plus the item's two margins, one pixel
+    short: a table's grid line takes a pixel of every column, so the date lost
+    its time ("2026-10-06 ...") and "Completed with errors" its last words in
+    every row. The delegate's own answer for a column
+    (`sizeHintForColumn`, which counts the margins and the grid line) must fit
+    the width the column was pinned to, for the longest status and a date."""
+    with _AppFont(point_size) as app:
+        dialog = _history_dialog_with_runs(tmp_path, app, width=1000, height=900)
+        table = dialog.benchmark_history_list
+        for day, status in enumerate(
+            ("completed", "completed_with_errors", "canceled", "failed"), start=1
+        ):
+            dialog._benchmark_history_store.add_entry(
+                _run_over(["tiny"], status=status, day=day)
+            )
+        dialog._refresh_benchmark_history_list()
+        _settle_table(app, table)
+        header = table.horizontalHeader()
+        needed = {
+            table.horizontalHeaderItem(c).text(): table.sizeHintForColumn(c)
+            for c in range(table.columnCount())
+        }
+        given = {
+            table.horizontalHeaderItem(c).text(): header.sectionSize(c)
+            for c in range(table.columnCount())
+        }
+        dialog.hide()
+
+    short = {
+        name: (needed[name], given[name])
+        for name in needed
+        if needed[name] > given[name]
+    }
+    assert not short, f"(needed, given) px of the columns that elide: {short}"
+
+
+def _history_dialog_with_runs(tmp_path, app, *, width: int, height: int):
+    """The Benchmark tab, shown, over an empty history store of its own."""
+    dialog, _ = _dialog()
+    dialog._benchmark_history_store = BenchmarkHistoryStore(
+        path=tmp_path / "benchmark_history.json"
+    )
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.show()
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    dialog.resize(width, height)
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    return dialog
+
+
+def _show_runs(dialog, app, count: int) -> None:
+    """Make the History hold exactly *count* runs and let the view settle."""
+    store = dialog._benchmark_history_store
+    store.clear()
+    for day in range(count):
+        store.add_entry(_run_over(["tiny"], status="completed", day=1 + day % 28))
+    dialog._refresh_benchmark_history_list()
+    _settle_table(app, dialog.benchmark_history_list)
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_history_scrollbar_exists_only_while_rows_overflow(
+    point_size: float, tmp_path
+):
+    """Owner: the first field of the Benchmark tab "has a scrolling bar that
+    never disappears". It was `AlwaysOn` (a disabled bar beside an empty or
+    short list) so that its arrival could not narrow a column. The columns now
+    keep still without it (the test below), so it shows when, and only when,
+    the rows do not fit."""
+    with _AppFont(point_size) as app:
+        dialog = _history_dialog_with_runs(tmp_path, app, width=1000, height=900)
+        table = dialog.benchmark_history_list
+        bar = table.verticalScrollBar()
+        row = compact_table_row_height(table)
+        capacity = table.viewport().height() // row
+        seen = []
+        for count in (0, capacity, capacity + 1, 0):
+            _show_runs(dialog, app, count)
+            seen.append((bar.isVisible(), bar.maximum() > 0))
+        dialog.hide()
+
+    assert capacity >= 2, "the table is too short to tell the two cases apart"
+    assert seen == [(False, False), (False, False), (True, True), (False, False)]
+
+
+@pytest.mark.pixel_exact
+def test_six_runs_need_no_scrollbar_in_a_default_size_dialog(tmp_path):
+    """The owner has six stored runs. The table used the style's 30 px rows
+    where the Results and plan tables use 20 px ones, so six rows needed 180 px
+    of a 147 px viewport in the 860x960 dialog (a 33 px range under a bar that
+    was always there anyway); at the shared row height they fit with room for a
+    seventh."""
+    with _AppFont(9.0) as app:
+        dialog = _history_dialog_with_runs(
+            tmp_path,
+            app,
+            width=_DEFAULT_SETTINGS_DIALOG_SIZE.width(),
+            height=_DEFAULT_SETTINGS_DIALOG_SIZE.height(),
+        )
+        table = dialog.benchmark_history_list
+        _show_runs(dialog, app, 7)
+        seven = (table.verticalScrollBar().isVisible(), table.rowHeight(0))
+        _show_runs(dialog, app, 6)
+        six = table.verticalScrollBar().isVisible()
+        shared_row_height = compact_table_row_height(dialog.benchmark_results_table)
+        dialog.hide()
+
+    assert six is False
+    assert seven == (False, shared_row_height)
+
+
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_bar_arriving_moves_no_history_column_but_models(
+    point_size: float, tmp_path
+):
+    """With the bar as needed, its 12 px come out of the viewport. Models is
+    the last column and the only stretching one, so the five before it keep
+    their place and width: with Models in the middle (as it was) the three
+    columns to its right moved left by the bar's width when the row that
+    outgrew the list arrived."""
+    with _AppFont(point_size) as app:
+        dialog = _history_dialog_with_runs(tmp_path, app, width=1000, height=900)
+        table = dialog.benchmark_history_list
+        header = table.horizontalHeader()
+        bar = table.verticalScrollBar()
+        capacity = table.viewport().height() // compact_table_row_height(table)
+
+        def columns() -> list[tuple[int, int]]:
+            return [
+                (header.sectionViewportPosition(c), header.sectionSize(c))
+                for c in range(table.columnCount())
+            ]
+
+        _show_runs(dialog, app, capacity)
+        without_bar = columns()
+        assert not bar.isVisible()
+        _show_runs(dialog, app, capacity + 1)
+        assert bar.isVisible()
+        with_bar = columns()
+        bar_width = bar.width()
+        last_title = table.horizontalHeaderItem(table.columnCount() - 1).text()
+        dialog.hide()
+
+    assert last_title == "Models"
+    assert with_bar[:-1] == without_bar[:-1]
+    assert with_bar[-1][0] == without_bar[-1][0]
+    assert without_bar[-1][1] - with_bar[-1][1] == bar_width

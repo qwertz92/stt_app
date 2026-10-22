@@ -3862,6 +3862,58 @@ def test_a_language_switch_never_changes_or_reloads_queued_work(
     controller.shutdown()
 
 
+class _LanguageNotingStream(FakeStreamingTranscriber):
+    """A live stream that notes every language it is set to."""
+
+    def __init__(self, settings):
+        super().__init__()
+        self.language_mode = settings.language_mode
+        self.language_sets: list[str] = []
+
+    def set_language_mode(self, mode):
+        self.language_mode = mode
+        self.language_sets.append(mode)
+
+
+@pytest.mark.parametrize("settings_mode", ["batch", "streaming"])
+def test_a_language_pick_during_a_recording_applies_to_the_next_one(
+    monkeypatch, tmp_path, settings_mode
+):
+    """The overlay's Lang button is enabled while Listening (2026-10-23): a
+    pick then must not reach the recording in progress -- its job keeps the
+    language it started under and a live stream is never told about the pick
+    -- and the next recording starts under the new one."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", language_mode="en"
+    )
+    runtimes: list[_LanguageNotingStream] = []
+
+    def make(settings, **_kw):
+        runtimes.append(_LanguageNotingStream(settings))
+        return runtimes[-1]
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", make)
+    controller._settings = replace(controller._settings, mode=settings_mode)
+
+    controller.start_recording()
+    controller.set_language_mode("de")
+    controller.stop_recording()
+    first = controller._active_request_token
+
+    assert controller._jobs[first].settings.language_mode == "en"
+    assert controller.settings.language_mode == "de"
+    for runtime in runtimes:
+        assert "de" not in runtime.language_sets, "the live runtime was retargeted"
+    if settings_mode == "streaming":
+        controller._on_transcription_ready("first", request_token=first)
+
+    second = _record_and_stop(controller)
+
+    assert controller._jobs[second].settings.language_mode == "de"
+    controller.shutdown()
+    _ = app
+
+
 def test_retry_uses_the_language_the_recording_was_made_in(monkeypatch, tmp_path):
     """Owner decision 2026-10-17 (it was "the language selected now" before):
     a retry transcribes the recording in the language it was made in. Engine
