@@ -26,12 +26,24 @@ once `capture.start()` returned, which proves nothing about the microphone.
   receiver's own thread runs the slot directly -- under the lock that was a
   deadlock (the regression test hangs without the change; verified by
   moving the call back).
-- **Decision for the owner, not taken here**: the 2026-10-10 fix kept
-  "Speak now" through a starved start because the audio is buffered. That
-  is still true for a starved thread; the change trades a slower invitation
-  in that case for never showing green while nothing records. If starts on
-  the work laptop now sit on "Starting" for seconds, the log shows which
-  case it is (`audio_capture_callback_slow`, `first_callback_ms`).
+- **A trade-off taken here, for the owner to confirm or reverse**: the
+  2026-10-10 fix (an agent's choice, not the owner's) kept "Speak now"
+  through a starved start because the audio is buffered. That is still
+  true for a starved thread; this change trades a slower invitation in that
+  case for never showing green while nothing records. If starts on the work
+  laptop now sit on "Starting" for seconds, the log shows which case it is
+  (`audio_capture_callback_slow`, `first_callback_ms`).
+- **Review round 1 (Sonnet, read-only): no P1/P2.** Fixed on the spot: a
+  NaN or infinite sample made the new level field raise inside `stop()`
+  (P3: the recording never reached the controller, and a warm stream kept
+  the dead capture attached) -- it now reads `invalid`, and the int16
+  conversion maps non-finite samples to silence/full scale instead of an
+  undefined cast; a test now announces the first block from another thread
+  (every other test did it on the Qt thread, where the connection is
+  direct, so a `DirectConnection` would have passed them all); the
+  stopped-capture case of the announcement test now stops before any block,
+  the only case the generation guard decides. Each new test failed against
+  the code without its fix.
 
 ## 2026-10-23: first words missing with the warm stream: what the log could not say
 

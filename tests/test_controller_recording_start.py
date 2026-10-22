@@ -13,6 +13,7 @@ delivered anything.
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 from conftest import (
@@ -270,5 +271,42 @@ def test_a_streaming_handshake_does_not_invite_speech_before_the_first_block(
         "Streaming active. Speak now, press hotkey to finalize.",
         False,
     )
+    controller.shutdown()
+    _ = app
+
+
+def test_the_first_block_from_the_audio_thread_paints_on_the_qt_thread(
+    monkeypatch,
+):
+    """In the app the announcement comes from PortAudio's callback thread;
+    the queued connection must carry it to the Qt thread, which alone may
+    touch the overlay. Delivered directly, the paint would run on the audio
+    thread (review 2026-10-23: every other test announces on the Qt thread,
+    where the connection is direct)."""
+    overlay = FakeOverlay()
+    controller, app = _controller(monkeypatch, _SilentCapture, overlay)
+    painted_on: list[threading.Thread] = []
+    original = controller._set_listening_overlay
+
+    def record_thread(detail, **kwargs):
+        painted_on.append(threading.current_thread())
+        original(detail, **kwargs)
+
+    monkeypatch.setattr(controller, "_set_listening_overlay", record_thread)
+    controller.start_recording()
+    painted_on.clear()
+    capture = FakeCapture.instances[-1]
+
+    worker = threading.Thread(target=capture.deliver_first_block)
+    worker.start()
+    worker.join(timeout=5.0)
+    assert painted_on == []
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline and not painted_on:
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert painted_on == [threading.main_thread()]
+    assert _listening_paints(overlay)[-1] == (_SPEAK_NOW, False)
     controller.shutdown()
     _ = app

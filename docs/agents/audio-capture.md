@@ -291,9 +291,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   0.9/1.9/2.9 when healthy), the RMS level of each of the first three
   seconds of the recording (`level_dbfs_by_second`, by audio position;
   `zero` for a second of digital zeros only, which a driver inserts and a
-  microphone never produces; added 2026-10-23 so "my voice starts 2 s in"
-  reads from the log: quiet seconds that arrived, against seconds that did
-  not -- the deficit), `warm_attach_gap_ms` (time since the warm
+  microphone never produces; `invalid` for one with a NaN or infinite
+  sample, which must not raise inside `stop()` -- the WAV conversion maps
+  such samples to silence or full scale; added 2026-10-23 so "my voice
+  starts 2 s in" reads from the log: quiet seconds that arrived, against
+  seconds that did not -- the deficit), `warm_attach_gap_ms` (time since
+  the warm
   stream's previous callback at attach) and the stop's wait. The per-block
   "Audio stream status" warning is written once per recording: it runs on
   the PortAudio thread. A refused warm attach logs

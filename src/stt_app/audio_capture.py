@@ -339,11 +339,15 @@ class _CaptureTiming:
     def level_by_second(self) -> str:
         """RMS level of each leading second in dBFS, "/"-joined: "-" for a
         second the recording did not reach, "zero" for one of digital zeros
-        only -- what a driver inserts, never what a microphone hears."""
+        only -- what a driver inserts, never what a microphone hears -- and
+        "invalid" for one holding a NaN or infinite sample, which must not
+        raise inside `stop()` (review 2026-10-23)."""
         parts = []
         for energy, frames in zip(self._level_energy, self._level_frames, strict=True):
             if frames == 0:
                 parts.append("-")
+            elif not math.isfinite(energy):
+                parts.append("invalid")
             elif energy <= 0.0:
                 parts.append("zero")
             else:
@@ -1649,7 +1653,11 @@ class AudioCapture:
         return buffer.getvalue()
 
     def _to_pcm16_array(self, audio: np.ndarray) -> np.ndarray:
-        clipped = np.clip(audio, -1.0, 1.0)
+        # A NaN cast to int16 is undefined (a click at full scale, and a
+        # RuntimeWarning); a driver's non-finite sample becomes silence or
+        # full scale instead.
+        finite = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
+        clipped = np.clip(finite, -1.0, 1.0)
         return (clipped * 32767.0).astype(np.int16)
 
     def _to_pcm16_bytes(self, audio: np.ndarray) -> bytes:

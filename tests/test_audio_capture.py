@@ -1,6 +1,7 @@
 import logging
 import threading
 import time
+import warnings
 import wave
 from io import BytesIO
 
@@ -2504,14 +2505,44 @@ def test_the_first_block_of_each_capture_is_announced_once(monkeypatch):
     callback(_block(), 1600, None, None)
     assert announced == [1]
     capture.stop()
-    callback(_block(), 1600, None, None)  # a late block of the stopped capture
-    assert announced == [1]
 
     capture.start()
     restarted = FakeInputStream.instances[-1].kwargs["callback"]
     restarted(_block(), 1600, None, None)
     assert announced == [1, 1]
     capture.stop()
+
+    # Stopped before any block: a late one is not this recording's first.
+    capture.start()
+    silent = FakeInputStream.instances[-1].kwargs["callback"]
+    capture.stop()
+    silent(_block(), 1600, None, None)
+    assert announced == [1, 1]
+
+
+def test_a_non_finite_sample_does_not_break_the_stop(monkeypatch, caplog):
+    """Review 2026-10-23 (P3): a NaN or inf from a driver made the level of
+    its second NaN, `round` raised inside `stop()`, and the recording never
+    reached the controller (a warm stream kept the dead capture attached)."""
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level_nan")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        clock.now += 0.1
+        callback(_block(value=float("nan")), 1600, None, None)
+        clock.now += 0.1
+        callback(_block(), 1600, None, None)
+        # Casting a NaN to int16 is undefined; numpy says so with a warning.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            wav_bytes = capture.stop()
+
+    assert _wav_frames(wav_bytes) == 2 * 1600
+    assert "level_dbfs_by_second=invalid/-/-" in caplog.text
+    # And the NaN block is silence in the WAV.
+    with wave.open(BytesIO(wav_bytes), "rb") as wav_file:
+        samples = np.frombuffer(wav_file.readframes(1600), dtype=np.int16)
+    assert not samples.any()
 
 
 def test_a_cold_capture_delivers_audio_only_once_a_block_came(monkeypatch):
