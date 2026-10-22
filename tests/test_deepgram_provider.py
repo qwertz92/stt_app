@@ -1297,6 +1297,34 @@ class TestDeepgramKeepAlive:
         assert len(warnings) == 1, [r.getMessage() for r in warnings]
         assert "microphone" in warnings[0].getMessage()
 
+    def test_real_audio_restarts_the_count_of_a_gap(self):
+        """The cap is per gap: the count of empty waits restarts at every real
+        audio block. Two gaps of seven waits (21 s each, inside the 30 s cap)
+        are 14 empty waits in all; without the restart the second gap would
+        reach the cap at its fourth wait, the 11th in total, and end a stream
+        whose microphone had delivered audio in between. The arrivals sit well
+        inside their waits (no tie at a wait's edge): block at 0.1 s, the next
+        after 7 waits (22.5 s), the next after 7 more (45.0 s)."""
+        t = DeepgramTranscriber(api_key="key")
+        send_queue = _ClockedQueue(
+            [(0.1, b"a"), (22.5, b"b"), (45.0, b"c"), (46.0, _SENTINEL)]
+        )
+        errors: list[str] = []
+
+        ws = _run_the_sender_to_its_sentinel(t, send_queue, on_error=errors.append)
+
+        assert [payload for _at, payload, _opcode in ws.frames] == [
+            b"a",
+            *[_KEEPALIVE_FRAME] * 7,
+            b"b",
+            *[_KEEPALIVE_FRAME] * 7,
+            b"c",
+        ]
+        assert errors == []
+        assert t._stream_error is None
+        # The sender went on to the sentinel: 3 blocks, 14 empty waits, the sentinel.
+        assert len(send_queue.timeouts_asked) == 3 + 14 + 1
+
     def test_a_capped_gap_reports_once_and_a_closing_socket_adds_nothing(
         self, monkeypatch
     ):
@@ -1326,6 +1354,12 @@ class TestDeepgramKeepAlive:
         assert errors == [_SHORT_GAP_CAP_ERROR]
 
     def test_a_stop_after_the_cap_neither_hangs_nor_loses_the_cause(self, monkeypatch):
+        """The sender is gone when the stop arrives. The stop must notice that
+        at once -- `_drain_stream_sender` waits up to its 2 s drain timeout for a
+        sender that is still alive, so a bound of 1 s tells the two apart -- and
+        must send neither `Finalize` nor `CloseStream`: after a failed drain
+        the socket is closed instead, so no control frame follows audio that
+        never reached the server."""
         t = DeepgramTranscriber(api_key="key")
         errors: list[str] = []
         outcome: list[TranscriptionError | str] = []
@@ -1337,7 +1371,7 @@ class TestDeepgramKeepAlive:
                 outcome.append(exc)
 
         try:
-            _ws, send_thread = _open_a_stream_and_send_one_block_before_a_gap(
+            ws, send_thread = _open_a_stream_and_send_one_block_before_a_gap(
                 monkeypatch, t, errors.append
             )
             _wait_for(lambda: errors)
@@ -1345,9 +1379,17 @@ class TestDeepgramKeepAlive:
 
             stopper = threading.Thread(target=stop)
             stopper.start()
-            stopper.join(timeout=3.0)
+            stopper.join(timeout=1.0)
 
-            assert not stopper.is_alive(), "the stop hung on the sender that had ended"
+            # Read first: a stop that went on to finalize also runs long.
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"audio",
+                _KEEPALIVE_FRAME,
+                _KEEPALIVE_FRAME,
+            ], "a control frame followed the sender's last frame"
+            assert not stopper.is_alive(), (
+                "the stop waited for the sender that had ended"
+            )
         finally:
             t.abort_stream()
         assert len(outcome) == 1
