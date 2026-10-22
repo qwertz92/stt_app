@@ -3,6 +3,95 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (the update download had the retranscription's crash on Cancel)
+
+Searched every `threading.Thread` started by a Qt object for the shape of the
+History retranscription crash (a worker capturing a dialog that is `exec()`ed
+or deleted on close). One more had it: `UpdateDownloadDialog` is `exec()`ed by
+`show_update_available_dialog` and its worker captured `self`, so Cancel during
+a download left the worker holding the dialog's last reference until the
+download noticed the cancel, then destroyed it on the worker thread. Same fix:
+plain values and a `GuiThreadReporter`; `_DownloadSignals` went. The test fails
+without the fix (the cancelled dialog stayed alive). The others are safe as
+they stand: the Settings dialog and the unfinished-recordings notice are held
+for the whole session and never deleted on close, so no worker can hold their
+last reference or emit into a deleted one.
+
+## 2026-10-23 (the History retranscription crash: a worker held the closed dialog)
+
+Owner's report: History (from the overlay) > Retranscribe, the dialog closed
+during the run, then another entry of the same recording deleted -- crash.
+Reproduced with a probe driving the real `HistoryDialog` and
+`RetranscribeDialog` with a fake controller, the app kept alive on last-window
+close as in `main.py` (`docs/agents/persistence-and-history.md`):
+- **Cause 1 (the owner's sequence):** PySide6's `QDialog.exec()` hands the
+  dialog back to Python ownership, so it dies with its last Python reference
+  although it has a parent. The worker closure captured `self`; after Close it
+  held the last reference, and the end of the run destroyed the dialog on the
+  worker thread: "QObject::killTimer: Timers cannot be stopped from another
+  thread" (its elapsed timer still ran), then "Fatal Python error: Aborted" or
+  an access violation (2 of 4 runs; every run printed the warnings). History
+  staying open is what makes the worker the last owner; closing History first
+  deletes the child on the GUI thread instead.
+- **Cause 2:** a progress emit on the dialog while History's
+  `WA_DeleteOnClose` deleted it raised `TypeError(' only accepts 0
+  argument(s), 1 given!')`, which `_emit`'s `RuntimeError` guard let through,
+  and the process aborted (2 of 4 runs at one progress line per ms).
+- **Not a cause:** deleting the other entry. `delete_entries` never touched
+  audio and still does not (now logged, and documented); the transcript was
+  always saved by the controller on the worker thread.
+- A first probe version reported a "starved" worker after History closed; that
+  was the probe's own app quitting on last-window close. Probes of Qt
+  lifetime must set `setQuitOnLastWindowClosed(False)` like `main.py`.
+- **Fix:** `gui_thread.GuiThreadReporter` (weak reference, one dispatcher owned
+  by the application, call queued to the GUI thread and dropped for a dead
+  receiver); `RetranscribeDialog` hands the worker only the reporter, History
+  a module-level callable with the controller and its own reporter, which
+  refreshes the list when the run ends (`produced_transcript` and the post-exec
+  reload went, the refresh covers both cases). A failed `Thread.start` now
+  ends the run with a message instead of a dialog stuck in "Transcribing...".
+  Both ends of a History retranscription and every history delete are logged.
+  After the fix: 6/6 and 8/8 probe runs clean, entry saved, 963 progress
+  reports to the deleted dialog dropped.
+- Tests fail without the fix for the stated reason (the closed dialog is kept
+  alive by the run): the dialog-level test and the History-level test of the
+  owner's sequence; the latter first used `findChild`, which (measured) kept
+  the child alive through its parent and failed even with the fix, so it looks
+  the dialog up through `topLevelWidgets()`.
+
+## 2026-10-23 (a crash leaves a trace: crash.log, exception hooks, the previous session in diagnostics)
+
+Owner's report: after a crash and a restart only post-restart logs existed,
+and `dictation.log.1` was "completely outdated". Checked in the code and with a
+probe that crashed a session natively and restarted it (throwaway folder):
+- **The log is not overwritten on restart.** `RotatingFileHandler` appends,
+  flushes every record, and rotates only by size (1 MB, three backups). The
+  owner's own `dictation.log` held the sessions of 17 and 22 October, so
+  `dictation.log.1` is simply an older 1 MB chunk. Explorer also shows a stale
+  size and date for the file the running app holds open (measured: the listing
+  said 18 October and 565 kB until a handle was closed, then 23 October and
+  639 kB), which makes the live log look outdated too.
+- **What was really missing:** nothing records a crash in native code (an
+  access violation ends the process before any Python handler runs; the probe's
+  log simply stopped), uncaught exceptions went to a stderr the windowed build
+  does not have, the History retranscription and delete paths log nothing, and
+  "Copy diagnostics" copies only the current session -- after a restart, exactly
+  "only logs after the restart".
+- **Changed** (`docs/agents/controller-and-jobs.md`): `logger.start_crash_reporting`
+  enables faulthandler into `logs\crash.log` for the process lifetime with a
+  start and an end line per session; the next start logs `previous_session_end`
+  with the trace when the previous session did not quit cleanly or left one,
+  and "Copy diagnostics" then starts one session earlier. Uncaught exceptions
+  from any thread, Qt slots and unraisable contexts are logged with their
+  traceback. The quit watchdog writes into `crash.log` instead of a second
+  handle on `dictation.log`, whose rename Windows refuses while that handle is
+  open (a rotation during the quit dropped every later line).
+- Tests: a restart keeps the previous session's lines; a subprocess crashed by
+  `faulthandler._sigsegv()` leaves its stack in `crash.log`, the next start
+  logs it and the diagnostics copy reaches the crashed session; only a session
+  without its end line is reported; the size bound; the three hooks log and
+  hand on.
+
 ## 2026-10-23 (review round 4 of the Retry work: the mode waits for the microphone, the copy may fail)
 
 Round 4 over `d009937` found no P1 or P2 (the Retry strand meets the stop rule);

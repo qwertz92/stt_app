@@ -151,7 +151,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `unfinished_recordings_dialog.py` | Startup notice listing those recordings: transcribe all/selected into history, show in folder, delete, keep files |
 | `quit_dialog.py` | The tray's Quit: quits at once, or asks (wait and insert / quit now / don't quit) while work is pending |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
-| `logger.py` | Application logging setup and diagnostics text |
+| `gui_thread.py` | `GuiThreadReporter`: a worker thread's reports run on the GUI thread through one app-owned dispatcher, only while the receiver still exists; a worker must never hold a widget |
+| `logger.py` | Application logging setup and diagnostics text; `crash.log` (faulthandler for the process lifetime, previous-session report at start) and the uncaught-exception hooks |
 | `ssl_utils.py` | System trust store injection and CA bundle resolution |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
 | `silero_vad.py` | Silero VAD v6 speech check (the graph faster-whisper ships, ONNX Runtime CPU, one thread, built on a background thread with a 60 s retry after a failed load): `check_speech_*` for the batch silence gate, `measure_speech_pcm16` for the streaming post-pause gate; `None` = unmeasured, never gates |
@@ -214,6 +215,9 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - Every download goes through the single download slot (local models).
 - Every settings save applies the user's edits, diffed against
   `_populated_settings`, onto a fresh `load()` (settings dialog).
+- A worker thread never holds a Qt widget: a closed `exec()`ed dialog died
+  with the worker's last reference, on the worker thread (crash). Workers
+  report through `gui_thread.GuiThreadReporter` (persistence and history).
 
 ## Core flow
 

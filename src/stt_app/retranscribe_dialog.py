@@ -25,9 +25,12 @@ from .config import (
     language_modes_for_selection,
 )
 from .dialog_style import make_label_selectable
+from .gui_thread import GuiThreadReporter
 from .settings_dialog_helpers import (
     _REMOTE_MODEL_DEFAULTS,
+    _THREAD_START_ERRORS,
     LOCAL_MODEL_LABELS,
+    exception_reason,
     fill_engine_combo,
     hint_font,
     local_model_short_label,
@@ -73,10 +76,12 @@ _MINIMUM_SIZE = QtCore.QSize(560, 460)
 
 
 class RetranscribeDialog(QtWidgets.QDialog):
-    """Transcribe one history entry's audio again with a chosen setup."""
+    """Transcribe one history entry's audio again with a chosen setup.
 
-    _progress_reported = QtCore.Signal(str)
-    _run_finished = QtCore.Signal(bool, str)
+    Closing the dialog does not stop a run: the controller saves its
+    transcript to history either way, and the run's reports to a closed
+    dialog are dropped (`gui_thread`).
+    """
 
     def __init__(
         self,
@@ -94,8 +99,6 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._transcribe = transcribe
         self._running = False
         self._elapsed_seconds = 0
-        #: True once a run produced a transcript, so the caller can reload.
-        self.produced_transcript = False
 
         self._entry_engine = str(getattr(entry, "engine", "") or "").strip().lower()
         self._entry_model = str(getattr(entry, "model", "") or "").strip()
@@ -109,9 +112,6 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._elapsed_timer = QtCore.QTimer(self)
         self._elapsed_timer.setInterval(1000)
         self._elapsed_timer.timeout.connect(self._tick_elapsed)
-
-        self._progress_reported.connect(self._on_progress)
-        self._run_finished.connect(self._on_finished)
 
         form = QtWidgets.QFormLayout()
         form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
@@ -644,26 +644,36 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._set_status("Transcribing...")
         self._elapsed_timer.start()
 
-        # Read the widgets on the GUI thread; the worker only sees plain data.
+        # Read the widgets on the GUI thread; the worker only sees plain data
+        # and the reporter -- never `self`. A worker holding the dialog held
+        # its last reference once the user closed it (`exec()` gives the
+        # dialog to Python), and the end of the run destroyed the dialog on
+        # the worker thread: the owner's crash of 2026-10-23 (`gui_thread`).
         path = str(self._audio_path)
         settings = self.build_settings()
         transcribe = self._transcribe
+        reporter = GuiThreadReporter(self)
 
         def _run() -> None:
             def _progress(message: str) -> None:
-                _emit(self, "_progress_reported", str(message))
+                reporter.post("_on_progress", str(message))
 
             try:
                 ok, text = transcribe(path, settings, _progress)
             except Exception as exc:
-                ok, text = False, str(exc)
-            _emit(self, "_run_finished", bool(ok), str(text))
+                ok, text = False, exception_reason(exc)
+            reporter.post("_on_finished", bool(ok), str(text))
 
-        threading.Thread(
-            target=_run,
-            name="stt_app_history_retranscription",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=_run,
+                name="stt_app_history_retranscription",
+                daemon=True,
+            ).start()
+        except _THREAD_START_ERRORS as exc:
+            self._on_finished(
+                False, f"The transcription could not start: {exception_reason(exc)}"
+            )
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._run_button.setEnabled(enabled)
@@ -687,12 +697,10 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._set_controls_enabled(True)
         result = str(text or "")
         if not ok or not result.strip():
-            self.produced_transcript = False
             self._set_status(f"Failed: {result}", error=True)
             return
         self._result_text.setPlainText(result)
         self._copy_button.setEnabled(True)
-        self.produced_transcript = True
         self._set_status("Done. Saved to history as a new entry.", success=True)
 
     # -- feedback ------------------------------------------------------------
@@ -740,12 +748,3 @@ def _labelled(content: QtWidgets.QWidget, title: str) -> QtWidgets.QWidget:
     layout.addWidget(caption)
     layout.addWidget(content, 1)
     return holder
-
-
-def _emit(owner: QtCore.QObject, signal_name: str, *args: object) -> bool:
-    """Emit from a worker thread; a closed dialog must not raise."""
-    try:
-        getattr(owner, signal_name).emit(*args)
-    except RuntimeError:
-        return False
-    return True

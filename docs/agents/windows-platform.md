@@ -31,7 +31,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   installer and `.sha256` assets, trusted redirects, the declared size and a
   matching checksum (partial data stays `.partial`); launching needs an
   Authenticode subject in `TRUSTED_WINDOWS_PUBLISHER_SUBJECTS`, which stays
-  empty until a real signing identity exists.
+  empty until a real signing identity exists. The download worker gets plain
+  values and a `gui_thread.GuiThreadReporter`, never the dialog (2026-10-23):
+  the dialog is `exec()`ed, so after Cancel a worker that captured it held its
+  last reference and destroyed it on the worker thread
+  (`docs/agents/persistence-and-history.md`, the retranscription crash).
 - **A hotkey's key must never be a modifier**: `RegisterHotKey` matches
   modifiers exactly and pressing a modifier sets its own bit, so
   `Ctrl+Win+LShift` registers and never fires. `parse_hotkey` rejects it;

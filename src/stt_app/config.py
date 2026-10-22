@@ -2432,6 +2432,14 @@ LOG_BACKUP_COUNT = 3
 # clipboard and has to stay pasteable.
 SESSION_START_LOG_MARKER = "app_session_started"
 DIAGNOSTICS_MAX_LINES = 800
+# Where faulthandler writes the stacks of a crash in native code (Qt, a C
+# extension), which Python logging never sees; next to the log. One previous
+# file is kept: past this size it becomes `crash.log.1` at the next start.
+CRASH_LOG_FILE_NAME = "crash.log"
+CRASH_LOG_MAX_BYTES = 1_000_000
+# How much of the previous session's native trace the next start copies into
+# the log (its last lines, where the fatal dump is).
+CRASH_TRACE_MAX_LINES = 300
 DOC_MODELS_PATH = "docs/models.md"
 DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"
 
