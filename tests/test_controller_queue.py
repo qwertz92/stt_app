@@ -4795,3 +4795,37 @@ def test_a_finished_dictation_still_waits_for_a_newer_dictation(monkeypatch, tmp
     assert [call[0] for call in inserter.calls] == ["transcript A transcript B"]
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize("cancel", ["current", "row"])
+def test_canceling_a_retry_says_it_was_the_retry(monkeypatch, tmp_path, cancel):
+    """The dictation behind it is still transcribing; "Transcription
+    canceled." read as if that one had stopped."""
+    controller, app, overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+
+    if cancel == "current":
+        controller.cancel_current_action()
+    else:
+        controller.cancel_queued_transcription(token_r)
+
+    assert overlay.states[-1] == ("Done", "Retry canceled.")
+    assert controller._jobs[token_n2].aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_canceling_a_dictation_still_says_transcription_canceled(monkeypatch, tmp_path):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    _record_and_stop(controller)
+
+    controller.cancel_current_action()
+
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+    controller.shutdown()
+    _ = app

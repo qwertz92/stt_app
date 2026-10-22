@@ -56,6 +56,11 @@ fix (`docs/agents/controller-and-jobs.md`).
   the token nothing is deferred for it, N2 pastes at once and the retry pastes
   when it is done. Behind a newer dictation nothing changes (the control test
   pins it). This needed no design change; one field and one condition.
+- **P4: after Cancel on a queued retry the overlay said "Transcription
+  canceled." while the dictation behind it kept transcribing.** The text is now
+  "Retry canceled." for a retry (`_canceled_text`, in `cancel_current_action` and
+  `cancel_queued_transcription`); clearing the whole queue keeps the general
+  text, since everything stopped.
 
 ## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
 

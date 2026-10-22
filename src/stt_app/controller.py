@@ -4859,6 +4859,7 @@ class DictationController(QtCore.QObject):
             self._logger.info("queue_cancel_ignored_pace_held token=%d", request_token)
             return
         was_active = request_token == self._active_request_token
+        canceled_text = self._canceled_text(job)
         self._request_job_stop(
             request_token,
             delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -4877,7 +4878,16 @@ class DictationController(QtCore.QObject):
             # Unless the flush above just reported a transcript that could not
             # be pasted: that Error carries the text and the Insert action, and
             # this line would replace both with three words.
-            self._paint_status_keeping_offer("Done", "Transcription canceled.")
+            self._paint_status_keeping_offer("Done", canceled_text)
+
+    @staticmethod
+    def _canceled_text(job: _TranscriptionJob | None) -> str:
+        """What the overlay says after the job it showed was canceled. A retry
+        says so: the dictation behind it may still be transcribing, and
+        "Transcription canceled." read as if that one had stopped."""
+        if job is not None and job.is_retry:
+            return "Retry canceled."
+        return "Transcription canceled."
 
     def clear_transcription_queue(self) -> None:
         """Cancel every queued/running transcription.
@@ -10119,6 +10129,7 @@ class DictationController(QtCore.QObject):
         request_token = self._active_request_token
         if request_token is not None:
             had_job = request_token in self._jobs
+            canceled_text = self._canceled_text(self._jobs.get(request_token))
             # Request a real stop; a transcript that still finishes is kept in
             # history rather than discarded.
             self._request_job_stop(
@@ -10142,7 +10153,7 @@ class DictationController(QtCore.QObject):
             if not self._flush_deferred_background_results(
                 ignore_active_transcription=True
             ):
-                self._paint_status_keeping_offer("Done", "Transcription canceled.")
+                self._paint_status_keeping_offer("Done", canceled_text)
             return
 
         # Preloading can intentionally overlap a recording or a queued batch

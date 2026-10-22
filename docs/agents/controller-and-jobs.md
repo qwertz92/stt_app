@@ -279,6 +279,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     is older than the retry in token order anyway). Behind a newer dictation
     nothing changes. Tests: `test_a_finished_dictation_pastes_at_once_while_a_retry_holds_the_overlay`
     and the control `test_a_finished_dictation_still_waits_for_a_newer_dictation`.
+  - **Canceling a retry says "Retry canceled."** (`_canceled_text`, used by
+    `cancel_current_action` and `cancel_queued_transcription`): the dictation
+    behind it may still be transcribing, and "Transcription canceled." read
+    as if that one had stopped. Clearing the whole queue keeps the general
+    text, since everything stopped. Tests: `test_canceling_a_retry_says_it_was_the_retry`
+    and `test_canceling_a_dictation_still_says_transcription_canceled`.
   - A `_TranscriptionJob` holds the target window, `background_delivery`
     and `aborting`. Foreground = token active, no newer recording, not
     aborting; `_new_recording_active()` excludes `_streaming_recording`.
