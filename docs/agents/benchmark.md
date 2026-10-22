@@ -303,7 +303,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   minimum width fell (dialog hint 611 -> 508 px); the tab bar still sets
   the dialog's minimum.
 - **The History list's Models cell counts the models the run measured, and
-  no column changes width when a row arrives** (2026-10-09). The column
+  no column but the last changes width when a row arrives** (2026-10-09,
+  revised 2026-10-23). The column
   already existed and joined `options.model_names` whole (1006 px of text for
   twelve models in a 189 px cell, no count). `_benchmark_models_label` now
   writes "12 models: tiny, base, ..." from the distinct models of the stored
@@ -319,11 +320,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   and its widest possible value: the widest digit in a date, four digits, a
   three-digit RTF, the longest of `BENCHMARK_STATUS_LABELS`. Audio is
   `Interactive` at 24 average characters, Models the one `Stretch` column.
-  The vertical bar is `AlwaysOn`: appearing with the row that outgrew the
-  list it took 12 px (9 pt) from Models. Measured at the minimum dialog
-  width, columns 94 / 150 / Models / 48 / 70 / 124 px at 9 pt, unchanged from
-  the empty list through five different runs and twenty rows, at 9, 11.25 and
-  13.5 pt.
+  The vertical bar was `AlwaysOn` (2026-10-09) so that its arrival could not
+  narrow a column; the owner reported it as "a scrolling bar that never
+  disappears" (2026-10-23), and it was right: the bar sat beside an empty list
+  (a disabled bar with no range) and beside six runs, which overflowed the
+  147 px viewport by 33 px only because the rows were 30 px tall. The rule
+  is now: **a bar exists only while rows overflow, and its arrival moves
+  nothing but the end of the Models column.** Three changes make that true.
+  The bar's policy is Qt's default, as needed (no `setVerticalScrollBarPolicy`
+  call). Models is the last column and the one `Stretch` column (it was
+  third), so the bar's 12 px come out of it and the columns left of it keep
+  their x and width. The rows are `compact_table_row_height` (20 px at 9 pt, like the
+  Results table and the run-plan table of the same tab) instead of
+  Qt's 30 px default, so a default-size dialog (860x960, a 147 px viewport)
+  shows seven runs, not four, before a bar is needed. Rebuilding an
+  overflowing list changes nothing visible: zero Show, Hide or Resize events
+  on the bar and the viewport over three consecutive rebuilds.
+  Measured with real widgets (not offscreen) at 9 pt, 860x960:
+
+  | Rows | Before (`AlwaysOn`, 30 px rows) | After (as needed, 20 px rows) |
+  | ---- | ------------------------------- | ----------------------------- |
+  | 0 | bar shown, range 0 | no bar, Models 302 px |
+  | 6 | bar shown, range 33 px | no bar, Models 302 px |
+  | 20 | bar shown, range 453 px | bar 12 px, Models 290 px |
+
+  After, the other columns sit at x 0 / 94 / 244 / 292 / 362 with widths
+  94 / 150 / 48 / 70 / 124 in every row of the table above, at 860x1000 and
+  at 1100x1200 too (Models 542 -> 530 px there). Before, they were 94 / 150 /
+  Models / 48 / 70 / 124 and Models was 290 px with or without rows.
+  The one thing that moves, the end of Models, moves because the reader added
+  rows, and it only shows as a shorter elision in cells that elide on the
+  right anyway.
+  `test_the_history_scrollbar_exists_only_while_rows_overflow`,
+  `test_six_runs_need_no_scrollbar_in_a_default_size_dialog` and
+  `test_the_bar_arriving_moves_no_history_column_but_models` pin it. Rejected:
+  keeping `AlwaysOn` and hiding the bar's track (the reserved 12 px is empty
+  space bought for a bar that is not there, which the project's UI rule
+  forbids), and `ResizeToContents` on Models (it would make the column as wide
+  as its longest model list, 1006 px for twelve models).
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
   height decides how short a dialog still shows the whole tab without

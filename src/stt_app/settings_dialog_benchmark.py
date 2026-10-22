@@ -162,17 +162,25 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
 
 # The History list's columns. Recorded, Runs, Best RTF and Status never change
 # width (`_pin_benchmark_history_columns`); Audio keeps a width of its own and
-# Models takes whatever is left, which is where the long text is.
+# Models takes whatever is left, which is where the long text is. Models is
+# last, and the other columns are anchored from the left, so the vertical bar
+# (shown only while the rows overflow) takes its width from Models alone: with
+# Models in the middle the three columns to its right moved by the bar's width
+# when the row that outgrew the list arrived.
 _BENCHMARK_HISTORY_COLUMNS = (
     "Recorded",
     "Audio",
-    "Models",
     "Runs",
     "Best RTF",
     "Status",
+    "Models",
 )
+_BENCHMARK_HISTORY_RECORDED_COLUMN = 0
 _BENCHMARK_HISTORY_AUDIO_COLUMN = 1
-_BENCHMARK_HISTORY_MODELS_COLUMN = 2
+_BENCHMARK_HISTORY_RUNS_COLUMN = 2
+_BENCHMARK_HISTORY_BEST_RTF_COLUMN = 3
+_BENCHMARK_HISTORY_STATUS_COLUMN = 4
+_BENCHMARK_HISTORY_MODELS_COLUMN = 5
 _BENCHMARK_HISTORY_AUDIO_CHARACTERS = 24
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
@@ -1196,20 +1204,24 @@ class _BenchmarkMixin:
         # Same surface as the Results table so the tab reads as one design.
         self.benchmark_history_list.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
         self.benchmark_history_list.verticalHeader().setVisible(False)
+        # The rows of the other two tables of this tab (the style's own 30 px
+        # made six runs overflow a default-size dialog by a row).
+        row_height = compact_table_row_height(self.benchmark_history_list)
+        self.benchmark_history_list.verticalHeader().setMinimumSectionSize(row_height)
+        self.benchmark_history_list.verticalHeader().setDefaultSectionSize(row_height)
         self.benchmark_history_list.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
         self.benchmark_history_list.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
-        # The vertical bar is always there (disabled while everything fits):
-        # it appeared with the row that outgrew the list and took 12 px (9 pt)
-        # from the Models column, the one width a new row could still change.
-        self.benchmark_history_list.setVerticalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAlwaysOn
-        )
+        # No scroll bar policy on purpose: Qt's default, as needed, shows the
+        # vertical bar only while the rows overflow. It was AlwaysOn so that its
+        # arrival could not narrow a column, which left a disabled bar beside a
+        # list that fits; Models is last and the one stretching column, so the
+        # bar's arrival now moves nothing but the end of that column.
         # Widths come from `_pin_benchmark_history_columns`, which needs the
-        # polished table; Models is the one stretching column.
+        # polished table.
         history_header = self.benchmark_history_list.horizontalHeader()
         history_header.setSectionResizeMode(
             _BENCHMARK_HISTORY_MODELS_COLUMN, QtWidgets.QHeaderView.Stretch
@@ -1835,10 +1847,14 @@ class _BenchmarkMixin:
         )
         digit = max("0123456789", key=metrics.horizontalAdvance)
         widest_values = {
-            0: f"{digit * 4}-{digit * 2}-{digit * 2} {digit * 2}:{digit * 2}",
-            3: digit * 4,
-            4: f"{digit * 3}.{digit * 3}",
-            5: max(BENCHMARK_STATUS_LABELS.values(), key=metrics.horizontalAdvance),
+            _BENCHMARK_HISTORY_RECORDED_COLUMN: (
+                f"{digit * 4}-{digit * 2}-{digit * 2} {digit * 2}:{digit * 2}"
+            ),
+            _BENCHMARK_HISTORY_RUNS_COLUMN: digit * 4,
+            _BENCHMARK_HISTORY_BEST_RTF_COLUMN: f"{digit * 3}.{digit * 3}",
+            _BENCHMARK_HISTORY_STATUS_COLUMN: max(
+                BENCHMARK_STATUS_LABELS.values(), key=metrics.horizontalAdvance
+            ),
         }
         for column, sample in widest_values.items():
             header.setSectionResizeMode(column, QtWidgets.QHeaderView.Fixed)
@@ -2932,10 +2948,10 @@ class _BenchmarkMixin:
             values = [
                 _benchmark_created_label(entry.created_at),
                 entry.options.audio_name or Path(entry.options.audio_path).name or "-",
-                models_label,
                 str(actual_runs),
                 _format_number(best_rtf),
                 _benchmark_status_text(entry.status),
+                models_label,
             ]
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)

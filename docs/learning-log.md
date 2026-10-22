@@ -3,6 +3,34 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (Benchmark History: a scroll bar that never went away)
+
+- **Owner: "Benchmark tab first field has a scrolling bar that never
+  disappears".** The first field is the Benchmark History list. Cause:
+  `settings_dialog_benchmark._build_benchmark_history_box` set the vertical
+  bar `AlwaysOn` (2026-10-09), so that the bar arriving with the row that
+  outgrew the list could not take 12 px from a column and move it. Cost, never
+  weighed against that gain: a bar with no range beside an empty list, and
+  beside the owner's six runs, where the style's 30 px rows overflowed the
+  147 px viewport of a 860x960 dialog by 33 px (measured with real widgets,
+  not offscreen).
+- **Fix, three parts that only work together.** The policy is Qt's default, as
+  needed. Models moved from the third to the last column, so the 12 px come out
+  of the one stretching column and nothing left of it moves (columns at x
+  0 / 94 / 244 / 292 / 362 with and without the bar). The rows use
+  `compact_table_row_height` (20 px), so six runs need no bar and seven fit.
+  A bar that appeared without the first part would shift four columns by 12 px;
+  one without the second would still show for six runs. Rejected: keep
+  `AlwaysOn` and hide the track (reserved empty space), `ResizeToContents` on
+  Models (as wide as the longest model list).
+- Measured, 860x960: 0 and 6 rows no bar; 20 rows bar 12 px and Models 302 ->
+  290 px, nothing else moved; zero Show, Hide or Resize events on the bar over
+  three rebuilds of an overflowing list. `benchmark.md` has the table.
+- An existing test encoded the old trade-off:
+  `test_no_history_column_changes_width_when_rows_arrive` asserted that no
+  column moves, which is exactly what `AlwaysOn` bought, so it was rewritten
+  with the new rule (only the last column may move, by the bar's width).
+
 ## 2026-10-23 (opening Settings from the tray double-click surfaced the overlay)
 
 - **Owner: "overlay always comes to the front when I open the settings, why?"**
