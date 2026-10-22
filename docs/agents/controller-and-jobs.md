@@ -267,6 +267,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     for another Retry. Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
     `test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry`,
     the `insert` control and `test_a_new_recording_does_not_touch_a_result_that_is_already_waiting`.
+    The mode is applied once the microphone is open, for batch and streaming
+    (`start_recording`, review round 4, 2026-10-23): a start the model's
+    refusal, an unavailable streaming engine or a failed microphone open
+    stops leaves every job in flight alone
+    (`test_a_start_that_does_not_happen_leaves_the_jobs_in_flight_alone`,
+    and the side that applies,
+    `test_a_recording_that_started_applies_the_mode_batch_or_streaming`).
+    Applied at the top of the method it demoted or stopped jobs for a
+    recording that never began. What it costs: the Qt thread is blocked while
+    the microphone opens, so the only moment a result can be delivered between
+    the key press and the mode is the 25 ms event drain
+    (`processEvents`) before the open; that result is held as waiting for its
+    paste (a recording start is in progress), and a waiting result is not in
+    flight, so it counts as finished before the recording started and the mode
+    does not touch it.
   - **A finished result waits for a dictation, not for a retry**
     (`_should_defer_background_insertion`, round 3). The wait for the
     overlay's job keeps the live session coherent and delivers older results

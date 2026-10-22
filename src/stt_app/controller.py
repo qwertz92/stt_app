@@ -1873,7 +1873,6 @@ class DictationController(QtCore.QObject):
             start_target_signature = self._capture_target_signature(
                 fallback_window=start_target_handle
             )
-            self._apply_concurrent_mode_to_jobs_in_flight()
             self._overlay.reveal_temporarily()
             preload = self._preload_future
             preload_running = (
@@ -1957,13 +1956,21 @@ class DictationController(QtCore.QObject):
                     )
             if self._settings.mode == "streaming":
                 self._start_streaming_recording()
-                return
-
-            self._start_batch_recording(
-                replace(self._settings),
-                waiting_for_model=preload_running,
-                preload_phase_word=self._preload_phase_word(),
-            )
+            else:
+                self._start_batch_recording(
+                    replace(self._settings),
+                    waiting_for_model=preload_running,
+                    preload_phase_word=self._preload_phase_word(),
+                )
+            if self._audio_capture is not None:
+                # The microphone is open: only now does this recording take
+                # the place of the transcriptions in flight. Applied at the top
+                # of this method it met every refused start (a model still
+                # loading, streaming unavailable) and every failed microphone
+                # open too, demoting or stopping jobs for a recording that
+                # never began. Both starters set the capture only on success
+                # and leave it None otherwise.
+                self._apply_concurrent_mode_to_jobs_in_flight()
         finally:
             pending_toggles = self._pending_toggle_after_start_count
             self._pending_toggle_after_start_count = 0
@@ -4982,7 +4989,8 @@ class DictationController(QtCore.QObject):
 
     def _apply_concurrent_mode_to_jobs_in_flight(self) -> None:
         """Apply the configured mode to every transcription in flight when a
-        new recording starts.
+        new recording starts -- once its microphone is open: a refused start or
+        a failed open leaves the jobs alone (`start_recording`).
 
         The result is never discarded: ``insert`` keeps it inserting into its
         captured window, ``history`` switches it to history-only, and ``cancel``

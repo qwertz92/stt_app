@@ -3,6 +3,26 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (review round 4 of the Retry work: the mode waits for the microphone, the copy may fail)
+
+Round 4 over `d009937` found no P1 or P2 (the Retry strand meets the stop rule);
+its P3/P4 findings, fixed with tests that failed against the committed
+controller for the stated reason (18 of the 24 new or changed cases; the rest
+are controls, and one test only pins what the docs now say),
+`docs/agents/controller-and-jobs.md`:
+- **P3: the concurrent mode was applied before the start was known to
+  succeed.** `_apply_concurrent_mode_to_jobs_in_flight` ran near the top of
+  `start_recording`, before the refusals (a model still loading, streaming
+  unavailable, a preload failure) and before the microphone opened, so a refused
+  start or a failed open still demoted (history) or stopped (cancel) every job
+  in flight for a recording that never began. It is applied after
+  `_start_streaming_recording` / `_start_batch_recording` return with the capture
+  set, which both starters do only on success. Reasoned rather than assumed: the
+  Qt thread is blocked while the microphone opens, so the only delivery that can
+  slip in before the mode is during the 25 ms event drain, and a result held then
+  counts as finished before the recording started. Checked for the same pattern
+  in the gap and import roads: they run after the mode, no change.
+
 ## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
 
 The round-3 entry below says a gap transcript has the same hole as the fallback

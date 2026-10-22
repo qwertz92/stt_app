@@ -16,6 +16,7 @@ import numpy as np
 import pytest
 from conftest import (
     FakeCapture,
+    FakeCaptureFails,
     FakeLastRecordingStore,
     FakeOverlay,
     FakeSettingsStore,
@@ -4938,6 +4939,101 @@ def test_a_new_recording_does_not_touch_a_result_that_is_already_waiting(
 
     assert waiting.background_delivery == "insert" and waiting.aborting is False
     assert controller._jobs[token_r].background_delivery == "history"
+    controller.shutdown()
+    _ = app
+
+
+def _refuse_for_the_model(controller, monkeypatch):
+    """The model the settings select failed to load: the start is refused."""
+    monkeypatch.setattr(
+        controller, "_model_preload_failure", lambda _settings: "The model failed."
+    )
+
+
+def _refuse_for_streaming(controller, _monkeypatch):
+    """Streaming is selected on an engine that has none: the start is refused."""
+    controller._settings = replace(
+        controller._settings, engine="openai", mode="streaming"
+    )
+
+
+def _fail_the_batch_microphone(controller, monkeypatch):
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
+
+
+def _fail_the_batch_capture_build(controller, monkeypatch):
+    def _raise(*_args, **_kwargs):
+        raise RuntimeError("no capture")
+
+    monkeypatch.setattr(controller, "_build_audio_capture", _raise)
+
+
+def _fail_the_streaming_microphone(controller, monkeypatch):
+    controller._settings = replace(controller._settings, mode="streaming")
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
+
+
+@pytest.mark.parametrize("mode", ["history", "cancel"])
+@pytest.mark.parametrize(
+    "spoil_the_start",
+    [
+        _refuse_for_the_model,
+        _refuse_for_streaming,
+        _fail_the_batch_microphone,
+        _fail_the_batch_capture_build,
+        _fail_the_streaming_microphone,
+    ],
+)
+def test_a_start_that_does_not_happen_leaves_the_jobs_in_flight_alone(
+    monkeypatch, tmp_path, mode, spoil_the_start
+):
+    """The mode was applied at the top of `start_recording`, before the
+    refusals and before the microphone opened, so a start that was refused or
+    whose microphone did not open still demoted (history) or stopped (cancel)
+    every transcription in flight, and nothing was recorded for it."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode=mode
+        )
+    )
+    spoil_the_start(controller, monkeypatch)
+
+    controller.start_recording()
+
+    assert controller._audio_capture is None, "no recording started"
+    for token in (token_n2, token_r):
+        job = controller._jobs[token]
+        assert job.background_delivery == "insert" and job.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("mode", "streaming"),
+    [("history", False), ("history", True), ("cancel", False), ("cancel", True)],
+)
+def test_a_recording_that_started_applies_the_mode_batch_or_streaming(
+    monkeypatch, tmp_path, mode, streaming
+):
+    """The other side of the same rule: once the microphone is open, in
+    either mode, the jobs in flight meet the configured mode."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode=mode
+        )
+    )
+    if streaming:
+        controller._settings = replace(controller._settings, mode="streaming")
+
+    controller.start_recording()
+
+    assert controller._audio_capture is not None, "the recording started"
+    for token in (token_n2, token_r):
+        job = controller._jobs[token]
+        if mode == "history":
+            assert job.background_delivery == "history" and job.aborting is False
+        else:
+            assert job.aborting is True
     controller.shutdown()
     _ = app
 
