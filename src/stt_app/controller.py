@@ -62,6 +62,7 @@ from .config import (
     PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
+    RECORDING_START_SLOW_MS,
     RECORDINGS_MAX_COUNT_UNLIMITED,
     REMOTE_BATCH_MAX_PART_SECONDS,
     RETRY_OLDER_FAILURES_MAX,
@@ -909,6 +910,15 @@ class DictationController(QtCore.QObject):
         # backlog returned: record-hotkey presses stamped no later were made
         # during that wait (`toggle_recording_from_hotkey`).
         self._stop_wait_ended_ms: int | None = None
+        # The record hotkey's `MSG.time` while its press is being handled,
+        # and, for the recording start it led to, that press time and the
+        # `message_clock_ms()` at which the start began: what
+        # `recording_start_timing` measures the wait from the press to the
+        # running capture with (speech in it is not recorded). None for a
+        # start that did not come from the hotkey.
+        self._hotkey_press_ms: int | None = None
+        self._start_press_ms: int | None = None
+        self._start_handled_ms: int | None = None
         self._active_session_mode = "batch"
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
@@ -1783,7 +1793,11 @@ class DictationController(QtCore.QObject):
             # A later press: the wait is over for good, and the wrapping
             # clock must not compare against a mark weeks old.
             self._stop_wait_ended_ms = None
-        self.toggle_recording()
+        self._hotkey_press_ms = message_time_ms
+        try:
+            self.toggle_recording()
+        finally:
+            self._hotkey_press_ms = None
 
     def _toggle_recording(self) -> None:
         if self._recording_start_in_progress:
@@ -1861,6 +1875,8 @@ class DictationController(QtCore.QObject):
                 "running; choose Quit in the tray again to quit."
             )
         self._recording_start_in_progress = True
+        self._start_press_ms = self._hotkey_press_ms
+        self._start_handled_ms = message_clock_ms()
         try:
             start_target_handle = self._window_focus_helper.capture_target_window()
             start_target_signature = self._capture_target_signature(
@@ -1958,6 +1974,8 @@ class DictationController(QtCore.QObject):
                 preload_phase_word=self._preload_phase_word(),
             )
         finally:
+            self._start_press_ms = None
+            self._start_handled_ms = None
             pending_toggles = self._pending_toggle_after_start_count
             self._pending_toggle_after_start_count = 0
             self._recording_start_in_progress = False
@@ -2577,25 +2595,63 @@ class DictationController(QtCore.QObject):
         On locked-down machines opening the microphone can take seconds; this
         makes the culprit visible in the log so 'my first words are cut off'
         reports can be verified and the keep_microphone_warm option suggested.
+
+        A warm stream opens nothing, yet drops every block until the capture
+        attaches, so the Qt thread's own delay counts too: from the record
+        hotkey's `MSG.time` to the start of its handling
+        (`press_to_handle_ms`, the press waiting behind other work) and to
+        this moment, the capture running (`press_to_capture_ms`). Owner
+        report 2026-10-23: first words missing from the WAV with the warm
+        stream on, on a laptop at 100% CPU; the log had no figure for that
+        span. `n/a` for a start not made with the hotkey.
         """
         capture_ms = round((time.perf_counter() - capture_started_at) * 1000)
         warm, _callback_count = self._audio_capture_runtime_context(capture)
-        level = logging.WARNING if capture_ms >= 500 else logging.INFO
+        press_to_handle_ms = self._ms_since_start_press(self._start_handled_ms)
+        press_to_capture_ms = self._ms_since_start_press(message_clock_ms())
+        late_capture = (
+            press_to_capture_ms is not None
+            and press_to_capture_ms >= RECORDING_START_SLOW_MS
+        )
+        level = (
+            logging.WARNING
+            if capture_ms >= RECORDING_START_SLOW_MS or late_capture
+            else logging.INFO
+        )
+        notes = []
+        if capture_ms >= RECORDING_START_SLOW_MS and not warm:
+            notes.append(
+                "slow microphone open; speech before this point is lost — "
+                "consider enabling keep_microphone_warm"
+            )
+        if late_capture:
+            notes.append(
+                "speech between the hotkey press and this point was not recorded"
+            )
         self._logger.log(
             level,
-            "recording_start_timing mode=%s beep_ms=%d capture_start_ms=%d "
+            "recording_start_timing mode=%s press_to_handle_ms=%s "
+            "press_to_capture_ms=%s beep_ms=%d capture_start_ms=%d "
             "warm_stream=%s%s",
             mode,
+            "n/a" if press_to_handle_ms is None else press_to_handle_ms,
+            "n/a" if press_to_capture_ms is None else press_to_capture_ms,
             beep_ms,
             capture_ms,
             warm,
-            (
-                " (slow microphone open; speech before this point is lost — "
-                "consider enabling keep_microphone_warm)"
-                if capture_ms >= 500 and not warm
-                else ""
-            ),
+            f" ({'; '.join(notes)})" if notes else "",
         )
+
+    def _ms_since_start_press(self, now_ms: int | None) -> int | None:
+        """Milliseconds from the record hotkey press that started this
+        recording to `now_ms` on the message clock; None without a press, off
+        Windows, or for a mark before the press."""
+        press = self._start_press_ms
+        if press is None or now_ms is None:
+            return None
+        if not message_time_not_after(press, now_ms):
+            return None
+        return (now_ms - press) % TICK_COUNT_MODULUS
 
     def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
         self._audio_callback_watchdog_capture = capture

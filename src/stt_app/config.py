@@ -1973,6 +1973,10 @@ AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS = 2_000
 # AUDIO_INPUT_BUFFER_S, so a burst that comes just before it still holds every
 # frame since the start.
 AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS = 12_000
+# `recording_start_timing` is a warning from here on: a microphone open, or the
+# wait from the record hotkey press to the running capture, this long loses
+# the first words of anyone who starts speaking at the press.
+RECORDING_START_SLOW_MS = 500
 # A stop finds the captured audio behind the wall clock by more than this
 # (plus AUDIO_BACKLOG_DRIFT_PER_S of the recording's length, for a device clock
 # that runs apart from the PC's) only when the callback thread is behind: on a

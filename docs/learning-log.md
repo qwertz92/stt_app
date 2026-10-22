@@ -3,6 +3,47 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: first words missing with the warm stream: what the log could not say
+
+Owner report from the slow work laptop (Defender XDR, often 100% CPU, run
+from source, warm stream on): the first words of a recording are missing,
+also from the saved WAV ("I only hear my voice after about 2 s"), and he
+believes the overlay was green. Investigated from code and measured on
+HomeBase; the laptop itself was not available.
+- **No path paints "Speak now" before the capture runs.** Both start paths
+  paint it after `capture.start()` returned, i.e. after the warm attach or
+  the cold `start()`; before that the overlay is Idle (the press not yet
+  handled) or the slate "Starting". What the green does not cover: a warm
+  stream drops every block while no recording is attached, so whatever is
+  said between the hotkey press and the attach is gone. Nothing bridges
+  that gap on a healthy stream; only a callback thread stalled across the
+  press brings the pre-attach seconds along in its burst (the 2026-10-10
+  limitation, which adds audio rather than losing it).
+- **Measured on HomeBase**: the start path from a press to the attach, with
+  the real overlay and the real warm stream, took 0-16 ms idle (the message
+  clock's resolution) and 0-62 ms under 16 CPU burners, 10 starts each. A
+  main Python thread busy for 2 s delayed the running stream's callbacks by
+  at most 19 ms idle and 102 ms under the burners (largest gap 168 ms), so a
+  busy Qt thread alone does not starve the microphone. Cold starts on seven
+  inputs (MME and WASAPI, 3 runs each): first block 103-175 ms after
+  `start()`, everything since `start()` captured (deficit 0.10 s at the end,
+  one block in flight), no leading digital silence -- but the onboard
+  Realtek input ramps up: first block -96 to -107 dBFS, second -64 to -82,
+  settled near -45 from the third to sixth (0.3-0.5 s). So at home nothing
+  loses two seconds; on the laptop the cause is not known.
+- **The log could not tell the candidates apart**, so it now can:
+  `recording_start_timing` carries `press_to_handle_ms` and
+  `press_to_capture_ms` (from the record hotkey's `MSG.time`; a warning at
+  500 ms, `RECORDING_START_SLOW_MS`, shared with the slow-open warning), and
+  `audio_capture_stats` carries `level_dbfs_by_second` (the level of the
+  first three seconds of the recording; `zero` for digital zeros). A late
+  attach shows as a large `press_to_capture_ms`; seconds that arrived quiet
+  (a device ramp, a headset switching profile, the user starting late) as a
+  low first level with no deficit; seconds that never arrived as a deficit.
+- Not changed by this entry: no pre-roll (the 2026-10-10 decision rests on
+  the start path being short, which the new field now measures in the
+  field).
+
 ## 2026-10-17: review of the package back-off and the preload line
 
 One review round (Sonnet) over the two entries below found no P1 or P2; the

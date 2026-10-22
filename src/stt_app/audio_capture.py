@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import logging
+import math
 import threading
 import time
 import wave
@@ -49,6 +50,10 @@ _clock = time.perf_counter
 # arrived: a starved callback thread shows as 0.00 where a healthy one shows
 # about 0.9, 1.9 and 2.9 s.
 _EARLY_AUDIO_MARKS_S = (1.0, 2.0, 3.0)
+# How many leading seconds of a recording `audio_capture_stats` gives the
+# level of: "my voice only starts 2 s in" is then readable from the log --
+# quiet seconds that arrived, against seconds that did not (`audio_s`).
+_LEVEL_SECONDS = 3
 # While `stop` waits for a backlog, how often it asks PortAudio whether the
 # stream still runs: a stream that stopped owes nothing.
 _DRAIN_ACTIVE_CHECK_S = 0.25
@@ -204,8 +209,14 @@ class _CaptureTiming:
         self.buffer_s = AUDIO_INPUT_BUFFER_S
         self._loss_evidence = 0
         self._loss_evidence_at_settle = 0
+        # Sum of squared samples and frames of each of the first
+        # `_LEVEL_SECONDS` seconds of audio received, by position in the
+        # recording, not by wall time.
+        self._level_energy = [0.0] * _LEVEL_SECONDS
+        self._level_frames = [0] * _LEVEL_SECONDS
 
-    def record_block(self, now: float, frames: int, status) -> None:
+    def record_block(self, now: float, frames: int, status, energy: float) -> None:
+        """Account one block; `energy` is the sum of its squared samples."""
         elapsed = 0.0 if self.anchor is None else now - self.anchor
         for index, mark in enumerate(_EARLY_AUDIO_MARKS_S):
             if self.early_audio_s[index] is None and elapsed >= mark:
@@ -222,6 +233,10 @@ class _CaptureTiming:
                 self._loss_evidence += 1
         self.last_block_at = now
         self.blocks += 1
+        second = self.frames // self.sample_rate
+        if second < _LEVEL_SECONDS:
+            self._level_energy[second] += energy
+            self._level_frames[second] += frames
         self.frames += frames
         if status:
             self.status_flags += 1
@@ -321,6 +336,20 @@ class _CaptureTiming:
     def backlog_tolerance_s(self, wall_s: float) -> float:
         return AUDIO_BACKLOG_TOLERANCE_S + AUDIO_BACKLOG_DRIFT_PER_S * wall_s
 
+    def level_by_second(self) -> str:
+        """RMS level of each leading second in dBFS, "/"-joined: "-" for a
+        second the recording did not reach, "zero" for one of digital zeros
+        only -- what a driver inserts, never what a microphone hears."""
+        parts = []
+        for energy, frames in zip(self._level_energy, self._level_frames, strict=True):
+            if frames == 0:
+                parts.append("-")
+            elif energy <= 0.0:
+                parts.append("zero")
+            else:
+                parts.append(str(round(10 * math.log10(energy / frames))))
+        return "/".join(parts)
+
     def log(self, logger: logging.Logger, *, warm: bool, wall_s: float) -> None:
         # With the pre-attach audio a warm burst carries, as the stop counts it.
         deficit_s = self.deficit_s(wall_s)
@@ -348,8 +377,8 @@ class _CaptureTiming:
             "audio_capture_stats warm=%s first_callback_ms=%s callbacks=%d "
             "audio_s=%.2f wall_s=%.2f deficit_s=%.2f settled_deficit_s=%.2f "
             "max_gap_ms=%d overflows=%d "
-            "status_flags=%d audio_by_1s_2s_3s=%s warm_attach_gap_ms=%s "
-            "stop_drain_ms=%d stop_drain_recovered_s=%.2f%s",
+            "status_flags=%d audio_by_1s_2s_3s=%s level_dbfs_by_second=%s "
+            "warm_attach_gap_ms=%s stop_drain_ms=%d stop_drain_recovered_s=%.2f%s",
             warm,
             first_ms,
             self.blocks,
@@ -361,6 +390,7 @@ class _CaptureTiming:
             self.overflows,
             self.status_flags,
             early,
+            self.level_by_second(),
             attach_gap,
             round(self.drain_s * 1000),
             self.drain_frames / self.sample_rate,
@@ -1525,7 +1555,7 @@ class AudioCapture:
                     "are counted in the stop's capture stats)",
                     status,
                 )
-            self._timing.record_block(now, mono.size, status)
+            self._timing.record_block(now, mono.size, status, float(np.dot(mono, mono)))
             if self._drain_owed_s is not None:
                 # The deficit may have settled with this block.
                 self._drain_cutoff_frames = self._drain_cutoff_locked()

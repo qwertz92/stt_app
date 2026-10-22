@@ -2445,3 +2445,45 @@ def test_a_warm_attach_logs_how_long_the_stream_had_been_silent(monkeypatch, cap
     # Review round 3 F5: the deficit counts the pre-attach audio the burst
     # carried (0.1 s wall + 4.0 s before the attach - 4.2 s received).
     assert "deficit_s=-0.10" in caplog.text
+
+
+def test_the_stats_give_the_level_of_each_of_the_first_three_seconds(
+    monkeypatch, caplog
+):
+    """Owner report 2026-10-23 (slow work laptop, warm stream): "my voice only
+    starts about 2 s into the saved recording". The stats could not say
+    whether those seconds arrived quiet (the microphone delivered audio, but
+    no voice) or did not arrive at all (`audio_s` against `wall_s` says
+    that). The level of each of the first three seconds of the recording
+    tells the first case apart without the WAV; "zero" marks a second of
+    nothing but digital zeros, which a driver inserts and a microphone never
+    produces."""
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        for index in range(1, 26):
+            clock.now = 100.0 + index / 10
+            # 1 s of digital zeros, 1 s at -60 dBFS, then 0.5 s at -20 dBFS.
+            value = 0.0 if index <= 10 else (0.001 if index <= 20 else 0.1)
+            callback(_block(value=value), 1600, None, None)
+        capture.stop()
+
+    stats = [r for r in caplog.records if "audio_capture_stats" in r.getMessage()]
+    assert len(stats) == 1
+    assert "level_dbfs_by_second=zero/-60/-20" in stats[0].getMessage()
+
+
+def test_the_level_of_a_second_the_recording_did_not_reach_is_a_dash(
+    monkeypatch, caplog
+):
+    clock = _Clock()
+    logger = logging.getLogger("test.audio_capture.level_short")
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        capture, callback = _cold_capture(monkeypatch, clock, logger=logger)
+        for index in range(1, 6):
+            clock.now = 100.0 + index / 10
+            callback(_block(value=0.01), 1600, None, None)
+        capture.stop()
+
+    assert "level_dbfs_by_second=-40/-/-" in caplog.text
