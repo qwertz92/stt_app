@@ -248,6 +248,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     first. A streaming dictation's live inserts wait for an earlier result
     for their window (`_stream_live_insert_held`, 2026-10-09); the order
     rule and every case it covers: `docs/agents/text-insertion.md`.
+  - **The mode applies to every transcription in flight, not only the job the
+    overlay shows** (review round 3, 2026-10-17).
+    `_apply_concurrent_mode_to_jobs_in_flight` runs when a recording starts
+    and acts on every job still computing -- not aborting, not
+    `insertion_deferred` (a finished result waiting for its paste is not in
+    flight, and its delivery is decided by its own rules). It used to act on
+    `_active_request_token` only. Every older job had met the mode when a
+    later recording started while it held the token, until a Retry took the
+    token without a recording: the dictation that was in flight before it
+    never met the mode (history-only: it still pasted; cancel: the retry was
+    stopped instead of it). A running retry is covered too, deliberately: the
+    mode is about what happens to transcriptions in flight when the user
+    starts dictating again, not about which one the overlay shows, and
+    leaving the retry out would let it paste into its old window during the
+    new dictation in history-only mode, or run on in cancel mode. In cancel
+    mode the retry's late result still goes to History and its recording stays
+    for another Retry. Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
+    `test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry`,
+    the `insert` control and `test_a_new_recording_does_not_touch_a_result_that_is_already_waiting`.
   - A `_TranscriptionJob` holds the target window, `background_delivery`
     and `aborting`. Foreground = token active, no newer recording, not
     aborting; `_new_recording_active()` excludes `_streaming_recording`.

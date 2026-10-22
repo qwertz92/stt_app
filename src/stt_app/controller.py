@@ -1860,7 +1860,7 @@ class DictationController(QtCore.QObject):
             start_target_signature = self._capture_target_signature(
                 fallback_window=start_target_handle
             )
-            self._apply_concurrent_mode_to_active_job()
+            self._apply_concurrent_mode_to_jobs_in_flight()
             self._overlay.reveal_temporarily()
             preload = self._preload_future
             preload_running = (
@@ -4905,18 +4905,23 @@ class DictationController(QtCore.QObject):
             # main overlay area instead of leaving a stale "Processing".
             self._paint_status_keeping_offer("Done", "Transcription canceled.")
 
-    def _apply_concurrent_mode_to_active_job(self) -> None:
-        """Apply the configured mode to the in-flight transcription when a new
-        recording starts.
+    def _apply_concurrent_mode_to_jobs_in_flight(self) -> None:
+        """Apply the configured mode to every transcription in flight when a
+        new recording starts.
 
         The result is never discarded: ``insert`` keeps it inserting into its
         captured window, ``history`` switches it to history-only, and ``cancel``
         asks the compute to stop (a transcript that still finishes is kept in
         history).
+
+        Every job still computing, not only the one the overlay shows: a Retry
+        takes the overlay's token without a recording starting, so the
+        dictation that was in flight before it kept its delivery and was the
+        one the mode skipped, while the retry -- a transcription in flight like
+        any other, which would otherwise paste into its old window during or
+        after the new dictation -- got it. A finished result waiting for its
+        paste (`insertion_deferred`) and a job being stopped are not in flight.
         """
-        token = self._active_request_token
-        if token is None or token not in self._jobs:
-            return
         mode = str(
             getattr(
                 self._settings,
@@ -4924,15 +4929,21 @@ class DictationController(QtCore.QObject):
                 DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
             )
         )
-        if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
-            self._jobs[
-                token
-            ].background_delivery = CONCURRENT_TRANSCRIPTION_MODE_HISTORY
-        elif mode == CONCURRENT_TRANSCRIPTION_MODE_CANCEL:
-            self._request_job_stop(
-                token,
-                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
-            )
+        if mode not in (
+            CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+            CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+        ):
+            return
+        for job in list(self._jobs.values()):
+            if job.aborting or job.insertion_deferred:
+                continue
+            if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
+                job.background_delivery = CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+            else:
+                self._request_job_stop(
+                    job.token,
+                    delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+                )
 
     def _submit_batch_transcription(
         self,

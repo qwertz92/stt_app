@@ -32,6 +32,21 @@ fix (`docs/agents/controller-and-jobs.md`).
   copy's bytes, the next start (`_offer_unfinished_recordings` offers nothing
   and the link still resolves), the next dictation, the failed write, and a
   recording that fell back nowhere (no copy, no link, no notice).
+- **P3: a new recording applied the concurrent mode to the retry instead of
+  the dictation in flight.** `_apply_concurrent_mode_to_active_job` acted on
+  `_active_request_token` only. Until the Retry work every older job had met the
+  mode when a later recording started while it held the token; a Retry takes
+  the token without a recording, so the dictation that was in flight before it
+  (N2) was skipped: history-only, N2 still pasted; cancel, the retry was
+  stopped instead of N2. It is now `_apply_concurrent_mode_to_jobs_in_flight`
+  and acts on every job that is computing (not aborting, not waiting for its
+  paste). Decision, with its reason: the running retry is covered too. The mode
+  is about transcriptions in flight when the user starts dictating again, not
+  about which one the overlay shows, so a retry left out would paste into its
+  old window during the new dictation in history-only mode, or keep running in
+  cancel mode. Alternative: exempt the retry, which would keep it pasting; say
+  so if you want that. A cancel-mode retry's late result still goes to History
+  and its recording stays for another Retry.
 
 ## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
 

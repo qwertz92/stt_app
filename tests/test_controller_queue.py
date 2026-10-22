@@ -4645,3 +4645,107 @@ def test_queue_rows_name_the_language_each_recording_was_made_in(monkeypatch, tm
     assert [label.split(" · ")[-3] for label in labels] == ["EN", "DE", "Auto"]
     controller.shutdown()
     _ = app
+
+
+def _a_running_dictation_and_a_retry_that_took_the_overlay(
+    monkeypatch, tmp_path, *, mode
+):
+    """W failed, N2 was dictated after it and is still transcribing, and the
+    Retry of W has taken the overlay's token (R). Returns the controller, the
+    app, the overlay, the inserter, the history and the three tokens."""
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode=mode
+    )
+    token_w = _record_and_stop(controller)
+    controller._on_transcription_failed("boom", request_token=token_w)
+    token_n2 = _record_and_stop(controller)
+    assert controller.retry_last_transcription() is True
+    token_r = controller._active_request_token
+    assert token_r not in (token_w, token_n2)
+    assert controller._jobs[token_n2].aborting is False
+    return controller, app, overlay, inserter, history, (token_n2, token_r)
+
+
+def test_a_new_recording_applies_history_only_to_every_job_in_flight(
+    monkeypatch, tmp_path
+):
+    """`concurrent_transcription_mode` is about the transcriptions in flight
+    when a recording starts, not about the job the overlay shows. It acted on
+    the overlay's token only, which the Retry had taken: the dictation still
+    transcribing kept inserting although the mode said history only, and the
+    retry was the one demoted."""
+    controller, app, _overlay, inserter, history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="history"
+        )
+    )
+
+    controller.start_recording()
+
+    assert controller._jobs[token_n2].background_delivery == "history"
+    assert controller._jobs[token_r].background_delivery == "history"
+    controller._on_transcription_ready("transcript N2", request_token=token_n2)
+    assert inserter.calls == []
+    assert not controller._deferred_background_results
+    assert [entry.text for entry in history.load()] == ["transcript N2"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry(
+    monkeypatch, tmp_path
+):
+    """Cancel mode stopped the retry instead of the dictation. Both are
+    transcriptions in flight, so both are stopped; a result that still
+    arrives goes to history."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="cancel"
+        )
+    )
+
+    controller.start_recording()
+
+    assert controller._jobs[token_n2].aborting is True
+    assert controller._jobs[token_r].aborting is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_leaves_every_job_alone_in_insert_mode(monkeypatch, tmp_path):
+    """Negative control: `insert` is the default and changes nothing."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+
+    controller.start_recording()
+
+    for token in (token_n2, token_r):
+        job = controller._jobs[token]
+        assert job.background_delivery == "insert" and job.aborting is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_does_not_touch_a_result_that_is_already_waiting(
+    monkeypatch, tmp_path
+):
+    """A finished result waiting to be pasted is not in flight: the mode is
+    about compute, and the paste it waits for is decided by its own
+    delivery."""
+    controller, app, _overlay, _inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="history"
+        )
+    )
+    waiting = controller._jobs[token_n2]
+    waiting.insertion_deferred = True
+
+    controller.start_recording()
+
+    assert waiting.background_delivery == "insert" and waiting.aborting is False
+    assert controller._jobs[token_r].background_delivery == "history"
+    controller.shutdown()
+    _ = app
