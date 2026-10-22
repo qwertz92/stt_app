@@ -8,6 +8,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import appdata_root
 from .dialog_style import DIALOG_STYLESHEET, apply_dialog_style, make_label_selectable
+from .gui_thread import GuiThreadReporter
 from .update_checker import UpdateCheckResult
 from .update_installer import (
     UpdateDownloadCancelled,
@@ -66,12 +67,6 @@ def show_update_status_dialog(
         ok_button.setMinimumWidth(UPDATE_STATUS_BUTTON_MIN_WIDTH)
         _centre_dialog_buttons(box)
     box.exec()
-
-
-class _DownloadSignals(QtCore.QObject):
-    progress = QtCore.Signal(int, int)
-    completed = QtCore.Signal(object, bool, str)
-    failed = QtCore.Signal(str, bool)
 
 
 class UpdateDownloadDialog(QtWidgets.QDialog):
@@ -140,10 +135,6 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
         layout.addWidget(self._details_label)
         layout.addLayout(actions)
 
-        self._signals = _DownloadSignals(self)
-        self._signals.progress.connect(self._on_progress)
-        self._signals.completed.connect(self._on_completed)
-        self._signals.failed.connect(self._on_failed)
         self._download_scheduled = False
 
     def showEvent(self, event) -> None:
@@ -167,30 +158,41 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
     def _start_download(self) -> None:
         if self._worker is not None:
             return
+        # The worker gets plain values and a reporter, never `self`: this
+        # dialog is `exec()`ed, which gives it to Python, so a worker holding
+        # it after Cancel destroyed it on the worker thread (`gui_thread`).
+        result = self._result
+        downloader = self._downloader
+        signature_verifier = self._signature_verifier
+        cancel_event = self._cancel_event
+        reporter = GuiThreadReporter(self)
 
         def run() -> None:
             try:
                 destination = (
                     appdata_root()
                     / "updates"
-                    / (self._result.latest_tag or self._result.latest_version)
+                    / (result.latest_tag or result.latest_version)
                 )
-                path = self._downloader(
-                    self._result,
+                path = downloader(
+                    result,
                     destination,
-                    progress=self._signals.progress.emit,
-                    cancelled=self._cancel_event.is_set,
+                    progress=lambda downloaded, total: reporter.post(
+                        "_on_progress", downloaded, total
+                    ),
+                    cancelled=cancel_event.is_set,
                 )
-                signature_valid, signature_detail = self._signature_verifier(path)
-                self._signals.completed.emit(
+                signature_valid, signature_detail = signature_verifier(path)
+                reporter.post(
+                    "_on_completed",
                     path,
                     bool(signature_valid),
                     str(signature_detail),
                 )
             except UpdateDownloadCancelled:
-                self._signals.failed.emit("Update download cancelled.", True)
+                reporter.post("_on_failed", "Update download cancelled.", True)
             except Exception as exc:
-                self._signals.failed.emit(str(exc), False)
+                reporter.post("_on_failed", str(exc), False)
 
         self._worker = threading.Thread(
             target=run,

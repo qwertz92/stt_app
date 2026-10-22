@@ -109,6 +109,34 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   `SHOpenFolderAndSelectItems` on a short-lived thread (Explorer's
   `/select,` takes one file), opening the folder when that fails; the test
   guard in `conftest.py` blocks that call and `os.startfile`.
+- **A retranscription's worker never holds a Qt widget; closing its dialog
+  does not stop it, and its transcript always reaches history** (owner's
+  crash, 2026-10-23: History > Retranscribe, the dialog closed during the
+  run, then the other entry of that recording deleted). Measured cause:
+  PySide6's `QDialog.exec()` hands a dialog back to Python ownership even
+  with a parent (measured with a probe: a parented, exec'ed dialog died with
+  its last Python reference, a merely shown one did not). The run's thread captured the dialog, so once it was
+  closed the worker held that last reference, and the end of the run
+  destroyed the dialog on the worker thread -- "Timers cannot be stopped from
+  another thread" (its running elapsed timer), then an abort or access
+  violation in 2 of 4 probe runs. A second mode: progress emitted on a dialog
+  while History's `WA_DeleteOnClose` deleted it raised a `TypeError` past the
+  `RuntimeError` guard and aborted (2 of 4 at 1 ms progress). Now the worker
+  gets a `gui_thread.GuiThreadReporter` (weak reference, one app-owned
+  dispatcher, the call runs on the GUI thread or is dropped) and a
+  module-level transcribe callable holding the controller, never a dialog;
+  History refreshes itself from the run's end (`_on_retranscription_finished`),
+  so a run whose dialog was closed shows its entry; both ends are logged
+  without text. Deleting an entry never touches audio
+  (`TranscriptHistoryStore.delete_entries`, logs `history_entries_deleted`):
+  a retranscription links the same file as the entry it repeats, and only the
+  archive retention removes recordings. Known gap, not changed: that
+  retention (`_prune_recordings`) can delete the oldest archived file while a
+  queued retranscription of it waits, which then fails with "file not found".
+  Tests: `test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run`,
+  `test_a_retranscription_closed_mid_run_reaches_history_and_its_list`,
+  `tests/test_gui_thread.py`. Any other worker that captures a dialog which
+  is `exec()`ed or deleted on close has the same defect: hand it a reporter.
 - **Unfinished recordings are a directory of WAV files, not an index**
   (2026-10-09; `unfinished_recordings.py`,
   `%APPDATA%\stt_app\unfinished_recordings`). The name

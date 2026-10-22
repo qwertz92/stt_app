@@ -1256,12 +1256,14 @@ def test_a_legacy_match_with_a_gap_does_not_complete_its_recording(tmp_path):
 
 
 def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
-    """A quit that never finishes must end anyway, with the stacks in the log.
+    """A quit that never finishes must end anyway, with the stacks recorded.
 
     The owner's quit once left a process with no tray icon running until
     Ctrl+C. Ctrl+C cannot reach a thread blocked in native code, and Python
     code (a daemon thread) cannot run once finalization froze the other
-    threads, so the guard has to be faulthandler's native timer.
+    threads, so the guard has to be faulthandler's native timer. It writes
+    into the session's crash log, never a second handle on `dictation.log`,
+    which would make a rotation during the quit fail.
     """
     armed = []
     monkeypatch.setattr(
@@ -1271,15 +1273,15 @@ def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
             (timeout, kwargs.get("repeat"), kwargs.get("file"), kwargs.get("exit"))
         ),
     )
-    log_path = tmp_path / "dictation.log"
-    log_path.write_text("", encoding="utf-8")
-    messages = []
-    logger = SimpleNamespace(
-        warning=lambda msg, *args: messages.append(msg % args),
-        info=lambda msg, *args: messages.append(msg % args),
-    )
+    with (tmp_path / "crash.log").open("a", encoding="utf-8") as stream:
+        crash_log = main_module.CrashLog(tmp_path / "crash.log", stream)
+        messages = []
+        logger = SimpleNamespace(
+            warning=lambda msg, *args: messages.append(msg % args),
+            info=lambda msg, *args: messages.append(msg % args),
+        )
 
-    stream = main_module._arm_quit_watchdog(log_path, logger)
+        main_module._arm_quit_watchdog(crash_log, logger)
 
     assert len(armed) == 1
     timeout, repeat, file, exit_ = armed[0]
@@ -1288,7 +1290,6 @@ def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
     assert exit_ is True, "the watchdog must end the process, not only report"
     assert file is stream
     assert any("app_quit_started" in m for m in messages)
-    stream.close()
 
 
 def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):

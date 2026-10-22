@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import gc
+import threading
+import time
+import weakref
 from pathlib import Path
 
 import pytest
@@ -790,7 +794,6 @@ def test_retranscribe_dialog_empty_result_is_not_saved_to_history(tmp_path):
 
     dialog._on_finished(True, "")
 
-    assert dialog.produced_transcript is False
     assert "Failed" in dialog._status_label.text()
     assert not dialog._copy_button.isEnabled()
 
@@ -808,7 +811,6 @@ def test_retranscribe_dialog_shows_the_result_and_enables_copy(tmp_path):
 
     assert dialog._result_text.toPlainText() == "new text"
     assert dialog._copy_button.isEnabled()
-    assert dialog.produced_transcript is True
 
 
 def test_retranscribe_dialog_never_resizes_around_its_content(tmp_path):
@@ -932,7 +934,6 @@ def test_retranscribe_dialog_keeps_a_failure_visible(tmp_path):
     dialog._on_finished(False, "boom")
 
     assert "boom" in dialog._status_label.text()
-    assert dialog.produced_transcript is False
     assert not dialog._copy_button.isEnabled()
 
 
@@ -1080,3 +1081,176 @@ def test_retranscribe_offers_the_custom_endpoints_saved_model_list(tmp_path):
 
     assert dialog._model_combo.findData("gemini-2.5-flash") >= 0
     assert dialog._model_combo.findData("whisper-1") >= 0
+
+
+_RETRANSCRIPTION_THREAD = "stt_app_history_retranscription"
+
+
+def _join_retranscription_threads(timeout: float = 5.0) -> None:
+    for thread in threading.enumerate():
+        if thread.name == _RETRANSCRIPTION_THREAD:
+            thread.join(timeout)
+            assert not thread.is_alive(), "the retranscription worker never ended"
+
+
+def _process_events_until(condition, timeout: float = 5.0) -> bool:
+    app = QtWidgets.QApplication.instance()
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        app.processEvents()
+        if condition():
+            return True
+        time.sleep(0.01)
+    return condition()
+
+
+def test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run(tmp_path):
+    """The owner's crash (2026-10-23): closing Retranscribe mid-run.
+
+    `QDialog.exec()` hands the dialog to Python ownership, so it dies with its
+    last Python reference. The worker used to capture the dialog, held that
+    last reference once the dialog was closed, and released it at the end of
+    the run -- destroying a QWidget on the worker thread ("Timers cannot be
+    stopped from another thread", then an abort or access violation). A dialog
+    without a parent has the same ownership, without needing `exec()` here.
+    """
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    started = threading.Event()
+    release = threading.Event()
+
+    def _blocking_transcribe(path, settings, progress_callback):
+        started.set()
+        release.wait(10)
+        progress_callback("Transcribing with a model")
+        return True, "retranscribed text"
+
+    dialog = RetranscribeDialog(
+        entry=_entry(source_audio_path=str(audio)),
+        audio_path=audio,
+        base_settings=AppSettings(),
+        transcribe=_blocking_transcribe,
+    )
+    dialog._start_run()
+    assert started.wait(5)
+    alive = weakref.ref(dialog)
+    dialog.close()
+    del dialog
+    keep = None
+    try:
+        gc.collect()
+        QtWidgets.QApplication.instance().processEvents()
+        assert alive() is None, (
+            "the running retranscription keeps the closed dialog alive, so "
+            "its end destroys the dialog on the worker thread"
+        )
+    finally:
+        # Without the fix, the last reference must still drop here, on the
+        # GUI thread, or this test itself would crash the run.
+        keep = alive()
+        release.set()
+        _join_retranscription_threads()
+        QtWidgets.QApplication.instance().processEvents()
+        del keep
+
+
+class _BlockingController:
+    """Saves the transcript to history the way the controller does, on the
+    calling (worker) thread, once the test releases it."""
+
+    def __init__(self, settings, history_store):
+        self.settings = settings
+        self._history_store = history_store
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def transcribe_audio_file(
+        self, path, settings_override=None, progress_callback=None
+    ):
+        self.started.set()
+        self.release.wait(10)
+        if progress_callback is not None:
+            progress_callback("Transcribing with a model")
+        self._history_store.add_entry(
+            _entry(text="the right language", mode="import", source_audio_path=path),
+            20,
+        )
+        return True, "the right language"
+
+
+def test_a_retranscription_closed_mid_run_reaches_history_and_its_list(
+    monkeypatch, tmp_path
+):
+    """The owner's sequence: retranscribe, close the dialog during the run,
+    delete the other entry of the same recording, let the run finish.
+
+    The transcript must land in history and show in the open History list,
+    the deleted entry must not take the shared audio file with it, and the
+    closed dialog must be gone before the run ends (destroyed on the GUI
+    thread, not by the worker).
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording_20261018_230000_000000.wav"
+    audio.write_bytes(b"RIFF")
+    wrong_language = _entry(text="wrong language", source_audio_path=str(audio))
+    earlier_retry = _entry(
+        text="earlier retry", mode="import", source_audio_path=str(audio)
+    )
+    dialog = _make_dialog(tmp_path, [wrong_language, earlier_retry])
+    controller = _BlockingController(
+        AppSettings(history_max_items=20), dialog._history_store
+    )
+    dialog._controller = controller
+    dialog.show()
+    app.processEvents()
+    dialog._select_rows([dialog._entries.index(wrong_language)])
+    retranscribe_dialogs = []
+
+    def _start_and_close():
+        # Not `dialog.findChild`: a child returned through it is handed to its
+        # parent's ownership, which would keep it alive here regardless.
+        (retranscribe,) = [
+            widget
+            for widget in QtWidgets.QApplication.topLevelWidgets()
+            if isinstance(widget, RetranscribeDialog) and widget.isVisible()
+        ]
+        retranscribe._start_run()
+        assert controller.started.wait(5)
+        retranscribe_dialogs.append(weakref.ref(retranscribe))
+        retranscribe.close()
+
+    QtCore.QTimer.singleShot(0, _start_and_close)
+    dialog._retranscribe_selected()
+    try:
+        gc.collect()
+        app.processEvents()
+        assert retranscribe_dialogs and retranscribe_dialogs[0]() is None, (
+            "the closed Retranscribe dialog outlives its call; the run would "
+            "release it on the worker thread"
+        )
+
+        dialog._select_rows([dialog._entries.index(earlier_retry)])
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "question",
+            staticmethod(lambda *args, **kwargs: QtWidgets.QMessageBox.Yes),
+        )
+        dialog._delete_selected()
+    finally:
+        # As in the test above: a dialog the worker still holds must lose its
+        # last reference here, on the GUI thread.
+        keep = retranscribe_dialogs[0]() if retranscribe_dialogs else None
+        controller.release.set()
+        _join_retranscription_threads()
+        app.processEvents()
+        del keep
+
+    assert _process_events_until(
+        lambda: any(entry.text == "the right language" for entry in dialog._entries)
+    ), "History did not show the transcript of a run whose dialog was closed"
+    assert [entry.text for entry in dialog._history_store.load()] == [
+        "wrong language",
+        "the right language",
+    ]
+    assert audio.is_file(), "deleting an entry removed the audio another one uses"

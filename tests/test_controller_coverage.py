@@ -9,6 +9,7 @@ import os
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -10267,12 +10268,23 @@ def test_a_queued_transcript_with_a_gap_keeps_its_recording():
     _ = app
 
 
-def test_an_imported_last_recording_with_a_gap_is_kept(monkeypatch, tmp_path):
+def _import_the_last_recording_with_a_gap(monkeypatch, tmp_path):
+    """The Import tab transcribes the managed last recording and the remote
+    transcript comes back with a gap marker. Returns the controller, the app,
+    the fake store, the recordings folder (a setting, so that nothing is
+    written outside the test's folder) and the result."""
     last_path = tmp_path / "last_recording.wav"
     last_path.write_bytes(b"RIFF")
     last_recording_store = FakeLastRecordingStore(str(last_path))
     last_recording_store._available = True
-    controller, app = _make_controller(last_recording_store=last_recording_store)
+    last_recording_store.recording_id = "rec-I"
+    recordings = tmp_path / "recordings"
+    controller, app = _make_controller(
+        last_recording_store=last_recording_store,
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, recordings_dir=str(recordings))
+        ),
+    )
 
     class _FakeTranscriber:
         def transcribe_batch(self, _path):
@@ -10282,13 +10294,61 @@ def test_an_imported_last_recording_with_a_gap_is_kept(monkeypatch, tmp_path):
         "stt_app.controller.create_transcriber",
         lambda _settings, **_kwargs: _FakeTranscriber(),
     )
+    return controller, app, last_recording_store, recordings, last_path
+
+
+def test_an_imported_last_recording_with_a_gap_is_kept(monkeypatch, tmp_path):
+    """Kept in a copy in the recordings folder that the entry links, like a
+    dictation's: the managed recording is one slot the next dictation
+    replaces. The slot then completes as for any success."""
+    controller, app, last_recording_store, recordings, last_path = (
+        _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
+    )
 
     ok, text = controller.transcribe_audio_file(str(last_path))
 
     assert ok is True
     assert "[no text returned for 3:00-6:00]" in text
+    [entry] = controller._history_store.load()
+    kept = Path(entry.source_audio_path)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == b"RIFF"
+    assert last_recording_store.completed == 1
+    assert last_recording_store.failed == []
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [OSError("disk full"), RuntimeError("unexpected")],
+    ids=["oserror", "runtimeerror"],
+)
+def test_an_imported_last_recording_with_a_gap_stays_managed_when_the_copy_fails(
+    monkeypatch, tmp_path, failure
+):
+    """The copy failed, by the disk or by anything else: nothing is linked,
+    the import still delivers its transcript, and the managed recording stays
+    kept (marked failed)."""
+    controller, app, last_recording_store, recordings, last_path = (
+        _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+
+    ok, _text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is True
+    [entry] = controller._history_store.load()
+    assert entry.source_audio_path == ""
+    assert not recordings.exists()
     assert last_recording_store.completed == 0
-    assert len(last_recording_store.failed) == 1
+    assert last_recording_store.failed == [
+        controller_module._GAP_KEPT_RECORDING_MESSAGE
+    ]
     controller.shutdown()
     _ = app
 

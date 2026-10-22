@@ -167,11 +167,20 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
 # look like the recording never happened.
 _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording."
 
-# The last-recording error for a transcript with a gap marker. The recording
-# is kept rather than completed, so the stretch the marker names can still be
-# listened to or transcribed again.
+# The last-recording error for a transcript with a gap marker whose audio no
+# History entry links (the copy in the recordings folder could not be written,
+# `_keep_audio_of_a_gap_transcript`). The recording is kept rather than
+# completed, so the stretch the marker names can still be listened to or
+# transcribed again.
 _GAP_KEPT_RECORDING_MESSAGE = (
     "Part of the recording returned no text; the recording was kept."
+)
+
+# The same for a fallback retry (the recorded language was not offered, so the
+# transcript is in another language than the speech) whose copy of the audio
+# could not be written: the managed recording is the only audio left.
+_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE = (
+    "The transcript is in another language than the recording; the recording was kept."
 )
 
 # The stages of a local model preload. They fail, progress and finish for
@@ -249,9 +258,14 @@ class _TranscriptionJob:
     # The language a retry's recording was made in, when the engine and model
     # the retry runs under do not offer it (`_pin_recorded_language`): the
     # transcript is then in `settings.language_mode`, not in the language
-    # spoken, and its delivery keeps the recording and says so
-    # (`_mark_last_recording_completed`). "" for every other job.
+    # spoken, and its delivery keeps the audio and says so
+    # (`_keep_audio_of_a_fallback_retry`). "" for every other job.
     language_fallback_from: str = ""
+    # True for the job `retry_last_transcription` submitted: it transcribes an
+    # older recording again, so it is not the live session that holds back
+    # the delivery of results that finish meanwhile
+    # (`_should_defer_background_insertion`), and a cancel of it says so.
+    is_retry: bool = False
     # False for a job with no recording id -- bytes the managed store never
     # received (a retry whose retained identity is unknown, a road whose
     # persist was refused) or a slot it could not name: its terminal marks
@@ -1892,7 +1906,6 @@ class DictationController(QtCore.QObject):
             start_target_signature = self._capture_target_signature(
                 fallback_window=start_target_handle
             )
-            self._apply_concurrent_mode_to_active_job()
             self._overlay.reveal_temporarily()
             preload = self._preload_future
             preload_running = (
@@ -1977,13 +1990,21 @@ class DictationController(QtCore.QObject):
                     )
             if self._settings.mode == "streaming":
                 self._start_streaming_recording()
-                return
-
-            self._start_batch_recording(
-                replace(self._settings),
-                waiting_for_model=preload_running,
-                preload_phase_word=self._preload_phase_word(),
-            )
+            else:
+                self._start_batch_recording(
+                    replace(self._settings),
+                    waiting_for_model=preload_running,
+                    preload_phase_word=self._preload_phase_word(),
+                )
+            if self._audio_capture is not None:
+                # The microphone is open: only now does this recording take
+                # the place of the transcriptions in flight. Applied at the top
+                # of this method it met every refused start (a model still
+                # loading, streaming unavailable) and every failed microphone
+                # open too, demoting or stopping jobs for a recording that
+                # never began. Both starters set the capture only on success
+                # and leave it None otherwise.
+                self._apply_concurrent_mode_to_jobs_in_flight()
         finally:
             self._start_press_ms = None
             self._start_handled_ms = None
@@ -4190,16 +4211,17 @@ class DictationController(QtCore.QObject):
 
         A transcript carrying a gap marker -- a part of a split remote
         recording that held sound came back empty (`transcribe_in_parts`) --
-        is marked failed instead: the marker tells the user to listen to that
-        stretch, and with `keep_after_success` off a completed recording is
-        deleted. Failed keeps it reachable from History and Import.
-
-        A retry that ran in another language than the recording was made in
-        (`language_fallback_from`) keeps its recording the same way, while
-        the managed slot still holds it, and sends the one tray notice that
-        names the language that ran (`_tell_language_fallback`): with
-        "keep last recording" off the WAV was deleted after the success, so
-        Import could not redo it in the right language.
+        keeps its audio: the marker tells the user to listen to that stretch,
+        and with `keep_after_success` off a completed recording is deleted.
+        The audio is normally a file the History entry links
+        (`_keep_audio_of_a_gap_transcript`, or the archive's), and the
+        recording completes as usual. Where no file is linked -- the copy
+        could not be written -- it is marked failed instead, which keeps the
+        managed recording reachable from Import until the next dictation
+        replaces it. The same holds for a fallback retry
+        (`_keep_audio_of_a_fallback_retry`): its transcript is in another
+        language than the speech, and completing the recording with no copy
+        would delete the only audio it could be redone from.
 
         A job records the managed recording's id when it is registered. An
         older job that finishes after a newer recording was stored -- the
@@ -4214,33 +4236,23 @@ class DictationController(QtCore.QObject):
         """
         if job is not None and not job.marks_last_recording:
             return
-        fell_back = (
-            job is not None and bool(job.language_fallback_from) and bool(text.strip())
-        )
-        # Only the managed slot's own recording can be kept: a newer one took
-        # the slot, and a mark keyed by this job's id would touch nothing.
-        keeps = (
-            fell_back and self._current_last_recording_id() == job.source_recording_id
-        )
-        if transcript_has_gap(text):
-            self._mark_last_recording_failed(job, _GAP_KEPT_RECORDING_MESSAGE)
-        elif keeps:
-            ran, recorded = self._language_fallback_labels(job)
-            self._mark_last_recording_failed(
-                job,
-                f"Transcribed in {ran} because {recorded} is not offered by the "
-                "model; the recording was kept.",
-            )
-        else:
-            expected = job.source_recording_id if job is not None else None
-            try:
-                self._last_recording_store.mark_completed(
-                    expected_recording_id=expected or None
+        if job is None or not job.source_audio_path:
+            # No copy is linked, so the managed recording is the only audio.
+            if transcript_has_gap(text):
+                self._mark_last_recording_failed(job, _GAP_KEPT_RECORDING_MESSAGE)
+                return
+            if job is not None and job.language_fallback_from:
+                self._mark_last_recording_failed(
+                    job, _LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE
                 )
-            except Exception:
-                self._logger.exception("Failed to finalize last recording state")
-        if fell_back:
-            self._tell_language_fallback(job, kept=keeps)
+                return
+        expected = job.source_recording_id if job is not None else None
+        try:
+            self._last_recording_store.mark_completed(
+                expected_recording_id=expected or None
+            )
+        except Exception:
+            self._logger.exception("Failed to finalize last recording state")
 
     @staticmethod
     def _language_fallback_labels(job: _TranscriptionJob) -> tuple[str, str]:
@@ -4253,15 +4265,25 @@ class DictationController(QtCore.QObject):
             LANGUAGE_MODE_LABELS.get(recorded, recorded),
         )
 
-    def _tell_language_fallback(self, job: _TranscriptionJob, *, kept: bool) -> None:
-        """One tray notice that a retry's transcript is in another language
-        than the speech, because the engine and model it ran under do not
-        offer the recorded one -- the Processing line that said so was
-        overwritten by the first provider progress line, and History stores
-        no language. `kept` says whether the recording is still reachable
-        from Import (`_mark_last_recording_completed`); a promise the audio
-        cannot keep is worse than none."""
-        ran, recorded = self._language_fallback_labels(job)
+    def _keep_audio_of_a_fallback_retry(self, job: _TranscriptionJob) -> None:
+        """Keep the audio of a transcript that is in another language than the
+        speech and link it from the History entry the result is about to get.
+        The tray is told once that entry has been written
+        (`_announce_language_fallback`).
+
+        The recorded language was not offered (`language_fallback_from`), so
+        the user may want the recording transcribed again in the right one.
+        The managed recording cannot be that copy: it is one slot, which the
+        next dictation replaces, and the next start completes -- deleting the
+        WAV -- when its transcript is already in History. The copy goes where
+        retained audio goes, the recordings folder: saved as an unfinished
+        recording and moved there under its own name, the way
+        `_retain_unfinished_audio` keeps one, which no recordings count prunes.
+        `job.source_audio_path` carries it into every history write of the
+        delivery, and History's Retranscribe takes a language. Recordings that
+        fell back nowhere are kept or not as the settings say, as before.
+        """
+        kept = self._keep_audio_of_a_job(job)
         self._logger.info(
             "retry_language_fallback_delivered token=%d recording_id=%s "
             "recorded=%s language=%s kept=%s",
@@ -4269,19 +4291,134 @@ class DictationController(QtCore.QObject):
             job.source_recording_id or "n/a",
             job.language_fallback_from,
             job.settings.language_mode,
-            kept,
+            kept or "no",
         )
-        outcome = (
-            "The recording is kept: Import Audio > Use last recording "
-            "transcribes it again in another language."
-            if kept
-            else "A newer recording has replaced this one, so Use last "
-            "recording on the Import Audio tab no longer offers it."
-        )
+
+    def _announce_language_fallback(
+        self, job: _TranscriptionJob | None, entry: TranscriptHistoryEntry | None
+    ) -> None:
+        """Tell the tray what a fallback retry ran in and what became of its
+        audio, after its History write was tried: the sentence about
+        Retranscribe in History is true only when `entry` exists."""
+        if job is None or not job.language_fallback_from:
+            return
+        ran, recorded = self._language_fallback_labels(job)
+        if not job.source_audio_path:
+            outcome = (
+                "The audio could not be copied (see the log); the last recording "
+                "is kept only until the next dictation or restart."
+            )
+        elif entry is None:
+            outcome = (
+                "The audio is kept in the recordings folder, but its transcript "
+                "could not be saved to History (see the log)."
+            )
+        else:
+            outcome = (
+                "The audio is kept: Retranscribe... in History runs it in "
+                "another language."
+            )
         self.busy_overlay_error.emit(
             f"The retry ran in {ran} because {recorded} is not offered by the "
             f"current engine and model. {outcome}"
         )
+
+    def _keep_audio_of_a_gap_transcript(self, job: _TranscriptionJob) -> None:
+        """Keep the audio of a transcript with a gap marker and link it from
+        the History entry the result is about to get.
+
+        The marker names a stretch the user may need to listen to, or have
+        transcribed again. Its audio used to be the managed last recording,
+        kept by marking it failed (`_mark_last_recording_completed`): one slot,
+        which the next dictation replaces. It is kept like a fallback retry's
+        audio (`_keep_audio_of_a_fallback_retry`): in the recordings folder,
+        linked by `job.source_audio_path`, so History's Retranscribe finds it.
+        A job that already links a file -- "Archive every recording" -- has its
+        audio kept by the settings, and the caller does not ask. Where the copy
+        cannot be written nothing is linked, and the managed recording stays
+        the kept audio as before.
+        """
+        kept = self._keep_audio_of_a_job(job)
+        self._logger.info(
+            "gap_transcript_audio_kept token=%d recording_id=%s kept=%s",
+            job.token,
+            job.source_recording_id or "n/a",
+            kept or "no",
+        )
+
+    def _keep_audio_of_a_job(self, job: _TranscriptionJob) -> str:
+        """Copy a job's audio into the recordings folder and link it from the
+        History entry the job is about to write; "" when nothing was kept (the
+        copy failed, or the job has no audio in memory any more)."""
+        payload = self._request_audio_by_token.get(job.token)
+        if payload is None:
+            return ""
+        kept = self._keep_audio_in_recordings_folder(
+            payload[0],
+            recording_id=job.source_recording_id,
+            recorded_at=job.created_at,
+            language_mode=job.language_fallback_from,
+        )
+        if kept:
+            job.source_audio_path = kept
+        return kept
+
+    def _keep_audio_in_recordings_folder(
+        self,
+        wav_bytes: bytes,
+        *,
+        recording_id: str,
+        recorded_at: datetime,
+        language_mode: str = "",
+    ) -> str:
+        """Where this recording's audio now lives, "" when it could not be kept.
+
+        Saved as an unfinished recording and moved to the recordings folder
+        under that name, which no recordings count prunes. The file's language
+        tag is `language_mode`, else the language the recording was made in. A
+        move that fails leaves the file in the unfinished recordings folder
+        and answers that path (logged): the next start offers it there.
+
+        Never raises, whatever the store or the folder does: it runs inside the
+        delivery of a finished transcript, before its History entry is written,
+        and an exception out of it would discard that transcript."""
+        store = self._unfinished_recording_store
+        try:
+            store.save(
+                wav_bytes,
+                recording_id=recording_id,
+                recorded_at=recorded_at,
+                language_mode=(
+                    language_mode
+                    or self._recorded_language_by_recording_id.get(recording_id, "")
+                ),
+            )
+            recording = store.find(recording_id)
+        except Exception:
+            self._logger.exception(
+                "Failed to keep the audio of a transcript. recording_id=%s",
+                recording_id,
+            )
+            return ""
+        if recording is None:
+            self._logger.warning(
+                "The saved audio of a transcript could not be found again, so "
+                "it is not linked and may sit in the unfinished recordings "
+                "folder. recording_id=%s",
+                recording_id,
+            )
+            return ""
+        try:
+            return os.path.abspath(
+                store.move_to(recording, Path(self._resolve_recordings_dir()))
+            )
+        except Exception:
+            self._logger.exception(
+                "Failed to move the audio of a transcript to the recordings "
+                "folder. recording_id=%s",
+                recording_id,
+            )
+            return os.path.abspath(recording.path)
 
     def _mark_last_recording_transcribing(
         self, job: _TranscriptionJob, settings: AppSettings
@@ -4468,6 +4605,7 @@ class DictationController(QtCore.QObject):
         source_audio_path: str = "",
         source_recording_id: str | None = None,
         language_fallback_from: str = "",
+        is_retry: bool = False,
     ) -> _TranscriptionJob:
         """Track a submitted transcription for the queue and target insertion.
 
@@ -4500,6 +4638,7 @@ class DictationController(QtCore.QObject):
             source_recording_id=source_recording_id,
             credentials_generation=self._credentials_generation,
             language_fallback_from=language_fallback_from,
+            is_retry=is_retry,
             marks_last_recording=marks_last_recording,
             source_audio_path=str(source_audio_path or "").strip(),
         )
@@ -4958,6 +5097,7 @@ class DictationController(QtCore.QObject):
             self._logger.info("queue_cancel_ignored_pace_held token=%d", request_token)
             return
         was_active = request_token == self._active_request_token
+        canceled_text = self._canceled_text(job)
         self._request_job_stop(
             request_token,
             delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -4976,7 +5116,16 @@ class DictationController(QtCore.QObject):
             # Unless the flush above just reported a transcript that could not
             # be pasted: that Error carries the text and the Insert action, and
             # this line would replace both with three words.
-            self._paint_status_keeping_offer("Done", "Transcription canceled.")
+            self._paint_status_keeping_offer("Done", canceled_text)
+
+    @staticmethod
+    def _canceled_text(job: _TranscriptionJob | None) -> str:
+        """What the overlay says after the job it showed was canceled. A retry
+        says so: the dictation behind it may still be transcribing, and
+        "Transcription canceled." read as if that one had stopped."""
+        if job is not None and job.is_retry:
+            return "Retry canceled."
+        return "Transcription canceled."
 
     def clear_transcription_queue(self) -> None:
         """Cancel every queued/running transcription.
@@ -5011,18 +5160,24 @@ class DictationController(QtCore.QObject):
             # main overlay area instead of leaving a stale "Processing".
             self._paint_status_keeping_offer("Done", "Transcription canceled.")
 
-    def _apply_concurrent_mode_to_active_job(self) -> None:
-        """Apply the configured mode to the in-flight transcription when a new
-        recording starts.
+    def _apply_concurrent_mode_to_jobs_in_flight(self) -> None:
+        """Apply the configured mode to every transcription in flight when a
+        new recording starts -- once its microphone is open: a refused start or
+        a failed open leaves the jobs alone (`start_recording`).
 
         The result is never discarded: ``insert`` keeps it inserting into its
         captured window, ``history`` switches it to history-only, and ``cancel``
         asks the compute to stop (a transcript that still finishes is kept in
         history).
+
+        Every job still computing, not only the one the overlay shows: a Retry
+        takes the overlay's token without a recording starting, so the
+        dictation that was in flight before it kept its delivery and was the
+        one the mode skipped, while the retry -- a transcription in flight like
+        any other, which would otherwise paste into its old window during or
+        after the new dictation -- got it. A finished result waiting for its
+        paste (`insertion_deferred`) and a job being stopped are not in flight.
         """
-        token = self._active_request_token
-        if token is None or token not in self._jobs:
-            return
         mode = str(
             getattr(
                 self._settings,
@@ -5030,15 +5185,21 @@ class DictationController(QtCore.QObject):
                 DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
             )
         )
-        if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
-            self._jobs[
-                token
-            ].background_delivery = CONCURRENT_TRANSCRIPTION_MODE_HISTORY
-        elif mode == CONCURRENT_TRANSCRIPTION_MODE_CANCEL:
-            self._request_job_stop(
-                token,
-                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
-            )
+        if mode not in (
+            CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+            CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+        ):
+            return
+        for job in list(self._jobs.values()):
+            if job.aborting or job.insertion_deferred:
+                continue
+            if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
+                job.background_delivery = CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+            else:
+                self._request_job_stop(
+                    job.token,
+                    delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+                )
 
     def _submit_batch_transcription(
         self,
@@ -5048,6 +5209,7 @@ class DictationController(QtCore.QObject):
         source_audio_path: str = "",
         source_recording_id: str | None = None,
         language_fallback_from: str = "",
+        is_retry: bool = False,
     ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
@@ -5060,6 +5222,7 @@ class DictationController(QtCore.QObject):
             source_audio_path=source_audio_path,
             source_recording_id=source_recording_id,
             language_fallback_from=language_fallback_from,
+            is_retry=is_retry,
         )
         self._logger.info(
             "transcription_submitted token=%s mode=batch engine=%s model=%s "
@@ -6838,6 +7001,11 @@ class DictationController(QtCore.QObject):
                 request_token=request_token,
             )
             return
+        if job is not None and job.language_fallback_from:
+            # Before either road writes its History entry: the entry links it.
+            self._keep_audio_of_a_fallback_retry(job)
+        if job is not None and not job.source_audio_path and transcript_has_gap(text):
+            self._keep_audio_of_a_gap_transcript(job)
         if request_token is not None:
             if not self._is_foreground_transcription(request_token, job):
                 # A newer recording owns the live session, or this job was asked
@@ -6956,6 +7124,7 @@ class DictationController(QtCore.QObject):
             source_recording_id=(job.source_recording_id if job is not None else None),
             source_audio_path=(job.source_audio_path if job is not None else ""),
         )
+        self._announce_language_fallback(job, history_entry)
 
         if (
             joins_paste_queue
@@ -7244,6 +7413,7 @@ class DictationController(QtCore.QObject):
             source_audio_path=job.source_audio_path,
             track_for_edit=False,
         )
+        self._announce_language_fallback(job, job.history_entry)
         # The job's own recording is done with, as on the foreground road:
         # keyed by its id, so a newer recording in the slot is left alone,
         # and skipped for bytes the store never received. Unmarked, the
@@ -7298,8 +7468,10 @@ class DictationController(QtCore.QObject):
         what the user is dictating into and requires no focus steal (see
         ``_can_insert_during_active_recording``). An in-flight foreground
         transcription normally also defers background inserts so the live
-        session stays coherent, but an explicit user cancel passes
-        ``ignore_active_transcription=True`` to deliver already-completed
+        session stays coherent -- unless it is a retry, an older recording's
+        text and not that session (``_TranscriptionJob.is_retry``; a token
+        naming no registered job still defers) -- but an explicit user cancel
+        passes ``ignore_active_transcription=True`` to deliver already-completed
         results immediately — each targets its own captured window, and
         delivering the older result now keeps token order intact — instead of
         leaving them stuck (looking "deleted") behind a transcription that can
@@ -7316,7 +7488,14 @@ class DictationController(QtCore.QObject):
             return False
         if bool(getattr(self._settings, "immediate_background_insert", False)):
             return False
-        return self._active_request_token is not None
+        if self._active_request_token is None:
+            return False
+        # A retry holding the token is an older recording's text, not the live
+        # session this wait keeps coherent: a result that finishes meanwhile
+        # pastes at once instead of waiting for it, which with a local model
+        # takes minutes. The retry pastes when it is done.
+        active = self._jobs.get(self._active_request_token)
+        return not (active is not None and active.is_retry)
 
     def _can_insert_during_active_recording(
         self,
@@ -8190,9 +8369,10 @@ class DictationController(QtCore.QObject):
                 # to a job that no longer exists. If the new recording then
                 # submits nothing (silence-gated, no audio captured, cancelled,
                 # a watchdog abort), it stays set for the rest of the session:
-                # `_should_defer_background_insertion` ends in "is the token
-                # set", so every later queued transcript is deferred and never
-                # pasted, and `_overlay_session_active()` answers True forever,
+                # `_should_defer_background_insertion` defers whenever the
+                # token is set unless it names a registered retry, so every
+                # later queued transcript is deferred and never pasted, and
+                # `_overlay_session_active()` answers True forever,
                 # which is what makes `show_idle_status` swallow a failed
                 # hotkey registration.
                 if self._active_request_token == request_token:
@@ -10005,6 +10185,7 @@ class DictationController(QtCore.QObject):
             settings,
             source_recording_id=self._last_failed_recording_id,
             language_fallback_from=language_fallback_from,
+            is_retry=True,
         )
         return True
 
@@ -10079,20 +10260,25 @@ class DictationController(QtCore.QObject):
                         **conditional_transition,
                     )
                 return False, _EMPTY_MODEL_TRANSCRIPT_MESSAGE
+            kept_path = "" if managed_last_recording else os.path.abspath(path)
+            if managed_last_recording and transcript_has_gap(text):
+                # Kept like a dictation's (`_keep_audio_of_a_gap_transcript`):
+                # the managed recording is one slot the next dictation replaces.
+                kept_path = self._keep_audio_of_an_imported_last_recording(
+                    audio_source, recording_id
+                )
             self._append_transcript_history(
                 text,
                 settings,
                 "import",
                 source_recording_id=recording_id,
-                source_audio_path=(
-                    "" if managed_last_recording else os.path.abspath(path)
-                ),
+                source_audio_path=kept_path,
                 track_for_edit=False,
             )
             if managed_last_recording:
-                if transcript_has_gap(text):
-                    # Kept, like a dictation whose transcript has a gap
-                    # (`_mark_last_recording_completed`).
+                if transcript_has_gap(text) and not kept_path:
+                    # No copy: the managed recording stays the kept audio,
+                    # like a dictation's (`_mark_last_recording_completed`).
                     self._last_recording_store.mark_failed(
                         _GAP_KEPT_RECORDING_MESSAGE,
                         **conditional_transition,
@@ -10113,6 +10299,31 @@ class DictationController(QtCore.QObject):
                         "Failed to persist imported recording failure state"
                     )
             return False, str(exc)
+
+    def _keep_audio_of_an_imported_last_recording(
+        self, audio_source: str | bytes, recording_id: str
+    ) -> str:
+        """The recordings-folder copy of the managed last recording an import
+        just transcribed with a gap, "" when it could not be made. The audio is
+        the import's own bytes (a snapshot of the slot), or the slot's file."""
+        try:
+            wav_bytes = (
+                audio_source
+                if isinstance(audio_source, bytes)
+                else Path(audio_source).read_bytes()
+            )
+        except Exception:
+            self._logger.exception(
+                "Failed to read the last recording to keep it. recording_id=%s",
+                recording_id,
+            )
+            return ""
+        return self._keep_audio_in_recordings_folder(
+            wav_bytes,
+            recording_id=recording_id,
+            recorded_at=self._recorded_at_by_recording_id.get(recording_id)
+            or datetime.now(),  # noqa: DTZ005 (local time on purpose, like the archive's names)
+        )
 
     def _transcribe_import_worker(
         self,
@@ -10236,6 +10447,7 @@ class DictationController(QtCore.QObject):
         request_token = self._active_request_token
         if request_token is not None:
             had_job = request_token in self._jobs
+            canceled_text = self._canceled_text(self._jobs.get(request_token))
             # Request a real stop; a transcript that still finishes is kept in
             # history rather than discarded.
             self._request_job_stop(
@@ -10259,7 +10471,7 @@ class DictationController(QtCore.QObject):
             if not self._flush_deferred_background_results(
                 ignore_active_transcription=True
             ):
-                self._paint_status_keeping_offer("Done", "Transcription canceled.")
+                self._paint_status_keeping_offer("Done", canceled_text)
             return
 
         # Preloading can intentionally overlap a recording or a queued batch

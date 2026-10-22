@@ -86,6 +86,266 @@ HomeBase; the laptop itself was not available.
   the start path being short, which the new field now measures in the
   field).
 
+## 2026-10-23 (the update download had the retranscription's crash on Cancel)
+
+Searched every `threading.Thread` started by a Qt object for the shape of the
+History retranscription crash (a worker capturing a dialog that is `exec()`ed
+or deleted on close). One more had it: `UpdateDownloadDialog` is `exec()`ed by
+`show_update_available_dialog` and its worker captured `self`, so Cancel during
+a download left the worker holding the dialog's last reference until the
+download noticed the cancel, then destroyed it on the worker thread. Same fix:
+plain values and a `GuiThreadReporter`; `_DownloadSignals` went. The test fails
+without the fix (the cancelled dialog stayed alive). The others are safe as
+they stand: the Settings dialog and the unfinished-recordings notice are held
+for the whole session and never deleted on close, so no worker can hold their
+last reference or emit into a deleted one.
+
+## 2026-10-23 (the History retranscription crash: a worker held the closed dialog)
+
+Owner's report: History (from the overlay) > Retranscribe, the dialog closed
+during the run, then another entry of the same recording deleted -- crash.
+Reproduced with a probe driving the real `HistoryDialog` and
+`RetranscribeDialog` with a fake controller, the app kept alive on last-window
+close as in `main.py` (`docs/agents/persistence-and-history.md`):
+- **Cause 1 (the owner's sequence):** PySide6's `QDialog.exec()` hands the
+  dialog back to Python ownership, so it dies with its last Python reference
+  although it has a parent. The worker closure captured `self`; after Close it
+  held the last reference, and the end of the run destroyed the dialog on the
+  worker thread: "QObject::killTimer: Timers cannot be stopped from another
+  thread" (its elapsed timer still ran), then "Fatal Python error: Aborted" or
+  an access violation (2 of 4 runs; every run printed the warnings). History
+  staying open is what makes the worker the last owner; closing History first
+  deletes the child on the GUI thread instead.
+- **Cause 2:** a progress emit on the dialog while History's
+  `WA_DeleteOnClose` deleted it raised `TypeError(' only accepts 0
+  argument(s), 1 given!')`, which `_emit`'s `RuntimeError` guard let through,
+  and the process aborted (2 of 4 runs at one progress line per ms).
+- **Not a cause:** deleting the other entry. `delete_entries` never touched
+  audio and still does not (now logged, and documented); the transcript was
+  always saved by the controller on the worker thread.
+- A first probe version reported a "starved" worker after History closed; that
+  was the probe's own app quitting on last-window close. Probes of Qt
+  lifetime must set `setQuitOnLastWindowClosed(False)` like `main.py`.
+- **Fix:** `gui_thread.GuiThreadReporter` (weak reference, one dispatcher owned
+  by the application, call queued to the GUI thread and dropped for a dead
+  receiver); `RetranscribeDialog` hands the worker only the reporter, History
+  a module-level callable with the controller and its own reporter, which
+  refreshes the list when the run ends (`produced_transcript` and the post-exec
+  reload went, the refresh covers both cases). A failed `Thread.start` now
+  ends the run with a message instead of a dialog stuck in "Transcribing...".
+  Both ends of a History retranscription and every history delete are logged.
+  After the fix: 6/6 and 8/8 probe runs clean, entry saved, 963 progress
+  reports to the deleted dialog dropped.
+- Tests fail without the fix for the stated reason (the closed dialog is kept
+  alive by the run): the dialog-level test and the History-level test of the
+  owner's sequence; the latter first used `findChild`, which (measured) kept
+  the child alive through its parent and failed even with the fix, so it looks
+  the dialog up through `topLevelWidgets()`.
+
+## 2026-10-23 (a crash leaves a trace: crash.log, exception hooks, the previous session in diagnostics)
+
+Owner's report: after a crash and a restart only post-restart logs existed,
+and `dictation.log.1` was "completely outdated". Checked in the code and with a
+probe that crashed a session natively and restarted it (throwaway folder):
+- **The log is not overwritten on restart.** `RotatingFileHandler` appends,
+  flushes every record, and rotates only by size (1 MB, three backups). The
+  owner's own `dictation.log` held the sessions of 17 and 22 October, so
+  `dictation.log.1` is simply an older 1 MB chunk. Explorer also shows a stale
+  size and date for the file the running app holds open (measured: the listing
+  said 18 October and 565 kB until a handle was closed, then 23 October and
+  639 kB), which makes the live log look outdated too.
+- **What was really missing:** nothing records a crash in native code (an
+  access violation ends the process before any Python handler runs; the probe's
+  log simply stopped), uncaught exceptions went to a stderr the windowed build
+  does not have, the History retranscription and delete paths log nothing, and
+  "Copy diagnostics" copies only the current session -- after a restart, exactly
+  "only logs after the restart".
+- **Changed** (`docs/agents/controller-and-jobs.md`): `logger.start_crash_reporting`
+  enables faulthandler into `logs\crash.log` for the process lifetime with a
+  start and an end line per session; the next start logs `previous_session_end`
+  with the trace when the previous session did not quit cleanly or left one,
+  and "Copy diagnostics" then starts one session earlier. Uncaught exceptions
+  from any thread, Qt slots and unraisable contexts are logged with their
+  traceback. The quit watchdog writes into `crash.log` instead of a second
+  handle on `dictation.log`, whose rename Windows refuses while that handle is
+  open (a rotation during the quit dropped every later line).
+- Tests: a restart keeps the previous session's lines; a subprocess crashed by
+  `faulthandler._sigsegv()` leaves its stack in `crash.log`, the next start
+  logs it and the diagnostics copy reaches the crashed session; only a session
+  without its end line is reported; the size bound; the three hooks log and
+  hand on.
+
+## 2026-10-23 (review round 4 of the Retry work: the mode waits for the microphone, the copy may fail)
+
+Round 4 over `d009937` found no P1 or P2 (the Retry strand meets the stop rule);
+its P3/P4 findings, fixed with tests that failed against the committed
+controller for the stated reason (18 of the 24 new or changed cases; the rest
+are controls, and one test only pins what the docs now say),
+`docs/agents/controller-and-jobs.md`:
+- **P3: the concurrent mode was applied before the start was known to
+  succeed.** `_apply_concurrent_mode_to_jobs_in_flight` ran near the top of
+  `start_recording`, before the refusals (a model still loading, streaming
+  unavailable, a preload failure) and before the microphone opened, so a refused
+  start or a failed open still demoted (history) or stopped (cancel) every job
+  in flight for a recording that never began. It is applied after
+  `_start_streaming_recording` / `_start_batch_recording` return with the capture
+  set, which both starters do only on success. Reasoned rather than assumed: the
+  Qt thread is blocked while the microphone opens, so the only delivery that can
+  slip in before the mode is during the 25 ms event drain, and a result held then
+  counts as finished before the recording started. Checked for the same pattern
+  in the gap and import roads: they run after the mode, no change.
+- **P4: a failed copy completed the managed slot.** For a fallback retry whose
+  copy could not be written, `_mark_last_recording_completed` completed the slot
+  and deleted the only audio; the gap and import roads already kept it (failed
+  mark), the fallback road now does too
+  (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`). A fallback that is kept this
+  way lives until the next dictation or restart; the tray says so.
+- **P4: the fallback notice could promise History that did not exist.** It was
+  sent before the History write; with `_append_transcript_history` answering
+  None it still pointed to Retranscribe in History. It is sent by
+  `_announce_language_fallback` after the write on both roads, with three
+  wordings (entry, copy without entry, no copy). `find` answering None after a
+  save is now logged as a warning.
+- **P4: the copy could take a finished transcript down.** The keep call ran
+  before the History write and caught only `OSError` and `ValueError`; anything
+  else escaped `_on_transcription_ready`. `_keep_audio_in_recordings_folder`
+  now catches `Exception` at its two steps (logged with the traceback) and never
+  raises; the import road's file read too.
+- **Docs that had gone stale:** `docs/agents/text-insertion.md` said a pending
+  streaming finalize is stopped by a retry (it is refused); the comment in
+  `_on_transcription_failed` said the deferral "ends in is the token set"
+  (it defers unless the token names a registered retry); the claim that a
+  cancel-mode retry's recording stays for another Retry holds only until a
+  result arrives, and a late result resolves it
+  (`test_in_cancel_mode_a_stopped_retry_keeps_its_audio_until_a_result_arrives`).
+
+## 2026-10-23 (a transcript with a gap marker keeps its audio in a copy, not in the one slot)
+
+The round-3 entry below says a gap transcript has the same hole as the fallback
+retry's audio had, which I had taken as precedent in round 2 without checking
+it. It does: the gap's audio was the managed last recording, kept by marking it
+failed, and that slot is replaced by the next dictation, so the stretch the
+marker names was gone as soon as the user dictated again (the next start already
+spared it, `main._complete_unless_gap`). Closed the way the fallback retry's was
+(`docs/agents/controller-and-jobs.md`, `docs/agents/remote-providers.md`):
+- **A dictation or retry whose transcript has a gap keeps a copy.**
+  `_on_transcription_ready` calls `_keep_audio_of_a_gap_transcript` before
+  either road writes the History entry, for a job that links no file yet. The
+  copy goes into the recordings folder through
+  `_keep_audio_in_recordings_folder` (now shared with the fallback retry and
+  taking the recording's id, time and language instead of a job), the entry
+  links it, and `_mark_last_recording_completed` completes the slot unless no
+  file is linked. With "Archive every recording" the entry already links the
+  archive's file: no second copy, and the slot completes as well. Where the copy
+  cannot be written the managed recording stays marked failed, as before.
+- **The import of the managed last recording does the same**
+  (`_keep_audio_of_an_imported_last_recording`), so the Import tab's gap result
+  is no exception. A fallback retry that also has a gap makes one copy.
+- **Decided not to add a tray notice for a gap.** The marker is in the pasted
+  text and in History, a gap had none before, and a Warning toast per gap is a
+  new surface for the owner to decide; adding it is about ten lines
+  (`busy_overlay_error`, like the fallback retry's). The cost of not having it
+  is that the user does not learn that Retranscribe in History now reaches the
+  audio, and that a copy sits in the recordings folder (no count prunes it,
+  like every file kept there) although "keep last recording" is off.
+- Tests failed before the fix for the stated reason (the entry linked no file;
+  the slot stayed failed): in `tests/test_controller_queue.py` the copy and the
+  link, the next dictation and the next start, the background road, the archive
+  case, the failed copy and the negative controls; in
+  `tests/test_controller_coverage.py` the import road and its failed copy. The
+  older `test_an_imported_last_recording_with_a_gap_is_kept` asserted the
+  opposite (slot failed, nothing linked) and was rewritten.
+
+## 2026-10-23 (third review of the Deepgram cap: three test gaps, two doc slips)
+
+The review of `ed5db71` found no P1/P2; test and documentation only, no change
+to `deepgram_provider.py`.
+- **P3: nothing pinned that real audio restarts the idle count** (`idle_s = 0.0`
+  in the sender's audio arm). Replacing it with `pass` kept all 91 other tests
+  green, because the test that resumed audio after the cap went away with the
+  old behaviour. New test `test_real_audio_restarts_the_count_of_a_gap`: a block,
+  7 empty waits, a block, 7 empty waits, a block, the sentinel -> 14 KeepAlives
+  and no error; without the restart the second gap hits the cap at the 11th
+  wait in total. With the mutation it is the only test that fails (the sender
+  ends the stream at the fourth wait of the second gap, so 5 of the 17 expected
+  frames never go out).
+- **P4: the stop-after-the-cap test did not say what the stop must not do or
+  how fast it must be.** It now asserts that no `Finalize` or `CloseStream`
+  follows the sender's last frame and bounds the stop at 1 s instead of 3 s.
+  Mutations on the real source: `if not drained:` -> `if False:` in
+  `_finalize_stream_control` fails the new frame assertion (the socket got
+  Finalize and CloseStream); removing `not send_thread.is_alive()` from the
+  second loop of `_drain_stream_sender` fails the 1 s bound (the stop waits the
+  2 s drain timeout). The old 3 s bound would not have caught the second one: 2 s
+  fits inside it (reasoned, not run).
+- **P4 docs**: the entry "2026-10-17 (second review of the Deepgram cap: the
+  sender ends the stream itself)" said an abort makes the cap find no matching
+  session. `_stream_session_matches_locked` is true for every state but idle, so
+  it stays true while retiring; what silences the cap is `abort_stream`
+  clearing `_stream_on_error` and setting `_stream_send_queue` to `None` (the
+  sender returns at its top-of-loop check). Corrected there. The older entry
+  "2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead
+  microphone)" now carries a line saying the second review supersedes its fix.
+
+## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
+
+Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
+smaller points in my round-2 commits, each reproduced by the reviewer with real
+futures and again by a test here that failed for the stated reason before its
+fix (`docs/agents/controller-and-jobs.md`).
+- **P2: the "kept" recording of a fallback retry survived neither the next
+  start nor the next dictation, although the tray promised it.** Round 2 kept
+  the managed recording itself, marked failed like a gap transcript's. That is
+  one slot: the next dictation replaces its WAV, and the next start finds the
+  failed recording recoverable, finds the retry's History entry by its
+  recording id (`main._last_recording_already_transcribed`) and completes it --
+  `_complete_unless_gap` spares only a gap marker -- which deletes the WAV with
+  "keep last recording" and "save all recordings" off, their defaults. My
+  tests checked the state right after the delivery and never the next start,
+  and I took the gap transcript as precedent without checking that it has the
+  same hole for the next dictation. The fix is the one the restart road
+  already uses: at delivery the audio is saved as an unfinished recording and
+  moved to the recordings folder under its own name (`save` and `move_to` of
+  `UnfinishedRecordingStore`, the pair `_retain_unfinished_audio` uses), a
+  name that no recordings count prunes, and `job.source_audio_path` links it
+  from the History entry, which is what Retranscribe resolves. The managed
+  slot completes as for any success, so `mark_failed`, the slot-matching check
+  and the "newer recording replaced it" wording are gone. The notice is one
+  sentence pointing to Retranscribe in History, and says the audio could not
+  be kept where the write failed. Tests cover the entry's link and the
+  copy's bytes, the next start (`_offer_unfinished_recordings` offers nothing
+  and the link still resolves), the next dictation, the failed write, and a
+  recording that fell back nowhere (no copy, no link, no notice).
+- **P3: a new recording applied the concurrent mode to the retry instead of
+  the dictation in flight.** `_apply_concurrent_mode_to_active_job` acted on
+  `_active_request_token` only. Until the Retry work every older job had met the
+  mode when a later recording started while it held the token; a Retry takes
+  the token without a recording, so the dictation that was in flight before it
+  (N2) was skipped: history-only, N2 still pasted; cancel, the retry was
+  stopped instead of N2. It is now `_apply_concurrent_mode_to_jobs_in_flight`
+  and acts on every job that is computing (not aborting, not waiting for its
+  paste). Decision, with its reason: the running retry is covered too. The mode
+  is about transcriptions in flight when the user starts dictating again, not
+  about which one the overlay shows, so a retry left out would paste into its
+  old window during the new dictation in history-only mode, or keep running in
+  cancel mode. Alternative: exempt the retry, which would keep it pasting; say
+  so if you want that. A cancel-mode retry's late result still goes to History
+  and its recording stays for another Retry.
+- **P3: a dictation that finished before a running retry waited for it.**
+  `_should_defer_background_insertion` held every finished result while any
+  job held the overlay's token. For a normal newer dictation that is right
+  (the live session, token order, one coalesced paste), but a retry is an
+  older recording's text: N2 sat as "Pending insert" until the retry ended,
+  minutes with a local model. A job now carries `is_retry`; while a retry holds
+  the token nothing is deferred for it, N2 pastes at once and the retry pastes
+  when it is done. Behind a newer dictation nothing changes (the control test
+  pins it). This needed no design change; one field and one condition.
+- **P4: after Cancel on a queued retry the overlay said "Transcription
+  canceled." while the dictation behind it kept transcribing.** The text is now
+  "Retry canceled." for a retry (`_canceled_text`, in `cancel_current_action` and
+  `cancel_queued_transcription`); clearing the whole queue keeps the general
+  text, since everything stopped.
+
 ## 2026-10-17: review of the package back-off and the preload line
 
 One review round (Sonnet) over the two entries below found no P1 or P2; the
@@ -231,6 +491,9 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   restart road has no tray notice per row, because the dialog row already
   names the language (see the row-wording bullet below) and a toast per row on
   top of an open window would be noise; say so if a toast there is wanted too.
+  (Superseded for the in-process road by round 3, entry above: marking the
+  managed recording failed kept nothing past the next start; the audio is now
+  copied to the recordings folder and linked from the History entry.)
 - **P4, reproduced: the fallback named a language that did not run.** When the
   recorded language was not offered, a retry used "the selected language" as it
   stood in the settings. A selection the engine does not offer either stays
@@ -324,7 +587,8 @@ P4s. Each was reproduced first by a test that failed for the stated reason
 Structural change first: the sender no longer logs and keeps waiting at the cap;
 it ends the stream, through the failure path a failed send already takes, and
 returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
-... Deepgram closes after its own 10 s" part of the entry below.
+... Deepgram closes after its own 10 s" part of the entry "2026-10-17 (review of
+the Deepgram KeepAlive: it must not hide a dead microphone)".
 - **The finding (P3, reproduced by the lead on a fake server)**: at the cap the
   sender only logged and `continue`d, so the dead-microphone error still
   depended on Deepgram closing the socket. A vendor window longer than 10 s
@@ -357,9 +621,15 @@ returns. Supersedes the "Past it, it writes neither KeepAlive nor silence frame
   is recorded but not reported, and the stop raises it when it has no text; the
   drain finds the sender thread dead (`_drain_stream_sender` checks
   `send_thread.is_alive()`) and gives up without waiting for it, so the stop
-  does not hang (the test bounds it at 3 s; it does not measure how fast). An
-  abort sets the session to retiring, so the cap finds no matching session and
-  stays quiet. Run for real: a controller test
+  does not hang (the test bounds it at 1 s since the third review, which tells
+  it from the 2 s drain timeout a live sender would cost). An abort does not
+  make the session stop matching: `_stream_session_matches_locked` is true
+  for every state but idle, retiring included. The cap stays quiet for two
+  other reasons: `abort_stream` clears `_stream_on_error` first, so
+  `_notify_stream_error` finds no callback, and it sets `_stream_send_queue` to
+  `None`, so the sender returns at its top-of-loop check
+  (`self._stream_send_queue is not send_queue`) before it reaches the cap
+  branch at all. Run for real: a controller test
   (`test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording`)
   with the real `DeepgramTranscriber` on its fake socket and the real sender
   thread (the socket stays open and silent, a cap of 120 ms) sees one
@@ -514,6 +784,11 @@ Review finding on ad546f7 (P3, reproduced by the reviewer), lead's decision.
   it has four call sites (the status painter is one call with two wordings).
 
 ## 2026-10-17 (review of the Deepgram KeepAlive: it must not hide a dead microphone)
+
+Superseded in part by the entry "2026-10-17 (second review of the Deepgram cap:
+the sender ends the stream itself)": at the cap the sender now ends the stream
+itself, where "The fix" below stops writing frames and waits for Deepgram's
+close, and the cap no longer resumes when audio returns.
 
 - **The finding (P3, the lead's review of 20703c0..99970e1)**: before the
   KeepAlive, a microphone whose callback thread stopped delivering after the
