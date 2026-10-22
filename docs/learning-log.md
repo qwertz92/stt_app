@@ -3,6 +3,65 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-17 (review round 3 of the Retry work: the kept recording, the mode, the wait)
+
+Round 3 of the independent review (main `5b4ac4a`) found one P2 and three
+smaller points in my round-2 commits, each reproduced by the reviewer with real
+futures and again by a test here that failed for the stated reason before its
+fix (`docs/agents/controller-and-jobs.md`).
+- **P2: the "kept" recording of a fallback retry survived neither the next
+  start nor the next dictation, although the tray promised it.** Round 2 kept
+  the managed recording itself, marked failed like a gap transcript's. That is
+  one slot: the next dictation replaces its WAV, and the next start finds the
+  failed recording recoverable, finds the retry's History entry by its
+  recording id (`main._last_recording_already_transcribed`) and completes it --
+  `_complete_unless_gap` spares only a gap marker -- which deletes the WAV with
+  "keep last recording" and "save all recordings" off, their defaults. My
+  tests checked the state right after the delivery and never the next start,
+  and I took the gap transcript as precedent without checking that it has the
+  same hole for the next dictation. The fix is the one the restart road
+  already uses: at delivery the audio is saved as an unfinished recording and
+  moved to the recordings folder under its own name (`save` and `move_to` of
+  `UnfinishedRecordingStore`, the pair `_retain_unfinished_audio` uses), a
+  name that no recordings count prunes, and `job.source_audio_path` links it
+  from the History entry, which is what Retranscribe resolves. The managed
+  slot completes as for any success, so `mark_failed`, the slot-matching check
+  and the "newer recording replaced it" wording are gone. The notice is one
+  sentence pointing to Retranscribe in History, and says the audio could not
+  be kept where the write failed. Tests cover the entry's link and the
+  copy's bytes, the next start (`_offer_unfinished_recordings` offers nothing
+  and the link still resolves), the next dictation, the failed write, and a
+  recording that fell back nowhere (no copy, no link, no notice).
+- **P3: a new recording applied the concurrent mode to the retry instead of
+  the dictation in flight.** `_apply_concurrent_mode_to_active_job` acted on
+  `_active_request_token` only. Until the Retry work every older job had met the
+  mode when a later recording started while it held the token; a Retry takes
+  the token without a recording, so the dictation that was in flight before it
+  (N2) was skipped: history-only, N2 still pasted; cancel, the retry was
+  stopped instead of N2. It is now `_apply_concurrent_mode_to_jobs_in_flight`
+  and acts on every job that is computing (not aborting, not waiting for its
+  paste). Decision, with its reason: the running retry is covered too. The mode
+  is about transcriptions in flight when the user starts dictating again, not
+  about which one the overlay shows, so a retry left out would paste into its
+  old window during the new dictation in history-only mode, or keep running in
+  cancel mode. Alternative: exempt the retry, which would keep it pasting; say
+  so if you want that. A cancel-mode retry's late result still goes to History
+  and its recording stays for another Retry.
+- **P3: a dictation that finished before a running retry waited for it.**
+  `_should_defer_background_insertion` held every finished result while any
+  job held the overlay's token. For a normal newer dictation that is right
+  (the live session, token order, one coalesced paste), but a retry is an
+  older recording's text: N2 sat as "Pending insert" until the retry ended,
+  minutes with a local model. A job now carries `is_retry`; while a retry holds
+  the token nothing is deferred for it, N2 pastes at once and the retry pastes
+  when it is done. Behind a newer dictation nothing changes (the control test
+  pins it). This needed no design change; one field and one condition.
+- **P4: after Cancel on a queued retry the overlay said "Transcription
+  canceled." while the dictation behind it kept transcribing.** The text is now
+  "Retry canceled." for a retry (`_canceled_text`, in `cancel_current_action` and
+  `cancel_queued_transcription`); clearing the whole queue keeps the general
+  text, since everything stopped.
+
 ## 2026-10-17: review of the package back-off and the preload line
 
 One review round (Sonnet) over the two entries below found no P1 or P2; the
@@ -148,6 +207,9 @@ before its fix (`docs/agents/controller-and-jobs.md`, `docs/agents/overlay.md`).
   restart road has no tray notice per row, because the dialog row already
   names the language (see the row-wording bullet below) and a toast per row on
   top of an open window would be noise; say so if a toast there is wanted too.
+  (Superseded for the in-process road by round 3, entry above: marking the
+  managed recording failed kept nothing past the next start; the audio is now
+  copied to the recordings folder and linked from the History entry.)
 - **P4, reproduced: the fallback named a language that did not run.** When the
   recorded language was not offered, a retry used "the selected language" as it
   stood in the settings. A selection the engine does not offer either stays
