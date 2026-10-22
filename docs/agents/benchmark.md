@@ -340,14 +340,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
 
   | Rows | Before (`AlwaysOn`, 30 px rows) | After (as needed, 20 px rows) |
   | ---- | ------------------------------- | ----------------------------- |
-  | 0 | bar shown, range 0 | no bar, Models 302 px |
-  | 6 | bar shown, range 33 px | no bar, Models 302 px |
-  | 20 | bar shown, range 453 px | bar 12 px, Models 290 px |
+  | 0 | bar shown, range 0 | no bar, Models 299 px |
+  | 6 | bar shown, range 33 px | no bar, Models 299 px |
+  | 20 | bar shown, range 453 px | bar 12 px, Models 287 px |
 
-  After, the other columns sit at x 0 / 94 / 244 / 292 / 362 with widths
-  94 / 150 / 48 / 70 / 124 in every row of the table above, at 860x1000 and
-  at 1100x1200 too (Models 542 -> 530 px there). Before, they were 94 / 150 /
-  Models / 48 / 70 / 124 and Models was 290 px with or without rows.
+  After, the other columns sit at x 0 / 95 / 246 / 294 / 364 with widths
+  95 / 151 / 48 / 70 / 125 in every row of the table above, at 860x1000 and
+  at 1100x1200 too (Models 539 -> 527 px there). Before, they were 94 / 150 /
+  Models / 48 / 70 / 124 and Models was 290 px with or without rows (the
+  1 px more of Recorded, Audio and Status is the grid-line fix below, a
+  separate change).
   The one thing that moves, the end of Models, moves because the reader added
   rows, and it only shows as a shorter elision in cells that elide on the
   right anyway.
@@ -358,6 +360,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   space bought for a bar that is not there, which the project's UI rule
   forbids), and `ResizeToContents` on Models (it would make the column as wide
   as its longest model list, 1006 px for twelve models).
+  **A pinned width counts the grid line** (2026-10-23).
+  `_pin_benchmark_history_columns` sized each column as the widest value plus
+  the item's two margins, 1 px short: a table's grid line takes a pixel of every
+  column (`QTableView.sizeHintForColumn` adds it when `showGrid()`), so in every
+  row the date read "2026-10-06 ..." and the longest status "Completed with ...",
+  in the default-size dialog, since the pin was added on 2026-10-09. Measured
+  with the delegate's own answer at 9 / 11.25 / 13.5 pt: Recorded needed 95 /
+  122 / 150 px and was pinned at 94 / 121 / 149, Status 125 / 155 / 184 against
+  124 / 154 / 183. The margin now includes the grid line's pixel, and
+  `test_the_pinned_history_columns_show_every_value_whole` asks
+  `sizeHintForColumn` of every column against its width (the earlier test
+  restated the same 6 px formula as the code, so it could not see this).
 - **The Benchmark page fits a 680 px dialog at 9 pt** (2026-10-03; a
   1366x768 screen minus taskbar and `_DIALOG_SCREEN_MARGIN`). Its minimum
   height decides how short a dialog still shows the whole tab without

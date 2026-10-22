@@ -435,6 +435,45 @@ def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp
         assert empty[column] >= header_needs[column], column
 
 
+@pytest.mark.pixel_exact
+@pytest.mark.parametrize("point_size", [9.0, 11.25, 13.5])
+def test_the_pinned_history_columns_show_every_value_whole(point_size: float, tmp_path):
+    """The pinned widths were the text plus the item's two margins, one pixel
+    short: a table's grid line takes a pixel of every column, so the date lost
+    its time ("2026-10-06 ...") and "Completed with errors" its last words in
+    every row. The delegate's own answer for a column
+    (`sizeHintForColumn`, which counts the margins and the grid line) must fit
+    the width the column was pinned to, for the longest status and a date."""
+    with _AppFont(point_size) as app:
+        dialog = _history_dialog_with_runs(tmp_path, app, width=1000, height=900)
+        table = dialog.benchmark_history_list
+        for day, status in enumerate(
+            ("completed", "completed_with_errors", "canceled", "failed"), start=1
+        ):
+            dialog._benchmark_history_store.add_entry(
+                _run_over(["tiny"], status=status, day=day)
+            )
+        dialog._refresh_benchmark_history_list()
+        _settle_table(app, table)
+        header = table.horizontalHeader()
+        needed = {
+            table.horizontalHeaderItem(c).text(): table.sizeHintForColumn(c)
+            for c in range(table.columnCount())
+        }
+        given = {
+            table.horizontalHeaderItem(c).text(): header.sectionSize(c)
+            for c in range(table.columnCount())
+        }
+        dialog.hide()
+
+    short = {
+        name: (needed[name], given[name])
+        for name in needed
+        if needed[name] > given[name]
+    }
+    assert not short, f"(needed, given) px of the columns that elide: {short}"
+
+
 def _history_dialog_with_runs(tmp_path, app, *, width: int, height: int):
     """The Benchmark tab, shown, over an empty history store of its own."""
     dialog, _ = _dialog()

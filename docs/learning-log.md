@@ -17,7 +17,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Fix, three parts that only work together.** The policy is Qt's default, as
   needed. Models moved from the third to the last column, so the 12 px come out
   of the one stretching column and nothing left of it moves (columns at x
-  0 / 94 / 244 / 292 / 362 with and without the bar). The rows use
+  0 / 95 / 246 / 294 / 364 with and without the bar). The rows use
   `compact_table_row_height` (20 px), so six runs need no bar and seven fit.
   A bar that appeared without the first part would shift four columns by 12 px;
   one without the second would still show for six runs. Rejected: keep
@@ -30,6 +30,15 @@ Agents and developers: use this as a knowledge base for past issues and solution
   `test_no_history_column_changes_width_when_rows_arrive` asserted that no
   column moves, which is exactly what `AlwaysOn` bought, so it was rewritten
   with the new rule (only the last column may move, by the bar's width).
+- **Found on the way, fixed in its own commit: every Recorded and Status cell
+  was elided by one pixel.** The screenshot taken to check the fix above showed
+  "2026-10-06 ..." and "Completed with ..." in a default-size dialog, in the
+  state before the fix too (checked with the old module in a scratch copy).
+  The pinned widths counted the item's two margins but not the pixel the grid
+  line takes from each column; the delegate's own `sizeHintForColumn` needed
+  95 / 125 px where the columns were 94 / 124. The old width test used the same
+  formula as the code, so it passed. The new test compares `sizeHintForColumn`
+  with the width, failing at 9, 11.25 and 13.5 pt before the fix.
 
 ## 2026-10-23 (opening Settings from the tray double-click surfaced the overlay)
 

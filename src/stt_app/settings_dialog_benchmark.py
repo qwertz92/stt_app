@@ -1842,9 +1842,13 @@ class _BenchmarkMixin:
         header = table.horizontalHeader()
         header.ensurePolished()
         metrics = table.fontMetrics()
+        # The item's margin on both sides, plus the pixel the grid line takes
+        # from every column: without it the widest date and status lost their
+        # last characters to an ellipsis, one pixel short (what
+        # `QTableView.sizeHintForColumn` adds when the grid is shown).
         text_margin = 2 * (
             table.style().pixelMetric(QtWidgets.QStyle.PM_FocusFrameHMargin) + 1
-        )
+        ) + (1 if table.showGrid() else 0)
         digit = max("0123456789", key=metrics.horizontalAdvance)
         widest_values = {
             _BENCHMARK_HISTORY_RECORDED_COLUMN: (
