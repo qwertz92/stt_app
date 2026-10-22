@@ -4749,3 +4749,49 @@ def test_a_new_recording_does_not_touch_a_result_that_is_already_waiting(
     assert controller._jobs[token_r].background_delivery == "history"
     controller.shutdown()
     _ = app
+
+
+def test_a_finished_dictation_pastes_at_once_while_a_retry_holds_the_overlay(
+    monkeypatch, tmp_path
+):
+    """N2 was recorded after W, so its token is older than the retry's, and it
+    waited for the retry to finish -- minutes with a local model -- before it
+    pasted. The retry is an older recording's text, not the live session the
+    wait keeps coherent: whichever finishes first pastes first, and the retry
+    pastes when it is done."""
+    controller, app, overlay, inserter, _history, (token_n2, token_r) = (
+        _a_running_dictation_and_a_retry_that_took_the_overlay(
+            monkeypatch, tmp_path, mode="insert"
+        )
+    )
+    processing = overlay.states[-1]
+
+    controller._on_transcription_ready("transcript N2", request_token=token_n2)
+
+    assert [call[0] for call in inserter.calls] == ["transcript N2"]
+    assert not controller._deferred_background_results
+    assert overlay.states[-1] == processing, "the retry keeps the overlay"
+    controller._on_transcription_ready("retry of W", request_token=token_r)
+    assert [call[0] for call in inserter.calls] == ["transcript N2", "retry of W"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finished_dictation_still_waits_for_a_newer_dictation(monkeypatch, tmp_path):
+    """Negative control: behind a newer dictation that holds the overlay a
+    finished older result is still held, so the two paste in recording
+    order."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token_a = _record_and_stop(controller)
+    token_b = _record_and_stop(controller)
+
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    assert inserter.calls == []
+    assert controller._deferred_background_results
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+    assert [call[0] for call in inserter.calls] == ["transcript A transcript B"]
+    controller.shutdown()
+    _ = app

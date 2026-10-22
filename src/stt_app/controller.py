@@ -250,6 +250,11 @@ class _TranscriptionJob:
     # spoken, and its delivery keeps the audio and says so
     # (`_keep_audio_of_a_fallback_retry`). "" for every other job.
     language_fallback_from: str = ""
+    # True for the job `retry_last_transcription` submitted: it transcribes an
+    # older recording again, so it is not the live session that holds back
+    # the delivery of results that finish meanwhile
+    # (`_should_defer_background_insertion`), and a cancel of it says so.
+    is_retry: bool = False
     # False for a job with no recording id -- bytes the managed store never
     # received (a retry whose retained identity is unknown, a road whose
     # persist was refused) or a slot it could not name: its terminal marks
@@ -4362,6 +4367,7 @@ class DictationController(QtCore.QObject):
         source_audio_path: str = "",
         source_recording_id: str | None = None,
         language_fallback_from: str = "",
+        is_retry: bool = False,
     ) -> _TranscriptionJob:
         """Track a submitted transcription for the queue and target insertion.
 
@@ -4394,6 +4400,7 @@ class DictationController(QtCore.QObject):
             source_recording_id=source_recording_id,
             credentials_generation=self._credentials_generation,
             language_fallback_from=language_fallback_from,
+            is_retry=is_retry,
             marks_last_recording=marks_last_recording,
             source_audio_path=str(source_audio_path or "").strip(),
         )
@@ -4953,6 +4960,7 @@ class DictationController(QtCore.QObject):
         source_audio_path: str = "",
         source_recording_id: str | None = None,
         language_fallback_from: str = "",
+        is_retry: bool = False,
     ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
@@ -4965,6 +4973,7 @@ class DictationController(QtCore.QObject):
             source_audio_path=source_audio_path,
             source_recording_id=source_recording_id,
             language_fallback_from=language_fallback_from,
+            is_retry=is_retry,
         )
         self._logger.info(
             "transcription_submitted token=%s mode=batch engine=%s model=%s "
@@ -7182,7 +7191,14 @@ class DictationController(QtCore.QObject):
             return False
         if bool(getattr(self._settings, "immediate_background_insert", False)):
             return False
-        return self._active_request_token is not None
+        if self._active_request_token is None:
+            return False
+        # A retry holding the token is an older recording's text, not the live
+        # session this wait keeps coherent: a result that finishes meanwhile
+        # pastes at once instead of waiting for it, which with a local model
+        # takes minutes. The retry pastes when it is done.
+        active = self._jobs.get(self._active_request_token)
+        return not (active is not None and active.is_retry)
 
     def _can_insert_during_active_recording(
         self,
@@ -9871,6 +9887,7 @@ class DictationController(QtCore.QObject):
             settings,
             source_recording_id=self._last_failed_recording_id,
             language_fallback_from=language_fallback_from,
+            is_retry=True,
         )
         return True
 

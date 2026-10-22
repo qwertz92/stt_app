@@ -47,6 +47,15 @@ fix (`docs/agents/controller-and-jobs.md`).
   cancel mode. Alternative: exempt the retry, which would keep it pasting; say
   so if you want that. A cancel-mode retry's late result still goes to History
   and its recording stays for another Retry.
+- **P3: a dictation that finished before a running retry waited for it.**
+  `_should_defer_background_insertion` held every finished result while any
+  job held the overlay's token. For a normal newer dictation that is right
+  (the live session, token order, one coalesced paste), but a retry is an
+  older recording's text: N2 sat as "Pending insert" until the retry ended,
+  minutes with a local model. A job now carries `is_retry`; while a retry holds
+  the token nothing is deferred for it, N2 pastes at once and the retry pastes
+  when it is done. Behind a newer dictation nothing changes (the control test
+  pins it). This needed no design change; one field and one condition.
 
 ## 2026-10-17 (review round 2 of the Retry work: what a retry stops, the fallback language, the double click)
 

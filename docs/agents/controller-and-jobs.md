@@ -267,6 +267,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     for another Retry. Tests: `test_a_new_recording_applies_history_only_to_every_job_in_flight`,
     `test_a_new_recording_in_cancel_mode_stops_the_dictation_and_the_retry`,
     the `insert` control and `test_a_new_recording_does_not_touch_a_result_that_is_already_waiting`.
+  - **A finished result waits for a dictation, not for a retry**
+    (`_should_defer_background_insertion`, round 3). The wait for the
+    overlay's job keeps the live session coherent and delivers older results
+    together with the newer one in token order. A retry holding the token
+    (`_TranscriptionJob.is_retry`, set by `retry_last_transcription`) is an
+    older recording's text, not that session: a dictation that finished
+    before it used to sit as "Pending insert" until the retry ended, minutes
+    with a local model. It now pastes at once, and the retry pastes when it
+    is done (the same-window order rules still apply: the finished dictation
+    is older than the retry in token order anyway). Behind a newer dictation
+    nothing changes. Tests: `test_a_finished_dictation_pastes_at_once_while_a_retry_holds_the_overlay`
+    and the control `test_a_finished_dictation_still_waits_for_a_newer_dictation`.
   - A `_TranscriptionJob` holds the target window, `background_delivery`
     and `aborting`. Foreground = token active, no newer recording, not
     aborting; `_new_recording_active()` excludes `_streaming_recording`.
@@ -295,6 +307,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     otherwise the `_active_request_token` guard holds. Deferred tokens are
     always older than the active one, so delivering them first keeps token
     order; the running transcription delivers itself later, no duplicate.
+    (Exception: while a retry holds the token nothing is deferred for it,
+    see "A finished result waits for a dictation, not for a retry".)
     A `paste_paced` job (held by the restore-window pace, see
     `docs/agents/text-insertion.md`) passes the active-transcription guard
     (a capture still blocks unless immediate mode) and is flushed by the
