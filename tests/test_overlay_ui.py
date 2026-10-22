@@ -1645,24 +1645,159 @@ def test_the_footer_microphone_button_elides_and_moves_nothing():
     overlay.hide()
 
 
-def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
+def test_overlay_language_button_shows_fixed_auto_as_disabled():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
-    emitted: list[str] = []
-    overlay.language_changed.connect(emitted.append)
 
     overlay.set_language_options(("auto",), "de")
 
     assert overlay._language_button.text() == "Lang: Auto"
     assert overlay._language_button.isEnabled() is False
+    assert "fixed to Auto" in overlay._language_button.toolTip()
 
-    overlay.set_language_options(("auto", "de"), "auto")
     overlay.set_state("Listening", "Recording...")
+
+    assert overlay._language_button.isEnabled() is False
+
+
+@pytest.mark.parametrize("state", ["Idle", "Listening", "Processing", "Done", "Error"])
+def test_overlay_language_can_be_changed_in_every_state(state):
+    """The lock stayed from the day the selector reset the cached runtime
+    (July 2026). A language is now a per-request parameter and every job keeps
+    the one it was made under, so a pick while a transcription runs -- the
+    moment the owner needs it, between two recordings -- is safe, and the
+    button said "after the current operation finishes" for as long as a
+    queue had work."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[str] = []
+    overlay.language_changed.connect(emitted.append)
+    overlay.set_language_options(("auto", "de", "en"), "en")
+    overlay.set_state(state, "work in progress")
+
+    assert overlay._language_button.isEnabled() is True
     overlay._select_language("de")
 
-    assert emitted == []
-    assert overlay._language_button.text() == "Lang: Auto"
-    assert overlay._language_button.isEnabled() is False
+    assert emitted == ["de"]
+    assert overlay._language_mode == "de"
+
+
+def _listening_in(overlay: OverlayUI, mode: str) -> None:
+    """A recording that starts while *mode* is selected."""
+    overlay.set_language_options(("auto", "de", "en"), mode)
+    overlay.set_state("Listening", "Speak now.")
+
+
+def test_a_pick_during_a_recording_is_labelled_as_for_the_next_one():
+    """The recording in progress keeps the language it started under (the
+    controller's snapshot); the button must not suggest otherwise."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _listening_in(overlay, "en")
+    assert overlay._language_button.text() == "Lang: English"
+
+    overlay._select_language("de")
+
+    assert overlay._language_button.text() == "Next: German"
+    tooltip = overlay._language_button.toolTip()
+    assert "This recording is made in English" in tooltip
+    assert "German applies from the next recording" in tooltip
+
+    overlay._select_language("en")
+
+    assert overlay._language_button.text() == "Lang: English"
+    assert "This recording" not in overlay._language_button.toolTip()
+
+
+def test_the_next_label_ends_with_the_recording_and_not_before():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _listening_in(overlay, "en")
+    overlay._select_language("de")
+    assert overlay._language_button.text() == "Next: German"
+
+    # Stop: the transcription is a job of its own, named in the queue by its
+    # language. The button is the selection again.
+    overlay.set_state("Processing", "Transcribing audio...")
+
+    assert overlay._language_button.text() == "Lang: German"
+
+    # A second recording starts under the selection that stands now.
+    overlay.set_state("Listening", "Speak now.")
+    assert overlay._language_button.text() == "Lang: German"
+    overlay._select_language("en")
+    assert overlay._language_button.text() == "Next: English"
+
+
+def test_repainting_listening_keeps_the_language_the_recording_began_in():
+    """Streaming repaints Listening with every live-text update."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _listening_in(overlay, "en")
+    overlay._select_language("de")
+
+    overlay.set_state("Listening", "Live: hello")
+    overlay.set_state("Listening", "Live: hello there")
+
+    assert overlay._language_button.text() == "Next: German"
+
+
+def test_new_language_options_keep_the_label_of_the_recording_in_progress():
+    """A settings save re-sends the options mid-recording."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _listening_in(overlay, "en")
+
+    overlay.set_language_options(("auto", "de", "en"), "de")
+
+    assert overlay._language_button.text() == "Next: German"
+
+
+@pytest.mark.pixel_exact
+def test_naming_the_next_language_moves_nothing_on_the_overlay():
+    """The caption changes from "Lang:" to "Next:" while the user is looking
+    at the button: the button, the row it sits in and the overlay keep their
+    size and place (the button is pinned at the widest caption of both)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_language_options(("auto", "de", "en", "lb"), "lb")
+    overlay.set_state("Listening", "Speak now.")
+    overlay.show()
+    app.processEvents()
+
+    def boxes() -> dict[str, tuple[int, int, int, int]]:
+        found = {"overlay": overlay.geometry().getRect()}
+        for name in dir(overlay):
+            widget = getattr(overlay, name, None)
+            if isinstance(widget, QtWidgets.QAbstractButton | QtWidgets.QLabel):
+                point = widget.mapTo(overlay, QtCore.QPoint(0, 0))
+                found[name] = (point.x(), point.y(), widget.width(), widget.height())
+        return found
+
+    before = boxes()
+    overlay._select_language("de")
+    app.processEvents()
+    named = boxes()
+    overlay._select_language("lb")
+    app.processEvents()
+    after = boxes()
+    overlay.hide()
+
+    assert overlay._language_button.text() == "Lang: Luxembourgish"
+    assert named == before, "the caption change moved or resized something"
+    assert after == before
+
+
+def test_the_language_button_is_wide_enough_for_either_caption():
+    """ "Next:" and "Lang:" are not the same width in a proportional font."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    button = overlay._language_button
+    metrics = button.fontMetrics()
+    for label in overlay_ui_module.LANGUAGE_MODE_LABELS.values():
+        for prefix in ("Lang", "Next"):
+            need = metrics.horizontalAdvance(f"{prefix}: {label}")
+            assert button.width() >= need + overlay_ui_module._LANGUAGE_BUTTON_CHROME_PX
 
 
 @pytest.mark.pixel_exact
@@ -2381,7 +2516,12 @@ _SCALED_BUTTON_CAPTIONS = {
     "_edit_button": ("Edit",),
     "_clear_button": ("Clear",),
     "_reset_pos_button": ("Reset Pos",),
-    "_language_button": ("Lang: Auto", "Lang: Luxembourgish"),
+    "_language_button": (
+        "Lang: Auto",
+        "Lang: Luxembourgish",
+        "Next: Auto",
+        "Next: Luxembourgish",
+    ),
     "_retry_button": ("Retry",),
     "_cancel_button": ("Cancel",),
     "_insert_button": ("Insert",),

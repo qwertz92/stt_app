@@ -3,6 +3,29 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (overlay: the Language button stayed locked while jobs ran)
+
+- **Owner: "cannot change the language in the overlay when a transcription is
+  active (have to wait for the queue to empty)".** Cause, verified in the code:
+  `OverlayUI.set_state` set `_language_change_blocked` for Listening and
+  Processing, which disabled the button and made `_select_language` return.
+  The lock dates from 2026-07-06, when a pick reset the cached transcriber;
+  since 2026-08-02 the language is a per-request parameter and every job keeps
+  the snapshot taken when its recording started. The 2026-10-09 entry below
+  ("a queued recording keeps the language it was recorded in") verified the
+  controller and concluded that nothing needed changing -- it never looked at
+  the overlay, whose button was greyed for exactly the time the owner needed
+  it (Processing lasts while any job runs).
+- **The lock is gone; a pick always applies to the next recording** (batch and
+  streaming alike, tested for both at the controller). While a recording is
+  Listening the button reads `Next: German` instead of `Lang: German` when the
+  selection differs from the language the recording began under, with a
+  tooltip naming both; it is pinned at the widest of the two captions, so
+  nothing moves (real widgets: overlay 470x144, button 152x22 at (303, 39) in
+  every state). Decision and rejected alternatives: `docs/agents/overlay.md`.
+- Negative control: letting the stop read `self._settings` instead of the
+  start-of-recording snapshot fails both new controller tests.
+
 ## 2026-10-13 (every clipboard restore was a new Win+V entry)
 
 - **Owner: Win+V full of screenshots he did not remember taking, while he

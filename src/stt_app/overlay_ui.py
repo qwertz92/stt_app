@@ -578,7 +578,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._queue_visible = False
         self._language_modes = ("auto",)
         self._language_mode = "auto"
-        self._language_change_blocked = False
+        # The language the recording in progress started under (None while no
+        # recording runs). The controller's snapshot of it is what the job
+        # gets; a pick made during the recording applies to the next one.
+        self._recording_language_mode: str | None = None
         self._microphone_entries: tuple[tuple[str, str], ...] = ()
         self._microphone_selected = ""
         self._microphone_default_name = ""
@@ -1198,7 +1201,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._sync_record_button(state)
         self._sync_action_slot(state, error_action)
         self._reset_pos_button.setEnabled(True)
-        self._language_change_blocked = state in {"Listening", "Processing"}
+        self._track_recording_language(state)
         self._sync_language_button()
         # Only while recording: the running capture keeps its microphone (a
         # warm-stream retarget waits for it), so a pick made now would
@@ -1501,7 +1504,7 @@ class OverlayUI(QtWidgets.QWidget):
             )
 
     def _select_language(self, mode: str) -> None:
-        if self._language_change_blocked or mode not in self._language_modes:
+        if mode not in self._language_modes:
             return
         if mode == self._language_mode:
             self._rebuild_language_menu()
@@ -1522,28 +1525,62 @@ class OverlayUI(QtWidgets.QWidget):
     def _widest_language_caption_width(self) -> int:
         metrics = QtGui.QFontMetrics(self._language_button.font())
         widest = max(
-            metrics.horizontalAdvance(self._language_caption(label))
+            metrics.horizontalAdvance(
+                self._language_caption(label, for_next_recording=for_next)
+            )
             for label in LANGUAGE_MODE_LABELS.values()
+            for for_next in (False, True)
         )
         return widest + _LANGUAGE_BUTTON_CHROME_PX
 
     @staticmethod
-    def _language_caption(label: str) -> str:
-        return f"Lang: {label}"
+    def _language_caption(label: str, *, for_next_recording: bool = False) -> str:
+        return f"{'Next' if for_next_recording else 'Lang'}: {label}"
+
+    def _track_recording_language(self, state: str) -> None:
+        """Remember the language a recording began under, until it ends.
+
+        Taken when the state first becomes Listening (streaming repaints
+        Listening with every live-text update) and dropped by any other state.
+        The controller snapshots its settings in the same Qt slot, after one
+        25 ms event drain that excludes user input (`start_recording`), so the
+        two agree unless a settings save lands inside that drain.
+        """
+        if state != "Listening":
+            self._recording_language_mode = None
+        elif self._recording_language_mode is None:
+            self._recording_language_mode = self._language_mode
 
     def _sync_language_button(self) -> None:
+        """Caption, enabled state and tooltip of the Lang button.
+
+        The selection is always for the *next* recording: every job keeps the
+        language it was recorded under. While a recording runs under another
+        language than the one selected now, the caption says "Next:" so the
+        button does not claim the running recording is in the new language.
+        """
         label = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)
         has_choices = len(self._language_modes) > 1
-        self._language_button.setText(self._language_caption(label))
-        self._language_button.setEnabled(
-            has_choices and not self._language_change_blocked
+        recording = self._recording_language_mode
+        differs = recording is not None and recording != self._language_mode
+        self._language_button.setText(
+            self._language_caption(label, for_next_recording=differs)
         )
-        if self._language_change_blocked:
-            tooltip = "Language can be changed after the current operation finishes."
-        elif not has_choices:
+        self._language_button.setEnabled(has_choices)
+        if not has_choices:
             tooltip = f"Language is fixed to {label} for the selected engine and model."
+        elif differs:
+            recording_label = LANGUAGE_MODE_LABELS.get(recording, recording)
+            tooltip = (
+                f"This recording is made in {recording_label}. {label} applies "
+                "from the next recording. Click to change it."
+            )
         else:
-            tooltip = f"Current language: {label}. Click to change it."
+            tooltip = (
+                f"Current language: {label}. Click to change it. A change "
+                "applies from the next recording; recordings already made or "
+                "being transcribed keep theirs."
+            )
         self._language_button.setToolTip(tooltip)
 
     def set_microphone_options(

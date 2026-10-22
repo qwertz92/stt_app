@@ -149,6 +149,39 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   event-loop turn after `aboutToHide` (Qt hides first, triggers after, so an
   immediate rebuild would still delete the chosen action). The button caption
   and enabled state update at once; only the item list waits.
+- **The Language button is never locked by a running job; a pick is always for
+  the next recording** (2026-10-23, owner: "cannot change the language when a
+  transcription is active"). It was disabled in Listening and Processing, a
+  lock from 2026-07-06 when a pick reset the cached runtime; since then the
+  language is a per-request parameter and every job keeps the one in its
+  settings snapshot (`controller-and-jobs.md`), so the lock only forced the
+  owner to wait for the queue to empty. Now only an engine/model that offers a
+  single language disables it. While Listening, the overlay remembers the
+  language selected when the state first became Listening
+  (`_recording_language_mode`, `_track_recording_language`; any other state
+  drops it, and streaming repaints Listening with every partial, so only the
+  first counts). When the selection differs, the caption reads `Next: German`
+  instead of `Lang: German` and the tooltip says which language this recording
+  is made in; once the recording ends the caption is the selection again and
+  the queue row names the finished recording's language (`EN`, `DE`).
+  - **Rejected: keeping Listening locked, as the microphone is.** A microphone
+    pick cannot reach the running capture; a language pick can still be useful
+    (the next recording), and a disabled button only says "not now".
+    **Rejected: a note in the detail area** (streaming's live text owns it) **or
+    in the tray** (the button would keep claiming the new language).
+  - **No layout shift**: the button is pinned at the widest `Lang: X` or
+    `Next: X` caption (`_widest_language_caption_width`). `Next:` is 1-2 px
+    narrower than `Lang:` in Segoe UI at 9 to 18 pt (measured, widest label
+    Luxembourgish / Northern Sotho), so today the second caption changes
+    nothing; it guards fonts where it would be wider.
+    `test_naming_the_next_language_moves_nothing_on_the_overlay` compares every
+    button and label rectangle across the swap; measured with real widgets
+    the overlay stays 470x144 and the button 152x22 at (303, 39) in Idle,
+    Listening, after a pick, and in Processing with a queue row (470x190).
+  - The overlay's value equals the controller's snapshot because both are taken
+    in `start_recording`, one event drain apart (25 ms at most, excluding user
+    input events); only a settings save landing inside that drain could make
+    them differ (the label would then name the other language).
 - **The footer is [microphone menu][opacity slider][value]** (2026-10-03,
   UX review item 3, variant B). The microphone button
   (`_OverlayMicrophoneButton`, the Lang button's chevron and chrome, text
