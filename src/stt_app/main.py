@@ -1101,10 +1101,13 @@ def _is_partial_transcript(entry) -> bool:
 
 def _complete_unless_gap(last_recording_store: LastRecordingStore, entry) -> None:
     """Complete a recording whose transcript is already in history -- unless
-    that transcript carries a gap marker. The controller kept such a
-    recording on purpose (marked failed): completing it here deletes the audio
-    with `keep_after_success` off, and the marker names a stretch of it the
-    user may still need to listen to."""
+    that transcript carries a gap marker. The controller normally completes
+    such a recording itself, after copying its audio to the recordings folder
+    for the History entry to link (`_keep_audio_of_a_delivery`). One still
+    here is one the controller kept on purpose (marked failed) because no
+    linked copy could be made, or one whose completion a crash cut off:
+    completing it here deletes the audio with `keep_after_success` off, and
+    the marker names a stretch of it the user may still need to listen to."""
     if transcript_has_gap(str(getattr(entry, "text", "") or "")):
         return
     try:

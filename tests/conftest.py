@@ -515,10 +515,13 @@ class FakeLastRecordingStore:
         self.transcribing.append((engine, model, mode))
         self.transcribing_ids.append(expected_recording_id)
 
-    def mark_failed(self, error: str, *, expected_recording_id=None) -> None:
+    def mark_failed(self, error: str, *, expected_recording_id=None) -> bool:
+        """True like the real store's mark that took: this fake keeps no
+        per-recording state, so it never refuses a foreign id."""
         self.failed.append(str(error))
         self.failed_ids.append(expected_recording_id)
         self._available = True
+        return True
 
     def mark_canceled(self, detail: str = "", *, expected_recording_id=None) -> None:
         self.canceled.append(str(detail))
