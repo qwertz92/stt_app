@@ -709,7 +709,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     - Anything else (no end line and no quit line -- a crash, a kill, a
       power loss --, or any faulthandler output): WARNING
       `previous_session_end clean_quit=yes|no quit_started=yes|no
-      native_trace_lines=N crash_log=...` with an excerpt, so
+      native_trace_lines=N crash_log=... session_started=<time> pid=<pid>
+      version=<v>` (copied from the section's start line, both reports)
+      with an excerpt, so
       `dictation.log` alone tells the story; "Copy diagnostics" then starts at
       the previous session's marker instead of the current one. The excerpt
       is the last dump (from its "Fatal Python error" / "Windows fatal
@@ -726,11 +728,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   - `install_qt_message_logging` installs Qt's message handler: each
     message as `qt_message category=... text` at its type's level (debug
     below INFO is dropped, critical as ERROR, fatal as CRITICAL), at most 20
-    times per session per text with numbers ignored (a warning on every
-    window move cannot fill the log), and a message raised while logging is
-    dropped instead of recursing. Qt's warnings went to stderr too: the
-    "Timers cannot be stopped from another thread" before the retranscription
-    crash was written nowhere.
+    times per session per text with numbers and `0x` pointers ignored (a
+    warning on every window move cannot fill the log; the count starts over
+    past 500 different texts, so it stays bounded), and a message raised
+    while logging is dropped instead of recursing. Qt's warnings went to
+    stderr too: the "Timers cannot be stopped from another thread" before the
+    retranscription crash was written nowhere. Consequence: they no longer
+    reach the console (`QT_FORCE_STDERR_LOGGING`) and debug output enabled by
+    `QT_LOGGING_RULES` is dropped (`docs/advanced-setup.md`). Qt's default
+    handler is put back by `atexit`: a Qt message from a finalizer in the
+    interpreter's last collection, into the Python handler, crashed the
+    process with an access violation (reproduced 2026-10-23, 0xC0000005).
+  - A start that cannot open `crash.log` reports the previous session but
+    writes no start line, so the next start reports the same session again
+    (`known-limitations.md`); `session_started` shows that it is the same.
   - Not changed, and why: `dictation.log` stays `RotatingFileHandler`
     (append, 1 MB x 3 backups). Verified 2026-10-23 that a restart never
     truncates it (the owner's file held the sessions of 17 and 22 October);

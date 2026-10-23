@@ -542,3 +542,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `transcribe_audio_file` holds for its run and the prune skips, about 1 h
   with tests. Kept for now: rare, and what is lost is the retranscription
   itself, which says why it failed; the audio was due for deletion anyway.
+- **A crash can be reported twice** (P4, found 2026-10-23;
+  `controller-and-jobs.md`, crash reporting). A start whose `crash.log`
+  cannot be opened (held or refused by another program) still reports how
+  the previous session ended, but writes no start line of its own, so the
+  next start finds the same last section and reports it again. Both
+  reports carry the same `session_started=<time> pid=<pid>`, so they read as
+  one session. Avoiding the repeat needs a record outside the file that
+  could not be opened (for example in `dictation.log`, which rotates);
+  about 1 h, for a second line in a rare case.

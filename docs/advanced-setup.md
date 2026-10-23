@@ -892,8 +892,10 @@ A short delay after SendInput prevents race conditions where the target app read
   diagnostics" then includes the previous run as well. A run that was
   ended while it quit, as a Windows shutdown or restart does, gets only the
   line `previous_session_stopped_during_quit`, and the diagnostics copy stays
-  with the current run. Qt's own warnings are in `dictation.log` too, as
-  `qt_message` lines.
+  with the current run. Qt's own messages go to `dictation.log` too, as
+  `qt_message` lines, and no longer to the console: while the app runs,
+  `QT_FORCE_STDERR_LOGGING` shows nothing, and Qt's debug messages are
+  dropped even when `QT_LOGGING_RULES` enables them.
 - While the app runs, Explorer may show `dictation.log` with the size and date
   of an earlier time: Windows updates those for a file held open only when it
   is closed. Open the file to see its current content.
