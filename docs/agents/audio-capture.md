@@ -61,27 +61,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     triggers the coalesced close-idle / re-enumerate / reopen; during a
     recording it defers to stop/abort. Without COM: Settings "Refresh" and
     the watchdog self-heal.
-  - **Only capture endpoints reach that refresh.** A default-device change
+  - **Only capture endpoints start that refresh.** A default-device change
     counts only for `eCapture` (the callback's `flow`); an endpoint added,
     removed or changing state is looked up (`GetDevice`, then
-    `IMMEndpoint::GetDataFlow`) and dropped when it is `eRender` (logged
-    `audio_device_change_ignored ... flow=render`). A monitor,
-    HDMI/DisplayPort audio, a dock or headphones used to close the idle warm
-    microphone for nothing: 114-190 ms not running and 246-323 ms without a
-    block per refresh on HomeBase, more on a slow machine, after the 600 ms
-    settle -- a hotkey press in that window started cold. A flow that cannot
-    be read counts as capture (a missed refresh hides a hot-plugged
-    microphone; an extra one costs one reopen).
+    `IMMEndpoint::GetDataFlow`), and an `eRender` one is reported as kind
+    `output` (logged `audio_device_change_ignored ... flow=render`). A
+    monitor, HDMI/DisplayPort audio, a dock or headphones used to close the
+    idle warm microphone for nothing: 114-190 ms not running and 246-323 ms
+    without a block per refresh on HomeBase (a slow machine is not
+    measured), after the 600 ms settle -- a hotkey press in that window
+    started cold.
+  - **An `output` event pushes a pending refresh back but never starts
+    one** (`_on_audio_devices_changed`): every event used to restart the
+    settle timer, so a Bluetooth headset switching profiles -- output and
+    microphone in one burst -- was refreshed after the whole burst.
+  - **A flow that cannot be read counts as capture** (a missed refresh hides
+    a hot-plugged microphone; an extra one costs one reopen), logged
+    `audio_device_change_flow_unknown`. A deleted endpoint (a virtual or
+    unpaired device; an unplugged one keeps its entry) cannot be looked up
+    at its removal, so flows read earlier are kept per endpoint ID.
   - **The lookup runs on the listener's own thread, never in the callback**
     (`_EndpointLookup`): Microsoft's callback rules forbid blocking and
     releasing the last reference to an MMDevice object, and the callback
     thread's COM state is not ours. The callback only puts the ID on a
-    `SimpleQueue`; the thread enters its own MTA, keeps one enumerator (a
-    fresh one after a failed lookup, e.g. an audio service restart) and is
-    ended by `stop()` after unregistering (bounded 1 s, then
+    `SimpleQueue`; the thread enters its own MTA, keeps one enumerator
+    (replaced after a failed lookup, a precaution against a stale one) and
+    is ended by `stop()` after unregistering (bounded 1 s, then
     `audio_endpoint_lookup_busy`). A lookup costs about 0.08 ms. No render
-    event is needed by anything: the tones are `winsound`, not PortAudio,
-    and the pickers list inputs only.
+    event is needed by anything else: the tones are `winsound`, not
+    PortAudio, and the pickers list inputs only.
   - `request_restart` / `request_close` defer while a consumer is attached.
   - **`attach` checks `opened_device_key` inside `attach`, under the lock
     that publishes the stream**; `expected_device_key` is required and the

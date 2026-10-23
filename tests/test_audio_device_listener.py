@@ -1,4 +1,5 @@
 import ctypes
+import logging
 import sys
 from collections import Counter
 
@@ -8,6 +9,7 @@ from conftest import make_controller
 from stt_app import audio_device_listener
 from stt_app.audio_device_listener import (
     CHANGE_DEFAULT_DEVICE,
+    CHANGE_OUTPUT,
     CHANGE_TOPOLOGY,
     AudioDeviceChangeListener,
 )
@@ -140,33 +142,59 @@ def test_every_capture_endpoint_event_still_reaches_the_microphone():
 
 
 @_requires_com
-def test_an_endpoint_whose_data_flow_cannot_be_read_still_refreshes():
+def test_an_endpoint_whose_data_flow_cannot_be_read_still_refreshes(caplog):
     """Unknown is treated as a microphone: a missed refresh is the worse error.
 
     Ignoring it would leave a hot-plugged microphone invisible until the next
-    event; refreshing for an output costs one warm-stream reopen.
+    event; refreshing for an output costs one warm-stream reopen. The log
+    says so, so a real removal can be told from a microphone in the field.
     """
     seen: list[str] = []
-    client = audio_device_listener._NotificationClient(seen.append, None)
+    logger = logging.getLogger("test.audio_device_listener")
+    client = audio_device_listener._NotificationClient(seen.append, logger)
 
-    client.OnDeviceAdded("not-an-endpoint-id")
-    client.close()
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        client.OnDeviceAdded("not-an-endpoint-id")
+        client.close()
 
     assert seen == [CHANGE_TOPOLOGY]
+    assert "audio_device_change_flow_unknown event=added" in caplog.text
+
+
+@_requires_com
+def test_a_deleted_output_endpoint_is_still_known_as_an_output(monkeypatch):
+    """A virtual or unpaired output is deleted, not unplugged: by the time its
+    removal is looked up, `GetDevice` no longer finds it. Its flow from the
+    earlier event must decide, or the removal refreshes the microphone.
+    """
+    flows = iter([_E_RENDER, None])
+    seen: list[str] = []
+    monkeypatch.setattr(
+        audio_device_listener, "_data_flow", lambda enumerator, device_id: next(flows)
+    )
+    client = audio_device_listener._NotificationClient(seen.append, None)
+
+    client.OnDeviceAdded("virtual-output")
+    client.OnDeviceRemoved("virtual-output")
+    client.close()
+
+    assert seen == [CHANGE_OUTPUT, CHANGE_OUTPUT]
 
 
 @_requires_com
 def test_a_failing_receiver_never_crosses_the_com_boundary_or_ends_the_lookup():
     calls: list[str] = []
 
-    def _fail_first(kind: str) -> None:
+    def _fail_first_of_each_kind(kind: str) -> None:
         calls.append(kind)
-        if len(calls) == 1:
+        if calls.count(kind) == 1:
             raise RuntimeError("boom")
 
-    client = audio_device_listener._NotificationClient(_fail_first, None)
+    client = audio_device_listener._NotificationClient(_fail_first_of_each_kind, None)
 
+    # Raises on the callback thread (here: the test's) ...
     client.OnDefaultDeviceChanged(_E_CAPTURE, _E_CONSOLE, "capture-endpoint")
+    # ... and on the lookup thread, which must go on delivering.
     client.OnDeviceAdded("not-an-endpoint-id")
     client.OnDeviceAdded("not-an-endpoint-id")
     client.close()
@@ -177,8 +205,9 @@ def test_a_failing_receiver_never_crosses_the_com_boundary_or_ends_the_lookup():
 
 @_requires_com
 def test_a_failed_lookup_gets_a_fresh_enumerator_next_time(monkeypatch):
-    """One enumerator from before an audio service restart fails every lookup;
-    kept, it would silently switch the filter off for the rest of the session.
+    """A precaution: if an enumerator went stale (say, an audio service
+    restart) and failed every lookup, keeping it would switch the filter off
+    for the rest of the session.
     """
     created: list[object] = []
     flows = iter([None, _E_RENDER])
@@ -199,7 +228,7 @@ def test_a_failed_lookup_gets_a_fresh_enumerator_next_time(monkeypatch):
     client.close()
 
     assert len(created) == 2
-    assert seen == [CHANGE_TOPOLOGY]
+    assert seen == [CHANGE_TOPOLOGY, CHANGE_OUTPUT]
 
 
 @pytest.mark.skipif(

@@ -3,9 +3,10 @@
 Registers an ``IMMNotificationClient`` with the MMDevice API so the app reacts
 immediately when the Windows default capture device changes or a capture
 device is connected/removed — no polling; output (render) endpoints are
-filtered out here. Callbacks arrive on MMDevice API worker
-threads, so the supplied ``on_change`` callable must be thread-safe (the
-controller forwards it into a Qt signal). When comtypes or the COM stack is
+reported as such. ``on_change`` is called on an MMDevice API worker thread
+(a default-device change) or on the listener's own lookup thread (every
+other kind), so it must be thread-safe (the controller forwards it into a
+Qt signal). When comtypes or the COM stack is
 unavailable (non-Windows dev environments), the listener stays inert and
 ``start()`` returns False; device changes then surface only through the
 watchdog self-heal and manual refresh paths.
@@ -23,11 +24,12 @@ from typing import ClassVar
 # ``on_change`` kinds. "default": the Windows default capture device changed.
 # "topology": an endpoint that is not known to be an output was added/removed
 # or changed state -- a capture endpoint, or one whose data flow could not be
-# read. An output's event is dropped: the reaction is not cheap, it closes
-# the idle warm microphone, re-initializes PortAudio and reopens it, and a
-# recording started meanwhile opens cold.
+# read. "output": the same for an output (render) endpoint, which must not
+# start a refresh: that closes the idle warm microphone, re-initializes
+# PortAudio and reopens it, and a recording started meanwhile opens cold.
 CHANGE_DEFAULT_DEVICE = "default"
 CHANGE_TOPOLOGY = "topology"
+CHANGE_OUTPUT = "output"
 
 # EDataFlow (mmdeviceapi.h).
 _E_RENDER = 0
@@ -105,7 +107,7 @@ if sys.platform == "win32":
             ]
 
         class IMMDeviceEnumerator(IUnknown):
-            # Only Register/Unregister are called; the preceding methods exist
+            # GetDevice and Register/Unregister are called; the others exist
             # to keep the vtable layout correct.
             _iid_ = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
             # comtypes reads this plain class-level list when it builds
@@ -186,8 +188,8 @@ if sys.platform == "win32":
             COM state is not ours to change. So a callback only queues the
             endpoint ID, and this thread -- in an MTA it enters itself --
             keeps one enumerator for its whole life and releases it here.
-            Only a proven output is dropped: a missed refresh leaves a
-            hot-plugged microphone invisible, an extra one costs a
+            Only a proven output is reported as "output": a missed refresh
+            leaves a hot-plugged microphone invisible, an extra one costs a
             warm-stream reopen.
             """
 
@@ -234,6 +236,10 @@ if sys.platform == "win32":
                 # Its own frame: the enumerator is released when it ends,
                 # before `_run` leaves the apartment. Nothing here raises.
                 enumerator = None
+                # Flows read earlier, by endpoint ID (an ID's flow never
+                # changes): an endpoint that was deleted, not unplugged,
+                # can no longer be looked up when it is removed.
+                known: dict[str, int] = {}
                 while (item := self._queue.get()) is not None:
                     event, device_id = item
                     if enumerator is None:
@@ -247,16 +253,24 @@ if sys.platform == "win32":
                         else _data_flow(enumerator, device_id)
                     )
                     if flow is None:
-                        # A fresh enumerator next time: one from before an
-                        # audio service restart fails every lookup.
+                        # Precaution: a fresh enumerator next time, in case
+                        # this one went stale (an audio service restart).
                         enumerator = None
+                        flow = known.get(device_id) if device_id else None
+                    elif device_id:
+                        known[device_id] = flow
                     if flow == _E_RENDER:
                         if self._logger is not None:
                             self._logger.info(
                                 "audio_device_change_ignored event=%s flow=render",
                                 event,
                             )
+                        _deliver(self._on_change, CHANGE_OUTPUT, self._logger)
                         continue
+                    if flow is None and self._logger is not None:
+                        self._logger.info(
+                            "audio_device_change_flow_unknown event=%s", event
+                        )
                     _deliver(self._on_change, CHANGE_TOPOLOGY, self._logger)
 
         class _NotificationClient(COMObject):

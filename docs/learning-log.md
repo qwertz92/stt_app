@@ -5,7 +5,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-10-23: an output device no longer closes the warm microphone
 
-Follow-up to the missing-first-words report below (option b there).
+Follow-up to the missing-first-words report below: one of the options
+listed to the lead for it, now built.
 - **What happened**: `audio_device_listener` turned every endpoint added,
   removed or changing state into a "topology" change, whatever its data
   flow -- the 2026-07-18 comment called the reaction cheap and not worth a
@@ -21,9 +22,9 @@ Follow-up to the missing-first-words report below (option b there).
   shows how often it would have.
 - **Now** each such endpoint is looked up (`GetDevice`, then
   `IMMEndpoint::GetDataFlow`; IID, vtable order and `EDataFlow` checked
-  against `mmdeviceapi.h`) and dropped only when it is `eRender`; capture
-  and unreadable flows refresh as before. The default-device change was
-  already capture-only.
+  against `mmdeviceapi.h`); an `eRender` one is reported as kind `output`,
+  which never starts a refresh; capture and unreadable flows refresh as
+  before. The default-device change was already capture-only.
 - **Not inside the callback.** Microsoft's rules for `IMMNotificationClient`
   forbid blocking and releasing the last reference to an MMDevice object
   in a callback, and the callback thread's COM apartment belongs to the
@@ -38,11 +39,25 @@ Follow-up to the missing-first-words report below (option b there).
 - **Tests on the real endpoints** (skipped where a machine has none): the
   default render endpoint's added/removed/state-changed and default change
   leave the controller's refresh timer idle while the capture endpoint's
-  start it; a negative control with the filter switched off (run once,
-  not kept) started the timer on the render event, as before this change.
-  Also: an unreadable flow refreshes, a failing receiver neither crosses
-  the COM boundary nor ends the lookup thread, a failed lookup gets a
-  fresh enumerator, and `stop()` ends the thread.
+  state change starts it, and all four capture events are delivered; a
+  negative control with the filter switched off (run once, not kept)
+  started the timer on the render event, as before this change. Also: an
+  unreadable flow refreshes and is logged, a failing receiver neither
+  crosses the COM boundary nor ends the lookup thread, a failed lookup
+  gets a fresh enumerator, and `stop()` ends the thread.
+- **Review round 1 (Sonnet, read-only): no P1/P2.** Fixed: a deleted output
+  (virtual or unpaired device) could not be looked up at its removal and
+  still refreshed -- flows read earlier are now kept per endpoint ID, and
+  an unreadable flow is logged (`audio_device_change_flow_unknown`); every
+  event used to restart the 600 ms settle, so a Bluetooth headset's
+  profile switch (output and microphone in one burst) was refreshed after
+  the whole burst -- an `output` event now pushes a pending refresh back
+  without ever starting one (a negative control with the controller blind
+  to outputs started the timer); the failing-receiver test now also fails
+  on the lookup thread; doc wording. Not fixed: a thread that cannot start
+  makes `start()` fail as a whole (only an interpreter that cannot create
+  threads at app start; the watchdog self-heal and Settings "Refresh"
+  remain).
 
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
