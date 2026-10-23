@@ -27,12 +27,14 @@ from .history_ui_actions import (
     run_history_import,
 )
 from .retranscribe_dialog import RetranscribeDialog
+from .settings_dialog_helpers import exception_reason
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
     HistoryStorageSignature,
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
+    failure_reason,
     format_history_timestamp,
     join_recent_entries_for_clipboard,
     map_recent_entry_rows,
@@ -61,6 +63,7 @@ class HistoryDialog(QtWidgets.QDialog):
         autoload: bool = True,
         last_recording_store: object | None = None,
         controller: object | None = None,
+        run_end_receiver: object | None = None,
     ) -> None:
         super().__init__(parent)
         self._history_store = history_store
@@ -70,6 +73,11 @@ class HistoryDialog(QtWidgets.QDialog):
         # keeps this dialog constructible from tests and non-app callers.
         self._last_recording_store = last_recording_store
         self._controller = controller
+        # Whose `refresh_after_retranscription` runs when a retranscription
+        # started here ends; this dialog by default. The presenter in `main`
+        # passes itself, so whichever History is open by then shows the new
+        # entry: a run can outlive this dialog and a reopened one.
+        self._run_end_receiver = run_end_receiver
         self._entries: list[TranscriptHistoryEntry] = []
         self._history_reload_signature: tuple[HistoryStorageSignature, int] | None = (
             None
@@ -521,13 +529,16 @@ class HistoryDialog(QtWidgets.QDialog):
             transcribe=functools.partial(
                 _retranscribe_and_report,
                 self._controller,
-                GuiThreadReporter(self),
+                GuiThreadReporter(self._run_end_receiver or self),
+            ),
+            on_unseen_failure=functools.partial(
+                _report_unseen_retranscription_failure, self._controller
             ),
             parent=self,
         )
         dialog.exec()
 
-    def _on_retranscription_finished(self) -> None:
+    def refresh_after_retranscription(self) -> None:
         """Show a retranscription's new entry, whenever the run ends.
 
         The run outlives its dialog: closed mid-run, the dialog is gone when
@@ -905,8 +916,9 @@ def _retranscribe_and_report(
     widget (`gui_thread`). The controller saves the transcript to history
     before this returns, whatever became of either dialog.
 
-    Both ends are logged (no text): the owner's crash of 2026-10-23 happened
-    on this path, and the log showed nothing of it.
+    Both ends are logged, never the transcript: the owner's crash of
+    2026-10-23 happened on this path, and the log showed nothing of it. A
+    failure is a warning with its reason, since its dialog may be closed.
     """
     _LOGGER.info(
         "history_retranscription_started engine=%s language=%s audio=%s",
@@ -914,19 +926,42 @@ def _retranscribe_and_report(
         settings.language_mode,
         Path(str(path)).name,
     )
-    ok, text = False, ""
     try:
         ok, text = controller.transcribe_audio_file(
             path,
             settings_override=settings,
             progress_callback=progress_callback,
         )
+    except Exception as exc:
+        _LOGGER.warning(
+            "history_retranscription_failed reason=%s",
+            exception_reason(exc),
+            exc_info=True,
+        )
+        raise
+    else:
+        if ok:
+            _LOGGER.info("history_retranscription_finished chars=%d", len(text or ""))
+        else:
+            _LOGGER.warning(
+                "history_retranscription_failed reason=%s",
+                failure_reason(str(text or "")),
+            )
         return ok, text
     finally:
-        _LOGGER.info(
-            "history_retranscription_finished ok=%s chars=%d", ok, len(text or "")
-        )
-        history_reporter.post("_on_retranscription_finished")
+        history_reporter.post("refresh_after_retranscription")
+
+
+def _report_unseen_retranscription_failure(controller, message: str) -> None:
+    """Tell the tray about a failed retranscription whose dialog was closed.
+
+    Runs on the GUI thread, from the dialog's report of the failure that
+    found the dialog gone (`RetranscribeDialog`); nothing else would show it.
+    Through the tray notification of a failed queued transcription.
+    """
+    controller.background_transcription_failed.emit(
+        f"Retranscription from History failed: {failure_reason(message)}"
+    )
 
 
 def _normalize_history_limit(value: int) -> int:

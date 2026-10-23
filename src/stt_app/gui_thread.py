@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import functools
 import weakref
+from collections.abc import Callable
 
 import shiboken6
 from PySide6 import QtCore
@@ -78,18 +79,35 @@ class GuiThreadReporter:
     worker. `post` is safe from any thread at any time.
     """
 
-    def __init__(self, receiver: QtCore.QObject) -> None:
+    def __init__(self, receiver: object) -> None:
+        # A widget, or any other object that supports weak references.
         self._dispatcher = _gui_dispatcher()
         self._receiver = weakref.ref(receiver)
 
-    def post(self, method_name: str, *args: object) -> bool:
-        """Queue ``receiver.<method_name>(*args)``; False once the app is gone."""
+    def post(
+        self,
+        method_name: str,
+        *args: object,
+        if_gone: Callable[[], object] | None = None,
+    ) -> bool:
+        """Queue ``receiver.<method_name>(*args)``; False once the app is gone.
+
+        ``if_gone`` runs on the GUI thread instead when the receiver no
+        longer exists by then -- for a report that must not be lost with it.
+        """
         return self._dispatcher.post(
-            functools.partial(self._deliver, method_name, args)
+            functools.partial(self._deliver, method_name, args, if_gone)
         )
 
-    def _deliver(self, method_name: str, args: tuple[object, ...]) -> None:
+    def _deliver(
+        self,
+        method_name: str,
+        args: tuple[object, ...],
+        if_gone: Callable[[], object] | None,
+    ) -> None:
         receiver = self._receiver()
         if receiver is None or not shiboken6.isValid(receiver):
+            if if_gone is not None:
+                if_gone()
             return
         getattr(receiver, method_name)(*args)

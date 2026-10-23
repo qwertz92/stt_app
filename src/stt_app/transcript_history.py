@@ -29,6 +29,24 @@ HistoryStorageSignature = tuple[int, int] | None
 DISPLAY_TIMEZONE_LOCAL = "local"
 DISPLAY_TIMEZONE_UTC = "utc"
 VALID_HISTORY_DISPLAY_TIMEZONES = (DISPLAY_TIMEZONE_LOCAL, DISPLAY_TIMEZONE_UTC)
+# Separates a failure's reason from the transcript it carries when the
+# transcript could not be written to history (`unsaved_transcript_failure`).
+_UNSAVED_TRANSCRIPT_LABEL = " Transcript: "
+
+
+def unsaved_transcript_failure(reason: str, transcript: str) -> str:
+    """The failure message of a transcription history could not take.
+
+    It carries the transcript, so the dialog that shows the failure still
+    offers the text: it is in no entry. Logs and notifications show only
+    `failure_reason`.
+    """
+    return f"{reason}{_UNSAVED_TRANSCRIPT_LABEL}{transcript}"
+
+
+def failure_reason(message: str) -> str:
+    """A transcription failure message without a transcript it carries."""
+    return message.partition(_UNSAVED_TRANSCRIPT_LABEL)[0]
 
 
 @dataclass(frozen=True, slots=True)
