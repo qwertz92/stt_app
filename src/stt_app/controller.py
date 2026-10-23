@@ -22,7 +22,7 @@ from PySide6 import QtCore, QtGui
 from . import audio_devices, local_runtime_support, silero_vad
 from .app_paths import resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
-from .audio_device_listener import AudioDeviceChangeListener
+from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
@@ -3053,6 +3053,15 @@ class DictationController(QtCore.QObject):
         # event raises several notifications (per role/endpoint), so coalesce
         # before reacting.
         if self._shutdown_started:
+            return
+        if kind == CHANGE_OUTPUT:
+            # Never starts a refresh: that closes the idle warm microphone
+            # for an output it never uses. A pending one is pushed back, as
+            # every added/removed/state event did before outputs were told
+            # apart, in case one burst changes both sides (assumed, not
+            # measured: a Bluetooth headset switching profiles).
+            if self._audio_device_change_timer.isActive():
+                self._audio_device_change_timer.start()
             return
         self._logger.info("audio_device_change kind=%s", kind)
         self._audio_device_change_timer.start()

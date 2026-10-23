@@ -3,6 +3,70 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: an output device no longer closes the warm microphone
+
+Follow-up to the missing-first-words report below: one of the options
+listed to the lead for it, now built.
+- **What happened**: `audio_device_listener` turned every endpoint added,
+  removed or changing state into a "topology" change, whatever its data
+  flow -- the 2026-07-18 comment called the reaction cheap and not worth a
+  COM call. It is not cheap: after the 600 ms settle the worker closes the
+  idle warm stream, re-initializes PortAudio and reopens it. Measured on
+  HomeBase (6 rounds, real microphone, no audio kept): the stream was not
+  running for 114-190 ms and delivered its first block again 246-323 ms
+  after the close; the slow work laptop is not measured. A hotkey press in
+  that window started cold (or after an attach refusal). Output endpoints
+  change far more often than microphones: a monitor waking or sleeping
+  (HDMI/DisplayPort audio), a dock, headphones. Whether that hit the
+  owner's recordings is not known; `audio_device_change_output` now
+  shows how often it would have.
+- **Now** each such endpoint is looked up (`GetDevice`, then
+  `IMMEndpoint::GetDataFlow`; IID, vtable order and `EDataFlow` checked
+  against `mmdeviceapi.h`); an `eRender` one, like a new default output,
+  is reported as kind `output`, which never starts a refresh; capture and
+  unreadable flows refresh as before. The default-device change already
+  refreshed for capture only.
+- **Not inside the callback.** Microsoft's rules for `IMMNotificationClient`
+  forbid blocking and releasing the last reference to an MMDevice object
+  in a callback, and the callback thread's COM apartment belongs to the
+  audio stack. A first draft did the lookup in the callback with a fresh
+  enumerator per call and a guarded `CoInitializeEx` -- it worked in the
+  measurement, but released MMDevice objects in the callback (Microsoft's
+  own sample does that for devices, never for its enumerator). Now the
+  callback only queues the ID; `_EndpointLookup`, a thread of the listener,
+  enters its own MTA, keeps one enumerator, and is ended by `stop()`.
+  A lookup costs 0.08 ms median, 0.24 ms worst (50 calls each on real
+  endpoints).
+- **Tests on the real endpoints** (skipped where a machine has none): the
+  default render endpoint's added/removed/state-changed and default change
+  leave the controller's refresh timer idle while the capture endpoint's
+  state change starts it, and all four capture events are delivered; a
+  negative control with the filter switched off (run once, not kept)
+  started the timer on the render event, as before this change. Also: an
+  unreadable flow refreshes and is logged, a failing receiver neither
+  crosses the COM boundary nor ends the lookup thread, a failed lookup
+  gets a fresh enumerator, and `stop()` ends the thread.
+- **Review round 1 (Sonnet, read-only): no P1/P2.** Fixed: a deleted output
+  (virtual or unpaired device) may not be found at its removal and still
+  refreshed -- flows read earlier in the session are now kept per endpoint
+  ID (one never seen before still refreshes once), and an unreadable flow
+  is logged with its endpoint ID; every added/removed/state event used to
+  restart the 600 ms settle, so a burst changing both sides (assumed, not
+  measured: a Bluetooth headset switching profiles) was refreshed after
+  the whole burst -- an `output` event now pushes a pending refresh back
+  without ever starting one (a negative control with the controller blind
+  to outputs started the timer); the failing-receiver test now also fails
+  on the lookup thread; doc wording. Not fixed: a thread that cannot start
+  makes `start()` fail as a whole (only an interpreter that cannot create
+  threads at app start; the watchdog self-heal and Settings "Refresh"
+  remain).
+- **Review round 2 (Sonnet, read-only, over the round-1 fixes): no P1/P2;
+  stop.** Fixed on the spot: a new default output now also pushes a
+  pending refresh back; the log line is `audio_device_change_output` (it
+  said `ignored`) and both lines carry the endpoint ID; one test also stubs
+  the enumerator; every test client is closed by a fixture; docs no longer
+  overstate the cache or the Bluetooth case.
+
 ## 2026-10-23 (five P4s the review found in the three overlay/tray/benchmark fixes)
 
 - A stale "disabled while busy" in `controller-and-jobs.md` contradicted the
