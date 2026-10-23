@@ -4,9 +4,9 @@ Registers an ``IMMNotificationClient`` with the MMDevice API so the app reacts
 immediately when the Windows default capture device changes or a capture
 device is connected/removed — no polling; output (render) endpoints are
 reported as such. ``on_change`` is called on an MMDevice API worker thread
-(a default-device change) or on the listener's own lookup thread (every
-other kind), so it must be thread-safe (the controller forwards it into a
-Qt signal). When comtypes or the COM stack is
+(a default-device change) or on the listener's own lookup thread (an
+endpoint added, removed or changing state), so it must be thread-safe (the
+controller forwards it into a Qt signal). When comtypes or the COM stack is
 unavailable (non-Windows dev environments), the listener stays inert and
 ``start()`` returns False; device changes then surface only through the
 watchdog self-heal and manual refresh paths.
@@ -24,9 +24,10 @@ from typing import ClassVar
 # ``on_change`` kinds. "default": the Windows default capture device changed.
 # "topology": an endpoint that is not known to be an output was added/removed
 # or changed state -- a capture endpoint, or one whose data flow could not be
-# read. "output": the same for an output (render) endpoint, which must not
-# start a refresh: that closes the idle warm microphone, re-initializes
-# PortAudio and reopens it, and a recording started meanwhile opens cold.
+# read. "output": the same for an output (render) endpoint, or a new default
+# output; it must not start a refresh: that closes the idle warm microphone,
+# re-initializes PortAudio and reopens it, and a recording started meanwhile
+# opens cold.
 CHANGE_DEFAULT_DEVICE = "default"
 CHANGE_TOPOLOGY = "topology"
 CHANGE_OUTPUT = "output"
@@ -190,7 +191,8 @@ if sys.platform == "win32":
             keeps one enumerator for its whole life and releases it here.
             Only a proven output is reported as "output": a missed refresh
             leaves a hot-plugged microphone invisible, an extra one costs a
-            warm-stream reopen.
+            warm-stream reopen. Flows it has read are kept per endpoint ID,
+            for a deleted endpoint that can no longer be looked up.
             """
 
             def __init__(
@@ -236,9 +238,9 @@ if sys.platform == "win32":
                 # Its own frame: the enumerator is released when it ends,
                 # before `_run` leaves the apartment. Nothing here raises.
                 enumerator = None
-                # Flows read earlier, by endpoint ID (an ID's flow never
-                # changes): an endpoint that was deleted, not unplugged,
-                # can no longer be looked up when it is removed.
+                # Flows read earlier in this session, by endpoint ID (an
+                # ID's flow never changes): an endpoint that was deleted
+                # can no longer be looked up when its removal arrives.
                 known: dict[str, int] = {}
                 while (item := self._queue.get()) is not None:
                     event, device_id = item
@@ -262,14 +264,17 @@ if sys.platform == "win32":
                     if flow == _E_RENDER:
                         if self._logger is not None:
                             self._logger.info(
-                                "audio_device_change_ignored event=%s flow=render",
+                                "audio_device_change_output event=%s endpoint=%s",
                                 event,
+                                device_id,
                             )
                         _deliver(self._on_change, CHANGE_OUTPUT, self._logger)
                         continue
                     if flow is None and self._logger is not None:
                         self._logger.info(
-                            "audio_device_change_flow_unknown event=%s", event
+                            "audio_device_change_flow_unknown event=%s endpoint=%s",
+                            event,
+                            device_id,
                         )
                     _deliver(self._on_change, CHANGE_TOPOLOGY, self._logger)
 
@@ -310,6 +315,8 @@ if sys.platform == "win32":
             def OnDefaultDeviceChanged(self, flow, role, pwstrDefaultDeviceId):
                 if flow == _E_CAPTURE:
                     _deliver(self._on_change, CHANGE_DEFAULT_DEVICE, self._logger)
+                elif flow == _E_RENDER:
+                    _deliver(self._on_change, CHANGE_OUTPUT, self._logger)
 
             def OnPropertyValueChanged(self, pwstrDeviceId, key):
                 # Fires frequently (volume, names); irrelevant for routing.

@@ -190,10 +190,10 @@ def test_device_change_signal_starts_coalescing_timer():
 
 
 def test_an_output_change_pushes_back_a_pending_refresh_but_never_starts_one():
-    """A Bluetooth headset switching profiles changes its output and its
-    microphone in one burst. Every event used to restart the settle timer, so
-    the refresh waited for the whole burst; an output alone must not refresh
-    at all (it closes the warm microphone for nothing).
+    """Every added/removed/state event used to restart the settle timer, so a
+    burst changing both sides (assumed, not measured: a Bluetooth headset
+    switching profiles) was refreshed once, after the whole burst. An output
+    alone must not refresh at all: it closes the warm microphone for nothing.
     """
     controller, app = make_controller()
     timer = controller._audio_device_change_timer

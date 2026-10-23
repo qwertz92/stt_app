@@ -3051,8 +3051,9 @@ class DictationController(QtCore.QObject):
         if kind == CHANGE_OUTPUT:
             # Never starts a refresh: that closes the idle warm microphone
             # for an output it never uses. A pending one is pushed back, as
-            # before outputs were told apart: a Bluetooth headset switching
-            # profiles changes its output and its microphone in one burst.
+            # every added/removed/state event did before outputs were told
+            # apart, in case one burst changes both sides (assumed, not
+            # measured: a Bluetooth headset switching profiles).
             if self._audio_device_change_timer.isActive():
                 self._audio_device_change_timer.start()
             return
