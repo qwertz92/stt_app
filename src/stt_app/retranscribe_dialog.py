@@ -8,6 +8,7 @@ quick "try the bigger model on this one" needs no detour through Settings.
 
 from __future__ import annotations
 
+import functools
 import threading
 from collections.abc import Callable
 from dataclasses import replace
@@ -80,7 +81,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
 
     Closing the dialog does not stop a run: the controller saves its
     transcript to history either way, and the run's reports to a closed
-    dialog are dropped (`gui_thread`).
+    dialog are dropped (`gui_thread`) -- except a failure, which goes to
+    ``on_unseen_failure`` (on the GUI thread) when the dialog is gone.
     """
 
     def __init__(
@@ -90,6 +92,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         audio_path: Path,
         base_settings: AppSettings,
         transcribe: TranscribeCallable,
+        on_unseen_failure: Callable[[str], object] | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -97,6 +100,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._audio_path = Path(audio_path)
         self._base_settings = base_settings
         self._transcribe = transcribe
+        self._on_unseen_failure = on_unseen_failure
         self._running = False
         self._elapsed_seconds = 0
 
@@ -652,6 +656,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         path = str(self._audio_path)
         settings = self.build_settings()
         transcribe = self._transcribe
+        on_unseen_failure = self._on_unseen_failure
         reporter = GuiThreadReporter(self)
 
         def _run() -> None:
@@ -662,7 +667,12 @@ class RetranscribeDialog(QtWidgets.QDialog):
                 ok, text = transcribe(path, settings, _progress)
             except Exception as exc:
                 ok, text = False, exception_reason(exc)
-            reporter.post("_on_finished", bool(ok), str(text))
+            # Decided on the GUI thread when the report arrives: a failure
+            # the closed dialog can no longer show is reported elsewhere.
+            if_gone = None
+            if not ok and on_unseen_failure is not None:
+                if_gone = functools.partial(on_unseen_failure, str(text))
+            reporter.post("_on_finished", bool(ok), str(text), if_gone=if_gone)
 
         try:
             threading.Thread(

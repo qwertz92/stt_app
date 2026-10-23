@@ -2442,7 +2442,8 @@ DIAGNOSTICS_MAX_LINES = 800
 CRASH_LOG_FILE_NAME = "crash.log"
 CRASH_LOG_MAX_BYTES = 1_000_000
 # How much of the previous session's native trace the next start copies into
-# the log (its last lines, where the fatal dump is).
+# the log: the dump that ended the session, its start and end when it is
+# longer (`logger._trace_excerpt`).
 CRASH_TRACE_MAX_LINES = 300
 DOC_MODELS_PATH = "docs/models.md"
 DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"

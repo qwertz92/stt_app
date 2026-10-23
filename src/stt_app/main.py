@@ -90,11 +90,18 @@ def _arm_quit_watchdog(crash_log: CrashLog | None, logger) -> None:
     not rename a file another handle holds open: a log rotation during the
     quit failed, and the logging handler then dropped every later line. The
     next start copies the dump into the log (`start_crash_reporting`).
+
+    It also marks in the crash log that the quit began. A Windows shutdown
+    runs this from inside WM_ENDSESSION and may end the process before
+    `app.exec()` returns, so the session never writes its end line; with the
+    mark, the next start reports a session ended during its quit instead of
+    a crash.
     """
     logger.info("app_quit_started watchdog_s=%s", QUIT_WATCHDOG_TIMEOUT_S)
     if crash_log is None:
         logger.warning("app_quit_watchdog_unavailable reason=no_crash_log")
         return
+    crash_log.mark_quit_started()
     faulthandler.dump_traceback_later(
         QUIT_WATCHDOG_TIMEOUT_S, repeat=False, file=crash_log.stream, exit=True
     )
@@ -743,6 +750,7 @@ class _HistoryDialogPresenter:
             autoload=False,
             last_recording_store=self._last_recording_store,
             controller=self._controller,
+            run_end_receiver=self,
         )
         dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         dialog.finished.connect(lambda: self._clear_dialog(dialog))
@@ -750,6 +758,16 @@ class _HistoryDialogPresenter:
         _present_dialog(dialog)
         QtCore.QTimer.singleShot(0, lambda: _reload_history_dialog(dialog))
         return dialog
+
+    def refresh_after_retranscription(self) -> None:
+        """A retranscription ended: the History open now shows its entry.
+
+        Called on the GUI thread by the run's reporter. The History it was
+        started from may be closed by then and another one open, which loaded
+        its list before the run saved the transcript (`HistoryDialog`).
+        """
+        if self._active_dialog is not None:
+            _reload_history_dialog(self._active_dialog, force=True)
 
     def _clear_dialog(self, dialog: HistoryDialog) -> None:
         if self._active_dialog is dialog:

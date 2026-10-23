@@ -151,6 +151,7 @@ from .transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     edited_entry,
+    unsaved_transcript_failure,
 )
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .vad import EnergyVad, measure_peak_windowed_rms
@@ -166,6 +167,12 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
 # empty result as a failure so Retry keeps the audio and the overlay does not
 # look like the recording never happened.
 _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording."
+
+# Why a transcribed file (Import, History's Retranscribe, an unfinished
+# recording) is reported as failed when history refused its entry.
+_TRANSCRIPT_NOT_SAVED_REASON = (
+    "The transcript could not be saved to history (see the log)."
+)
 
 # The last-recording error for a transcript with a gap marker whose audio no
 # History entry links (the copy in the recordings folder could not be written,
@@ -1382,9 +1389,8 @@ class DictationController(QtCore.QObject):
             if kept_path and kept_path != os.path.abspath(path):
                 # Back where the next start offers it again.
                 self._return_unfinished_audio(kept_path, path)
-            return False, (
-                "The transcript could not be saved to history (see the log); "
-                f"the recording was kept. Transcript: {text}"
+            return False, unsaved_transcript_failure(
+                f"{_TRANSCRIPT_NOT_SAVED_REASON} The recording was kept.", text
             )
         if not kept_path:
             try:
@@ -10267,7 +10273,7 @@ class DictationController(QtCore.QObject):
                 kept_path = self._keep_audio_of_an_imported_last_recording(
                     audio_source, recording_id
                 )
-            self._append_transcript_history(
+            entry = self._append_transcript_history(
                 text,
                 settings,
                 "import",
@@ -10275,6 +10281,20 @@ class DictationController(QtCore.QObject):
                 source_audio_path=kept_path,
                 track_for_edit=False,
             )
+            if entry is None:
+                # Reported as a success, the dialog said "Saved to history"
+                # for a transcript in no entry. The failure carries the text,
+                # as the unfinished-recordings path does, and a managed last
+                # recording is marked failed, not completed: a completion can
+                # delete its audio, the only other source of the transcript.
+                if managed_last_recording:
+                    self._last_recording_store.mark_failed(
+                        _TRANSCRIPT_NOT_SAVED_REASON,
+                        **conditional_transition,
+                    )
+                return False, unsaved_transcript_failure(
+                    _TRANSCRIPT_NOT_SAVED_REASON, text
+                )
             if managed_last_recording:
                 if transcript_has_gap(text) and not kept_path:
                     # No copy: the managed recording stays the kept audio,

@@ -1371,7 +1371,7 @@ def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
         ),
     )
     with (tmp_path / "crash.log").open("a", encoding="utf-8") as stream:
-        crash_log = main_module.CrashLog(tmp_path / "crash.log", stream)
+        crash_log = main_module.CrashLog(stream)
         messages = []
         logger = SimpleNamespace(
             warning=lambda msg, *args: messages.append(msg % args),
@@ -1387,6 +1387,9 @@ def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):
     assert exit_ is True, "the watchdog must end the process, not only report"
     assert file is stream
     assert any("app_quit_started" in m for m in messages)
+    # A Windows shutdown may end the process right after this: the next
+    # start must see that the quit had begun.
+    assert "quit started" in (tmp_path / "crash.log").read_text(encoding="utf-8")
 
 
 def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
