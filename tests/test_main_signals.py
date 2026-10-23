@@ -474,7 +474,14 @@ def test_tray_double_click_connected():
     assert tray.receivers(sig) > 0
 
 
-_DOUBLE_CLICK_INTERVAL_MS = 80
+# Long next to the gap between two emits in a test (`_CLICK_GAP_MS`): a stall
+# of the machine longer than the interval between a Trigger and the
+# DoubleClick that follows it would let the overlay timer fire first and fail
+# the test for no reason (an 80 ms interval did that to a 20 ms gap), so the
+# interval is a good deal longer than any stall seen and the tests wait for
+# it once, not several times over.
+_DOUBLE_CLICK_INTERVAL_MS = 400
+_CLICK_GAP_MS = 20
 
 
 @pytest.fixture
@@ -487,8 +494,10 @@ def short_double_click_interval(monkeypatch):
     )
 
 
-def _wait_past_the_double_click_interval(factor: float = 2.5) -> None:
-    QtTest.QTest.qWait(int(_DOUBLE_CLICK_INTERVAL_MS * factor))
+def _wait_past_the_double_click_interval() -> None:
+    """Event loop running for the interval and a quarter more: a timer started
+    at the interval has fired by the end, one that was stopped has not."""
+    QtTest.QTest.qWait(int(_DOUBLE_CLICK_INTERVAL_MS * 1.25))
 
 
 def _tray_with_a_recording_settings_dialog(monkeypatch):
@@ -562,10 +571,10 @@ def test_a_double_click_opens_settings_and_leaves_the_overlay_alone(
     reason = QtWidgets.QSystemTrayIcon
 
     tray.activated.emit(reason.Trigger)
-    QtTest.QTest.qWait(_DOUBLE_CLICK_INTERVAL_MS // 4)
+    QtTest.QTest.qWait(_CLICK_GAP_MS)
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval(factor=4)
+    _wait_past_the_double_click_interval()
 
     assert len(opened) == 1, "the double-click must still open Settings"
     assert controller.bring_overlay_calls == 0
@@ -580,7 +589,7 @@ def test_clicks_after_a_double_click_surface_the_overlay_again(
     reason = QtWidgets.QSystemTrayIcon
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval(factor=4)
+    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 0
 
     tray.activated.emit(reason.Trigger)
