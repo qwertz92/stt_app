@@ -596,8 +596,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     recording (`transcribe_audio_file`, Import tab) does the same
     (`_keep_audio_of_an_imported_last_recording`: the import's own bytes, or
     the slot's file, through the same `_keep_audio_in_recordings_folder`), and
-    marks the slot failed only where that copy failed or its History write was
-    refused. An import of any other
+    marks the slot failed where that copy failed. A refused History write on
+    that road needs nothing of its own: every managed import whose entry was
+    refused is reported as a failure and marks the slot failed
+    (`_TRANSCRIPT_NOT_SAVED_REASON`, from the History retranscription review).
+    An import of any other
     file links the file itself, as before. Tests in
     `tests/test_controller_queue.py`:
     `test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it`,
@@ -613,8 +616,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     `test_a_fallback_retry_with_a_gap_keeps_one_copy` and the negative
     control `test_a_transcript_without_a_gap_keeps_no_copy`; in
     `tests/test_controller_coverage.py` the import cases
-    (`test_an_imported_last_recording_with_a_gap_is_kept`, its copy-failed
-    twin and `test_an_imported_last_recording_with_a_gap_stays_managed_when_history_refuses`).
+    (`test_an_imported_last_recording_with_a_gap_is_kept` and its copy-failed
+    twin).
     A plain dictation whose History write is refused still completes its
     slot: its text was pasted, and only a transcript whose audio must be kept
     (a gap, a language fallback) holds the slot back.

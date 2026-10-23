@@ -10316,10 +10316,9 @@ class DictationController(QtCore.QObject):
                     _TRANSCRIPT_NOT_SAVED_REASON, text
                 )
             if managed_last_recording:
-                if transcript_has_gap(text) and (not kept_path or entry is None):
-                    # No copy, or no entry linking it: the managed recording
-                    # stays the kept audio, like a dictation's
-                    # (`_mark_last_recording_completed`).
+                if transcript_has_gap(text) and not kept_path:
+                    # No copy: the managed recording stays the kept audio,
+                    # like a dictation's (`_mark_last_recording_completed`).
                     self._last_recording_store.mark_failed(
                         _GAP_KEPT_RECORDING_MESSAGE,
                         **conditional_transition,

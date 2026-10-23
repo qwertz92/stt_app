@@ -38,15 +38,18 @@ findings fixed before v0.13.0. Details in `docs/agents/controller-and-jobs.md`.
   removed a transcript with both reasons would have made two copies, so the two
   steps became one method.
 - **P4: a refused History write left the copy unlinked and the slot cleared.**
-  On the foreground road and in the Import tab's road for the managed last
-  recording, a gap or fallback transcript whose entry could not be written
-  still completed the managed slot (deleted with `save_last_wav` off), so
-  nothing in the app led to the copy. The job now records the refusal
-  (`history_refused`) and the slot is marked failed instead, as for a failed
-  copy; the import road does the same when its entry is `None`. A plain
-  dictation with a refused entry still completes: its text was pasted, and
-  the scope of this round was gap and fallback only (a negative control pins
-  it).
+  On the foreground road a gap or fallback transcript whose entry could not
+  be written still completed the managed slot (deleted with `save_last_wav`
+  off), so nothing in the app led to the copy. The job now records the
+  refusal (`history_refused`) and the slot is marked failed instead, as for a
+  failed copy. A plain dictation with a refused entry still completes: its
+  text was pasted, and the scope of this round was gap and fallback only (a
+  negative control pins it). The Import tab's road for the managed last
+  recording had the same hole; the History retranscription review, merged
+  into `main` while this round ran, closed it for every managed import (a
+  refused entry is a failure and marks the slot failed,
+  `_TRANSCRIPT_NOT_SAVED_REASON`), so the check and the test written for it
+  here were dropped after the merge as unreachable and redundant.
 - **P4: the entry-less notice named the wrong folder.** When the move to the
   recordings folder failed too, the file sits in the unfinished recordings
   folder and the line now says that.
@@ -62,16 +65,19 @@ findings fixed before v0.13.0. Details in `docs/agents/controller-and-jobs.md`.
   behaviour for the fallback road, and the gap road now matches it; closing it
   needs a second flag for "a copy was made" and a failure of the disk on top of
   a rare setting.
-- **Evidence.** The seven new or changed tests fail against the committed
-  controller (7 failed, 8 passed in the same selection: each for its intended
-  reason, e.g. the wording, a cleared slot, a missing copy) and the selection
-  passes on the fixed one. Affected modules on the fixed controller:
-  `test_controller_queue.py`, `test_controller_coverage.py` and
-  `test_controller.py` 804 passed; the other controller modules, the main
-  signals, unfinished-recording, last-recording, history and `gui_thread` tests
-  287 passed. The full suite was not run, and no independent reviewer saw
-  these six fixes (the rule stops reviews once no P1/P2 is left, and these are
-  P3/P4 fixes of a review that found none).
+- **Evidence.** The six new or changed tests fail against the controller
+  before the change (each for its intended reason: the wording, a cleared
+  slot, a missing or prunable copy) and pass after it; the same selection also
+  holds the controls that passed before (a plain dictation with a refused
+  entry, a transcript without a gap, a retry in the recorded language).
+  Affected modules after merging `main`: `test_controller_queue.py`,
+  `test_controller_coverage.py`, `test_controller.py` and
+  `test_main_signals.py` 842 passed; the other controller modules and the
+  unfinished-recording, last-recording, History audio, History dialog,
+  transcript-history and `gui_thread` tests 289 passed. The full suite was not
+  run, and no independent reviewer saw these fixes (the rule stops reviews
+  once no P1/P2 is left, and these are P3/P4 fixes of a review that found
+  none).
 
 ## 2026-10-23: History retranscription review follow-ups
 
