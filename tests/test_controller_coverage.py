@@ -10399,6 +10399,90 @@ def test_an_imported_last_recording_with_a_gap_stays_managed_when_the_copy_fails
     _ = app
 
 
+def _refuse_the_history_write(controller):
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    controller._history_store.add_entry = _refuse  # type: ignore[method-assign]
+
+
+def test_an_imported_last_recording_whose_entry_was_refused_leaves_its_audio_to_the_slot(
+    monkeypatch, tmp_path
+):
+    """No entry links the gap's copy, so nothing leads to it, and the next
+    import would add a second one under a numbered name. The slot is marked
+    failed and keeps the audio, and the copy is deleted."""
+    controller, app, last_recording_store, recordings, last_path = (
+        _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
+    )
+    _refuse_the_history_write(controller)
+
+    ok, _text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is False
+    assert list(recordings.iterdir()) == []
+    assert list(controller._unfinished_recording_store.directory.iterdir()) == []
+    assert last_recording_store.completed == 0
+    assert last_recording_store.failed == [
+        controller_module._TRANSCRIPT_NOT_SAVED_REASON
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_an_imported_last_recording_whose_entry_was_refused_keeps_the_copy_the_slot_refused(
+    monkeypatch, tmp_path, caplog
+):
+    """The slot holds another recording by now (its mark does not take), so the
+    copy is the only audio: it stays, and the log names it."""
+    caplog.set_level(logging.WARNING)
+    controller, app, last_recording_store, recordings, last_path = (
+        _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
+    )
+    _refuse_the_history_write(controller)
+    monkeypatch.setattr(last_recording_store, "mark_failed", lambda *_a, **_k: False)
+
+    ok, _text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is False
+    [kept] = list(recordings.iterdir())
+    assert kept.read_bytes() == b"RIFF"
+    assert str(kept) in caplog.text
+    controller.shutdown()
+    _ = app
+
+
+def test_an_imported_file_whose_entry_was_refused_leaves_the_users_file_alone(
+    monkeypatch, tmp_path
+):
+    """Negative control: only a copy the controller made is deleted. A file the
+    user picked is linked as itself and is never touched."""
+    audio = tmp_path / "from-the-user.wav"
+    audio.write_bytes(b"RIFF")
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, recordings_dir=str(tmp_path / "rec"))
+        )
+    )
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "erster teil [no text returned for 3:00-6:00] rest"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+    _refuse_the_history_write(controller)
+
+    ok, _text = controller.transcribe_audio_file(str(audio))
+
+    assert ok is False
+    assert audio.read_bytes() == b"RIFF"
+    controller.shutdown()
+    _ = app
+
+
 def test_a_background_transcript_with_a_gap_keeps_its_recording():
     """End to end through the background delivery: a newer session owns the
     overlay, the older job's result carries a gap marker."""
