@@ -83,7 +83,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach; a stall-sized input buffer, the stop's backlog wait and the per-recording `audio_capture_stats` line |
 | `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); the microphone picker choices both pickers offer; PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
-| `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
+| `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; output endpoints are dropped after a data-flow lookup on its own thread; inert without COM |
 | `local_runtime_support.py` | Which local runtimes this environment can run (`unavailable_reason(model)`): on Windows ARM64 CTranslate2 is absent, so faster-whisper models are marked, never downloaded and refuse to transcribe with the reason |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |

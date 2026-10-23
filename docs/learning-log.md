@@ -3,6 +3,47 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: an output device no longer closes the warm microphone
+
+Follow-up to the missing-first-words report below (option b there).
+- **What happened**: `audio_device_listener` turned every endpoint added,
+  removed or changing state into a "topology" change, whatever its data
+  flow -- the 2026-07-18 comment called the reaction cheap and not worth a
+  COM call. It is not cheap: after the 600 ms settle the worker closes the
+  idle warm stream, re-initializes PortAudio and reopens it. Measured on
+  HomeBase (6 rounds, real microphone, no audio kept): the stream was not
+  running for 114-190 ms and delivered its first block again 246-323 ms
+  after the close; the slow work laptop is not measured. A hotkey press in
+  that window started cold (or after an attach refusal). Output endpoints
+  change far more often than microphones: a monitor waking or sleeping
+  (HDMI/DisplayPort audio), a dock, headphones. Whether that hit the
+  owner's recordings is not known; `audio_device_change_ignored` now
+  shows how often it would have.
+- **Now** each such endpoint is looked up (`GetDevice`, then
+  `IMMEndpoint::GetDataFlow`; IID, vtable order and `EDataFlow` checked
+  against `mmdeviceapi.h`) and dropped only when it is `eRender`; capture
+  and unreadable flows refresh as before. The default-device change was
+  already capture-only.
+- **Not inside the callback.** Microsoft's rules for `IMMNotificationClient`
+  forbid blocking and releasing the last reference to an MMDevice object
+  in a callback, and the callback thread's COM apartment belongs to the
+  audio stack. A first draft did the lookup in the callback with a fresh
+  enumerator per call and a guarded `CoInitializeEx` -- it worked in the
+  measurement, but released MMDevice objects in the callback (Microsoft's
+  own sample does that for devices, never for its enumerator). Now the
+  callback only queues the ID; `_EndpointLookup`, a thread of the listener,
+  enters its own MTA, keeps one enumerator, and is ended by `stop()`.
+  A lookup costs 0.08 ms median, 0.24 ms worst (50 calls each on real
+  endpoints).
+- **Tests on the real endpoints** (skipped where a machine has none): the
+  default render endpoint's added/removed/state-changed and default change
+  leave the controller's refresh timer idle while the capture endpoint's
+  start it; a negative control with the filter switched off (run once,
+  not kept) started the timer on the render event, as before this change.
+  Also: an unreadable flow refreshes, a failing receiver neither crosses
+  the COM boundary nor ends the lookup thread, a failed lookup gets a
+  fresh enumerator, and `stop()` ends the thread.
+
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
 Second half of the same report (entry below): the green said "Speak now"
