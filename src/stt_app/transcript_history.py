@@ -39,14 +39,21 @@ def unsaved_transcript_failure(reason: str, transcript: str) -> str:
 
     It carries the transcript, so the dialog that shows the failure still
     offers the text: it is in no entry. Logs and notifications show only
-    `failure_reason`.
+    `failure_reason`; a dialog shows the two parts apart
+    (`split_unsaved_transcript`).
     """
     return f"{reason}{_UNSAVED_TRANSCRIPT_LABEL}{transcript}"
 
 
+def split_unsaved_transcript(message: str) -> tuple[str, str]:
+    """A failure message's reason and the transcript it carries ("" if none)."""
+    reason, _label, transcript = message.partition(_UNSAVED_TRANSCRIPT_LABEL)
+    return reason, transcript
+
+
 def failure_reason(message: str) -> str:
     """A transcription failure message without a transcript it carries."""
-    return message.partition(_UNSAVED_TRANSCRIPT_LABEL)[0]
+    return split_unsaved_transcript(message)[0]
 
 
 @dataclass(frozen=True, slots=True)

@@ -1383,6 +1383,60 @@ def test_a_failure_whose_dialog_was_closed_reaches_the_tray_and_the_log(
     assert "words nobody else should read" not in caplog.text
 
 
+def test_a_failure_arriving_while_the_dialog_closes_still_reaches_someone(tmp_path):
+    """`done()` hides the dialog before its last reference goes. A failure
+    delivered in between found the dialog alive, so `if_gone` did not run,
+    and the hidden dialog showed it to no one (review: 26-64 of 300 runs)."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    unseen = []
+    release = threading.Event()
+
+    def _failing_transcribe(path, settings, progress_callback):
+        release.wait(10)
+        return False, "the provider refused"
+
+    dialog = RetranscribeDialog(
+        entry=_entry(source_audio_path=str(audio)),
+        audio_path=audio,
+        base_settings=AppSettings(),
+        transcribe=_failing_transcribe,
+        on_unseen_failure=unseen.append,
+    )
+    dialog.show()
+    dialog._start_run()
+    release.set()
+    _join_retranscription_threads()  # the failure is posted, not yet delivered
+    dialog.close()  # hidden, but alive when the failure arrives
+
+    assert _process_events_until(lambda: not dialog._running)
+    assert unseen == ["the provider refused"]
+
+
+def test_a_transcript_history_refused_is_shown_where_it_can_be_copied(tmp_path):
+    """The carried transcript sat in the one-line status (about 600 px wide),
+    with the result area empty and Copy disabled."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    dialog = RetranscribeDialog(
+        entry=_entry(source_audio_path=str(audio)),
+        audio_path=audio,
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (False, ""),
+    )
+    dialog.show()
+    reason = "The transcript could not be saved to history (see the log)."
+    transcript = "a long transcript " * 300
+
+    dialog._on_finished(False, unsaved_transcript_failure(reason, transcript))
+
+    assert dialog._status_label.text() == f"Failed: {reason}"
+    assert dialog._result_text.toPlainText() == transcript
+    assert dialog._copy_button.isEnabled()
+
+
 def test_a_failure_the_open_dialog_shows_is_not_reported_again(tmp_path):
     """The tray report is for a failure no dialog shows, not a second copy."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

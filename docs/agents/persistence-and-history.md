@@ -148,19 +148,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
     with a close), `on_unseen_failure` sends "Retranscription from History
     failed: ..." through the controller's `background_transcription_failed`,
     the tray notification of a failed queued transcription. An open dialog
-    shows the failure itself and nothing is sent twice.
+    shows the failure itself and nothing is sent twice. A dialog that is
+    closed but not yet destroyed (`done()` hides it before its last
+    reference goes) receives the report itself; `_on_finished` then sends
+    the failure on when the dialog is not visible (review: 26-64 of 300
+    failures were lost in that window).
   - `transcribe_audio_file` ignored a refused history write and returned
     success, so the dialog said "Saved to history" for a transcript in no
     entry. It now returns the failure `_TRANSCRIPT_NOT_SAVED_REASON` with the
     transcript after it (`transcript_history.unsaved_transcript_failure`, as
-    the unfinished-recordings path already did), so the open dialog still
-    shows the text, and marks a managed last recording failed rather than
-    completed (a completion can delete its audio). Logs and the tray get
-    `failure_reason(...)`, which leaves the transcript out.
+    the unfinished-recordings path already did), and marks a managed last
+    recording failed rather than completed (a completion can delete its
+    audio); a failure mark that raises too is logged and does not cost the
+    message its transcript. Logs and the tray get `failure_reason(...)`,
+    which leaves the transcript out. The Retranscribe dialog and the Import
+    tab split the message (`split_unsaved_transcript`): the transcript goes
+    into the result area with Copy enabled, the status line keeps the
+    reason, and the Import tab no longer adds "Fix the settings and try
+    again." -- no setting caused it.
   Tests: `test_a_history_reopened_during_a_run_shows_its_entry_when_the_run_ends`,
   `test_a_failure_whose_dialog_was_closed_reaches_the_tray_and_the_log`,
+  `test_a_failure_arriving_while_the_dialog_closes_still_reaches_someone`,
   `test_a_failure_the_open_dialog_shows_is_not_reported_again`,
-  `test_a_transcribed_file_history_refused_is_a_failure_that_keeps_the_text`.
+  `test_a_transcript_history_refused_is_shown_where_it_can_be_copied`,
+  `test_a_transcribed_file_history_refused_is_a_failure_that_keeps_the_text`,
+  `test_a_refused_history_write_keeps_the_text_when_the_failure_mark_fails`,
+  `test_an_import_history_refused_shows_its_transcript_and_no_settings_advice`.
 - **Unfinished recordings are a directory of WAV files, not an index**
   (2026-10-09; `unfinished_recordings.py`,
   `%APPDATA%\stt_app\unfinished_recordings`). The name

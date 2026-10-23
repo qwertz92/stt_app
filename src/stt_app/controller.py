@@ -10316,14 +10316,20 @@ class DictationController(QtCore.QObject):
                 # as the unfinished-recordings path does, and a managed last
                 # recording is marked failed, not completed: a completion can
                 # delete its audio, the only other source of the transcript.
+                # A mark that fails as well (same volume as history.json)
+                # must not cost the message its transcript.
+                failure = unsaved_transcript_failure(_TRANSCRIPT_NOT_SAVED_REASON, text)
                 if managed_last_recording:
-                    self._last_recording_store.mark_failed(
-                        _TRANSCRIPT_NOT_SAVED_REASON,
-                        **conditional_transition,
-                    )
-                return False, unsaved_transcript_failure(
-                    _TRANSCRIPT_NOT_SAVED_REASON, text
-                )
+                    try:
+                        self._last_recording_store.mark_failed(
+                            _TRANSCRIPT_NOT_SAVED_REASON,
+                            **conditional_transition,
+                        )
+                    except Exception:
+                        self._logger.exception(
+                            "Failed to persist imported recording failure state"
+                        )
+                return False, failure
             if managed_last_recording:
                 if transcript_has_gap(text) and not kept_path:
                     # No copy: the managed recording stays the kept audio,

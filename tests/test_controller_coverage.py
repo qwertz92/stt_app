@@ -3981,6 +3981,43 @@ def test_a_transcribed_file_history_refused_is_a_failure_that_keeps_the_text(
     _ = app
 
 
+def test_a_refused_history_write_keeps_the_text_when_the_failure_mark_fails(
+    monkeypatch, tmp_path
+):
+    """The managed recording's failure mark lives on the same volume as
+    history.json; when it raised as well, the message lost its transcript."""
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+
+    class _StoreThatCannotMark(FakeLastRecordingStore):
+        def mark_failed(self, error, *, expected_recording_id=None):
+            raise OSError("disk full")
+
+    last_recording_store = _StoreThatCannotMark(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(
+        last_recording_store=last_recording_store,
+        history_store=_HistoryStoreThatRefuses(),
+    )
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "the retranscribed words"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, message = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is False
+    assert message.endswith("the retranscribed words")
+    assert last_recording_store.completed == 0
+    controller.shutdown()
+    _ = app
+
+
 def test_transcribe_audio_file_waits_for_controller_transcription_lane(
     monkeypatch,
     tmp_path,
