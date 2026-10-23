@@ -18,7 +18,11 @@ from stt_app.settings_dialog_helpers import (
     model_choices_for_engine,
 )
 from stt_app.settings_store import AppSettings, SettingsStore
-from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    unsaved_transcript_failure,
+)
 
 _GROQ_CHOICES = model_choices_for_engine("groq")
 
@@ -1155,15 +1159,28 @@ def test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run(tmp_path):
         del keep
 
 
+class _Signal:
+    """Records what is emitted, like the controller's Qt signal."""
+
+    def __init__(self):
+        self.emitted: list[str] = []
+
+    def emit(self, message):
+        self.emitted.append(message)
+
+
 class _BlockingController:
     """Saves the transcript to history the way the controller does, on the
-    calling (worker) thread, once the test releases it."""
+    calling (worker) thread, once the test releases it -- or fails with
+    ``failure`` without saving."""
 
-    def __init__(self, settings, history_store):
+    def __init__(self, settings, history_store, failure=None):
         self.settings = settings
         self._history_store = history_store
+        self._failure = failure
         self.started = threading.Event()
         self.release = threading.Event()
+        self.background_transcription_failed = _Signal()
 
     def transcribe_audio_file(
         self, path, settings_override=None, progress_callback=None
@@ -1172,11 +1189,29 @@ class _BlockingController:
         self.release.wait(10)
         if progress_callback is not None:
             progress_callback("Transcribing with a model")
+        if self._failure is not None:
+            return False, self._failure
         self._history_store.add_entry(
             _entry(text="the right language", mode="import", source_audio_path=path),
             20,
         )
         return True, "the right language"
+
+
+def _start_and_close_the_retranscribe_dialog(controller, closed):
+    """Runs inside History's `exec()` of the Retranscribe dialog: starts the
+    run, then closes the dialog while the run waits for `controller.release`."""
+    # Not `findChild`: a child returned through it is handed to its parent's
+    # ownership, which would keep it alive here regardless.
+    (retranscribe,) = [
+        widget
+        for widget in QtWidgets.QApplication.topLevelWidgets()
+        if isinstance(widget, RetranscribeDialog) and widget.isVisible()
+    ]
+    retranscribe._start_run()
+    assert controller.started.wait(5)
+    closed.append(weakref.ref(retranscribe))
+    retranscribe.close()
 
 
 def test_a_retranscription_closed_mid_run_reaches_history_and_its_list(
@@ -1206,21 +1241,12 @@ def test_a_retranscription_closed_mid_run_reaches_history_and_its_list(
     app.processEvents()
     dialog._select_rows([dialog._entries.index(wrong_language)])
     retranscribe_dialogs = []
-
-    def _start_and_close():
-        # Not `dialog.findChild`: a child returned through it is handed to its
-        # parent's ownership, which would keep it alive here regardless.
-        (retranscribe,) = [
-            widget
-            for widget in QtWidgets.QApplication.topLevelWidgets()
-            if isinstance(widget, RetranscribeDialog) and widget.isVisible()
-        ]
-        retranscribe._start_run()
-        assert controller.started.wait(5)
-        retranscribe_dialogs.append(weakref.ref(retranscribe))
-        retranscribe.close()
-
-    QtCore.QTimer.singleShot(0, _start_and_close)
+    QtCore.QTimer.singleShot(
+        0,
+        lambda: _start_and_close_the_retranscribe_dialog(
+            controller, retranscribe_dialogs
+        ),
+    )
     dialog._retranscribe_selected()
     try:
         gc.collect()
@@ -1254,3 +1280,134 @@ def test_a_retranscription_closed_mid_run_reaches_history_and_its_list(
         "the right language",
     ]
     assert audio.is_file(), "deleting an entry removed the audio another one uses"
+
+
+def test_a_history_reopened_during_a_run_shows_its_entry_when_the_run_ends(
+    tmp_path,
+):
+    """Retranscribe, close it, close History, reopen History before the run
+    ends: the new History loaded its list before the save, and the run's
+    refresh went to the closed one. Whichever History is open now reloads."""
+    from stt_app import main as main_module
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording_20261023_100000_000000.wav"
+    audio.write_bytes(b"RIFF")
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry(text="wrong language", source_audio_path=str(audio))])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    controller = _BlockingController(AppSettings(history_max_items=20), history_store)
+    presenter = main_module._HistoryDialogPresenter(
+        history_store=history_store,
+        settings_store=settings_store,
+        on_history_limit_changed=lambda _limit: None,
+        controller=controller,
+    )
+    first = presenter.open()
+    assert _process_events_until(lambda: len(first._entries) == 1)
+    first._select_rows([0])
+    closed = []
+    QtCore.QTimer.singleShot(
+        0, lambda: _start_and_close_the_retranscribe_dialog(controller, closed)
+    )
+    first._retranscribe_selected()
+    try:
+        first.close()
+        app.processEvents()
+        second = presenter.open()
+        assert second is not first
+        assert _process_events_until(lambda: len(second._entries) == 1)
+    finally:
+        keep = closed[0]() if closed else None
+        controller.release.set()
+        _join_retranscription_threads()
+        app.processEvents()
+        del keep
+
+    assert _process_events_until(
+        lambda: any(entry.text == "the right language" for entry in second._entries)
+    ), "the History open when the run ended did not show its transcript"
+
+
+def test_a_failure_whose_dialog_was_closed_reaches_the_tray_and_the_log(
+    caplog, tmp_path
+):
+    """Closed mid-run, the dialog was gone when the run failed, and the log
+    said only "ok=False chars=0": a failure nobody saw. It now goes to the
+    tray and the log, neither of which gets the transcript it carries."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording_20261023_100000_000000.wav"
+    audio.write_bytes(b"RIFF")
+    dialog = _make_dialog(tmp_path, [_entry(source_audio_path=str(audio))])
+    failure = unsaved_transcript_failure(
+        "The transcript could not be saved to history (see the log).",
+        "words nobody else should read",
+    )
+    controller = _BlockingController(
+        AppSettings(history_max_items=20), dialog._history_store, failure=failure
+    )
+    dialog._controller = controller
+    dialog.show()
+    app.processEvents()
+    dialog._select_rows([0])
+    closed = []
+    QtCore.QTimer.singleShot(
+        0, lambda: _start_and_close_the_retranscribe_dialog(controller, closed)
+    )
+    with caplog.at_level("INFO", logger="stt_app.history_dialog"):
+        dialog._retranscribe_selected()
+        try:
+            gc.collect()
+            app.processEvents()
+        finally:
+            keep = closed[0]() if closed else None
+            controller.release.set()
+            _join_retranscription_threads()
+            app.processEvents()
+            del keep
+        assert _process_events_until(
+            lambda: controller.background_transcription_failed.emitted
+        ), "the failure of a closed dialog's run reached no one"
+
+    reason = "The transcript could not be saved to history (see the log)."
+    assert controller.background_transcription_failed.emitted == [
+        f"Retranscription from History failed: {reason}"
+    ]
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "stt_app.history_dialog" and record.levelname == "WARNING"
+    ]
+    assert warnings == [f"history_retranscription_failed reason={reason}"]
+    assert "words nobody else should read" not in caplog.text
+
+
+def test_a_failure_the_open_dialog_shows_is_not_reported_again(tmp_path):
+    """The tray report is for a failure no dialog shows, not a second copy."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    unseen = []
+    release = threading.Event()
+
+    def _failing_transcribe(path, settings, progress_callback):
+        release.wait(10)
+        return False, "the provider refused"
+
+    dialog = RetranscribeDialog(
+        entry=_entry(source_audio_path=str(audio)),
+        audio_path=audio,
+        base_settings=AppSettings(),
+        transcribe=_failing_transcribe,
+        on_unseen_failure=unseen.append,
+    )
+    dialog.show()
+    dialog._start_run()
+    release.set()
+    _join_retranscription_threads()
+
+    assert _process_events_until(lambda: not dialog._running)
+    app.processEvents()
+    assert dialog._status_label.text() == "Failed: the provider refused"
+    assert unseen == []

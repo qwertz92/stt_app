@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: History retranscription review follow-ups
+
+The independent review of the retranscription crash fix (entry further
+down) found no P1/P2; its P3 findings on this path, fixed before v0.13.0:
+- **A History reopened during a run never showed the new entry.** The run's
+  refresh was bound to the History it was started from. Retranscribe, close
+  it, close History, reopen History: the new one loaded its list before the
+  save, and the refresh went to the closed one. The refresh now goes to
+  `main`'s History presenter, which reloads whichever History is open when
+  the run ends.
+- **A failed run whose dialog was closed was silent**: the log said INFO
+  `ok=False chars=0`. Now a WARNING with the reason, and when the dialog is
+  gone by the time the failure arrives -- decided on the GUI thread, so a
+  close at that moment cannot lose it -- the tray shows "Retranscription
+  from History failed: ..." through the existing notification for a failed
+  queued transcription. An open dialog shows the failure and nothing else
+  does.
+- **"Saved to history" after a refused history write** (pre-existing):
+  `transcribe_audio_file` ignored `_append_transcript_history` returning
+  None. It now fails with the reason and the transcript after it, as the
+  unfinished-recordings path did, so the dialog still shows the text; a
+  managed last recording is marked failed, not completed. The log and the
+  tray never get the transcript (`transcript_history.failure_reason`).
+- **Recorded, not fixed**: archive retention can delete the WAV of a queued
+  retranscription (`docs/agents/known-limitations.md`, about 1 h).
+
 ## 2026-10-23: crash reporting review follow-ups
 
 Same review, `logger.start_crash_reporting` and the quit:

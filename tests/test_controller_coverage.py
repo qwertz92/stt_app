@@ -58,7 +58,7 @@ from stt_app.config import (
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
-from stt_app.transcript_history import TranscriptHistoryStore
+from stt_app.transcript_history import TranscriptHistoryStore, failure_reason
 
 
 class _NotAnException(BaseException):
@@ -3931,6 +3931,52 @@ def test_transcribe_audio_file_marks_managed_last_recording_failed(
     assert ok is False
     assert "provider failed" in text
     assert last_recording_store.failed == ["provider failed"]
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("managed", [False, True])
+def test_a_transcribed_file_history_refused_is_a_failure_that_keeps_the_text(
+    monkeypatch, tmp_path, managed
+):
+    """History's Retranscribe said "Saved to history" for a transcript that
+    was in no entry: the refused write was ignored. The failure now names the
+    refusal and carries the text, and the managed last recording -- the only
+    other source of that text -- is marked failed, not completed (which can
+    delete its audio)."""
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+    other_path = tmp_path / "recording_20261023_100000_000000.wav"
+    other_path.write_bytes(b"RIFF")
+    last_recording_store = FakeLastRecordingStore(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(
+        last_recording_store=last_recording_store,
+        history_store=_HistoryStoreThatRefuses(),
+    )
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "the retranscribed words"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, message = controller.transcribe_audio_file(
+        str(last_path if managed else other_path)
+    )
+
+    assert ok is False
+    assert message.startswith("The transcript could not be saved to history")
+    assert message.endswith("the retranscribed words")
+    assert failure_reason(message) == (
+        "The transcript could not be saved to history (see the log)."
+    )
+    if managed:
+        assert last_recording_store.completed == 0
+        assert last_recording_store.failed == [failure_reason(message)]
     controller.shutdown()
     _ = app
 

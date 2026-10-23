@@ -750,6 +750,7 @@ class _HistoryDialogPresenter:
             autoload=False,
             last_recording_store=self._last_recording_store,
             controller=self._controller,
+            run_end_receiver=self,
         )
         dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         dialog.finished.connect(lambda: self._clear_dialog(dialog))
@@ -757,6 +758,16 @@ class _HistoryDialogPresenter:
         _present_dialog(dialog)
         QtCore.QTimer.singleShot(0, lambda: _reload_history_dialog(dialog))
         return dialog
+
+    def refresh_after_retranscription(self) -> None:
+        """A retranscription ended: the History open now shows its entry.
+
+        Called on the GUI thread by the run's reporter. The History it was
+        started from may be closed by then and another one open, which loaded
+        its list before the run saved the transcript (`HistoryDialog`).
+        """
+        if self._active_dialog is not None:
+            _reload_history_dialog(self._active_dialog, force=True)
 
     def _clear_dialog(self, dialog: HistoryDialog) -> None:
         if self._active_dialog is dialog:
