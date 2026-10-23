@@ -42,6 +42,7 @@ from .settings_store import (
     apply_engine_model_selection,
     listed_custom_models,
 )
+from .transcript_history import split_unsaved_transcript
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -82,7 +83,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
     Closing the dialog does not stop a run: the controller saves its
     transcript to history either way, and the run's reports to a closed
     dialog are dropped (`gui_thread`) -- except a failure, which goes to
-    ``on_unseen_failure`` (on the GUI thread) when the dialog is gone.
+    ``on_unseen_failure`` (on the GUI thread) when the dialog is gone or
+    closed.
     """
 
     def __init__(
@@ -707,7 +709,18 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._set_controls_enabled(True)
         result = str(text or "")
         if not ok or not result.strip():
-            self._set_status(f"Failed: {result}", error=True)
+            if not self.isVisible() and self._on_unseen_failure is not None:
+                # Closed, but not yet destroyed: `done()` hides the dialog
+                # before its last reference goes, so a failure arriving in
+                # between finds it alive and `if_gone` never runs.
+                self._on_unseen_failure(result)
+            # A transcript history refused goes where it can be read and
+            # copied; the one-line status keeps only the reason.
+            reason, transcript = split_unsaved_transcript(result)
+            if transcript:
+                self._result_text.setPlainText(transcript)
+                self._copy_button.setEnabled(True)
+            self._set_status(f"Failed: {reason}", error=True)
             return
         self._result_text.setPlainText(result)
         self._copy_button.setEnabled(True)

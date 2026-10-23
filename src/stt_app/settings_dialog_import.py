@@ -26,6 +26,7 @@ from .settings_dialog_helpers import (
     fill_engine_combo,
 )
 from .settings_store import AppSettings
+from .transcript_history import split_unsaved_transcript
 from .ui_feedback import set_button_feedback_state
 
 
@@ -564,16 +565,19 @@ class _ImportTabMixin:
             self._reset_import_copy_feedback()
             self._refresh_history_list(force=True)
             return
-        detail = f"Failed: {text}"
+        # A transcript history refused: the result area holds the transcript,
+        # the label the reason -- no settings to fix there.
+        reason, transcript = split_unsaved_transcript(text)
+        detail = f"Failed: {reason}"
         if self._last_recording_store.is_managed_audio_path(
             self._selected_import_file_path
         ):
-            detail = (
-                f"{detail} The last recording remains available. "
-                "Fix the settings and try again."
-            )
+            detail = f"{detail} The last recording remains available."
+            if not transcript:
+                detail = f"{detail} Fix the settings and try again."
+        result = transcript or detail
         self.import_result_label.setText(detail)
         self.import_result_label.setStyleSheet("color: #b71c1c;")
-        self.import_result_text.setPlainText(detail)
-        self.import_copy_button.setEnabled(bool(detail))
+        self.import_result_text.setPlainText(result)
+        self.import_copy_button.setEnabled(bool(result))
         self._reset_import_copy_feedback()

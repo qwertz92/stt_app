@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: second review of the crash and retranscription follow-ups
+
+The independent review of `bceea09` and `d200c9e` found no P1/P2. Fixed:
+- **A failure could still reach no one** when its report landed while the
+  Retranscribe dialog was closing: `done()` hides the dialog before its last
+  reference goes, so the report found it alive (no `if_gone`) and painted a
+  hidden dialog -- 26 to 64 of 300 in the reviewer's sweep. `_on_finished`
+  now sends a failure on when the dialog is not visible. The test hits that
+  window deterministically: the worker is joined, so the failure is posted,
+  then the dialog is closed before the GUI thread delivers it.
+- **The carried transcript is readable and copyable**: it sat in the
+  one-line status (about 600 px for thousands of pixels of text). The
+  Retranscribe dialog and the Import tab split the message: transcript into
+  the result area with Copy, reason in the status line. The Import tab no
+  longer tells the user to "Fix the settings" after a refused history write.
+- **A failing failure mark no longer costs the transcript**:
+  `mark_failed` raising (same volume as `history.json`) went to the generic
+  handler, which returned only the error.
+- **A Qt message from a finalizer at exit crashed the process** with the
+  Python message handler installed: 0xC0000005 in 3 of 3 runs on Windows
+  (the reviewer saw exit 139 6 of 6). `atexit` puts Qt's default handler
+  back; the subprocess test passes 3 of 3.
+- The Qt message count merges `0x` pointers and starts over past 500
+  different texts. With the handler, Qt's messages no longer reach stderr
+  and debug output is dropped; `docs/advanced-setup.md` says so.
+- **Recorded, not fixed**: a start that cannot open `crash.log` makes the
+  next start report the same crash again. Both reports now carry the
+  section's `session_started=<time> pid=<pid> version=<v>`, so they read as
+  one session (`docs/agents/known-limitations.md`).
+
 ## 2026-10-23: the v0.13.0 dry run caught two screen-size assumptions
 
 The `workflow_dispatch` dry run of "Windows Release" on `d673448` (run

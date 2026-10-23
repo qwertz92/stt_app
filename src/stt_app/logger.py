@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import faulthandler
 import logging
 import os
@@ -66,8 +67,15 @@ _QT_MESSAGE_LEVELS = {
 }
 # How often one Qt message is logged per session before it is dropped, so a
 # warning Qt repeats on every window move cannot fill the log. Messages that
-# differ only in numbers (coordinates, sizes, ids) count as one.
+# differ only in numbers or pointers (coordinates, sizes, ids, 0x1f3a) count
+# as one. A pointer has at least four hex digits, so a size such as "0x0"
+# counts like "1x1".
 _QT_MESSAGE_REPEAT_LIMIT = 20
+_QT_MESSAGE_VARIABLE_PART = re.compile(r"0x[0-9a-fA-F]{4,}|\d+")
+# How many different messages are counted before the count starts over, so
+# it cannot grow for the whole session; a message counted before may then be
+# logged up to `_QT_MESSAGE_REPEAT_LIMIT` times again.
+_QT_MESSAGE_KINDS_LIMIT = 500
 # The handler `install_qt_message_logging` installed; None before.
 _qt_message_handler = None
 
@@ -195,6 +203,10 @@ class PreviousSessionEnd:
     quit_started: bool
     #: What faulthandler wrote in that session, without blank lines.
     trace_lines: tuple[str, ...]
+    #: Its start line's time, pid and version ("unknown" past the window):
+    #: names the session, so a report repeated by a start that could not
+    #: open the crash log reads as the same session.
+    started: str = "unknown"
 
 
 class CrashLog:
@@ -295,19 +307,22 @@ def _log_previous_session_end(
         return
     if previous.quit_started and not previous.trace_lines:
         logger.info(
-            "%s crash_log=%s (ended while it quit, for example by a Windows "
-            "shutdown or restart; no crash trace)",
+            "%s crash_log=%s session_started=%s (ended while it quit, for "
+            "example by a Windows shutdown or restart; no crash trace)",
             PREVIOUS_SESSION_STOPPED_DURING_QUIT_LOG_MARKER,
             path,
+            previous.started,
         )
         return
     logger.warning(
-        "%s clean_quit=%s quit_started=%s native_trace_lines=%d crash_log=%s%s",
+        "%s clean_quit=%s quit_started=%s native_trace_lines=%d crash_log=%s "
+        "session_started=%s%s",
         PREVIOUS_SESSION_END_LOG_MARKER,
         "yes" if previous.clean_quit else "no",
         "yes" if previous.quit_started else "no",
         len(previous.trace_lines),
         path,
+        previous.started,
         "".join(f"\n{line}" for line in _trace_excerpt(previous.trace_lines, path)),
     )
 
@@ -368,8 +383,15 @@ def _read_previous_session_end(path: Path) -> PreviousSessionEnd | None:
         for index, line in enumerate(lines)
         if line.startswith(_CRASH_SESSION_START)
     ]
+    started = "unknown"
     if starts:
         section = lines[starts[-1] + 1 :]
+        started = (
+            lines[starts[-1]]
+            .removeprefix(_CRASH_SESSION_START)
+            .removesuffix("===")
+            .strip()
+        )
     elif window_start:
         section = lines
     else:
@@ -384,6 +406,7 @@ def _read_previous_session_end(path: Path) -> PreviousSessionEnd | None:
             for line in section
             if line.strip() and not line.startswith(_CRASH_MARKER_PREFIX)
         ),
+        started=started,
     )
 
 
@@ -482,7 +505,13 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
     the windowed build, nowhere. Each message is logged at the level of its
     type, with Qt's category, and at most `_QT_MESSAGE_REPEAT_LIMIT` times
     per session. A message Qt raises while this handler logs (none is known)
-    is dropped instead of recursing.
+    is dropped instead of recursing. Qt's messages therefore no longer reach
+    stderr, and debug messages are dropped (`QT_LOGGING_RULES` cannot bring
+    them back).
+
+    Qt's default handler is put back at exit (`atexit` runs before the
+    interpreter's last collection): a message a finalizer raised there,
+    into this Python handler, crashed the process (measured 2026-10-23).
     """
     global _qt_message_handler
     if _qt_message_handler is not None:
@@ -497,8 +526,10 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
             return
         inside.active = True
         try:
-            key = re.sub(r"\d+", "#", message)
+            key = _QT_MESSAGE_VARIABLE_PART.sub("#", message)
             with lock:
+                if key not in repeats and len(repeats) >= _QT_MESSAGE_KINDS_LIMIT:
+                    repeats.clear()
                 repeats[key] += 1
                 count = repeats[key]
             if count > _QT_MESSAGE_REPEAT_LIMIT:
@@ -519,6 +550,7 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
             inside.active = False
 
     QtCore.qInstallMessageHandler(handler)
+    atexit.register(QtCore.qInstallMessageHandler, None)
     _qt_message_handler = handler
 
 

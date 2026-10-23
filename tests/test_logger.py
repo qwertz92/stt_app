@@ -274,10 +274,41 @@ def test_only_a_session_that_did_not_quit_is_reported(
     reports = [line for line in records.lines if line.startswith("previous_session")]
     expected = (
         "previous_session_end clean_quit=no quit_started=no native_trace_lines=0 "
-        f"crash_log={tmp_path / 'crash.log'}"
+        f"crash_log={tmp_path / 'crash.log'} session_started="
     )
-    assert reports == [expected]
+    assert len(reports) == 1
+    assert reports[0].startswith(expected)
+    assert reports[0].endswith(f" pid={os.getpid()} version=1")
     assert [kwargs["all_threads"] for kwargs in enabled] == [True, True, True]
+
+
+def test_a_report_repeated_after_an_unopenable_crash_log_names_the_same_session(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """A start that cannot open crash.log writes no start line of its own, so
+    the next start reports the same crash again (accepted, see
+    known-limitations.md); both reports name that session."""
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-10-23T10:00:00+02:00 pid=42 "
+        "version=0.13.0 ===\n"
+        "Windows fatal exception: access violation\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_repeated")
+
+    def _refused(*_args, **_kwargs):
+        raise PermissionError("held by a virus scanner")
+
+    monkeypatch.setattr(logger_module, "open", _refused, raising=False)
+    assert logger_module.start_crash_reporting(tmp_path, log, version="1") is None
+    monkeypatch.delattr(logger_module, "open")
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    reports = [line for line in records.lines if line.startswith("previous_session")]
+    session = "session_started=2026-10-23T10:00:00+02:00 pid=42 version=0.13.0"
+    assert len(reports) == 2
+    assert all(report.splitlines()[0].endswith(session) for report in reports)
 
 
 def test_a_session_ended_during_its_quit_is_not_reported_as_a_crash(
@@ -575,3 +606,71 @@ def test_qt_messages_reach_the_log_once_per_kind_and_never_recurse(
     geometry = [line for line in records.lines if "setGeometry" in line]
     assert len(geometry) == 20
     assert geometry[-1].endswith("(repeated too often; later ones are not logged)")
+
+
+def test_qt_messages_with_other_pointers_count_as_one_and_the_count_is_bounded(
+    monkeypatch, _restore_exception_hooks
+):
+    """Numbers alone did not merge hex pointers (0x1f3a), and every distinct
+    text stayed in the count for the whole session."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(logger_module, "_QT_MESSAGE_REPEAT_LIMIT", 2)
+    monkeypatch.setattr(logger_module, "_QT_MESSAGE_KINDS_LIMIT", 3)
+    log, records = _capturing_logger("test.qt_message_kinds")
+    logger_module.install_qt_message_logging(log)
+
+    for pointer in ("0x1f3a", "0xbeef", "0xCAFE"):
+        QtCore.qWarning(f"QWidget({pointer}) has no parent")
+    QtCore.qWarning("first other text")
+    QtCore.qWarning("second other text")
+    QtCore.qWarning("third other text")  # a fourth kind: the count starts over
+    QtCore.qWarning("QWidget(0x1f3a) has no parent")
+
+    pointer_lines = [line for line in records.lines if "has no parent" in line]
+    assert len(pointer_lines) == 3, "two before the cap, one after the restart"
+    assert pointer_lines[1].endswith("(repeated too often; later ones are not logged)")
+
+
+_LATE_QT_MESSAGE = """
+import logging
+import sys
+
+from PySide6 import QtCore
+
+from stt_app.logger import install_qt_message_logging
+
+log = logging.getLogger("late")
+log.addHandler(logging.StreamHandler(sys.stderr))
+install_qt_message_logging(log)
+
+
+class Late:
+    def __del__(self):
+        QtCore.qWarning("from a finalizer at exit")
+
+
+late = Late()
+late.cycle = late  # only the interpreter's last collection frees it
+del late
+"""
+
+
+def test_a_qt_message_from_the_last_collection_at_exit_does_not_crash(tmp_path):
+    """The handler is Python code; Qt calling it from a finalizer while the
+    interpreter shuts down crashed the process (reviewer, 6 of 6 runs)."""
+    import stt_app
+
+    env = {
+        **os.environ,
+        "PYTHONPATH": str(Path(stt_app.__file__).resolve().parents[1]),
+        "APPDATA": str(tmp_path / "appdata"),
+        "LOCALAPPDATA": str(tmp_path / "localappdata"),
+    }
+    for _run in range(3):
+        finished = subprocess.run(
+            [sys.executable, "-c", _LATE_QT_MESSAGE],
+            env=env,
+            capture_output=True,
+            timeout=60,
+        )
+        assert finished.returncode == 0, finished.stderr

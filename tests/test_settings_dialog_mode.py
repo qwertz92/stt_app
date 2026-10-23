@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
@@ -24,7 +25,11 @@ from stt_app.persistence import backup_path
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_helpers import local_model_short_label
 from stt_app.settings_store import CURRENT_SCHEMA_VERSION, AppSettings
-from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    unsaved_transcript_failure,
+)
 from stt_app.update_checker import UpdateCheckResult
 
 
@@ -4560,6 +4565,33 @@ def test_import_failure_details_are_copyable():
     assert dialog.import_result_label.textInteractionFlags() & (
         QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
     )
+    _ = app
+
+
+def test_an_import_history_refused_shows_its_transcript_and_no_settings_advice():
+    """The last recording's import whose entry history refused ended with
+    "Fix the settings and try again." -- no settings were wrong -- and the
+    transcript sat inside that advice in the copied result."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._last_recording_store = SimpleNamespace(
+        is_managed_audio_path=lambda _path: True
+    )
+    reason = "The transcript could not be saved to history (see the log)."
+
+    dialog._finish_import_transcription(
+        False, unsaved_transcript_failure(reason, "the imported words")
+    )
+
+    assert dialog.import_result_label.text() == (
+        f"Failed: {reason} The last recording remains available."
+    )
+    assert dialog.import_result_text.toPlainText() == "the imported words"
+    assert dialog.import_copy_button.isEnabled() is True
     _ = app
 
 
