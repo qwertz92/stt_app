@@ -3,6 +3,21 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: the v0.13.0 dry run caught two screen-size assumptions
+
+The `workflow_dispatch` dry run of "Windows Release" on `d673448` (run
+39887299031) failed two of the Benchmark History scrollbar tests added the
+same day: `test_six_runs_need_no_scrollbar_in_a_default_size_dialog` asked for
+the 860x960 default dialog and `test_the_history_scrollbar_exists_only_while_rows_overflow[13.5]`
+for a 1000x900 one, and the runner's ~749 px screen capped both, so six runs
+overflowed and the 13.5 pt table held fewer than two rows. The app was not
+wrong; the tests broke the rule in `docs/agents/testing.md` (a resizing test
+asserts the size the window has and skips with the measured room). Both now
+skip with the measured height when the screen cannot show what they claim
+about; a temporary probe drove both skip paths locally (a 330 px dialog: a
+47 px viewport, one 28 px row; a 5000 px request: 1421 px). This is the
+failure class the dry run exists for: no local run sees the runner's screen.
+
 ## 2026-10-23: kept audio of the Retry work, final review: six small fixes
 
 Structurally: the two methods that kept a gap transcript's audio and a fallback

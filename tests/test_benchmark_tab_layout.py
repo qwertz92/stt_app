@@ -516,14 +516,23 @@ def test_the_history_scrollbar_exists_only_while_rows_overflow(
         table = dialog.benchmark_history_list
         bar = table.verticalScrollBar()
         row = compact_table_row_height(table)
-        capacity = table.viewport().height() // row
+        viewport_height = table.viewport().height()
+        capacity = viewport_height // row
+        if capacity < 2:
+            # The CI runner's ~749 px screen caps the 900 px dialog
+            # (docs/agents/testing.md): at 13.5 pt the History table then holds
+            # fewer than two rows, too few to tell "fits" from "overflows".
+            dialog.hide()
+            pytest.skip(
+                f"the History viewport is {viewport_height} px on this screen, "
+                f"room for {capacity} rows of {row} px; two are needed"
+            )
         seen = []
         for count in (0, capacity, capacity + 1, 0):
             _show_runs(dialog, app, count)
             seen.append((bar.isVisible(), bar.maximum() > 0))
         dialog.hide()
 
-    assert capacity >= 2, "the table is too short to tell the two cases apart"
     assert seen == [(False, False), (False, False), (True, True), (False, False)]
 
 
@@ -541,6 +550,15 @@ def test_six_runs_need_no_scrollbar_in_a_default_size_dialog(tmp_path):
             width=_DEFAULT_SETTINGS_DIALOG_SIZE.width(),
             height=_DEFAULT_SETTINGS_DIALOG_SIZE.height(),
         )
+        if dialog.height() < _DEFAULT_SETTINGS_DIALOG_SIZE.height():
+            # The claim is about the default-size dialog; the CI runner's
+            # ~749 px screen cannot show it (docs/agents/testing.md).
+            measured = dialog.height()
+            dialog.hide()
+            pytest.skip(
+                f"the screen fits a {measured} px dialog, not the default "
+                f"{_DEFAULT_SETTINGS_DIALOG_SIZE.height()} px one"
+            )
         table = dialog.benchmark_history_list
         _show_runs(dialog, app, 7)
         seven = (table.verticalScrollBar().isVisible(), table.rowHeight(0))
