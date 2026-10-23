@@ -527,3 +527,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the tree; that runner then loads the new tree, or, inside the two
     renames' milliseconds, fails to start once with "runtime failed to
     load". Not reproduced; closing it needs the old build's cooperation.
+- **Archive retention can delete the audio of a queued retranscription**
+  (P3, found 2026-10-23; `persistence-and-history.md`, the retranscription
+  entries). History's Retranscribe waits in the controller's one
+  transcription lane behind a running dictation. When that dictation ends,
+  its recording is archived and `_prune_recordings` deletes the oldest
+  `recording_<stamp>.wav` past `recordings_max_count`, without knowing that
+  a waiting retranscription is about to read that very file. The
+  retranscription then fails with a missing file, and the entries that
+  linked the recording lose their audio -- which the same prune would have
+  removed a moment later anyway. It needs the archive at its count limit
+  (the owner's holds 500), the oldest file retranscribed, and a dictation
+  ending during the wait. Fix: a set of paths in use that
+  `transcribe_audio_file` holds for its run and the prune skips, about 1 h
+  with tests. Kept for now: rare, and what is lost is the retranscription
+  itself, which says why it failed; the audio was due for deletion anyway.
