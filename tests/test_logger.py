@@ -8,6 +8,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PySide6 import QtCore, QtWidgets
@@ -137,10 +138,16 @@ def _end_process_logging() -> None:
 
 @pytest.fixture
 def _restore_exception_hooks(monkeypatch):
-    """`install_exception_logging` replaces three process-wide hooks."""
+    """`install_exception_logging` replaces three process-wide hooks, and
+    `install_qt_message_logging` Qt's message handler."""
     monkeypatch.setattr(sys, "excepthook", sys.excepthook)
     monkeypatch.setattr(sys, "unraisablehook", sys.unraisablehook)
     monkeypatch.setattr(threading, "excepthook", threading.excepthook)
+    installed_before = logger_module._qt_message_handler
+    yield
+    if logger_module._qt_message_handler is not installed_before:
+        QtCore.qInstallMessageHandler(installed_before)
+        logger_module._qt_message_handler = installed_before
 
 
 class _Records(logging.Handler):
@@ -259,19 +266,185 @@ def test_only_a_session_that_did_not_quit_is_reported(
     killed = logger_module.start_crash_reporting(tmp_path, log, version="1")
     killed.stream.close()  # ended without `mark_clean_exit`, as a kill does
     quitting = logger_module.start_crash_reporting(tmp_path, log, version="1")
+    quitting.mark_quit_started()
     quitting.mark_clean_exit()
     quitting.stream.close()
     logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
 
-    reports = [
-        line for line in records.lines if line.startswith("previous_session_end")
-    ]
+    reports = [line for line in records.lines if line.startswith("previous_session")]
     expected = (
-        "previous_session_end clean_quit=no native_trace_lines=0 "
+        "previous_session_end clean_quit=no quit_started=no native_trace_lines=0 "
         f"crash_log={tmp_path / 'crash.log'}"
     )
     assert reports == [expected]
     assert [kwargs["all_threads"] for kwargs in enabled] == [True, True, True]
+
+
+def test_a_session_ended_during_its_quit_is_not_reported_as_a_crash(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """A Windows shutdown ends the process inside WM_ENDSESSION, after Qt
+    emitted `aboutToQuit` and before `app.exec()` returns, so the session
+    never writes its end line. Reported as a crash, every restart of the PC
+    put a warning into the log and doubled the next diagnostics copy."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    log, records = _capturing_logger("test.crash_shutdown")
+
+    shut_down = logger_module.start_crash_reporting(tmp_path, log, version="1")
+    shut_down.mark_quit_started()
+    shut_down.stream.close()  # Windows ended it there
+    hung = logger_module.start_crash_reporting(tmp_path, log, version="1")
+    hung.mark_quit_started()
+    hung.stream.write("Timeout (0:00:15)!\nThread 0x0001 (most recent call first):\n")
+    hung.stream.close()  # the quit watchdog's dump, then its exit
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    reports = [line for line in records.lines if line.startswith("previous_session")]
+    assert len(reports) == 2
+    assert reports[0].startswith("previous_session_stopped_during_quit ")
+    assert "Windows shutdown" in reports[0]
+    assert logger_module.PREVIOUS_SESSION_END_LOG_MARKER not in reports[0], (
+        "the diagnostics copy would reach back into a session that only shut down"
+    )
+    assert reports[1].startswith(
+        "previous_session_end clean_quit=no quit_started=yes native_trace_lines=2 "
+    )
+
+
+def test_a_long_dump_keeps_its_header_and_the_crashing_thread(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """faulthandler writes the header first and the crashing thread last,
+    after every other thread (measured). Keeping only the last lines of a
+    long dump lost the header that names the fault."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    other_threads = [
+        line
+        for index in range(200)
+        for line in (
+            f"Thread 0x{index:04x} (most recent call first):",
+            '  File "threading.py", line 359 in wait',
+        )
+    ]
+    (tmp_path / "crash.log").write_text(
+        "\n".join(
+            [
+                "=== stt_app session started 2026-10-23T10:00:00+02:00 ===",
+                "Windows fatal exception: code 0xe06d7363",
+                "",
+                "Thread 0x9999 (most recent call first):",
+                '  File "survived.py", line 1 in handled',
+                "Windows fatal exception: access violation",
+                "",
+                *other_threads,
+                "",
+                "Current thread 0x5540 (most recent call first):",
+                '  File "history_dialog.py", line 42 in crashing_frame',
+                "",
+                "Extension modules: PySide6.QtCore (total: 1)",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_excerpt")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    excerpt = report.splitlines()[1:]
+    assert excerpt[0] == "(3 earlier trace lines are in crash.log)"
+    assert excerpt[1] == "Windows fatal exception: access violation"
+    assert '  File "history_dialog.py", line 42 in crashing_frame' in excerpt
+    assert excerpt[-1] == "Extension modules: PySide6.QtCore (total: 1)"
+    assert any("lines of this dump are left out here" in line for line in excerpt)
+    # The excerpt is bounded: the cap plus the two notes.
+    assert len(excerpt) == logger_module.CRASH_TRACE_MAX_LINES + 2
+
+
+def test_the_whole_previous_section_is_read(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """Only the last 256 kB used to be read: a session whose dumps were
+    longer had its start line outside, and its crash went unreported."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    trace = "\n".join(f'  File "deep.py", line {i} in frame' for i in range(12_000))
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-10-23T10:00:00+02:00 ===\n"
+        f"Fatal Python error: Aborted\n{trace}\n",
+        encoding="utf-8",
+    )
+    assert (tmp_path / "crash.log").stat().st_size > 256_000
+    log, records = _capturing_logger("test.crash_window")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert "clean_quit=no" in report
+    assert "native_trace_lines=12001" in report
+    assert report.splitlines()[1] == "Fatal Python error: Aborted"
+
+
+def test_a_section_longer_than_the_crash_log_bound_is_still_reported(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    monkeypatch.setattr(logger_module, "CRASH_LOG_MAX_BYTES", 1_000)
+    trace = "\n".join(f'  File "deep.py", line {i} in frame' for i in range(200))
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-10-23T10:00:00+02:00 ===\n"
+        f"Fatal Python error: Aborted\n{trace}\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_window_bound")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert "clean_quit=no" in report
+    assert report.splitlines()[-1] == '  File "deep.py", line 199 in frame'
+
+
+def test_the_previous_session_is_reported_when_the_crash_log_cannot_be_opened(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-10-23T10:00:00+02:00 ===\n"
+        "Windows fatal exception: access violation\n",
+        encoding="utf-8",
+    )
+
+    def _refused(*_args, **_kwargs):
+        raise PermissionError("held by a virus scanner")
+
+    monkeypatch.setattr(logger_module, "open", _refused, raising=False)
+    log, records = _capturing_logger("test.crash_unopenable")
+
+    assert logger_module.start_crash_reporting(tmp_path, log, version="1") is None
+
+    assert any(
+        line.startswith("previous_session_end clean_quit=no") for line in records.lines
+    )
+    assert any(line.startswith("crash_log_unavailable") for line in records.lines)
+
+
+def test_a_session_faulthandler_could_not_watch_is_not_reported(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """Its start line was written, its end line never would be: the next
+    start reported a crash that nothing had observed."""
+
+    def _refused(**_kwargs):
+        raise RuntimeError("cannot enable")
+
+    monkeypatch.setattr(logger_module.faulthandler, "enable", _refused)
+    log, records = _capturing_logger("test.crash_unwatched")
+    assert logger_module.start_crash_reporting(tmp_path, log, version="1") is None
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    assert not [line for line in records.lines if line.startswith("previous_session")]
 
 
 def test_a_large_crash_log_is_set_aside_at_start(
@@ -332,3 +505,73 @@ def test_uncaught_exceptions_are_logged_with_their_traceback(
     assert "unhandled_exception" in text and "RuntimeError: slot boom" in text
     assert "unraisable_exception" in text and "OSError: del boom" in text
     assert sorted(handed_on) == ["sys", "thr", "unr"]
+
+
+def test_a_failing_log_handler_never_keeps_the_previous_hook_from_running(
+    monkeypatch, _restore_exception_hooks
+):
+    handed_on = []
+    monkeypatch.setattr(sys, "excepthook", lambda *args: handed_on.append("sys"))
+    monkeypatch.setattr(threading, "excepthook", lambda args: handed_on.append("thr"))
+    monkeypatch.setattr(sys, "unraisablehook", lambda u: handed_on.append("unr"))
+
+    class _BrokenHandler(logging.Handler):
+        def emit(self, record):
+            raise RuntimeError("the log file is gone")
+
+    log = logging.getLogger("test.exception_logging_broken")
+    log.handlers[:] = [_BrokenHandler()]
+    log.propagate = False
+    logger_module.install_exception_logging(log)
+    error = ValueError("boom")
+
+    sys.excepthook(ValueError, error, None)
+    threading.excepthook(threading.ExceptHookArgs((ValueError, error, None, None)))
+    sys.unraisablehook(
+        SimpleNamespace(
+            exc_type=ValueError,
+            exc_value=error,
+            exc_traceback=None,
+            err_msg=None,
+            object=None,
+        )
+    )
+
+    assert handed_on == ["sys", "thr", "unr"]
+
+
+def test_qt_messages_reach_the_log_once_per_kind_and_never_recurse(
+    _restore_exception_hooks,
+):
+    """Qt's own warnings went to stderr, which the windowed build lacks: the
+    "Timers cannot be stopped from another thread" before the crash of
+    2026-10-23 was written nowhere."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    log, records = _capturing_logger("test.qt_messages")
+
+    class _ReentrantHandler(logging.Handler):
+        """A handler that makes Qt print while it logs."""
+
+        def emit(self, record):
+            QtCore.qWarning("raised while logging")
+
+    log.addHandler(_ReentrantHandler())
+    logger_module.install_qt_message_logging(log)
+    logger_module.install_qt_message_logging(log)  # a second call adds nothing
+
+    QtCore.qWarning("QObject::killTimer: Timers cannot be stopped from another thread")
+    QtCore.qDebug("debug chatter")
+    QtCore.qCritical("critical trouble")
+    for index in range(30):
+        QtCore.qWarning(f"QWindowsWindow::setGeometry: Unable to set {index}x{index}")
+
+    assert records.lines[0] == (
+        "qt_message category=default "
+        "QObject::killTimer: Timers cannot be stopped from another thread"
+    )
+    assert records.lines[1] == "qt_message category=default critical trouble"
+    assert not any("debug chatter" in line for line in records.lines)
+    assert not any("raised while logging" in line for line in records.lines)
+    geometry = [line for line in records.lines if "setGeometry" in line]
+    assert len(geometry) == 20
+    assert geometry[-1].endswith("(repeated too often; later ones are not logged)")

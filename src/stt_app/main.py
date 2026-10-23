@@ -90,11 +90,18 @@ def _arm_quit_watchdog(crash_log: CrashLog | None, logger) -> None:
     not rename a file another handle holds open: a log rotation during the
     quit failed, and the logging handler then dropped every later line. The
     next start copies the dump into the log (`start_crash_reporting`).
+
+    It also marks in the crash log that the quit began. A Windows shutdown
+    runs this from inside WM_ENDSESSION and may end the process before
+    `app.exec()` returns, so the session never writes its end line; with the
+    mark, the next start reports a session ended during its quit instead of
+    a crash.
     """
     logger.info("app_quit_started watchdog_s=%s", QUIT_WATCHDOG_TIMEOUT_S)
     if crash_log is None:
         logger.warning("app_quit_watchdog_unavailable reason=no_crash_log")
         return
+    crash_log.mark_quit_started()
     faulthandler.dump_traceback_later(
         QUIT_WATCHDOG_TIMEOUT_S, repeat=False, file=crash_log.stream, exit=True
     )

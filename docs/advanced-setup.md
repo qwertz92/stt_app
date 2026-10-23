@@ -887,9 +887,13 @@ A short delay after SendInput prevents race conditions where the target app read
   another native component ends the app before the log can record anything;
   the stacks of every thread are written here instead, and the next start
   copies them into `dictation.log` with the line `previous_session_end`. That
-  line also appears, without stacks, when the previous run ended without a
-  clean quit for another reason (killed, Windows restart, power loss). "Copy
-  diagnostics" then includes the previous run as well.
+  line also appears, without stacks, when the previous run ended without
+  starting to quit (killed, power loss, a crash that left no stacks). "Copy
+  diagnostics" then includes the previous run as well. A run that was
+  ended while it quit, as a Windows shutdown or restart does, gets only the
+  line `previous_session_stopped_during_quit`, and the diagnostics copy stays
+  with the current run. Qt's own warnings are in `dictation.log` too, as
+  `qt_message` lines.
 - While the app runs, Explorer may show `dictation.log` with the size and date
   of an earlier time: Windows updates those for a file held open only when it
   is closed. Open the file to see its current content.

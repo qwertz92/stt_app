@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: crash reporting review follow-ups
+
+Same review, `logger.start_crash_reporting` and the quit:
+- **Every Windows restart looked like a crash.** Measured with both
+  messages sent to a Qt window: WM_QUERYENDSESSION emits
+  `commitDataRequest` and answers 1; WM_ENDSESSION emits `aboutToQuit`
+  synchronously and calls `quit()`. Windows may end the process once
+  WM_ENDSESSION returns, before `app.exec()` returns, so the session never
+  wrote its end line and the next start logged `previous_session_end
+  clean_quit=no` and doubled the diagnostics copy. The first `aboutToQuit`
+  handler now writes "quit started" into `crash.log`; with it and no trace
+  the next start logs INFO `previous_session_stopped_during_quit` and the
+  copy stays with the current session. A real shutdown was not tested.
+- **A long dump lost the fault's name.** The excerpt kept the last 300
+  lines, but faulthandler writes the header ("Windows fatal exception:
+  access violation") first and the crashing thread last, after all others
+  (measured; the review assumed the crashing thread came first). The
+  excerpt is now the last dump, its first 20 and last 280 lines when longer.
+- Smaller ones: the whole crash log is read (up to its 1 MB bound, not the
+  last 256 kB, which missed a section with long dumps); the previous session
+  is reported before `crash.log` is opened, so an open that fails no longer
+  drops it; a session whose faulthandler could not be enabled is marked and
+  not reported as a crash; the exception hooks call the hook they replaced
+  even when logging raises; `CrashLog.path` was unused and is gone.
+- **Qt's own messages reach the log** (`install_qt_message_logging`), at
+  their type's level, at most 20 times per text with numbers ignored, and
+  never recursing. "Timers cannot be stopped from another thread", printed
+  right before the retranscription crash, had gone to a stderr the windowed
+  build lacks.
+
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
 Second half of the same report (entry below): the green said "Speak now"
