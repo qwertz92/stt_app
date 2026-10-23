@@ -551,3 +551,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   one session. Avoiding the repeat needs a record outside the file that
   could not be opened (for example in `dictation.log`, which rotates);
   about 1 h, for a second line in a rare case.
+- **A refused History write plus a failed *queued* paste still completes the
+  slot** (P4, found 2026-10-23 while fixing the direct-paste case,
+  `controller-and-jobs.md`, "A plain dictation completes its slot because its
+  text reached the user"). A foreground result that joins the paste queue
+  (`_deliver_foreground_through_paste_queue`: an earlier result for the same
+  window waits, or the previous paste's restore window is still open) completes
+  the managed slot when it is queued, before its deferred paste runs. If the
+  History write was refused and that paste then fails, the text exists only in
+  the not-inserted rows and the slot is already completed -- with "keep last
+  recording" off, its audio is gone. It needs three things at once: a
+  refused History write (a read-only or locked `transcript_history.json`),
+  two dictations close together in one window, and a failing paste. Fix: on
+  that road mark the slot failed instead of completing it while
+  `job.history_refused` is set (about 1 h with a test); the cost is that a paste
+  that then succeeds also leaves the audio kept until the next dictation.
+  Kept: the direct road, which is the common one, is fixed, and a refused
+  History write is already an error state the user can see in the log only.

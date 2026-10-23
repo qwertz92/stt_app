@@ -5,7 +5,6 @@ import contextlib
 import logging
 import math
 import os
-import re
 import shutil
 import subprocess
 import threading
@@ -20,7 +19,7 @@ from uuid import uuid4
 from PySide6 import QtCore, QtGui
 
 from . import audio_devices, local_runtime_support, silero_vad
-from .app_paths import resolve_recordings_dir
+from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
@@ -157,11 +156,6 @@ from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
-_ARCHIVED_RECORDING_NAME_RE = re.compile(
-    r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
-    re.IGNORECASE,
-)
-
 # A finished batch/import run that produced no text is a model miss, not
 # silence. The silence gate already skipped true quiet recordings. Treat the
 # empty result as a failure so Retry keeps the audio and the overlay does not
@@ -188,6 +182,13 @@ _GAP_KEPT_RECORDING_MESSAGE = (
 # could not be written or linked: the managed recording is the only audio left.
 _LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE = (
     "The transcript is in another language than the recording; the recording was kept."
+)
+
+# The same for an ordinary transcript that no History entry holds and whose paste
+# failed: its text then exists only in memory, and the recording is the only
+# other source of it.
+_UNSAVED_AND_UNDELIVERED_KEPT_RECORDING_MESSAGE = (
+    "The transcript was neither saved to History nor inserted; the recording was kept."
 )
 
 # The stages of a local model preload. They fail, progress and finish for
@@ -281,9 +282,16 @@ class _TranscriptionJob:
     # would relabel or delete it.
     marks_last_recording: bool = True
     source_audio_path: str = ""
-    # True when the foreground road's History write of this job's transcript
-    # was refused: no entry links the kept copy of the audio, so a transcript
-    # whose audio must be kept leaves the managed recording kept
+    # True when `_keep_audio_of_a_delivery` really wrote a copy of the audio
+    # to the recordings folder (or, failing the move, the unfinished folder)
+    # and `source_audio_path` is that copy. Not the same as a non-empty
+    # `source_audio_path`: with "Archive every recording" the job carries the
+    # archive's file from the start, and a count prunes that one.
+    audio_copied: bool = False
+    # True when the History write of this job's transcript was refused: no
+    # entry links the audio copy (`_after_the_history_write` settles it), a
+    # transcript whose audio must be kept leaves the managed recording kept,
+    # and so does one whose text did not get delivered either
     # (`_mark_last_recording_completed`).
     history_refused: bool = False
     future: object | None = None
@@ -3727,7 +3735,7 @@ class DictationController(QtCore.QObject):
             return
         aged = []
         for name in names:
-            if not _ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
+            if not ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
                 continue
             path = os.path.join(directory, name)
             try:
@@ -4225,7 +4233,11 @@ class DictationController(QtCore.QObject):
         self._last_history_entry = entry
 
     def _mark_last_recording_completed(
-        self, job: _TranscriptionJob | None, text: str
+        self,
+        job: _TranscriptionJob | None,
+        text: str,
+        *,
+        delivered: bool = True,
     ) -> None:
         """Complete the last recording only while it is still the job's own.
 
@@ -4234,14 +4246,19 @@ class DictationController(QtCore.QObject):
         keeps its audio: the marker tells the user to listen to that stretch,
         and with `keep_after_success` off a completed recording is deleted.
         The audio is normally a copy in the recordings folder that the History
-        entry links (`_keep_audio_of_a_delivery`), and the recording completes
-        as usual. Where no copy is linked -- it could not be written, or the
-        History write that would link it was refused (`history_refused`) -- the
-        recording is marked failed instead, which keeps it reachable from
-        Import until the next dictation replaces it. The same holds for a
-        fallback retry: its transcript is in another language than the speech,
-        and completing the recording with no linked copy would delete the only
-        audio it could be redone from.
+        entry links (`_keep_audio_of_a_delivery`, `audio_copied`), and the
+        recording completes as usual. Where no copy is linked -- it could not
+        be written, or the History write that would link it was refused
+        (`history_refused`) -- the recording is marked failed instead, which
+        keeps it reachable from Import until the next dictation replaces it.
+        The same holds for a fallback retry: its transcript is in another
+        language than the speech, and completing the recording with no linked
+        copy would delete the only audio it could be redone from.
+
+        An ordinary transcript completes because its text reached the user: it
+        was pasted, or it is in History. With `delivered` False (the paste
+        failed) and the History write refused, the text exists only in memory
+        (the not-inserted rows), so the recording is kept like a gap's.
 
         A job records the managed recording's id when it is registered. An
         older job that finishes after a newer recording was stored -- the
@@ -4261,8 +4278,10 @@ class DictationController(QtCore.QObject):
             keep_message = _GAP_KEPT_RECORDING_MESSAGE
         elif job is not None and job.language_fallback_from:
             keep_message = _LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE
+        elif job is not None and job.history_refused and not delivered:
+            keep_message = _UNSAVED_AND_UNDELIVERED_KEPT_RECORDING_MESSAGE
         if keep_message and (
-            job is None or not job.source_audio_path or job.history_refused
+            job is None or not job.audio_copied or job.history_refused
         ):
             # No linked copy, so the managed recording is the only audio.
             self._mark_last_recording_failed(job, keep_message)
@@ -4312,8 +4331,10 @@ class DictationController(QtCore.QObject):
         -- gets one of its own, as the quit road's copies do, because the
         unfinished store cannot save a file without one; the language tag is
         the recorded one, else the job's own selection, as the quit road tags
-        it. Where the copy cannot be written nothing is linked, and the
-        managed recording stays the kept audio (`_mark_last_recording_completed`).
+        it. Where the copy cannot be written nothing is linked
+        (`job.audio_copied` stays False, also when the archive's file is
+        linked), and the managed recording stays the kept audio
+        (`_mark_last_recording_completed`).
         """
         kept = ""
         payload = self._request_audio_by_token.get(job.token)
@@ -4332,6 +4353,7 @@ class DictationController(QtCore.QObject):
             )
             if kept:
                 job.source_audio_path = kept
+                job.audio_copied = True
         self._logger.info(
             "transcript_audio_kept token=%d recording_id=%s fallback_from=%s "
             "language=%s kept=%s",
@@ -4342,6 +4364,66 @@ class DictationController(QtCore.QObject):
             kept or "no",
         )
 
+    def _after_the_history_write(
+        self, job: _TranscriptionJob | None, entry: TranscriptHistoryEntry | None
+    ) -> None:
+        """What both delivery roads do once their History write was tried:
+        remember a refusal on the job, settle the audio copy a refusal leaves
+        without an entry, and tell the tray about a fallback retry."""
+        if job is not None:
+            job.history_refused = entry is None
+            if entry is None and job.audio_copied:
+                self._settle_the_audio_copy_of_an_unsaved_transcript(job)
+        self._announce_language_fallback(job, entry)
+
+    def _settle_the_audio_copy_of_an_unsaved_transcript(
+        self, job: _TranscriptionJob
+    ) -> None:
+        """The History write was refused, so the copy `_keep_audio_of_a_delivery`
+        made is linked by no entry, and the managed recording is marked failed
+        (kept, reachable from Import, offered by the next start). What becomes
+        of the copy depends on the store's answer to that mark
+        (`_drop_unlinked_audio_copy`)."""
+        marked = self._mark_last_recording_failed(job, _TRANSCRIPT_NOT_SAVED_REASON)
+        if self._drop_unlinked_audio_copy(
+            job.source_audio_path, slot_keeps_audio=marked
+        ):
+            job.audio_copied = False
+            job.source_audio_path = ""
+
+    def _drop_unlinked_audio_copy(
+        self, copy_path: str, *, slot_keeps_audio: bool
+    ) -> bool:
+        """What to do with a copy of a transcript's audio that no History entry
+        links, because its write was refused. True when the copy was deleted.
+
+        Nothing in the app leads to such a file and no recordings count prunes
+        it, so it would stay as an unknown file (and a later import of the same
+        recording adds a numbered second one). Where the managed recording
+        keeps the audio (`slot_keeps_audio`: the store took the failed mark)
+        the copy is deleted, as `_return_unfinished_audio` undoes the copy of
+        the unfinished-recordings road. Where it does not -- a newer
+        recording replaced it in the slot, or the job has no recording id --
+        the copy is the only audio left and stays, its path in the log."""
+        if not slot_keeps_audio:
+            self._logger.warning(
+                "The only copy of a recording whose transcript could not be "
+                "saved to History is kept. path=%s",
+                copy_path,
+            )
+            return False
+        try:
+            Path(copy_path).unlink(missing_ok=True)
+        except OSError:
+            self._logger.exception(
+                "Failed to delete the audio copy of a transcript that could "
+                "not be saved to History. path=%s",
+                copy_path,
+            )
+            return False
+        self._logger.info("transcript_audio_copy_dropped path=%s", copy_path)
+        return True
+
     def _announce_language_fallback(
         self, job: _TranscriptionJob | None, entry: TranscriptHistoryEntry | None
     ) -> None:
@@ -4349,22 +4431,29 @@ class DictationController(QtCore.QObject):
         audio, after its History write was tried: the sentence about
         Retranscribe in History is true only when `entry` exists.
 
-        With no copy the managed recording is the only audio, so it is marked
-        failed here, and the store's answer decides what the line says: a
-        newer recording replaced the slot when the retry finished behind it,
-        and then nothing of this audio is kept (the retry's own bytes are
-        retired with the delivery)."""
+        With no copy -- never made, or deleted because the managed recording
+        keeps the audio of a transcript History refused -- the managed
+        recording is the only audio, so it is marked failed here, and the
+        store's answer decides what the line says: a newer recording replaced
+        the slot when the retry finished behind it, and then nothing of this
+        audio is kept (the retry's own bytes are retired with the delivery)."""
         if job is None or not job.language_fallback_from:
             return
         ran, recorded = self._language_fallback_labels(job)
-        if not job.source_audio_path:
-            if self._mark_last_recording_failed(
+        if not job.audio_copied:
+            marked = self._mark_last_recording_failed(
                 job, _LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE
-            ):
-                outcome = (
-                    "The audio could not be copied (see the log); the last "
-                    "recording is kept only until the next dictation or restart."
-                )
+            )
+            unsaved = "The transcript could not be saved to History (see the log)"
+            until = (
+                "the last recording is kept only until the next dictation or restart."
+            )
+            if entry is None and marked:
+                outcome = f"{unsaved}; {until}"
+            elif entry is None:
+                outcome = f"{unsaved}, and the audio could not be kept."
+            elif marked:
+                outcome = f"The audio could not be copied (see the log); {until}"
             else:
                 outcome = "The audio could not be kept (see the log)."
         elif entry is None:
@@ -7157,9 +7246,7 @@ class DictationController(QtCore.QObject):
             source_recording_id=(job.source_recording_id if job is not None else None),
             source_audio_path=(job.source_audio_path if job is not None else ""),
         )
-        if job is not None:
-            job.history_refused = history_entry is None
-        self._announce_language_fallback(job, history_entry)
+        self._after_the_history_write(job, history_entry)
 
         if (
             joins_paste_queue
@@ -7208,7 +7295,7 @@ class DictationController(QtCore.QObject):
                 text_entry=history_entry,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job, text)
+                self._mark_last_recording_completed(job, text, delivered=False)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -7238,7 +7325,7 @@ class DictationController(QtCore.QObject):
                     self._insert_action_rows = (entry,)
                 self._shown_transcript_row = entry
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job, text)
+                self._mark_last_recording_completed(job, text, delivered=False)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -7448,7 +7535,7 @@ class DictationController(QtCore.QObject):
             source_audio_path=job.source_audio_path,
             track_for_edit=False,
         )
-        self._announce_language_fallback(job, job.history_entry)
+        self._after_the_history_write(job, job.history_entry)
         # The job's own recording is done with, as on the foreground road:
         # keyed by its id, so a newer recording in the slot is left alone,
         # and skipped for bytes the store never received. Unmarked, the
@@ -10317,17 +10404,25 @@ class DictationController(QtCore.QObject):
                 # recording is marked failed, not completed: a completion can
                 # delete its audio, the only other source of the transcript.
                 # A mark that fails as well (same volume as history.json)
-                # must not cost the message its transcript.
+                # must not cost the message its transcript. A managed
+                # recording's `kept_path` is the gap's copy or "", never the
+                # user's own file (`_drop_unlinked_audio_copy`); a copy the
+                # slot cannot stand in for stays and is named in the log.
                 failure = unsaved_transcript_failure(_TRANSCRIPT_NOT_SAVED_REASON, text)
                 if managed_last_recording:
                     try:
-                        self._last_recording_store.mark_failed(
+                        marked = self._last_recording_store.mark_failed(
                             _TRANSCRIPT_NOT_SAVED_REASON,
                             **conditional_transition,
                         )
                     except Exception:
+                        marked = False
                         self._logger.exception(
                             "Failed to persist imported recording failure state"
+                        )
+                    if kept_path:
+                        self._drop_unlinked_audio_copy(
+                            kept_path, slot_keeps_audio=bool(marked)
                         )
                 return False, failure
             if managed_last_recording:

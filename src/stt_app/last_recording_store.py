@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from .app_paths import debug_audio_path, last_recording_state_path
+from .app_paths import (
+    ARCHIVED_RECORDING_NAME_RE,
+    debug_audio_path,
+    last_recording_state_path,
+)
 from .persistence import (
     SOURCE_BACKUP_PRIMARY_UNREADABLE,
     SOURCE_UNREADABLE,
@@ -361,7 +365,7 @@ class LastRecordingStore:
             candidates = [
                 path
                 for path in root.iterdir()
-                if path.is_file() and path.suffix.lower() == ".wav"
+                if path.is_file() and ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
             ]
         except OSError:
             return None

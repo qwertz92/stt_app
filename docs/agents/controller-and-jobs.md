@@ -474,19 +474,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     unfinished recording and moved to the recordings folder under its own
     name (`UnfinishedRecordingStore.save` and `move_to`, the pair
     `_retain_unfinished_audio` uses), a name no recordings count prunes
-    (`_ARCHIVED_RECORDING_NAME_RE` does not match it), and
+    (`app_paths.ARCHIVED_RECORDING_NAME_RE` does not match it), and
     `job.source_audio_path` carries the path into the entry, which is what
     History's Retranscribe resolves (`history_audio.resolve_history_audio_path`).
     The managed slot then completes as for any success -- except where the
     copy could not be written (review round 4, 2026-10-23): completing it then
     deleted the only audio, so the recording is marked failed instead
     (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`), kept until the next
-    dictation or restart, as for a gap. The same holds where the foreground
-    road's History write was refused (`job.history_refused`, set right after
-    the write): the copy exists but no entry links it, so nothing in the app
-    leads to it except the managed recording (final review, 2026-10-23); the
-    background road never completes a slot whose entry is missing. Recordings
-    that fell back nowhere are
+    dictation or restart, as for a gap. The same holds where the History write
+    was refused (`job.history_refused`, set by `_after_the_history_write` right
+    after the write, on both roads): no entry links the copy, so nothing in the
+    app leads to it except the managed recording (final review, 2026-10-23).
+    What then becomes of the copy is decided by the store's answer to that
+    failed mark (`_drop_unlinked_audio_copy`, follow-up review 2026-10-23): where
+    the store took it the slot holds the audio and the copy -- a file no entry
+    names and no count prunes -- is deleted, as `_return_unfinished_audio` undoes
+    the unfinished-recordings road's copy; where it did not (the retry finished
+    behind a newer dictation, whose recording replaced the retried one in the
+    slot, or the job has no recording id) the copy is the only audio, stays, and
+    the log names its path. The background road never completes a slot whose
+    entry is missing. Recordings that fell back nowhere are
     kept or not as the retention settings say, unchanged. One
     `busy_overlay_error` tray notice names the language that ran, sent by
     `_announce_language_fallback` after the History write was tried (both
@@ -496,15 +503,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     the transcript could not be saved, naming the folder the file really sits
     in -- the recordings folder, or the unfinished recordings folder when the
     move failed too (the file is then linked at the unfinished path, below);
-    with no copy it marks the managed recording failed itself and takes the
-    store's answer (`_mark_last_recording_failed` returns it): "The audio could
-    not be copied (see the log)" and that the last recording is kept only until
-    the next dictation or restart where the slot took the mark, but "The audio
-    could not be kept (see the log)." where it did not -- the retry finished
-    behind a newer dictation, whose recording replaced the retried one in the
-    slot, and the delivery retired the retry's own bytes, so no audio of it is
-    kept anywhere (final review P3-1; the line used to promise the newer
-    dictation's recording). The copy never
+    that wording is reached only where the slot could not hold the audio, since
+    a copy the slot makes redundant is deleted; with no copy (never made, or
+    deleted for that reason) it marks the managed recording failed itself and
+    takes the store's answer (`_mark_last_recording_failed` returns it), and
+    the entry decides the first half of the line. With an entry: "The audio
+    could not be copied (see the log)" and that the last recording is kept only
+    until the next dictation or restart where the slot took the mark, but "The
+    audio could not be kept (see the log)." where it did not -- the retry
+    finished behind a newer dictation, whose recording replaced the retried one
+    in the slot, and the delivery retired the retry's own bytes, so no audio of
+    it is kept anywhere (final review P3-1; the line used to promise the newer
+    dictation's recording). Without an entry: "The transcript could not be
+    saved to History (see the log)", then the same sentence about the last
+    recording, or ", and the audio could not be kept." where the slot did not
+    take the mark. The copy never
     takes the transcript down: `_keep_audio_in_recordings_folder` catches
     whatever the store or the folder raises (`Exception`, logged with its
     traceback), since it runs before the History write; a saved file that
@@ -581,7 +594,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     copy raised anything at all, not only `OSError`; review round 4), or the
     foreground road's History write was refused (`job.history_refused`): there
     the managed recording is marked failed as before, the only copy until the
-    next dictation. The copy is made **even with "Archive every recording"**
+    next dictation. "Linked" is `job.audio_copied`, set only when the copy
+    really exists, never a non-empty `job.source_audio_path`: with "Archive
+    every recording" the job carries the archive's file from the start, and a
+    failed copy left that path in place, so the slot completed and the audio was
+    gone once a count pruned the archive file (follow-up review, 2026-10-23).
+    The copy is made **even with "Archive every recording"**
     (final review P4-1, 2026-10-23; owner's decision to copy anyway): the
     archive's file is deleted by `_prune_recordings` after the count of newer
     recordings, while a recordings-folder copy under another name never is, so
@@ -596,12 +614,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     recording (`transcribe_audio_file`, Import tab) does the same
     (`_keep_audio_of_an_imported_last_recording`: the import's own bytes, or
     the slot's file, through the same `_keep_audio_in_recordings_folder`), and
-    marks the slot failed where that copy failed. A refused History write on
-    that road needs nothing of its own: every managed import whose entry was
-    refused is reported as a failure and marks the slot failed
-    (`_TRANSCRIPT_NOT_SAVED_REASON`, from the History retranscription review).
-    An import of any other
-    file links the file itself, as before. Tests in
+    marks the slot failed where that copy failed. On a refused History write
+    every managed import is reported as a failure and marks the slot failed
+    (`_TRANSCRIPT_NOT_SAVED_REASON`, from the History retranscription review),
+    and the gap's copy, which no entry links, follows the rule of the dictation
+    roads: deleted when the store took the mark, kept with its path in the log
+    when it did not (`_drop_unlinked_audio_copy`; before 2026-10-23 it stayed as
+    an unlinked file, and a later import of the same recording added a second
+    one under a numbered name). A managed import's `kept_path` is that copy or
+    empty, so the user's own file is never what gets deleted. An import of any
+    other file links the file itself, as before. Tests in
     `tests/test_controller_queue.py`:
     `test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it`,
     `test_the_gap_audio_survives_the_next_dictation_and_the_next_start`, the
@@ -609,21 +631,48 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (`test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy`,
     which runs the archive's pruning), the no-id case
     (`test_a_job_without_a_recording_id_still_gets_a_copy_of_its_gap_audio`),
-    the copy-failed case, the refused-History cases
-    (`test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_recording`
+    the copy-failed case, the archive-on copy-failed case
+    (`test_a_gap_transcript_whose_archive_copy_failed_keeps_the_managed_recording`),
+    the refused-History cases
+    (`test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_recording`,
+    `test_a_refused_history_write_keeps_a_gap_copy_the_slot_cannot_hold`, the
+    two fallback twins `test_a_refused_history_write_leaves_a_fallback_retrys_audio_to_the_managed_recording`
+    and `test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_hold`,
+    `test_a_refused_history_write_and_a_failed_copy_say_that_nothing_is_kept`
     and the negative control
     `test_a_plain_transcript_with_a_refused_history_write_still_completes_the_recording`),
     `test_a_fallback_retry_with_a_gap_keeps_one_copy` and the negative
     control `test_a_transcript_without_a_gap_keeps_no_copy`; in
     `tests/test_controller_coverage.py` the import cases
     (`test_an_imported_last_recording_with_a_gap_is_kept` and its copy-failed
-    twin).
-    A plain dictation whose History write is refused still completes its
-    slot: its text was pasted, and only a transcript whose audio must be kept
-    (a gap, a language fallback) holds the slot back.
+    twin, the refused-entry pair
+    `test_an_imported_last_recording_whose_entry_was_refused_leaves_its_audio_to_the_slot`
+    and `..._keeps_the_copy_the_slot_refused`, and the control
+    `test_an_imported_file_whose_entry_was_refused_leaves_the_users_file_alone`).
     `main._complete_unless_gap` still spares a gap transcript's recording at
     the next start, but only for what the controller kept on purpose (no
     linked copy) or a completion a crash cut off.
+  - **A plain dictation completes its slot because its text reached the user**
+    (corrected 2026-10-23). The earlier wording -- "a plain dictation whose
+    History write is refused still completes its slot: its text was pasted" --
+    was true only while the paste succeeded. With the History write refused
+    **and** the paste failed (`_insert_text_at_target` returned False) the text
+    exists only in memory, in `_undelivered_inserts` (the not-inserted rows),
+    and completing the slot deleted the only audio it could be made again from
+    with "keep last recording" off. The two failed-insert sites of
+    `_on_transcription_ready` (the streaming tail and the batch text) now pass
+    `delivered=False` to `_mark_last_recording_completed`, which then marks the
+    slot failed (`_UNSAVED_AND_UNDELIVERED_KEPT_RECORDING_MESSAGE`) when
+    `job.history_refused` is set. A refused write with a successful paste still
+    completes (negative control above); so does a failed paste whose entry
+    exists, since the text is in History. Tests:
+    `test_a_transcript_neither_saved_nor_pasted_keeps_the_managed_recording`
+    and `test_a_streaming_tail_neither_saved_nor_pasted_keeps_the_managed_recording`.
+    Not covered: a result that joined the paste queue
+    (`_deliver_foreground_through_paste_queue`) completes the slot before its
+    deferred paste runs, so a refused write followed by a failed queued paste
+    still ends with the text only in memory and the slot completed
+    (`docs/agents/known-limitations.md`).
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.
@@ -795,7 +844,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   quit waited out the 2 s grace and then killed it. Quit with a loaded
   Cohere runtime: 2.2 s before, 0.4 s after (2026-10-03).
 - **`LastRecordingStore.selectable_path()` alone picks "Use last
-  recording"**: newest managed/archive WAV; a recoverable managed one wins.
+  recording"**: the newest of the managed WAV and the newest *archived
+  recording* in the recordings folder; a recoverable managed one wins. An
+  archived recording is a file named by `app_paths.ARCHIVED_RECORDING_NAME_RE`,
+  the rule the retention count prunes by (one definition, shared; it used to live
+  in `controller.py`). The folder also holds `unfinished_*` copies that History
+  entries link (gap and fallback transcripts, kept unfinished recordings):
+  taking the newest `.wav` of any name could answer one of those instead of the
+  newest dictation's archive file whenever it was newer (2026-10-23).
 - **Selected local models are strict**: transcription waits off the Qt
   thread for the exact snapshot's preload; never use a fallback model.
   Preload results and cancel are generation-scoped. Batch may use an

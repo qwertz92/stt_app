@@ -3,6 +3,63 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: kept audio, review of the final fixes: four small findings
+
+Structurally: the archive's file-name rule moved out of `controller.py`
+(`_ARCHIVED_RECORDING_NAME_RE`) into `app_paths.ARCHIVED_RECORDING_NAME_RE`, so
+the retention count and "Use last recording" read one definition; the job got a
+second audio field, `audio_copied`, beside `source_audio_path`; and the three
+lines that followed each road's History write became one method,
+`_after_the_history_write`. An independent review of the six fixes above found no
+P1/P2; these are its four P3/P4 findings. Details in
+`docs/agents/controller-and-jobs.md`.
+- **P3: an ordinary transcript could lose its audio with its text.** History
+  refused the entry and the paste failed too (a read-only history file, a window
+  that refuses the keystroke): the text then lives only in
+  `_undelivered_inserts`, yet `_mark_last_recording_completed` completed the slot
+  and, with "keep last recording" off, deleted the only audio. The two failed-insert
+  sites of `_on_transcription_ready` now pass `delivered=False`, and a refused
+  write then marks the slot failed. The learning-log sentence of the round before
+  -- "a plain dictation completes because its text was pasted" -- was true only
+  while the paste worked; it is corrected in the area file. A refused write with a
+  working paste still completes (a negative control pins it).
+- **P4: with the archive on and the copy failing, the slot completed anyway.** The
+  check was `not job.source_audio_path`, but with "Archive every recording" the job
+  already carries the archive's file, which a count prunes; so a failed copy
+  looked like a linked one. `job.audio_copied` is set only when the copy exists.
+  This is the "second flag" the previous round declined to add.
+- **P4: a refused write left an orphan copy no entry links.** On both dictation
+  roads and on the import road the copy stayed in the recordings folder, never
+  pruned and known to nothing (the import road even made a numbered second one on
+  the next import). After a refused write the slot is marked failed, and the copy
+  is deleted only when the store took that mark -- the audio then lives in the
+  slot, offered again by the next start; where the store did not (a newer
+  recording replaced the slot, the job has no id) the copy is the only audio, stays
+  and its path is logged. The fallback notice changed with it: it names the folder
+  only where a copy remains, and says "The transcript could not be saved to
+  History" where the slot holds the audio. The price of deleting: the audio of such
+  a transcript then lives until the next dictation instead of indefinitely. This
+  round's brief chose that; the alternative, keeping the copy and naming it, would
+  keep an unlinked file for every refusal.
+- **P4: "Use last recording" could answer a kept copy.** With the archive on,
+  `selectable_path` took the newest `.wav` of any name in the recordings folder;
+  an `unfinished_*` copy newer than the newest dictation's archive file won. It now
+  considers only archived-recording names.
+- **Not done.** The reviewer's wording point ("could not be kept" is pessimistic)
+  stays as it was. Two narrow gaps are recorded in
+  `docs/agents/known-limitations.md` instead of fixed: a refused write followed by
+  a failed *queued* paste still completes the slot, and a raising failed mark on the
+  import road leaves the copy's path out of the log. The second was closed in the
+  merge with the parallel retranscription fix, which had wrapped that same mark in
+  its own `try`: a raising mark now counts as not taken, so the copy stays and
+  `_drop_unlinked_audio_copy` names it.
+- **Evidence.** Thirteen new or changed tests fail against the controller before
+  the change, each for its reason (a surviving copy, a missing path in the log, a
+  cleared slot, a wrong file selected), and pass after it; the controls (a plain
+  dictation with a refused entry and a working paste, the user's own file in a
+  refused import) pass both ways. The seven modules named in the brief: 889 passed.
+  The full suite was not run, and no second reviewer saw these fixes (all P3/P4).
+
 ## 2026-10-23: second review of the crash and retranscription follow-ups
 
 The independent review of `bceea09` and `d200c9e` found no P1/P2. Fixed:
@@ -47,6 +104,7 @@ skip with the measured height when the screen cannot show what they claim
 about; a temporary probe drove both skip paths locally (a 330 px dialog: a
 47 px viewport, one 28 px row; a 5000 px request: 1421 px). This is the
 failure class the dry run exists for: no local run sees the runner's screen.
+
 
 ## 2026-10-23: kept audio of the Retry work, final review: six small fixes
 

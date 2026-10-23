@@ -39,6 +39,7 @@ from speech_fixtures import (
 )
 
 import stt_app.main as main_module
+from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE
 from stt_app.config import (
     CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
@@ -48,11 +49,7 @@ from stt_app.config import (
     QUEUE_ROW_KIND_UNDELIVERED,
     SILENCE_GATE_THRESHOLD_MIN,
 )
-from stt_app.controller import (
-    _ARCHIVED_RECORDING_NAME_RE,
-    _join_transcripts,
-    _TranscriptionJob,
-)
+from stt_app.controller import _join_transcripts, _TranscriptionJob
 from stt_app.history_audio import resolve_history_audio_path
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
@@ -4119,7 +4116,7 @@ def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
     assert kept.read_bytes() == audio
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert resolve_history_audio_path(entry) == kept
     assert controller._last_recording_store.load() is None, "completed as usual"
     assert tray == [
@@ -4173,63 +4170,150 @@ def test_the_fallback_notice_comes_after_the_history_entry(
     _ = app
 
 
-@pytest.mark.parametrize(
-    ("move_fails", "folder"),
-    [(False, "recordings folder"), (True, "unfinished recordings folder")],
-    ids=["moved", "move-failed"],
-)
-def test_the_fallback_notice_does_not_promise_history_when_the_entry_was_refused(
-    monkeypatch, tmp_path, move_fails, folder
-):
-    """The History write failed: the copy is kept, but there is no entry to
-    Retranscribe from, and the notice says so and names the folder the copy
-    really sits in -- the unfinished recordings folder when its move to the
-    recordings folder failed too. With no entry linking the copy, the managed
-    recording stays kept as well (marked failed): nothing else in the app
-    leads to the audio."""
-    recordings = tmp_path / "recordings"
-    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
-        monkeypatch,
-        tmp_path,
-        mode="insert",
-        language_mode="auto",
-        recordings_dir=str(recordings),
-    )
-    token = _record_and_stop(controller)
-    controller._on_transcription_failed("boom", request_token=token)
-    controller._settings = replace(
-        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
-    )
+def _refuse_the_history_write_and_perhaps_the_move(monkeypatch, *, move_fails):
+    """A `before_delivery` hook: History refuses the entry (a read-only file),
+    and with `move_fails` the move of the copy to the recordings folder fails
+    too, which leaves the copy in the unfinished recordings folder."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("history is read-only")
 
-    monkeypatch.setattr(history, "add_entry", _refuse)
-    if move_fails:
-        monkeypatch.setattr(controller._unfinished_recording_store, "move_to", _refuse)
-    tray: list[str] = []
-    controller.busy_overlay_error.connect(tray.append)
-    assert controller.retry_last_transcription() is True
+    def _hook(controller, history):
+        monkeypatch.setattr(history, "add_entry", _refuse)
+        if move_fails:
+            monkeypatch.setattr(
+                controller._unfinished_recording_store, "move_to", _refuse
+            )
 
-    controller._on_transcription_ready(
-        "hallo", request_token=controller._active_request_token
+    return _hook
+
+
+def _files_kept_anywhere(controller, recordings):
+    """Every file in the recordings folder and the unfinished recordings
+    folder."""
+    return [
+        path
+        for folder in (recordings, controller._unfinished_recording_store.directory)
+        if folder.exists()
+        for path in folder.iterdir()
+    ]
+
+
+@pytest.mark.parametrize("move_fails", [False, True], ids=["moved", "move-failed"])
+def test_a_refused_history_write_leaves_a_fallback_retrys_audio_to_the_managed_recording(
+    monkeypatch, tmp_path, move_fails
+):
+    """The History write failed, so no entry links the copy and nothing in the
+    app leads to it; no recordings count prunes it either, so it would stay as
+    a file nobody knows about. The retry is of the recording the managed slot
+    still holds, so the slot keeps the audio (marked failed) and the copy is
+    deleted, from whichever folder it sits in. The notice says the transcript
+    was not saved and that the last recording is what is kept."""
+    controller, app, tray, history, _audio, recordings = (
+        _a_retry_under_canary_that_finished(
+            monkeypatch,
+            tmp_path,
+            recorded="auto",
+            before_delivery=_refuse_the_history_write_and_perhaps_the_move(
+                monkeypatch, move_fails=move_fails
+            ),
+        )
     )
 
     assert history.load() == []
-    where = (
-        controller._unfinished_recording_store.directory if move_fails else recordings
-    )
-    [kept] = list(where.iterdir())
-    assert kept.is_file()
+    assert _files_kept_anywhere(controller, recordings) == []
     assert tray == [
         _FALLBACK_NOTICE
-        + f"The audio is kept in the {folder}, but its transcript could "
-        "not be saved to History (see the log)."
+        + "The transcript could not be saved to History (see the log); the last "
+        "recording is kept only until the next dictation or restart."
     ]
     store = controller._last_recording_store
     state = store.load()
     assert state is not None and state.status == "failed"
     assert store.selectable_path() is not None
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("move_fails", "folder"),
+    [(False, "recordings folder"), (True, "unfinished recordings folder")],
+    ids=["moved", "move-failed"],
+)
+def test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_hold(
+    monkeypatch, tmp_path, caplog, move_fails, folder
+):
+    """The retry finished behind a newer dictation, whose recording replaced the
+    retried one in the managed slot, and History refused the entry: the copy is
+    the only audio left, so it stays. The notice names the folder it sits in --
+    the unfinished recordings folder when its move to the recordings folder
+    failed too -- and the log names the file. The newer dictation's recording
+    is not relabeled."""
+    caplog.set_level(logging.WARNING)
+    controller, app, tray, history, audio, recordings = (
+        _a_retry_under_canary_that_finished(
+            monkeypatch,
+            tmp_path,
+            recorded="auto",
+            newer_dictation=True,
+            before_delivery=_refuse_the_history_write_and_perhaps_the_move(
+                monkeypatch, move_fails=move_fails
+            ),
+        )
+    )
+
+    assert history.load() == []
+    [kept] = _files_kept_anywhere(controller, recordings)
+    assert kept.parent == (
+        controller._unfinished_recording_store.directory if move_fails else recordings
+    )
+    assert kept.read_bytes() == audio
+    assert str(kept) in caplog.text, "the log names the only copy of the audio"
+    assert tray == [
+        _FALLBACK_NOTICE
+        + f"The audio is kept in the {folder}, but its transcript could "
+        "not be saved to History (see the log)."
+    ]
+    newer = controller._jobs[controller._active_request_token]
+    state = controller._last_recording_store.load()
+    assert state is not None and state.recording_id == newer.source_recording_id
+    assert state.status != "failed", "the newer recording is not relabeled"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refused_history_write_and_a_failed_copy_say_that_nothing_is_kept(
+    monkeypatch, tmp_path
+):
+    """The retry finished behind a newer dictation, its copy could not be
+    written and History refused the entry too: no audio of the retry is kept
+    anywhere, and the notice says both instead of saying that the last
+    recording is kept (that one is the newer dictation's)."""
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    def _hook(controller, history):
+        monkeypatch.setattr(history, "add_entry", _refuse)
+        monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+
+    controller, app, tray, history, _audio, recordings = (
+        _a_retry_under_canary_that_finished(
+            monkeypatch,
+            tmp_path,
+            recorded="auto",
+            newer_dictation=True,
+            before_delivery=_hook,
+        )
+    )
+
+    assert history.load() == []
+    assert _files_kept_anywhere(controller, recordings) == []
+    assert tray == [
+        _FALLBACK_NOTICE
+        + "The transcript could not be saved to History (see the log), and the "
+        "audio could not be kept."
+    ]
     controller.shutdown()
     _ = app
 
@@ -4447,7 +4531,7 @@ def test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it(
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
     assert kept.read_bytes() == audio
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert resolve_history_audio_path(entry) == kept
     assert controller._last_recording_store.load() is None, "completed as usual"
     controller.shutdown()
@@ -4524,7 +4608,7 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     [entry] = history.load()
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert kept.read_bytes() == audio
     for index in range(3):
         (recordings / f"recording_20260101_000000_00000{index}.wav").write_bytes(b"x")
@@ -4535,7 +4619,7 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     archived = [
         path
         for path in recordings.iterdir()
-        if _ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
+        if ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
     ]
     assert len(archived) == 1
     assert controller._last_recording_store.load() is None, "completed as usual"
@@ -4584,12 +4668,13 @@ def test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_reco
     """The copy was made, but no entry links it, so nothing in the app leads
     to it: the managed recording stays kept (marked failed), reachable from
     Import and offered by the next start, instead of completing and being
-    deleted with the setting off."""
+    deleted with the setting off. The slot is the audio's home then, so the
+    copy -- a file no entry names and no count prunes -- is deleted."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("history is read-only")
 
-    controller, app, history, audio, recordings = (
+    controller, app, history, _audio, recordings = (
         _a_dictation_whose_transcript_has_a_gap(
             monkeypatch,
             tmp_path,
@@ -4600,12 +4685,47 @@ def test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_reco
     )
 
     assert history.load() == []
-    [copy] = list(recordings.iterdir())
-    assert copy.read_bytes() == audio
+    assert _files_kept_anywhere(controller, recordings) == []
     store = controller._last_recording_store
     state = store.load()
     assert state is not None and state.status == "failed"
     assert store.selectable_path() is not None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refused_history_write_keeps_a_gap_copy_the_slot_cannot_hold(
+    monkeypatch, tmp_path, caplog
+):
+    """The older dictation finishes behind a newer one (the background road),
+    whose recording replaced it in the managed slot, and History refuses the
+    entry: the copy is the only audio of the gap, so it stays, and the log
+    names the file -- a gap raises no notice of its own. The newer recording
+    is not relabeled."""
+    caplog.set_level(logging.WARNING)
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert", recordings_dir=str(recordings)
+    )
+    older = _record_and_stop(controller)
+    audio = controller._request_audio_by_token[older][0]
+    newer = _record_and_stop(controller)
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    monkeypatch.setattr(history, "add_entry", _refuse)
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=older)
+
+    assert history.load() == []
+    [kept] = _files_kept_anywhere(controller, recordings)
+    assert kept.parent == recordings and kept.read_bytes() == audio
+    assert str(kept) in caplog.text, "the log names the only copy of the audio"
+    state = controller._last_recording_store.load()
+    assert state is not None
+    assert state.recording_id == controller._jobs[newer].source_recording_id
+    assert state.status != "failed", "the newer recording is not relabeled"
     controller.shutdown()
     _ = app
 
@@ -4615,7 +4735,8 @@ def test_a_plain_transcript_with_a_refused_history_write_still_completes_the_rec
 ):
     """Negative control: only a transcript whose audio must be kept (a gap, a
     language fallback) holds the managed recording back when its entry is
-    refused. A plain dictation was pasted, so completing is as before."""
+    refused, and a plain one whose text did not get delivered (the next test).
+    A plain dictation that was pasted completes as before."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("history is read-only")
@@ -4630,6 +4751,118 @@ def test_a_plain_transcript_with_a_refused_history_write_still_completes_the_rec
 
     assert history.load() == []
     assert controller._last_recording_store.load() is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_transcript_neither_saved_nor_pasted_keeps_the_managed_recording(
+    monkeypatch, tmp_path
+):
+    """History refused the entry and the paste failed as well, so the text
+    exists only in memory (the not-inserted rows) and the recording is the only
+    other source of it. Completing the slot deleted that audio with "keep last
+    recording" off; it is marked failed instead, as for a gap."""
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        inserter=FakeTextInserter(should_fail=True),
+    )
+    monkeypatch.setattr(history, "add_entry", _refuse)
+    token = _record_and_stop(controller)
+
+    controller._on_transcription_ready("a plain transcript", request_token=token)
+
+    assert history.load() == []
+    assert [row.text for row in controller._undelivered_inserts] == [
+        "a plain transcript"
+    ]
+    store = controller._last_recording_store
+    state = store.load()
+    assert state is not None and state.status == "failed"
+    assert store.audio_path.is_file()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_tail_neither_saved_nor_pasted_keeps_the_managed_recording(
+    monkeypatch, tmp_path
+):
+    """The same for a streaming dictation whose final insertion failed: the
+    words already in the document are not the tail, and with the entry refused
+    the whole text exists only in memory."""
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        inserter=FakeTextInserter(should_fail=True),
+    )
+    monkeypatch.setattr(history, "add_entry", _refuse)
+    assert controller._persist_last_recording_audio(b"RIFF-streamed", "auto")
+    token = 5
+    controller._register_transcription_job(
+        token,
+        controller._settings,
+        "streaming",
+        source_recording_id=controller._last_persisted_recording_id,
+    )
+    controller._active_request_token = token
+    controller._active_session_mode = "streaming"
+    controller._streaming_recording = True
+    controller._stream_text_state.committed_text = "erster teil"
+    controller._stream_text_state.live_text = "erster teil"
+
+    controller._on_transcription_ready("erster teil zweiter teil", request_token=token)
+
+    assert history.load() == []
+    store = controller._last_recording_store
+    state = store.load()
+    assert state is not None and state.status == "failed"
+    assert store.audio_path.is_file()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_archive_copy_failed_keeps_the_managed_recording(
+    monkeypatch, tmp_path
+):
+    """With "Archive every recording" the job already carries the archive's
+    path, but `_prune_recordings` deletes that file after enough newer
+    recordings, so it is no copy: the entry links it, and when the real copy
+    failed the slot must stay, or the audio is gone after the next prune.
+    (The fake capture writes no archive file; the job still carries its path.)"""
+    recordings = tmp_path / "recordings"
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch,
+        tmp_path,
+        mode="insert",
+        recordings_dir=str(recordings),
+        save_all_recordings=True,
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+    token = _record_and_stop(controller)
+    assert controller._jobs[token].source_audio_path, "the archive's path"
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token)
+
+    [entry] = history.load()
+    assert entry.source_audio_path, "the entry links the archive's file"
+    store = controller._last_recording_store
+    state = store.load()
+    assert state is not None and state.status == "failed"
+    assert store.selectable_path() is not None
     controller.shutdown()
     _ = app
 
