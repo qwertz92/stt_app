@@ -3,6 +3,20 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23 (five P4s the review found in the three overlay/tray/benchmark fixes)
+
+- A stale "disabled while busy" in `controller-and-jobs.md` contradicted the
+  unlocked Language button; the overlay's caption can differ from the snapshot
+  when the saved language is not offered, and now says so (`overlay.md`); the
+  tray's two edge cases are written down (`windows-platform.md`); the History
+  column order lives only in `_BENCHMARK_HISTORY_COLUMNS`, the indexes and the
+  row values derived from it; the two tray double-click tests use a 400 ms
+  interval, since an 80 ms one failed on any stall past 80 ms between two emits.
+  The caption claim is narrower than the review's wording: it names the first
+  offered language while the provider sends its own stand-in, the same language
+  only where the stand-in leads the list (Canary: German; checked, not for every
+  provider).
+
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
 Second half of the same report (entry below): the green said "Speak now"

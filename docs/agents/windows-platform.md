@@ -134,6 +134,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
     that a single click shows the overlay 500 ms late (the "Show overlay" menu
     item and its hotkey stay immediate); the deliberate single-click reveal
     stays, because it keeps dictation reachable without a keyboard.
+  - **Two consequences a user can meet.** (a) A second click within the
+    double-click interval of the first is a double-click to the shell, which
+    sends `DoubleClick`: it opens Settings, whether or not the user meant to
+    reveal the overlay twice. (b) A deliberate single click within one interval
+    after a double-click is dropped, because it cannot be told apart from the
+    trailing `Trigger` above; the user clicks again. Both are the price of
+    telling a single click from a double-click at all, and
+    `test_clicks_after_a_double_click_surface_the_overlay_again` pins that the
+    drop ends after one interval.
   - **Done in `main`, not in `WindowsTrayIcon`**, so the `QSystemTrayIcon`
     fallback is covered as well (it is assumed to deliver the same sequence;
     that was not measured).
