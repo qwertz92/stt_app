@@ -175,12 +175,14 @@ _BENCHMARK_HISTORY_COLUMNS = (
     "Status",
     "Models",
 )
-_BENCHMARK_HISTORY_RECORDED_COLUMN = 0
-_BENCHMARK_HISTORY_AUDIO_COLUMN = 1
-_BENCHMARK_HISTORY_RUNS_COLUMN = 2
-_BENCHMARK_HISTORY_BEST_RTF_COLUMN = 3
-_BENCHMARK_HISTORY_STATUS_COLUMN = 4
-_BENCHMARK_HISTORY_MODELS_COLUMN = 5
+# The order lives in the tuple above alone; the indexes and the row values
+# (`_refresh_benchmark_history_list`) are keyed by these.
+_BENCHMARK_HISTORY_RECORDED_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Recorded")
+_BENCHMARK_HISTORY_AUDIO_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Audio")
+_BENCHMARK_HISTORY_RUNS_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Runs")
+_BENCHMARK_HISTORY_BEST_RTF_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Best RTF")
+_BENCHMARK_HISTORY_STATUS_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Status")
+_BENCHMARK_HISTORY_MODELS_COLUMN = _BENCHMARK_HISTORY_COLUMNS.index("Models")
 _BENCHMARK_HISTORY_AUDIO_CHARACTERS = 24
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
@@ -2949,22 +2951,29 @@ class _BenchmarkMixin:
             )
             actual_runs = sum(len(case.runs) for case in entry.cases)
             models_label, models_tooltip = _benchmark_models_label(entry)
-            values = [
-                _benchmark_created_label(entry.created_at),
-                entry.options.audio_name or Path(entry.options.audio_path).name or "-",
-                str(actual_runs),
-                _format_number(best_rtf),
-                _benchmark_status_text(entry.status),
-                models_label,
-            ]
-            for column, value in enumerate(values):
+            values = {
+                _BENCHMARK_HISTORY_RECORDED_COLUMN: _benchmark_created_label(
+                    entry.created_at
+                ),
+                _BENCHMARK_HISTORY_AUDIO_COLUMN: (
+                    entry.options.audio_name
+                    or Path(entry.options.audio_path).name
+                    or "-"
+                ),
+                _BENCHMARK_HISTORY_RUNS_COLUMN: str(actual_runs),
+                _BENCHMARK_HISTORY_BEST_RTF_COLUMN: _format_number(best_rtf),
+                _BENCHMARK_HISTORY_STATUS_COLUMN: _benchmark_status_text(entry.status),
+                _BENCHMARK_HISTORY_MODELS_COLUMN: models_label,
+            }
+            for column in range(len(_BENCHMARK_HISTORY_COLUMNS)):
+                value = values[column]
                 item = QtWidgets.QTableWidgetItem(value)
                 item.setToolTip(
                     models_tooltip
                     if column == _BENCHMARK_HISTORY_MODELS_COLUMN
                     else value
                 )
-                if column == 0:
+                if column == _BENCHMARK_HISTORY_RECORDED_COLUMN:
                     item.setData(QtCore.Qt.UserRole, entry)
                 self.benchmark_history_list.setItem(row, column, item)
             if (
@@ -2988,7 +2997,9 @@ class _BenchmarkMixin:
         selected = self.benchmark_history_list.selectionModel().selectedRows()
         if not selected:
             return None
-        item = self.benchmark_history_list.item(selected[0].row(), 0)
+        item = self.benchmark_history_list.item(
+            selected[0].row(), _BENCHMARK_HISTORY_RECORDED_COLUMN
+        )
         if item is None:
             return None
         entry = item.data(QtCore.Qt.UserRole)
@@ -3104,7 +3115,9 @@ class _BenchmarkMixin:
             return
         entry = item.data(QtCore.Qt.UserRole)
         if not isinstance(entry, BenchmarkHistoryEntry):
-            first = self.benchmark_history_list.item(item.row(), 0)
+            first = self.benchmark_history_list.item(
+                item.row(), _BENCHMARK_HISTORY_RECORDED_COLUMN
+            )
             entry = first.data(QtCore.Qt.UserRole) if first is not None else None
         if isinstance(entry, BenchmarkHistoryEntry):
             if not self._may_replace_shown_benchmark_result():
