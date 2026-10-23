@@ -244,12 +244,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     a1e0b01). The dictation roads (a dictation or a retry, foreground or
     background, all through `_on_transcription_ready`) keep it in a copy in
     the recordings folder that the History entry links
-    (`_keep_audio_of_a_gap_transcript`, `docs/agents/controller-and-jobs.md`),
-    and so does the import of the managed last recording
-    (`transcribe_audio_file`); only where that copy could not be written is
-    the managed recording marked failed instead, which was the first design
-    on every road and keeps the audio only until the next dictation replaces
-    the slot (follow-up of the round-3 review, 2026-10-23). The startup check
+    (`_keep_audio_of_a_delivery`, `docs/agents/controller-and-jobs.md`, made
+    even with "Archive every recording", whose files a count prunes), and so
+    does the import of the managed last recording (`transcribe_audio_file`);
+    only where that copy could not be written or linked is the managed
+    recording marked failed instead, which was the first design on every road
+    and keeps the audio only until the next dictation replaces the slot
+    (follow-up of the round-3 review, 2026-10-23). The startup check
     `main._complete_unless_gap` spares such a failed recording whenever its
     transcript has a gap: it finds the transcript in history and used to
     complete -- i.e. delete -- the kept recording on the next launch (review

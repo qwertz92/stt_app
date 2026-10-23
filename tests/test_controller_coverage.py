@@ -10353,6 +10353,35 @@ def test_an_imported_last_recording_with_a_gap_stays_managed_when_the_copy_fails
     _ = app
 
 
+def test_an_imported_last_recording_with_a_gap_stays_managed_when_history_refuses(
+    monkeypatch, tmp_path
+):
+    """The copy was made, but no entry links it, so nothing in the app leads to
+    it: the managed recording stays kept (marked failed) instead of completing
+    and being deleted with `save_last_wav` off."""
+    controller, app, last_recording_store, recordings, last_path = (
+        _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
+    )
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    monkeypatch.setattr(controller._history_store, "add_entry", _refuse)
+
+    ok, _text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is True
+    assert controller._history_store.load() == []
+    [copy] = list(recordings.iterdir())
+    assert copy.read_bytes() == b"RIFF"
+    assert last_recording_store.completed == 0
+    assert last_recording_store.failed == [
+        controller_module._GAP_KEPT_RECORDING_MESSAGE
+    ]
+    controller.shutdown()
+    _ = app
+
+
 def test_a_background_transcript_with_a_gap_keeps_its_recording():
     """End to end through the background delivery: a newer session owns the
     overlay, the older job's result carries a gap marker."""

@@ -468,8 +468,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     next start (reproduced by the round-3 review with real futures). Now the
     job carries `language_fallback_from` (the recorded language; `_retry_settings`
     returns it as its third value and `retry_last_transcription` passes it on),
-    and `_on_transcription_ready` calls `_keep_audio_of_a_fallback_retry`
-    before either road writes its History entry: the audio is saved as an
+    and `_on_transcription_ready` calls `_keep_audio_of_a_delivery` (one method
+    for this and for a gap transcript, below) before either road writes its
+    History entry: the audio is saved as an
     unfinished recording and moved to the recordings folder under its own
     name (`UnfinishedRecordingStore.save` and `move_to`, the pair
     `_retain_unfinished_audio` uses), a name no recordings count prunes
@@ -480,16 +481,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     copy could not be written (review round 4, 2026-10-23): completing it then
     deleted the only audio, so the recording is marked failed instead
     (`_LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE`), kept until the next
-    dictation or restart, as for a gap. Recordings that fell back nowhere are
+    dictation or restart, as for a gap. The same holds where the foreground
+    road's History write was refused (`job.history_refused`, set right after
+    the write): the copy exists but no entry links it, so nothing in the app
+    leads to it except the managed recording (final review, 2026-10-23); the
+    background road never completes a slot whose entry is missing. Recordings
+    that fell back nowhere are
     kept or not as the retention settings say, unchanged. One
     `busy_overlay_error` tray notice names the language that ran, sent by
     `_announce_language_fallback` after the History write was tried (both
     roads), because only an existing entry makes "Retranscribe... in History"
     true: with the entry it points there; with the copy but no entry
-    (`_append_transcript_history` answered None) it says the audio is kept in
-    the recordings folder and the transcript could not be saved; with no copy
-    it says "The audio could not be copied (see the log)" and that the last
-    recording is kept only until the next dictation or restart. The copy never
+    (`_append_transcript_history` answered None) it says the audio is kept and
+    the transcript could not be saved, naming the folder the file really sits
+    in -- the recordings folder, or the unfinished recordings folder when the
+    move failed too (the file is then linked at the unfinished path, below);
+    with no copy it marks the managed recording failed itself and takes the
+    store's answer (`_mark_last_recording_failed` returns it): "The audio could
+    not be copied (see the log)" and that the last recording is kept only until
+    the next dictation or restart where the slot took the mark, but "The audio
+    could not be kept (see the log)." where it did not -- the retry finished
+    behind a newer dictation, whose recording replaced the retried one in the
+    slot, and the delivery retired the retry's own bytes, so no audio of it is
+    kept anywhere (final review P3-1; the line used to promise the newer
+    dictation's recording). The copy never
     takes the transcript down: `_keep_audio_in_recordings_folder` catches
     whatever the store or the folder raises (`Exception`, logged with its
     traceback), since it runs before the History write; a saved file that
@@ -505,7 +520,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     dialog that already names the language). Tests:
     `test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it`,
     `test_the_kept_audio_survives_the_next_start_and_the_next_dictation`,
-    `test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept`, the
+    `test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept`,
+    `test_the_no_copy_notice_does_not_promise_a_recording_a_newer_dictation_replaced`,
+    `test_the_fallback_notice_does_not_promise_history_when_the_entry_was_refused`
+    (both folders), the
     negative control `test_a_retry_in_the_recorded_language_keeps_no_extra_copy`
     and, for the restart road, `test_a_fallback_language_keeps_the_recording_like_a_gap_does`.
     The language also travels to disk, so the same holds after a restart:
@@ -550,36 +568,59 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     the fallback retry's audio had, which the next dictation replaces, so the
     stretch was gone as soon as the user dictated again (the next start
     already spared it: `main._complete_unless_gap`). `_on_transcription_ready`
-    now also calls `_keep_audio_of_a_gap_transcript` before either road writes
-    its History entry, for a job that links no file yet
-    (`not job.source_audio_path`): the same copy into the recordings folder
-    (`_keep_audio_in_recordings_folder`, shared with the fallback retry; the
-    file's language tag is the recording's own, from
-    `_recorded_language_by_recording_id`), linked by `job.source_audio_path`,
-    so History's Retranscribe offers it. `_mark_last_recording_completed` then
-    completes the managed slot as for any success, unless the job links no
-    file, which is where the copy could not be written (or the job has no
-    audio or recording id, or the copy raised anything at all, not only
-    `OSError`; review round 4): there the managed recording is marked failed as
-    before, the only copy until the next dictation. A job that links a file
-    already -- "Archive every recording" -- keeps its audio by the settings:
-    no extra copy, and the slot completes. Without a gap nothing changes, and
+    now also calls `_keep_audio_of_a_delivery` before either road writes its
+    History entry (the one method the fallback retry uses too, so a transcript
+    with both reasons gets one copy, not two): the same copy into the
+    recordings folder (`_keep_audio_in_recordings_folder`; the file's
+    language tag is the recording's own, from
+    `_recorded_language_by_recording_id`, else the job's own selection, as the
+    quit road tags it), linked by `job.source_audio_path`, so History's
+    Retranscribe offers it. `_mark_last_recording_completed` then completes
+    the managed slot as for any success, unless the job links no copy, which
+    is where the copy could not be written (or the job has no audio, or the
+    copy raised anything at all, not only `OSError`; review round 4), or the
+    foreground road's History write was refused (`job.history_refused`): there
+    the managed recording is marked failed as before, the only copy until the
+    next dictation. The copy is made **even with "Archive every recording"**
+    (final review P4-1, 2026-10-23; owner's decision to copy anyway): the
+    archive's file is deleted by `_prune_recordings` after the count of newer
+    recordings, while a recordings-folder copy under another name never is, so
+    the entry links the copy and the gap's audio outlives the archive. A job
+    **with no recording id** (the store refused its bytes, so it marks nothing
+    and its audio exists only in memory) gets `uuid4().hex` for the copy, as
+    the quit road's copies do: `UnfinishedRecordingStore.save` refuses an
+    empty id, which used to leave such a gap with no copy at all (final review
+    P3-2). Without a gap nothing changes, and
     a gap raises no tray notice of its own: the marker is in the pasted text and
     in History, and the overlay stays Done. The import of the managed last
     recording (`transcribe_audio_file`, Import tab) does the same
     (`_keep_audio_of_an_imported_last_recording`: the import's own bytes, or
     the slot's file, through the same `_keep_audio_in_recordings_folder`), and
-    marks the slot failed only where that copy failed. An import of any other
+    marks the slot failed only where that copy failed or its History write was
+    refused. An import of any other
     file links the file itself, as before. Tests in
     `tests/test_controller_queue.py`:
     `test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it`,
     `test_the_gap_audio_survives_the_next_dictation_and_the_next_start`, the
-    background road, the archive case, the copy-failed case,
+    background road, the archive case
+    (`test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy`,
+    which runs the archive's pruning), the no-id case
+    (`test_a_job_without_a_recording_id_still_gets_a_copy_of_its_gap_audio`),
+    the copy-failed case, the refused-History cases
+    (`test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_recording`
+    and the negative control
+    `test_a_plain_transcript_with_a_refused_history_write_still_completes_the_recording`),
     `test_a_fallback_retry_with_a_gap_keeps_one_copy` and the negative
     control `test_a_transcript_without_a_gap_keeps_no_copy`; in
-    `tests/test_controller_coverage.py` the two import cases
-    (`test_an_imported_last_recording_with_a_gap_is_kept` and its copy-failed
-    twin).
+    `tests/test_controller_coverage.py` the import cases
+    (`test_an_imported_last_recording_with_a_gap_is_kept`, its copy-failed
+    twin and `test_an_imported_last_recording_with_a_gap_stays_managed_when_history_refuses`).
+    A plain dictation whose History write is refused still completes its
+    slot: its text was pasted, and only a transcript whose audio must be kept
+    (a gap, a language fallback) holds the slot back.
+    `main._complete_unless_gap` still spares a gap transcript's recording at
+    the next start, but only for what the controller kept on purpose (no
+    linked copy) or a completion a crash cut off.
   - Model, engine or vocabulary changed between two queued recordings do reload
     the cached runtime when the second job acquires it (their identity differs);
     only language never does.

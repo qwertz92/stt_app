@@ -3,6 +3,76 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-10-23: kept audio of the Retry work, final review: six small fixes
+
+Structurally: the two methods that kept a gap transcript's audio and a fallback
+retry's audio, and the helper under them (`_keep_audio_of_a_gap_transcript`,
+`_keep_audio_of_a_fallback_retry`, `_keep_audio_of_a_job`), are now one,
+`_keep_audio_of_a_delivery`, called once from `_on_transcription_ready` when the
+job is a fallback retry or its text has a gap. The final read-only review over
+the three kept-audio commits found no P1/P2; the owner wanted its easy P3/P4
+findings fixed before v0.13.0. Details in `docs/agents/controller-and-jobs.md`.
+- **P3: the "no copy" tray line could be false.** A fallback retry of recording
+  R that finishes behind a newer dictation D2 (the background road) with a
+  failing copy marked R failed -- keyed to R, so a no-op, because the slot
+  already held D2 -- while the delivery retired the retry's own bytes of R.
+  The line still said "the last recording is kept only until the next
+  dictation or restart": it described D2's recording, and R's audio was gone.
+  `_mark_last_recording_failed` now answers whether the store took the mark,
+  and `_announce_language_fallback` makes that mark itself and words the line
+  from the answer: "The audio could not be kept (see the log)." when it did
+  not.
+- **P3: a job with no recording id never got a copy.** The store refusing a
+  recording (a full disk) leaves the job with id "" and its audio only in
+  memory; `UnfinishedRecordingStore.save` raises on an empty id and the copy
+  step swallowed it, so a gap or fallback transcript of such a job kept
+  nothing. The copy now gets `uuid4().hex` as the quit road's copies do, and
+  the file's language tag is the recorded one, else the job's own selection
+  (the quit road's order).
+- **P4 (owner's decision: copy anyway): the archive's file was not a copy.**
+  With "Archive every recording" the gap step was skipped because the job
+  already linked the archive's file, but `_prune_recordings` deletes archive
+  files once enough newer recordings exist, while recordings-folder copies
+  under another name are never pruned. The skip is gone; the entry links the
+  copy. The fallback road already copied unconditionally, and with the skip
+  removed a transcript with both reasons would have made two copies, so the two
+  steps became one method.
+- **P4: a refused History write left the copy unlinked and the slot cleared.**
+  On the foreground road and in the Import tab's road for the managed last
+  recording, a gap or fallback transcript whose entry could not be written
+  still completed the managed slot (deleted with `save_last_wav` off), so
+  nothing in the app led to the copy. The job now records the refusal
+  (`history_refused`) and the slot is marked failed instead, as for a failed
+  copy; the import road does the same when its entry is `None`. A plain
+  dictation with a refused entry still completes: its text was pasted, and
+  the scope of this round was gap and fallback only (a negative control pins
+  it).
+- **P4: the entry-less notice named the wrong folder.** When the move to the
+  recordings folder failed too, the file sits in the unfinished recordings
+  folder and the line now says that.
+- **P4: `main._complete_unless_gap`'s docstring** said gap recordings are kept
+  "marked failed"; that is now true only where no linked copy could be made, or
+  after a crash between the History write and the completion.
+- **Not done, with reasons.** The review's `shutil.move` duplicate point (a
+  move across volumes copies and then deletes the source, so a failed delete
+  can leave the file in both folders) was left out of this round. The
+  trade-off documented earlier and a speculative finding stay as they were.
+  With the archive on **and** the copy failing, the entry still links the
+  archive's file (which a count can prune later): that is the pre-existing
+  behaviour for the fallback road, and the gap road now matches it; closing it
+  needs a second flag for "a copy was made" and a failure of the disk on top of
+  a rare setting.
+- **Evidence.** The seven new or changed tests fail against the committed
+  controller (7 failed, 8 passed in the same selection: each for its intended
+  reason, e.g. the wording, a cleared slot, a missing copy) and the selection
+  passes on the fixed one. Affected modules on the fixed controller:
+  `test_controller_queue.py`, `test_controller_coverage.py` and
+  `test_controller.py` 804 passed; the other controller modules, the main
+  signals, unfinished-recording, last-recording, history and `gui_thread` tests
+  287 passed. The full suite was not run, and no independent reviewer saw
+  these six fixes (the rule stops reviews once no P1/P2 is left, and these are
+  P3/P4 fixes of a review that found none).
+
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
 Second half of the same report (entry below): the green said "Speak now"
