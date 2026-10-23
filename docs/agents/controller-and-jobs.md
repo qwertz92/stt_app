@@ -680,18 +680,54 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   - `faulthandler.enable(crash.log, all_threads=True)` for the process
     lifetime (`logs\crash.log`, held open; `CRASH_LOG_MAX_BYTES` 1 MB, then
     `crash.log.1` at the next start, one kept). Python logging never sees an
-    access violation in Qt or a C extension. Each session writes a start line;
-    `main` writes an end line after `app_exec_returned`.
-  - At start, the previous section is read back: no end line (a crash, kill,
-    Windows restart or power loss) or any faulthandler output logs one
-    WARNING `previous_session_end clean_quit=yes|no native_trace_lines=N
-    crash_log=...` with the last `CRASH_TRACE_MAX_LINES` (300) trace lines,
-    so `dictation.log` alone tells the story; "Copy diagnostics" then starts
-    at the previous session's marker instead of the current one.
+    access violation in Qt or a C extension. Each session writes a start
+    line, the first `aboutToQuit` handler (`_arm_quit_watchdog`) a "quit
+    started" line, and `main` an end line after `app_exec_returned`. When
+    faulthandler cannot be enabled after the start line, an "unavailable"
+    line follows it and the next start says nothing about that session:
+    nothing watched it and its end line would never come.
+  - At start, before the crash log is opened (so a log that cannot be
+    opened still gets the report), the previous section is read back, up to
+    `CRASH_LOG_MAX_BYTES` from the end (a longer section is read from its
+    end; until 2026-10-23 only 256 kB were read, and a section with longer
+    dumps went unreported). Three outcomes:
+    - Ended cleanly with no faulthandler output: nothing is logged.
+    - Quit started, no end line, no output: INFO
+      `previous_session_stopped_during_quit` ("for example by a Windows
+      shutdown or restart"). Qt emits `aboutToQuit` from inside
+      WM_ENDSESSION and calls `quit()` (measured 2026-10-23 with both
+      messages sent to a Qt window; WM_QUERYENDSESSION emits
+      `commitDataRequest` and answers 1), and Windows may end the process
+      once WM_ENDSESSION returns, before `app.exec()` does -- so a shutdown
+      looks like this. Reported as a crash, every reboot logged a warning and
+      doubled the next "Copy diagnostics"; the marker name deliberately does
+      not contain `previous_session_end`, so the copy does not reach back.
+      Not tested on a real shutdown; a kill during a quit looks the same.
+    - Anything else (no end line and no quit line -- a crash, a kill, a
+      power loss --, or any faulthandler output): WARNING
+      `previous_session_end clean_quit=yes|no quit_started=yes|no
+      native_trace_lines=N crash_log=...` with an excerpt, so
+      `dictation.log` alone tells the story; "Copy diagnostics" then starts at
+      the previous session's marker instead of the current one. The excerpt
+      is the last dump (from its "Fatal Python error" / "Windows fatal
+      exception" / "Timeout (" header; earlier ones are counted): whole up to
+      `CRASH_TRACE_MAX_LINES` (300), otherwise its first 20 and last 280
+      lines. faulthandler writes the header first and the crashing thread
+      ("Current thread") last, after every other thread (measured
+      2026-10-23), so keeping only the tail lost the fault's name.
   - `install_exception_logging` logs `sys.excepthook` (PySide6 reports a
     slot's exception there), `threading.excepthook` and `sys.unraisablehook`
     (ctypes callbacks, `__del__`) with the traceback, then calls the replaced
-    hook; idempotent. They went to a stderr the windowed build lacks.
+    hook even when logging raises; idempotent. They went to a stderr the
+    windowed build lacks.
+  - `install_qt_message_logging` installs Qt's message handler: each
+    message as `qt_message category=... text` at its type's level (debug
+    below INFO is dropped, critical as ERROR, fatal as CRITICAL), at most 20
+    times per session per text with numbers ignored (a warning on every
+    window move cannot fill the log), and a message raised while logging is
+    dropped instead of recursing. Qt's warnings went to stderr too: the
+    "Timers cannot be stopped from another thread" before the retranscription
+    crash was written nowhere.
   - Not changed, and why: `dictation.log` stays `RotatingFileHandler`
     (append, 1 MB x 3 backups). Verified 2026-10-23 that a restart never
     truncates it (the owner's file held the sessions of 17 and 22 October);

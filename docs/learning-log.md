@@ -73,6 +73,62 @@ findings fixed before v0.13.0. Details in `docs/agents/controller-and-jobs.md`.
   these six fixes (the rule stops reviews once no P1/P2 is left, and these are
   P3/P4 fixes of a review that found none).
 
+## 2026-10-23: History retranscription review follow-ups
+
+The independent review of the retranscription crash fix (entry further
+down) found no P1/P2; its P3 findings on this path, fixed before v0.13.0:
+- **A History reopened during a run never showed the new entry.** The run's
+  refresh was bound to the History it was started from. Retranscribe, close
+  it, close History, reopen History: the new one loaded its list before the
+  save, and the refresh went to the closed one. The refresh now goes to
+  `main`'s History presenter, which reloads whichever History is open when
+  the run ends.
+- **A failed run whose dialog was closed was silent**: the log said INFO
+  `ok=False chars=0`. Now a WARNING with the reason, and when the dialog is
+  gone by the time the failure arrives -- decided on the GUI thread, so a
+  close at that moment cannot lose it -- the tray shows "Retranscription
+  from History failed: ..." through the existing notification for a failed
+  queued transcription. An open dialog shows the failure and nothing else
+  does.
+- **"Saved to history" after a refused history write** (pre-existing):
+  `transcribe_audio_file` ignored `_append_transcript_history` returning
+  None. It now fails with the reason and the transcript after it, as the
+  unfinished-recordings path did, so the dialog still shows the text; a
+  managed last recording is marked failed, not completed. The log and the
+  tray never get the transcript (`transcript_history.failure_reason`).
+- **Recorded, not fixed**: archive retention can delete the WAV of a queued
+  retranscription (`docs/agents/known-limitations.md`, about 1 h).
+
+## 2026-10-23: crash reporting review follow-ups
+
+Same review, `logger.start_crash_reporting` and the quit:
+- **Every Windows restart looked like a crash.** Measured with both
+  messages sent to a Qt window: WM_QUERYENDSESSION emits
+  `commitDataRequest` and answers 1; WM_ENDSESSION emits `aboutToQuit`
+  synchronously and calls `quit()`. Windows may end the process once
+  WM_ENDSESSION returns, before `app.exec()` returns, so the session never
+  wrote its end line and the next start logged `previous_session_end
+  clean_quit=no` and doubled the diagnostics copy. The first `aboutToQuit`
+  handler now writes "quit started" into `crash.log`; with it and no trace
+  the next start logs INFO `previous_session_stopped_during_quit` and the
+  copy stays with the current session. A real shutdown was not tested.
+- **A long dump lost the fault's name.** The excerpt kept the last 300
+  lines, but faulthandler writes the header ("Windows fatal exception:
+  access violation") first and the crashing thread last, after all others
+  (measured; the review assumed the crashing thread came first). The
+  excerpt is now the last dump, its first 20 and last 280 lines when longer.
+- Smaller ones: the whole crash log is read (up to its 1 MB bound, not the
+  last 256 kB, which missed a section with long dumps); the previous session
+  is reported before `crash.log` is opened, so an open that fails no longer
+  drops it; a session whose faulthandler could not be enabled is marked and
+  not reported as a crash; the exception hooks call the hook they replaced
+  even when logging raises; `CrashLog.path` was unused and is gone.
+- **Qt's own messages reach the log** (`install_qt_message_logging`), at
+  their type's level, at most 20 times per text with numbers ignored, and
+  never recursing. "Timers cannot be stopped from another thread", printed
+  right before the retranscription crash, had gone to a stderr the windowed
+  build lacks.
+
 ## 2026-10-23: "Speak now" waits for the microphone's first block
 
 Second half of the same report (entry below): the green said "Speak now"

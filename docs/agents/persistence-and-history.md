@@ -124,19 +124,43 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   `RuntimeError` guard and aborted (2 of 4 at 1 ms progress). Now the worker
   gets a `gui_thread.GuiThreadReporter` (weak reference, one app-owned
   dispatcher, the call runs on the GUI thread or is dropped) and a
-  module-level transcribe callable holding the controller, never a dialog;
-  History refreshes itself from the run's end (`_on_retranscription_finished`),
-  so a run whose dialog was closed shows its entry; both ends are logged
-  without text. Deleting an entry never touches audio
+  module-level transcribe callable holding the controller, never a dialog.
+  Deleting an entry never touches audio
   (`TranscriptHistoryStore.delete_entries`, logs `history_entries_deleted`):
   a retranscription links the same file as the entry it repeats, and only the
-  archive retention removes recordings. Known gap, not changed: that
-  retention (`_prune_recordings`) can delete the oldest archived file while a
-  queued retranscription of it waits, which then fails with "file not found".
-  Tests: `test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run`,
+  archive retention removes recordings (its known gap is in
+  `known-limitations.md`). Tests:
+  `test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run`,
   `test_a_retranscription_closed_mid_run_reaches_history_and_its_list`,
   `tests/test_gui_thread.py`. Any other worker that captures a dialog which
   is `exec()`ed or deleted on close has the same defect: hand it a reporter.
+- **A retranscription's end reaches whichever History is open, and its
+  failure always reaches someone** (review of the fix above, 2026-10-23):
+  - The run's end calls `refresh_after_retranscription` on the dialog's
+    `run_end_receiver`: `main`'s `_HistoryDialogPresenter`, which reloads the
+    History open at that moment (the dialog itself when constructed without
+    one). Bound to the History it started from, a History reopened during the
+    run had loaded its list before the save and never refreshed.
+  - A failure is logged as WARNING `history_retranscription_failed
+    reason=...` (it was INFO `ok=False chars=0`). When the Retranscribe
+    dialog is gone by the time its failure report arrives on the GUI thread
+    (`GuiThreadReporter.post(..., if_gone=...)`, decided there, so no race
+    with a close), `on_unseen_failure` sends "Retranscription from History
+    failed: ..." through the controller's `background_transcription_failed`,
+    the tray notification of a failed queued transcription. An open dialog
+    shows the failure itself and nothing is sent twice.
+  - `transcribe_audio_file` ignored a refused history write and returned
+    success, so the dialog said "Saved to history" for a transcript in no
+    entry. It now returns the failure `_TRANSCRIPT_NOT_SAVED_REASON` with the
+    transcript after it (`transcript_history.unsaved_transcript_failure`, as
+    the unfinished-recordings path already did), so the open dialog still
+    shows the text, and marks a managed last recording failed rather than
+    completed (a completion can delete its audio). Logs and the tray get
+    `failure_reason(...)`, which leaves the transcript out.
+  Tests: `test_a_history_reopened_during_a_run_shows_its_entry_when_the_run_ends`,
+  `test_a_failure_whose_dialog_was_closed_reaches_the_tray_and_the_log`,
+  `test_a_failure_the_open_dialog_shows_is_not_reported_again`,
+  `test_a_transcribed_file_history_refused_is_a_failure_that_keeps_the_text`.
 - **Unfinished recordings are a directory of WAV files, not an index**
   (2026-10-09; `unfinished_recordings.py`,
   `%APPDATA%\stt_app\unfinished_recordings`). The name
