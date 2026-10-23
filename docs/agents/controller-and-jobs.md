@@ -226,8 +226,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   - `FakeLastRecordingStore` returns an id per save and answers `load()`.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   feeds the Transcription tab, the overlay selector (persists for the next
-  recording, disabled while busy, disabled `Lang: Auto` when auto is the only
-  mode) and provider validation. Cohere never exposes Auto. The controller asks
+  recording and stays usable while a recording or job runs; disabled
+  `Lang: Auto` when auto is the only mode) and provider validation. Cohere never exposes Auto. The controller asks
   it through `_offered_language_modes()` -- the active engine's own model
   (`_selected_model_name`), never `model_size`, which is the local model:
   asked with it, every remote model with a list of its own (Deepgram nova-2 and
