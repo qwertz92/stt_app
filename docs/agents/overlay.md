@@ -285,8 +285,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     Listening, after a pick, and in Processing with a queue row (470x190).
   - The overlay's value equals the controller's snapshot because both are taken
     in `start_recording`, one event drain apart (25 ms at most, excluding user
-    input events); only a settings save landing inside that drain could make
-    them differ (the label would then name the other language).
+    input events), with two exceptions. (1) A settings save landing inside that
+    drain: the label would then name the other language. (2) A saved selection
+    the engine and model do not offer (a pick made from the overlay's old,
+    too-wide list stays in `settings.json`; `controller-and-jobs.md`,
+    "Model-aware language selection"): `set_language_options` shows the first
+    offered language, while the snapshot keeps the stale saved value and the
+    provider's `_normalize_language_mode` replaces it with its own stand-in.
+    The caption then names the first offered language and the request carries
+    the stand-in; they are the same language only where the stand-in is the
+    list's first entry (Canary: German, and Auto for providers whose list
+    opens with it). Not checked for every provider. The next pick from the
+    overlay saves an offered language and ends the difference.
 - **The footer is [microphone menu][opacity slider][value]** (2026-10-03,
   UX review item 3, variant B). The microphone button
   (`_OverlayMicrophoneButton`, the Lang button's chevron and chrome, text
