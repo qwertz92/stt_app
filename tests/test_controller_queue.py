@@ -39,6 +39,7 @@ from speech_fixtures import (
 )
 
 import stt_app.main as main_module
+from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE
 from stt_app.config import (
     CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
@@ -48,11 +49,7 @@ from stt_app.config import (
     QUEUE_ROW_KIND_UNDELIVERED,
     SILENCE_GATE_THRESHOLD_MIN,
 )
-from stt_app.controller import (
-    _ARCHIVED_RECORDING_NAME_RE,
-    _join_transcripts,
-    _TranscriptionJob,
-)
+from stt_app.controller import _join_transcripts, _TranscriptionJob
 from stt_app.history_audio import resolve_history_audio_path
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError, TextMayHaveBeenPastedError
@@ -4119,7 +4116,7 @@ def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
     assert kept.read_bytes() == audio
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert resolve_history_audio_path(entry) == kept
     assert controller._last_recording_store.load() is None, "completed as usual"
     assert tray == [
@@ -4447,7 +4444,7 @@ def test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it(
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
     assert kept.read_bytes() == audio
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert resolve_history_audio_path(entry) == kept
     assert controller._last_recording_store.load() is None, "completed as usual"
     controller.shutdown()
@@ -4524,7 +4521,7 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     [entry] = history.load()
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
-    assert not _ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
     assert kept.read_bytes() == audio
     for index in range(3):
         (recordings / f"recording_20260101_000000_00000{index}.wav").write_bytes(b"x")
@@ -4535,7 +4532,7 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     archived = [
         path
         for path in recordings.iterdir()
-        if _ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
+        if ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
     ]
     assert len(archived) == 1
     assert controller._last_recording_store.load() is None, "completed as usual"

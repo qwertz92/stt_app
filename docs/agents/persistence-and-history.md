@@ -207,7 +207,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   2026-10-17: no insert was ever attempted), and the notice's text and
   final status say so. "Keep files and close"
   moves files to the recordings folder under their own name, which the
-  archive prune (`recording_<stamp>.wav` only) never deletes; a move never
+  archive prune (`recording_<stamp>.wav` only) never deletes and "Use last
+  recording" never picks (both go by `app_paths.ARCHIVED_RECORDING_NAME_RE`,
+  `LastRecordingStore.selectable_path`; 2026-10-23: a newer `unfinished_*` file
+  was answered instead of the newest dictation's archive file); a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.
 - **A recording carries the language it was made in** (owner decision
   2026-10-17; Retry transcribes in that language, `docs/agents/controller-and-jobs.md`).

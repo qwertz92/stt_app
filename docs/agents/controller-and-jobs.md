@@ -474,7 +474,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     unfinished recording and moved to the recordings folder under its own
     name (`UnfinishedRecordingStore.save` and `move_to`, the pair
     `_retain_unfinished_audio` uses), a name no recordings count prunes
-    (`_ARCHIVED_RECORDING_NAME_RE` does not match it), and
+    (`app_paths.ARCHIVED_RECORDING_NAME_RE` does not match it), and
     `job.source_audio_path` carries the path into the entry, which is what
     History's Retranscribe resolves (`history_audio.resolve_history_audio_path`).
     The managed slot then completes as for any success -- except where the
@@ -784,7 +784,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   quit waited out the 2 s grace and then killed it. Quit with a loaded
   Cohere runtime: 2.2 s before, 0.4 s after (2026-10-03).
 - **`LastRecordingStore.selectable_path()` alone picks "Use last
-  recording"**: newest managed/archive WAV; a recoverable managed one wins.
+  recording"**: the newest of the managed WAV and the newest *archived
+  recording* in the recordings folder; a recoverable managed one wins. An
+  archived recording is a file named by `app_paths.ARCHIVED_RECORDING_NAME_RE`,
+  the rule the retention count prunes by (one definition, shared; it used to live
+  in `controller.py`). The folder also holds `unfinished_*` copies that History
+  entries link (gap and fallback transcripts, kept unfinished recordings):
+  taking the newest `.wav` of any name could answer one of those instead of the
+  newest dictation's archive file whenever it was newer (2026-10-23).
 - **Selected local models are strict**: transcription waits off the Qt
   thread for the exact snapshot's preload; never use a fallback model.
   Preload results and cancel are generation-scoped. Batch may use an

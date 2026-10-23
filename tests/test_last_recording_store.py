@@ -142,6 +142,27 @@ def test_selectable_path_uses_newest_archived_recording(tmp_path):
     assert store.selectable_path(archive_dir) == archived
 
 
+def test_selectable_path_ignores_files_that_are_not_archived_recordings(tmp_path):
+    """The recordings folder also holds the copies the controller keeps for
+    History (`unfinished_<stamp>_<id>.wav`), which a count never prunes and
+    which can be newer than the newest dictation's archive file. Only the
+    archive's own names are candidates for "Use last recording"."""
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    archive_dir = tmp_path / "archive"
+    archive_dir.mkdir()
+    archived = archive_dir / "recording_20260428_101500_000000.wav"
+    kept_copy = archive_dir / "unfinished_20260428_101600_rec-1.de.wav"
+    for path in (archived, kept_copy):
+        path.write_bytes(b"RIFF")
+    os.utime(archived, (100, 100))
+    os.utime(kept_copy, (200, 200))
+
+    assert store.selectable_path(archive_dir) == archived
+
+
 def test_selectable_path_keeps_managed_recording_when_it_is_newer(tmp_path):
     store = LastRecordingStore(
         audio_path=tmp_path / "last_recording.wav",

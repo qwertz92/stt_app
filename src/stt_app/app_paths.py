@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 from .config import APP_NAME, LEGACY_APP_NAME
@@ -112,6 +113,18 @@ def resolve_recordings_dir(configured: str = "") -> Path:
     if value:
         return Path(value)
     return recordings_dir()
+
+
+# The name of a file "Archive every recording" wrote, `recording_<date>_<time>_
+# <six digits>.wav` (a kept unfinished recording that joins the archive takes the
+# same shape). The one definition of "an archived recording": the retention count
+# prunes only these, and "Use last recording" considers only these, because the
+# recordings folder also holds files neither may touch -- the copies of audio
+# that History entries link (`unfinished_<date>_<time>_<id>.wav`).
+ARCHIVED_RECORDING_NAME_RE = re.compile(
+    r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
+    re.IGNORECASE,
+)
 
 
 def transcript_history_path() -> Path:

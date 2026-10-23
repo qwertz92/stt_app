@@ -5,7 +5,6 @@ import contextlib
 import logging
 import math
 import os
-import re
 import shutil
 import subprocess
 import threading
@@ -20,7 +19,7 @@ from uuid import uuid4
 from PySide6 import QtCore, QtGui
 
 from . import audio_devices, local_runtime_support, silero_vad
-from .app_paths import resolve_recordings_dir
+from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
@@ -156,11 +155,6 @@ from .transcript_history import (
 from .unfinished_recordings import UnfinishedRecording, UnfinishedRecordingStore
 from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
-
-_ARCHIVED_RECORDING_NAME_RE = re.compile(
-    r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
-    re.IGNORECASE,
-)
 
 # A finished batch/import run that produced no text is a model miss, not
 # silence. The silence gate already skipped true quiet recordings. Treat the
@@ -3727,7 +3721,7 @@ class DictationController(QtCore.QObject):
             return
         aged = []
         for name in names:
-            if not _ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
+            if not ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
                 continue
             path = os.path.join(directory, name)
             try:
