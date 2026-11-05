@@ -21,15 +21,19 @@ upgrade if it is at least as fast as 1.29.0, and delete that entry. Delete the w
 no entry is left, in this repository and in meeting-notes-recorder (same pin).
 
 - microsoft/onnxruntime#33855: LLM decoding on WebGPU 14-17 % slower from 1.30.0-dev.20260819,
-  most likely PR #32063 (reused GPU buffers are zero-filled). No workaround known. 2026-11-05:
-  open, labelled, no maintainer comment yet.
+  most likely PR #32063 (reused GPU buffers are zero-filled). No workaround in any released build:
+  1.31.1 refuses `enableZeroBuffer` as an unrecognized WebGPU option (2026-11-05, Arc A750: LFM3 q8
+  12 % and LFM2 q4 15 % fewer tokens/s than 1.29.0). 2026-11-05: open, labelled, no maintainer
+  comment yet.
 - microsoft/onnxruntime#33856: the Cohere speech encoder 2.1x slower from 1.30.0-dev.20260909
-  (PR #32304, pointwise convolutions moved to a subgroup-matrix MatMul). Workaround:
-  `preferredLayout: "NCHW"`. 2026-11-05: Intel engineers asked to look; one of them noted that the
-  Arc A-series ("Alchemist") supports cooperative matrices under Vulkan but not D3D12 LinAlg, which
-  WebGPU uses on Windows.
-- PR microsoft/onnxruntime#32148 (open since 2026-08-18): moves the `enableZeroBuffer` switch to
-  environment options, still on by default. If it lands, turning it off may undo #33855.
+  (PR #32304). Workaround `preferredLayout: "NCHW"` recovers most of it, not all (1.31.1 on
+  2026-11-05: 2.66 s per audio minute with it, 3.75 without, 2.31 on 1.29.0). 2026-11-05: Intel
+  engineers are looking; one of them concluded that the slowdown comes from subgroup operations,
+  not from the subgroup-matrix units.
+- PR microsoft/onnxruntime#32148 (open since 2026-08-18): makes `enableZeroBuffer` an environment
+  option (`ep_factory.WebGpuExecutionProvider.enableZeroBuffer`), still on by default and, as
+  written, not reachable from Node.js. It helps with #33855 only once a released Node.js binding
+  can set it.
 
 Last checked: 2026-11-05.
 
