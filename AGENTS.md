@@ -10,6 +10,29 @@ changing that area. Detailed history is in `docs/learning-log.md`; ideas kept
 for later are in `docs/ROADMAP.md`; accepted defects are in
 `docs/agents/known-limitations.md`.
 
+## Open upstream bugs -- check them at the start of a session
+
+onnxruntime-node stays pinned at 1.29.0 (`package.json`) because of two regressions on WebGPU,
+reported by Thomas on 2026-11-04. When "Last checked" below is more than 7 days old, check both
+issues and the PR before other work (`gh issue view 33855 --repo microsoft/onnxruntime --comments`,
+the same for 33856, `gh pr view 32148 --repo microsoft/onnxruntime`), update the date and tell
+Thomas in one or two sentences what changed. When a fix is released: re-measure (method and figures: docs/05_provider_notes.md in the sibling repository meeting-notes-recorder),
+upgrade if it is at least as fast as 1.29.0, and delete that entry. Delete the whole section once
+no entry is left, in this repository and in meeting-notes-recorder (same pin).
+
+- microsoft/onnxruntime#33855: LLM decoding on WebGPU 14-17 % slower from 1.30.0-dev.20260819,
+  most likely PR #32063 (reused GPU buffers are zero-filled). No workaround known. 2026-11-05:
+  open, labelled, no maintainer comment yet.
+- microsoft/onnxruntime#33856: the Cohere speech encoder 2.1x slower from 1.30.0-dev.20260909
+  (PR #32304, pointwise convolutions moved to a subgroup-matrix MatMul). Workaround:
+  `preferredLayout: "NCHW"`. 2026-11-05: Intel engineers asked to look; one of them noted that the
+  Arc A-series ("Alchemist") supports cooperative matrices under Vulkan but not D3D12 LinAlg, which
+  WebGPU uses on Windows.
+- PR microsoft/onnxruntime#32148 (open since 2026-08-18): moves the `enableZeroBuffer` switch to
+  environment options, still on by default. If it lands, turning it off may undo #33855.
+
+Last checked: 2026-11-05.
+
 ## Quality principle
 
 Quality has the highest priority. Take as much time as needed.
