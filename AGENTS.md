@@ -23,19 +23,26 @@ no entry is left, in this repository and in meeting-notes-recorder (same pin).
 - microsoft/onnxruntime#33855: LLM decoding on WebGPU 14-17 % slower from 1.30.0-dev.20260819,
   most likely PR #32063 (reused GPU buffers are zero-filled). No workaround in any released build:
   1.31.1 refuses `enableZeroBuffer` as an unrecognized WebGPU option (2026-11-05, Arc A750: LFM3 q8
-  12 % and LFM2 q4 15 % fewer tokens/s than 1.29.0). 2026-11-05: open, labelled, no maintainer
-  comment yet.
+  12 % and LFM2 q4 15 % fewer tokens/s than 1.29.0). 2026-11-15: still open, labelled, no maintainer
+  comment and no linked pull request. ONNX Runtime 1.32.0 (GitHub release 2026-11-13, not on npm
+  yet: `npm view onnxruntime-node dist-tags` says latest 1.31.1) lists "Retained Node.js WebGPU
+  output resources across session execution" (#33741), which may or may not touch this; re-measure
+  once 1.32.0 is on npm.
 - microsoft/onnxruntime#33856: the Cohere speech encoder 2.1x slower from 1.30.0-dev.20260909
   (PR #32304). Workaround `preferredLayout: "NCHW"` recovers most of it, not all (1.31.1 on
-  2026-11-05: 2.66 s per audio minute with it, 3.75 without, 2.31 on 1.29.0). 2026-11-05: Intel
-  engineers are looking; one of them concluded that the slowdown comes from subgroup operations,
-  not from the subgroup-matrix units.
-- PR microsoft/onnxruntime#32148 (open since 2026-08-18): makes `enableZeroBuffer` an environment
-  option (`ep_factory.WebGpuExecutionProvider.enableZeroBuffer`), still on by default and, as
-  written, not reachable from Node.js. It helps with #33855 only once a released Node.js binding
-  can set it.
+  2026-11-05: 2.66 s per audio minute with it, 3.75 without, 2.31 on 1.29.0). 2026-11-15: Intel is
+  fixing it. PR #34074 (open since 2026-11-10, "Fixes #33856", review pending) adds a
+  subgroup-size-16 MatMul kernel tuned on an Arc A770: the issue's pointwise convolution goes from
+  7,043 to 343 microseconds, faster than the old kernel's 543. The cause they found: the kernel was
+  compiled for subgroup size 32 on Alchemist cards and ran out of registers. PR #33913 (disable the
+  kernel on Alchemist, approved 2026-11-06, not merged) is the fallback its author now calls
+  unnecessary. Neither is in 1.32.0.
+- PR microsoft/onnxruntime#32148 (open since 2026-08-18, untouched since 2026-11-03): makes
+  `enableZeroBuffer` an environment option (`ep_factory.WebGpuExecutionProvider.enableZeroBuffer`),
+  still on by default and, as written, not reachable from Node.js. It helps with #33855 only once a
+  released Node.js binding can set it.
 
-Last checked: 2026-11-05.
+Last checked: 2026-11-15.
 
 ## Quality principle
 
