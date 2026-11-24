@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .app_paths import unfinished_recordings_dir
+from .app_paths import KEPT_RECORDING_PREFIX, unfinished_recordings_dir
 from .persistence import atomic_write_bytes
 
 _STAMP_FORMAT = "%Y%m%d_%H%M%S"
@@ -141,19 +141,32 @@ class UnfinishedRecordingStore:
         """Delete one kept recording. Raises `OSError` when that fails."""
         recording.path.unlink(missing_ok=True)
 
-    def move_to(self, recording: UnfinishedRecording, directory: Path) -> Path:
+    def move_to(
+        self,
+        recording: UnfinishedRecording,
+        directory: Path,
+        *,
+        as_kept_copy: bool = False,
+    ) -> Path:
         """Move one kept recording out of the store, never over another file.
 
-        Returns where it went. Raises `OSError` when the move fails; the file
-        then stays where it was.
+        `as_kept_copy` names it `kept_...` instead of `unfinished_...`: the
+        audio of a transcript History links, which the recordings count may
+        prune (`app_paths.KEPT_RECORDING_NAME_RE`). Without it the name stays,
+        and no count ever deletes the file -- for a recording nobody
+        transcribed. Returns where it went. Raises `OSError` when the move
+        fails; the file then stays where it was.
         """
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
-        target = directory / recording.path.name
+        stem = recording.path.stem
+        if as_kept_copy and stem.lower().startswith("unfinished_"):
+            stem = KEPT_RECORDING_PREFIX + stem[len("unfinished_") :]
+        target = directory / f"{stem}.wav"
         counter = 1
         while target.exists():
             counter += 1
-            target = directory / f"{recording.path.stem}_{counter}.wav"
+            target = directory / f"{stem}_{counter}.wav"
         return Path(shutil.move(str(recording.path), str(target)))
 
 

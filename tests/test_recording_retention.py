@@ -7,7 +7,9 @@ without a transcript is in a durable file before the managed slot is
 overwritten, and that file goes once the transcript is in History.
 """
 
+import concurrent.futures
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +24,7 @@ from conftest import (
 )
 from speech_fixtures import room_tone, wav_bytes
 
-from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE
+from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE, KEPT_RECORDING_NAME_RE
 from stt_app.config import FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -116,5 +118,132 @@ def test_a_quiet_recording_the_gate_rejects_is_still_archived(monkeypatch, tmp_p
     saved = FakeCapture.instances[-1].last_saved_path
     assert saved is not None
     assert ARCHIVED_RECORDING_NAME_RE.fullmatch(Path(saved).name)
+    controller.shutdown()
+    _ = app
+
+
+# --- D2 / D3 -----------------------------------------------------------------
+
+
+def _files(folder: Path, names_and_ages: list[tuple[str, int]]) -> list[Path]:
+    folder.mkdir(parents=True, exist_ok=True)
+    paths = []
+    for name, age in names_and_ages:
+        path = folder / name
+        path.write_bytes(b"RIFF")
+        os.utime(path, (1_800_000_000 + age, 1_800_000_000 + age))
+        paths.append(path)
+    return paths
+
+
+def test_the_prune_skips_a_file_a_waiting_transcription_will_read(
+    monkeypatch, tmp_path
+):
+    controller, app, _unfinished = _controller(monkeypatch, tmp_path)
+    folder = tmp_path / "recordings"
+    oldest, middle, newest = _files(
+        folder,
+        [
+            ("recording_20261101_100000_000000.wav", 0),
+            ("recording_20261101_110000_000000.wav", 1),
+            ("recording_20261101_120000_000000.wav", 2),
+        ],
+    )
+
+    with controller._audio_file_in_use(str(oldest)):
+        controller._prune_recordings(str(folder), 2)
+
+    assert oldest.exists(), "History's Retranscribe is about to read it"
+    assert not middle.exists(), "the next oldest goes instead"
+    assert newest.exists()
+    # Released, it is pruned like any other file.
+    controller._prune_recordings(str(folder), 1)
+    assert not oldest.exists()
+    controller.shutdown()
+    _ = app
+
+
+class _PruningExecutor:
+    """Runs the import's work after a dictation ended and pruned the archive,
+    which is what happens while a retranscription waits in the lane."""
+
+    def __init__(self, controller, folder):
+        self.controller = controller
+        self.folder = folder
+        self.read_paths = []
+
+    def submit(self, fn, audio_source, *args, **kwargs):
+        self.controller._prune_recordings(str(self.folder), 1)
+        future = concurrent.futures.Future()
+        self.read_paths.append(Path(audio_source).exists())
+        future.set_result("transcript")
+        return future
+
+    def shutdown(self, wait=False, cancel_futures=False):
+        pass
+
+
+def test_a_queued_retranscription_keeps_its_archived_file(monkeypatch, tmp_path):
+    # The known-limitations entry of 2026-10-23: the archive at its count, the
+    # oldest file retranscribed, a dictation ending during the wait.
+    controller, app, _unfinished = _controller(monkeypatch, tmp_path)
+    folder = tmp_path / "recordings"
+    oldest, newest = _files(
+        folder,
+        [
+            ("recording_20261101_100000_000000.wav", 0),
+            ("recording_20261101_120000_000000.wav", 1),
+        ],
+    )
+    controller._executor = _PruningExecutor(controller, folder)
+
+    ok, text = controller.transcribe_audio_file(str(oldest))
+
+    assert (ok, text) == (True, "transcript")
+    assert controller._executor.read_paths == [True]
+    assert oldest.exists()
+    assert not newest.exists()
+    controller.shutdown()
+    _ = app
+
+
+def test_kept_copies_count_toward_keep_recordings_and_unfinished_files_never(
+    monkeypatch, tmp_path
+):
+    controller, app, _unfinished = _controller(monkeypatch, tmp_path)
+    folder = tmp_path / "recordings"
+    old_kept, untranscribed, archived, new_kept = _files(
+        folder,
+        [
+            ("kept_20261101_090000_rec-a.de.wav", 0),
+            ("unfinished_20261101_093000_rec-b.wav", 1),
+            ("recording_20261101_100000_000000.wav", 2),
+            ("kept_20261101_110000_rec-c.wav", 3),
+        ],
+    )
+
+    controller._prune_recordings(str(folder), 2)
+
+    assert not old_kept.exists(), "the oldest of the three counted files"
+    assert archived.exists() and new_kept.exists()
+    assert untranscribed.exists(), "may be a recording nobody transcribed"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_kept_copy_is_named_so_the_count_finds_it(monkeypatch, tmp_path):
+    from datetime import datetime
+
+    controller, app, _unfinished = _controller(monkeypatch, tmp_path)
+
+    kept = controller._keep_audio_in_recordings_folder(
+        _SPEECH_LIKE,
+        recording_id="rec-1",
+        recorded_at=datetime(2026, 11, 24, 10, 0, 0),  # noqa: DTZ001 (local wall clock, as the file names are)
+        language_mode="de",
+    )
+
+    assert Path(kept).parent == tmp_path / "recordings"
+    assert KEPT_RECORDING_NAME_RE.fullmatch(Path(kept).name), Path(kept).name
     controller.shutdown()
     _ = app

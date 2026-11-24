@@ -117,14 +117,36 @@ def resolve_recordings_dir(configured: str = "") -> Path:
 
 # The name of a file "Archive every recording" wrote, `recording_<date>_<time>_
 # <six digits>.wav` (a kept unfinished recording that joins the archive takes the
-# same shape). The one definition of "an archived recording": the retention count
-# prunes only these, and "Use last recording" considers only these, because the
-# recordings folder also holds files neither may touch -- the copies of audio
-# that History entries link (`unfinished_<date>_<time>_<id>.wav`).
+# same shape). The one definition of "an archived recording": "Use last
+# recording" considers only these, because the recordings folder also holds
+# copies of audio that History entries link and untranscribed recordings the
+# startup notice's "Keep files and close" moved there
+# (`unfinished_<date>_<time>_<id>.wav`).
 ARCHIVED_RECORDING_NAME_RE = re.compile(
     r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
     re.IGNORECASE,
 )
+# A kept copy: the audio of a transcript that History links, moved to the
+# recordings folder (a gap or language-fallback transcript, a transcribed
+# unfinished recording with only "Keep last recording" on), named
+# `kept_<date>_<time>_<id>[.<language>][_<n>].wav` since 2026-11-24. Its
+# transcript exists, so the retention count prunes it with the archive's
+# files (`is_retained_recording_name`). An `unfinished_*` file in that folder
+# is never pruned: it may be a recording nobody transcribed.
+KEPT_RECORDING_PREFIX = "kept_"
+KEPT_RECORDING_NAME_RE = re.compile(
+    r"^kept_[0-9]{8}_[0-9]{6}_[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)?(?:_[0-9]+)?\.wav$",
+    re.IGNORECASE,
+)
+
+
+def is_retained_recording_name(name: str) -> bool:
+    """Whether "Keep Recordings" counts and prunes a file of this name: an
+    archived recording or a kept copy (`_prune_recordings`)."""
+    return bool(
+        ARCHIVED_RECORDING_NAME_RE.fullmatch(name)
+        or KEPT_RECORDING_NAME_RE.fullmatch(name)
+    )
 
 
 def transcript_history_path() -> Path:

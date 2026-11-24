@@ -19,7 +19,7 @@ from uuid import uuid4
 from PySide6 import QtCore, QtGui
 
 from . import audio_devices, local_runtime_support, silero_vad
-from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
+from .app_paths import is_retained_recording_name, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
@@ -1004,6 +1004,12 @@ class DictationController(QtCore.QObject):
         self._capture_health_counted_from = 0.0
         # The warning the overlay shows now: "stall", "no_signal" or None.
         self._capture_warning: str | None = None
+        # Audio files a queued or running transcription will read (Import,
+        # History's Retranscribe), by normalized path with a count: the
+        # recordings count never prunes them (`_prune_recordings`). Written
+        # from the import's own thread, so under a lock.
+        self._audio_files_in_use: dict[str, int] = {}
+        self._audio_files_in_use_lock = threading.Lock()
         # The capture `stop_recording` is stopping: its stop may wait for the
         # backlog of a starved callback thread, and those blocks must still
         # reach the streaming transcriber (`_on_stream_audio_chunk`).
@@ -1510,9 +1516,9 @@ class DictationController(QtCore.QObject):
         deleted): with "Archive every recording" it joins the archive under
         the archive's name, counts as its newest file and the retention
         count applies (`_prune_recordings`); with only "Keep last recording
-        after successful transcription" it goes to the recordings folder
-        under its own name, which no count prunes -- the managed last
-        recording is one slot that holds the newest dictation and must not be
+        after successful transcription" it goes to the recordings folder as a
+        kept copy (`kept_...`, counted by "Keep Recordings" since 2026-11-24;
+        it was never pruned before) -- the managed last recording is one slot that holds the newest dictation and must not be
         overwritten by an older recording. A move that fails leaves the file
         where it was and answers that path (logged): the entry points at it,
         and the next start deletes no file an entry points at. Nothing after
@@ -1553,7 +1559,9 @@ class DictationController(QtCore.QObject):
             try:
                 return os.path.abspath(
                     self._unfinished_recording_store.move_to(
-                        recording, Path(self._resolve_recordings_dir())
+                        recording,
+                        Path(self._resolve_recordings_dir()),
+                        as_kept_copy=True,
                     )
                 )
             except OSError:
@@ -3964,7 +3972,55 @@ class DictationController(QtCore.QObject):
             return False
         return level is not None and level < AUDIO_NO_SIGNAL_LEVEL
 
+    @contextlib.contextmanager
+    def _audio_file_in_use(self, path: str):
+        """Keep the recordings count away from `path` while a transcription
+        will read it (D2 of 2026-11-24): History's Retranscribe and Import
+        wait in the one transcription lane, and a dictation ending meanwhile
+        pruned the very file they were about to read."""
+        key = os.path.normcase(os.path.abspath(path))
+        with self._audio_files_in_use_lock:
+            self._audio_files_in_use[key] = self._audio_files_in_use.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            with self._audio_files_in_use_lock:
+                left = self._audio_files_in_use.get(key, 1) - 1
+                if left > 0:
+                    self._audio_files_in_use[key] = left
+                else:
+                    self._audio_files_in_use.pop(key, None)
+
+    def _audio_paths_still_needed(self) -> set[str]:
+        """Normalized paths no prune may delete: files a queued or running
+        import reads, and the file a live job's History entry will link."""
+        with self._audio_files_in_use_lock:
+            needed = set(self._audio_files_in_use)
+        # The startup notice's worker prunes too; a copy of the registry, and
+        # a retry when a job came or went during the copy.
+        jobs: list[_TranscriptionJob] = []
+        for _attempt in range(3):
+            try:
+                jobs = list(self._jobs.values())
+                break
+            except RuntimeError:
+                continue
+        for job in jobs:
+            if job.source_audio_path and not job.aborting:
+                needed.add(os.path.normcase(os.path.abspath(job.source_audio_path)))
+        return needed
+
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
+        """Keep the newest `keep_count` retained recordings in `directory`.
+
+        Retained: the archive's `recording_*.wav` and the kept copies
+        (`kept_*.wav`, the audio of a transcript History links), counted
+        together and oldest first (D3 of 2026-11-24: one rule bounds the
+        folder; kept copies used to pile up). A file a queued or running
+        transcription still needs is skipped and stays counted, so the next
+        oldest goes instead (`_audio_paths_still_needed`). `unfinished_*`
+        files are never touched: one may be a recording nobody transcribed.
+        """
         keep = int(keep_count or RECORDINGS_MAX_COUNT_UNLIMITED)
         if keep <= RECORDINGS_MAX_COUNT_UNLIMITED:
             # 0 is "keep every recording", so nothing is deleted at all. A
@@ -3975,9 +4031,10 @@ class DictationController(QtCore.QObject):
             names = os.listdir(directory)
         except OSError:
             return
+        needed = self._audio_paths_still_needed()
         aged = []
         for name in names:
-            if not ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
+            if not is_retained_recording_name(name):
                 continue
             path = os.path.join(directory, name)
             try:
@@ -3988,12 +4045,18 @@ class DictationController(QtCore.QObject):
                 continue
         aged.sort()
         files = [path for _mtime, path in aged]
-        while len(files) > keep:
-            oldest = files.pop(0)
+        excess = len(files) - keep
+        for path in files:
+            if excess <= 0:
+                break
+            if os.path.normcase(os.path.abspath(path)) in needed:
+                self._logger.info("recording_prune_skipped_in_use path=%s", path)
+                continue
             try:
-                os.remove(oldest)
+                os.remove(path)
             except OSError:
                 break
+            excess -= 1
 
     def _reset_streaming_state(self, *, keep_session_text: bool = False) -> None:
         """Clear the streaming session. `keep_session_text` spares two fields.
@@ -4563,11 +4626,11 @@ class DictationController(QtCore.QObject):
         next dictation replaces, and the next start completes -- deleting the
         WAV -- when its transcript is already in History. The copy goes where
         retained audio goes, the recordings folder: saved as an unfinished
-        recording and moved there under its own name, the way
-        `_retain_unfinished_audio` keeps one, which no recordings count prunes.
-        It is made even when "Archive every recording" already linked the
-        archive's file, because `_prune_recordings` deletes archive files after
-        enough newer recordings. `job.source_audio_path` carries the copy into
+        recording and moved there as a kept copy (`kept_...`), the way
+        `_retain_unfinished_audio` keeps one. It is made even when "Archive
+        every recording" already linked the archive's file (owner's decision
+        2026-10-23); since 2026-11-24 "Keep Recordings" counts kept copies
+        with the archive's files, so both age out by the same count. `job.source_audio_path` carries the copy into
         every History write of the delivery, and History's Retranscribe takes
         a language. A job with no recording id -- the store refused its bytes
         -- gets one of its own, as the quit road's copies do, because the
@@ -4639,8 +4702,8 @@ class DictationController(QtCore.QObject):
         """What to do with a copy of a transcript's audio that no History entry
         links, because its write was refused. True when the copy was deleted.
 
-        Nothing in the app leads to such a file and no recordings count prunes
-        it, so it would stay as an unknown file (and a later import of the same
+        Nothing in the app leads to such a file and it waits for the recordings
+        count, so it would stay as an unknown file (and a later import of the same
         recording adds a numbered second one). Where the managed recording
         keeps the audio (`slot_keeps_audio`: the store took the failed mark)
         the copy is deleted, as `_return_unfinished_audio` undoes the copy of
@@ -4731,8 +4794,9 @@ class DictationController(QtCore.QObject):
     ) -> str:
         """Where this recording's audio now lives, "" when it could not be kept.
 
-        Saved as an unfinished recording and moved to the recordings folder
-        under that name, which no recordings count prunes. The file's language
+        Saved as an unfinished recording and moved to the recordings folder as
+        a kept copy (`kept_...`), which "Keep Recordings" counts with the
+        archive's files (`_prune_recordings`). The file's language
         tag is `language_mode`, else the language the recording was made in. A
         move that fails leaves the file in the unfinished recordings folder
         and answers that path (logged): the next start offers it there.
@@ -4768,7 +4832,11 @@ class DictationController(QtCore.QObject):
             return ""
         try:
             return os.path.abspath(
-                store.move_to(recording, Path(self._resolve_recordings_dir()))
+                store.move_to(
+                    recording,
+                    Path(self._resolve_recordings_dir()),
+                    as_kept_copy=True,
+                )
             )
         except Exception:
             self._logger.exception(
@@ -10569,6 +10637,17 @@ class DictationController(QtCore.QObject):
         path = str(file_path or "").strip()
         if not path:
             return False, "No file path provided."
+        with self._audio_file_in_use(path):
+            return self._transcribe_audio_file_in_use(
+                path, settings_override, progress_callback
+            )
+
+    def _transcribe_audio_file_in_use(
+        self,
+        path: str,
+        settings_override: AppSettings | None,
+        progress_callback: Callable[[str], None] | None,
+    ) -> tuple[bool, str]:
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
         managed_last_recording = self._last_recording_store.is_managed_audio_path(path)

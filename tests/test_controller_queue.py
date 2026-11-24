@@ -6,6 +6,7 @@ signals directly.
 """
 
 import logging
+import os
 import re
 import threading
 import time
@@ -39,7 +40,7 @@ from speech_fixtures import (
 )
 
 import stt_app.main as main_module
-from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE
+from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE, KEPT_RECORDING_NAME_RE
 from stt_app.config import (
     CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
@@ -4111,9 +4112,10 @@ def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
     language than the speech. Nothing of that survived the first progress
     line, and the managed recording is one slot: it is deleted by the next
     start (its transcript is in History) and replaced by the next dictation.
-    The audio is therefore kept in the recordings folder, where no count
-    prunes it, and the History entry links it: Retranscribe takes a language
-    there. The managed slot completes as for any success."""
+    The audio is therefore kept in the recordings folder as a kept copy
+    ("Keep Recordings" counts it), and the History entry links it:
+    Retranscribe takes a language there. The managed slot completes as for
+    any success."""
     controller, app, tray, history, audio, recordings = (
         _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
     )
@@ -4525,7 +4527,7 @@ def test_a_gap_transcript_keeps_its_audio_in_the_recordings_folder_and_links_it(
     """The marker tells the user to listen to the stretch it names. The only
     copy of the audio was the managed last recording, kept by marking it
     failed: one slot, replaced by the next dictation. The audio now goes where
-    retained audio goes, the recordings folder, under a name no count prunes,
+    retained audio goes, the recordings folder, as a kept copy (`kept_*`),
     and the History entry links it (Retranscribe); the managed slot completes
     as for any success."""
     controller, app, history, audio, recordings = (
@@ -4599,12 +4601,12 @@ def test_a_background_gap_transcript_keeps_its_audio_too(monkeypatch, tmp_path):
 def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     monkeypatch, tmp_path
 ):
-    """With "Archive every recording" the audio is also in the archive, but
-    `_prune_recordings` deletes archive files once more than the count of newer
-    recordings exist, and the gap's audio must outlive that: the entry links a
-    copy under a name no count prunes, as without the archive. (The fake
-    capture writes no archive file, so the pruning is exercised on archive-named
-    files made here.)"""
+    """With "Archive every recording" the audio is also in the archive, and
+    the entry still links a copy of its own (owner's decision 2026-10-23).
+    Since 2026-11-24 (D3) that copy is a `kept_*` file which "Keep Recordings"
+    counts with the archive's files, oldest first: one rule bounds the
+    folder. (The fake capture writes no archive file, so the pruning is
+    exercised on archive-named files made here.)"""
     controller, app, history, audio, recordings = (
         _a_dictation_whose_transcript_has_a_gap(
             monkeypatch, tmp_path, save_all_recordings=True, recordings_max_count=1
@@ -4614,20 +4616,23 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     [entry] = history.load()
     kept = Path(entry.source_audio_path)
     assert kept.parent == recordings
-    assert not ARCHIVED_RECORDING_NAME_RE.fullmatch(kept.name), "a count prunes it"
+    assert KEPT_RECORDING_NAME_RE.fullmatch(kept.name), kept.name
     assert kept.read_bytes() == audio
+    os.utime(kept, (1_800_000_000, 1_800_000_000))
     for index in range(3):
-        (recordings / f"recording_20260101_000000_00000{index}.wav").write_bytes(b"x")
+        archived = recordings / f"recording_20260101_000000_00000{index}.wav"
+        archived.write_bytes(b"x")
+        os.utime(archived, (1_800_000_100 + index, 1_800_000_100 + index))
 
-    controller._prune_recordings(str(recordings), 1)
+    controller._prune_recordings(str(recordings), 3)
 
-    assert kept.read_bytes() == audio, "the archive's count left the copy alone"
+    assert not kept.exists(), "the oldest counted file goes first"
     archived = [
         path
         for path in recordings.iterdir()
         if ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
     ]
-    assert len(archived) == 1
+    assert len(archived) == 3
     assert controller._last_recording_store.load() is None, "completed as usual"
     controller.shutdown()
     _ = app
@@ -4675,7 +4680,7 @@ def test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_reco
     to it: the managed recording stays kept (marked failed), reachable from
     Import and offered by the next start, instead of completing and being
     deleted with the setting off. The slot is the audio's home then, so the
-    copy -- a file no entry names and no count prunes -- is deleted."""
+    copy -- a file no entry names -- is deleted."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("history is read-only")
