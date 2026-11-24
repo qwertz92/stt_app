@@ -25,7 +25,7 @@ from conftest import (
 from speech_fixtures import room_tone, wav_bytes
 
 from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE, KEPT_RECORDING_NAME_RE
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import FALLBACK_HOTKEY, RETRY_OLDER_FAILURES_MAX
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -245,5 +245,74 @@ def test_a_kept_copy_is_named_so_the_count_finds_it(monkeypatch, tmp_path):
 
     assert Path(kept).parent == tmp_path / "recordings"
     assert KEPT_RECORDING_NAME_RE.fullmatch(Path(kept).name), Path(kept).name
+    controller.shutdown()
+    _ = app
+
+
+# --- D4 ----------------------------------------------------------------------
+
+
+def test_a_queued_recording_is_in_a_durable_file_before_the_next_overwrites_the_slot(
+    monkeypatch, tmp_path
+):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    first = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, first)
+    recording_a = controller._jobs[token_a].source_recording_id
+    assert unfinished.list_recordings() == [], "the slot holds it for now"
+
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+
+    kept = unfinished.list_recordings()
+    assert [item.recording_id for item in kept] == [recording_a]
+    assert kept[0].path.read_bytes() == first
+
+    # Its transcript reaches History: the copy goes.
+    controller._on_transcription_ready("first text", request_token=token_a)
+    assert unfinished.list_recordings() == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_cancelled_queued_recording_drops_its_durable_copy(monkeypatch, tmp_path):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    token_a = _record(controller, _SPEECH_LIKE)
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+    assert len(unfinished.list_recordings()) == 1
+
+    controller._on_transcription_canceled_result(token_a)
+
+    assert unfinished.list_recordings() == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failure_held_for_retry_keeps_its_durable_copy_until_delivered(
+    monkeypatch, tmp_path
+):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    token_a = _record(controller, _SPEECH_LIKE)
+    recording_a = controller._jobs[token_a].source_recording_id
+    controller._on_transcription_failed("provider down", request_token=token_a)
+    assert controller._last_failed_recording_id == recording_a
+
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+
+    assert [item.recording_id for item in unfinished.list_recordings()] == [recording_a]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failure_pushed_out_of_the_retry_list_is_written_not_lost(
+    monkeypatch, tmp_path
+):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    held = RETRY_OLDER_FAILURES_MAX + 1
+    for index in range(held + 1):
+        controller._hold_failed_audio_for_retry(
+            wav_bytes(room_tone(0.5, rms=0.05, seed=index)), f"rec-{index}"
+        )
+
+    assert [item.recording_id for item in unfinished.list_recordings()] == ["rec-0"]
     controller.shutdown()
     _ = app

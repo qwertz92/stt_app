@@ -4290,13 +4290,15 @@ def test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_ho
     _ = app
 
 
-def test_a_refused_history_write_and_a_failed_copy_say_that_nothing_is_kept(
+def test_a_refused_history_write_and_a_refused_copy_keep_the_secured_audio(
     monkeypatch, tmp_path
 ):
-    """The retry finished behind a newer dictation, its copy could not be
-    written and History refused the entry too: no audio of the retry is kept
-    anywhere, and the notice says both instead of saying that the last
-    recording is kept (that one is the newer dictation's)."""
+    """The retry finished behind a newer dictation, a fresh copy could not be
+    written and History refused the entry too. Until 2026-11-24 no audio of
+    the retry was kept anywhere; now the newer dictation's stop wrote the
+    retry's recording to the unfinished store before it took the slot (D4),
+    and the delivery takes that copy over into the recordings folder, so the
+    notice says where the audio is instead of saying it is lost."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("disk full")
@@ -4305,7 +4307,7 @@ def test_a_refused_history_write_and_a_failed_copy_say_that_nothing_is_kept(
         monkeypatch.setattr(history, "add_entry", _refuse)
         monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
 
-    controller, app, tray, history, _audio, recordings = (
+    controller, app, tray, history, audio, recordings = (
         _a_retry_under_canary_that_finished(
             monkeypatch,
             tmp_path,
@@ -4316,11 +4318,13 @@ def test_a_refused_history_write_and_a_failed_copy_say_that_nothing_is_kept(
     )
 
     assert history.load() == []
-    assert _files_kept_anywhere(controller, recordings) == []
+    [kept] = _files_kept_anywhere(controller, recordings)
+    assert kept.parent == recordings
+    assert kept.read_bytes() == audio
     assert tray == [
         _FALLBACK_NOTICE
-        + "The transcript could not be saved to History (see the log), and the "
-        "audio could not be kept."
+        + "The audio is kept in the recordings folder, but its transcript could "
+        "not be saved to History (see the log)."
     ]
     controller.shutdown()
     _ = app
@@ -4438,10 +4442,16 @@ def test_the_no_copy_notice_does_not_promise_a_recording_a_newer_dictation_repla
     by then, so marking R failed changes nothing, and the delivery retires the
     retry's own bytes of R: no audio of R is kept anywhere, and the notice must
     not say that "the last recording" is -- that is D2's, and it is not
-    relabeled either."""
+    relabeled either. The whole unfinished store fails here (`find` too):
+    with a working `find` the copy the newer dictation's stop secured would be
+    taken over instead (2026-11-24, D4)."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("disk full")
+
+    def _hook(controller, _history):
+        monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
+        monkeypatch.setattr(controller._unfinished_recording_store, "find", _refuse)
 
     controller, app, tray, history, _audio, _recordings = (
         _a_retry_under_canary_that_finished(
@@ -4449,9 +4459,7 @@ def test_the_no_copy_notice_does_not_promise_a_recording_a_newer_dictation_repla
             tmp_path,
             recorded="auto",
             newer_dictation=True,
-            before_delivery=lambda controller, _history: monkeypatch.setattr(
-                controller._unfinished_recording_store, "save", _refuse
-            ),
+            before_delivery=_hook,
         )
     )
 
