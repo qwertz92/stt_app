@@ -85,8 +85,8 @@ Both come from the same place in the Azure portal (see below).
 | Model | Notes |
 |-------|-------|
 | `mai-transcribe-2` (default) | Announced 2026-09-03. 60 languages. Second on the Artificial Analysis word-error-rate leaderboard (English) according to Microsoft |
-| `mai-transcribe-1.5` | Announced 2026-06-02. 43 languages |
-| `mai-transcribe-1` | First generation, smaller language set. **Deprecated by Microsoft on 2026-08-20**; whether the service still answers for it is not documented |
+
+Removed from the app on 2026-11-24 (a saved choice moves to `mai-transcribe-2`): `mai-transcribe-1.5` (announced 2026-06-02, 43 languages, $0.36/hour) and `mai-transcribe-1` (**deprecated by Microsoft on 2026-08-20**).
 
 The app stores these lower-case ids and sends the spelling Microsoft documents
 (`MAI-Transcribe-2`). The service also offers speaker diarization, word
@@ -120,8 +120,7 @@ automatically.
   credit (currently $200, valid 30 days) can pay for early testing on an S0
   resource, but it is a whole-account credit shared with every other Azure
   service, not something specific to Speech.
-- **Pay-as-you-go (Standard, S0):** ~$0.36/hour for fast transcription with
-  MAI-Transcribe-1.5. For MAI-Transcribe-2 Microsoft announced "$0.10 per hour
+- **Pay-as-you-go (Standard, S0):** For MAI-Transcribe-2 Microsoft announced "$0.10 per hour
   as a limited-time offer until the end of the year" (2026); it has not said
   what it costs afterwards.
 - Always confirm current pricing on the

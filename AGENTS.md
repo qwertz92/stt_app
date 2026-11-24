@@ -275,8 +275,8 @@ Short forms of rules that recur across areas; the area files hold the detail.
   `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
-  secret store. Model select picks `mai-transcribe-2` (default),
-  `mai-transcribe-1.5` or the deprecated `mai-transcribe-1`. "Azure LLM
+  secret store. The only model is `mai-transcribe-2`
+  (1.5 and the deprecated 1 are retired and moved). "Azure LLM
   Speech" is the service and MAI-Transcribe the model behind it: one engine,
   not two.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),

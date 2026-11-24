@@ -146,17 +146,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   falls to the default and is never sent. `scribe_v3_live` (realtime,
   $0.22/h) is not built. **Not verified live**: no key, so the v3 batch answer
   is read as v2's (`text`).
-- **Azure LLM Speech roster = Microsoft's table; an unconfigured Azure engine
-  moves to the default once (schema 24, 2026-09-19).** One engine (no MAI API
-  outside Azure): `mai-transcribe-2` (default, 60 languages),
-  `mai-transcribe-1.5` (43), `mai-transcribe-1` (selectable, "Deprecated on
-  Aug 20, 2026", labelled).
+- **Azure LLM Speech offers `mai-transcribe-2` only (2026-11-24; Microsoft's
+  MAI-Transcribe page, updated 2026-11-20, and microsoft.ai/news/
+  mai-transcribe-2, read that day).** One engine (no MAI API outside Azure).
+  The page still lists `MAI-Transcribe-1.5` and "`MAI-Transcribe-1`:
+  Deprecated on Aug 20, 2026"; both are removed from the app (older, fewer
+  languages, 1.5 at $0.36/h) and a saved choice moves to MAI-2 with a notice.
+  **The $0.10/h price is a promotion**: "priced at $0.10 per hour as a
+  limited-time offer until the end of the year" (2026); no 2027 price is
+  published, so MAI-2 may end up dearer. Re-judge 1.5 ($0.36/h) when Microsoft
+  names it. The request is unchanged (`enhancedMode.enabled`, `enhancedMode.
+  model`, api-version 2025-10-15 on the page).
   - Settings store the lower-case id; `AZURE_API_MODEL_NAMES` holds the
     documented spelling that is sent (e.g. `MAI-Transcribe-2`).
   - Languages follow that table via `AZURE_LOCALE_OVERRIDES` (`no` -> `nb`,
     `tl` -> `fil`); a test compares the *sent* codes per model both ways.
-  - Schema 24: a pre-24 file without `azure_endpoint` adopts the default;
-    with one it keeps its model (MAI-2 is $0.10/h vs $0.36/h).
   - **Socket timeout = 120 s + the recording's duration** (2026-10-03). The
     request is synchronous and Microsoft documents only "faster than
     real-time" (fast-transcription page, read 2026-10-03; no figure, no

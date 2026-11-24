@@ -80,7 +80,7 @@ def test_factory_openai_returns_openai_transcriber():
 def test_factory_azure_returns_azure_transcriber():
     settings = AppSettings(
         engine="azure",
-        azure_speech_model="mai-transcribe-1.5",
+        azure_speech_model="mai-transcribe-2",
         azure_endpoint="https://my-res.cognitiveservices.azure.com",
     )
 
@@ -90,7 +90,7 @@ def test_factory_azure_returns_azure_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, AzureLlmSpeechTranscriber)
-    assert t._model == "mai-transcribe-1.5"
+    assert t._model == "mai-transcribe-2"
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():

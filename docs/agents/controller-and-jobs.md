@@ -231,7 +231,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   it through `_offered_language_modes()` -- the active engine's own model
   (`_selected_model_name`), never `model_size`, which is the local model:
   asked with it, every remote model with a list of its own (Deepgram nova-2 and
-  nova-3, AssemblyAI-STT-3.7, Azure MAI-Transcribe 1 and 1.5,
+  nova-3, AssemblyAI-STT-3.7,
   Speechmatics Enhanced and Standard) showed, and `set_language_mode` accepted,
   the engine's default list (2026-10-17;
   `test_overlay_language_list_is_the_remote_models_own`).

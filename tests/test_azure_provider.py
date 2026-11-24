@@ -111,12 +111,6 @@ class TestAzureInit:
         t = AzureLlmSpeechTranscriber(api_key="key", endpoint=_ENDPOINT)
         assert t._model == DEFAULT_AZURE_SPEECH_MODEL
 
-    def test_custom_model(self):
-        t = AzureLlmSpeechTranscriber(
-            api_key="key", endpoint=_ENDPOINT, model="mai-transcribe-1"
-        )
-        assert t._model == "mai-transcribe-1"
-
     def test_unknown_model_falls_back_to_default(self):
         t = AzureLlmSpeechTranscriber(api_key="key", endpoint=_ENDPOINT, model="nope")
         assert t._model == DEFAULT_AZURE_SPEECH_MODEL
@@ -215,62 +209,12 @@ _DOCUMENTED_MAI_2 = frozenset(
         "zh",
     }
 )
-_DOCUMENTED_MAI_1_5 = frozenset(
-    {
-        "ar",
-        "as",
-        "bg",
-        "bn",
-        "ca",
-        "cs",
-        "da",
-        "de",
-        "el",
-        "en",
-        "es",
-        "et",
-        "fi",
-        "fr",
-        "gu",
-        "hi",
-        "hu",
-        "id",
-        "it",
-        "ja",
-        "kn",
-        "ko",
-        "lt",
-        "ml",
-        "mr",
-        "nb",
-        "nl",
-        "or",
-        "pa",
-        "pl",
-        "pt",
-        "ro",
-        "ru",
-        "sk",
-        "sl",
-        "sv",
-        "ta",
-        "te",
-        "th",
-        "tr",
-        "uk",
-        "vi",
-        "zh",
-    }
-)
 
 
 class TestAzureModelRoster:
     @pytest.mark.parametrize(
         ("model", "documented"),
-        [
-            ("mai-transcribe-2", _DOCUMENTED_MAI_2),
-            ("mai-transcribe-1.5", _DOCUMENTED_MAI_1_5),
-        ],
+        [("mai-transcribe-2", _DOCUMENTED_MAI_2)],
     )
     def test_the_language_list_is_microsofts_table(self, model, documented):
         """Every offered language, sent the way this provider sends it, is a
@@ -292,7 +236,6 @@ class TestAzureModelRoster:
 
     def test_the_counts_are_the_ones_the_labels_state(self):
         assert len(_DOCUMENTED_MAI_2) == 60
-        assert len(_DOCUMENTED_MAI_1_5) == 43
 
     def test_every_selectable_model_has_a_documented_api_name(self):
         from stt_app.config import AZURE_API_MODEL_NAMES, AZURE_SPEECH_MODELS
@@ -302,17 +245,13 @@ class TestAzureModelRoster:
             assert api_name.lower() == model
             assert api_name.startswith("MAI-Transcribe-")
 
-    def test_every_selectable_model_has_a_label_and_the_deprecated_one_says_so(
-        self,
-    ):
+    def test_every_selectable_model_has_a_label(self):
         from stt_app.config import AZURE_SPEECH_MODELS
         from stt_app.settings_dialog_helpers import _REMOTE_MODEL_LABELS
 
         for model in AZURE_SPEECH_MODELS:
             assert model in _REMOTE_MODEL_LABELS
-        assert "deprecated" in _REMOTE_MODEL_LABELS["mai-transcribe-1"]
         assert "60 languages" in _REMOTE_MODEL_LABELS["mai-transcribe-2"]
-        assert "43 languages" in _REMOTE_MODEL_LABELS["mai-transcribe-1.5"]
 
 
 class TestAzureBatchTranscription:
@@ -325,7 +264,7 @@ class TestAzureBatchTranscription:
             api_key="azure-key",
             endpoint=_ENDPOINT,
             language_mode="de",
-            model="mai-transcribe-1.5",
+            model="mai-transcribe-2",
         )
 
         result = t.transcribe_batch(b"RIFF fake")
@@ -343,8 +282,8 @@ class TestAzureBatchTranscription:
         assert "enhancedMode" in body
         # The documented spelling, not the id the settings store: every
         # example on Microsoft's page writes it this way.
-        assert '"model": "MAI-Transcribe-1.5"' in body
-        assert "mai-transcribe-1.5" not in body
+        assert '"model": "MAI-Transcribe-2"' in body
+        assert "mai-transcribe-2" not in body
         assert "locales" in body
         assert '"de"' in body
         assert 'name="audio"' in body
@@ -613,7 +552,7 @@ class TestAzureFactoryRouting:
         settings = SimpleNamespace(
             engine="azure",
             language_mode="de",
-            azure_speech_model="mai-transcribe-1",
+            azure_speech_model="mai-transcribe-2",
             azure_endpoint=_ENDPOINT,
         )
 
@@ -622,7 +561,7 @@ class TestAzureFactoryRouting:
         assert isinstance(transcriber, AzureLlmSpeechTranscriber)
         assert transcriber._api_key == "test-key"
         assert transcriber._language_mode == "de"
-        assert transcriber._model == "mai-transcribe-1"
+        assert transcriber._model == "mai-transcribe-2"
 
     def test_factory_uses_default_model_when_missing(self):
         from stt_app.transcriber.factory import create_transcriber

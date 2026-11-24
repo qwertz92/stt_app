@@ -212,8 +212,6 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v3": "scribe_v3 (current default, highest published accuracy)",
     "mai-transcribe-2": "mai-transcribe-2 (current default, 60 languages)",
-    "mai-transcribe-1.5": "mai-transcribe-1.5 (previous generation, 43 languages)",
-    "mai-transcribe-1": "mai-transcribe-1 (deprecated by Microsoft)",
     "fun-asr-realtime": "fun-asr-realtime (31 languages; no German)",
     "melia-1": "melia-1 (current default; Auto detects the language)",
     "enhanced": "enhanced (highest accuracy; pick a language)",

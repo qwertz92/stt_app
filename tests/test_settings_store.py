@@ -1050,50 +1050,24 @@ def _load_settings_file(tmp_path, monkeypatch, payload):
     return SettingsStore(path).load()
 
 
-def test_an_azure_engine_that_was_never_configured_adopts_the_current_model(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("schema", [0, 23, CURRENT_SCHEMA_VERSION])
+@pytest.mark.parametrize("retired", ["mai-transcribe-1.5", "mai-transcribe-1"])
+@pytest.mark.parametrize("endpoint", ["", "https://res.cognitiveservices.azure.com"])
+def test_the_retired_mai_models_load_as_mai_transcribe_2(
+    tmp_path, monkeypatch, schema, retired, endpoint
 ):
-    """Every file written before MAI-Transcribe-2 existed carries the
-    previous default, so the stored value is not a choice -- and without an
-    endpoint the engine could never run, so nothing was chosen at all. Left
-    alone, setting Azure up later would silently use the older model at
-    3.6 times the price."""
+    """Whatever the schema or the endpoint, neither older model is kept."""
     settings = _load_settings_file(
         tmp_path,
         monkeypatch,
-        {"schema_version": 23, "azure_speech_model": "mai-transcribe-1.5"},
+        {
+            "schema_version": schema,
+            "azure_speech_model": retired,
+            "azure_endpoint": endpoint,
+        },
     )
 
     assert settings.azure_speech_model == "mai-transcribe-2"
-
-
-def test_a_configured_azure_engine_keeps_its_model(tmp_path, monkeypatch):
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": 23,
-            "azure_speech_model": "mai-transcribe-1.5",
-            "azure_endpoint": "https://res.cognitiveservices.azure.com",
-        },
-    )
-
-    assert settings.azure_speech_model == "mai-transcribe-1.5"
-
-
-def test_an_azure_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
-    """The adoption happens once: a model picked before the endpoint is
-    entered must not flip back on the next load."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "azure_speech_model": "mai-transcribe-1.5",
-        },
-    )
-
-    assert settings.azure_speech_model == "mai-transcribe-1.5"
 
 
 @pytest.mark.parametrize("schema", [0, 24, CURRENT_SCHEMA_VERSION])
