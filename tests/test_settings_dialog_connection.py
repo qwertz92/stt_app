@@ -211,7 +211,7 @@ def test_elevenlabs_connection_runs_in_background_worker(monkeypatch):
             self,
             api_key: str,
             language_mode: str = "auto",
-            model: str = "scribe_v2",
+            model: str = "scribe_v3",
         ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode
@@ -235,7 +235,7 @@ def test_elevenlabs_connection_runs_in_background_worker(monkeypatch):
     dialog.elevenlabs_key_edit.setText("el-key")
     engine_index = dialog.engine_combo.findData("elevenlabs")
     dialog.engine_combo.setCurrentIndex(engine_index)
-    model_index = dialog.remote_model_combo.findData("scribe_v2")
+    model_index = dialog.remote_model_combo.findData("scribe_v3")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
     dialog._provider_test_buttons["elevenlabs"].click()
@@ -447,7 +447,7 @@ def test_save_persists_only_supported_remote_keys():
         "assemblyai-stt-3-7",
         "universal-2",
     }
-    assert dialog._loaded_settings.elevenlabs_model == "scribe_v2"
+    assert dialog._loaded_settings.elevenlabs_model == "scribe_v3"
     _ = app
 
 

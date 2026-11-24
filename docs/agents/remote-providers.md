@@ -136,8 +136,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
   proxy while the SDK worked. `format_ssl_error_message` is the shared text
   (names `SSL_CERT_FILE` too).
-- **ElevenLabs**: `scribe_v2` only; `scribe_v1` (removed 2026-07-09) migrates
-  and is never sent.
+- **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
+  like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
+  models page says "Change model_id from scribe_v2 to scribe_v3. Existing
+  request parameters work without changes", and the OpenAPI `model_id`
+  examples list `scribe_v3`). `scribe_v2` (still sold) is removed by the
+  newest-generation rule: nothing in it is better or cheaper. A saved
+  `scribe_v2` moves to v3 with a notice; `scribe_v1` (removed 2026-07-09)
+  falls to the default and is never sent. `scribe_v3_live` (realtime,
+  $0.22/h) is not built. **Not verified live**: no key, so the v3 batch answer
+  is read as v2's (`text`).
 - **Azure LLM Speech roster = Microsoft's table; an unconfigured Azure engine
   moves to the default once (schema 24, 2026-09-19).** One engine (no MAI API
   outside Azure): `mai-transcribe-2` (default, 60 languages),

@@ -679,7 +679,7 @@ class _GeneralTabMixin:
         elif provider == "elevenlabs":
             note = (
                 "The selected model applies to batch dictation and audio imports. "
-                "Realtime Scribe exists, but is not yet wired into this app."
+                "Scribe v3 Live exists, but is not yet wired into this app."
             )
         elif provider == "azure":
             # Only the endpoint is named here; the key is the sentence every

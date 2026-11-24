@@ -1622,6 +1622,7 @@ ENGINE_LABELS: dict[str, str] = {
 # model absent from both here and the `*_MODELS` tuples is not a retired
 # choice but damage, and falls to the engine's default without a notice.
 RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
+    "elevenlabs": {"scribe_v2": "scribe_v3"},
     "assemblyai": {
         "universal-3-5-pro": "assemblyai-stt-3-7",
         "universal-3-pro": "assemblyai-stt-3-7",
@@ -1732,8 +1733,14 @@ def normalize_deepgram_region(value: object) -> str:
 # can be retrieved from the AssemblyAI dashboard.
 ASSEMBLYAI_BATCH_MAX_WAIT_S = 1800.0
 
-ELEVENLABS_MODELS = ("scribe_v2",)
-DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
+# Scribe v3 (2026-11-10) replaces Scribe v2 at the same $0.20/h: "Change
+# model_id from scribe_v2 to scribe_v3. Existing request parameters work
+# without changes. Scribe v2 remains available." The dictation request
+# (`model_id`, `file`, `language_code`) is the same for both. Pages read
+# 2026-11-24: elevenlabs.io/docs/overview/models, elevenlabs.io/pricing/api,
+# and the `model_id` of `POST /v1/speech-to-text` in api.elevenlabs.io/openapi.json.
+ELEVENLABS_MODELS = ("scribe_v3",)
+DEFAULT_ELEVENLABS_MODEL = "scribe_v3"
 
 # Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
 # These are remote, cloud-only models from the Microsoft AI (MAI) team.

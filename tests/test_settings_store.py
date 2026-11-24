@@ -388,7 +388,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
             {
                 "deepgram_model": "nova-2",
                 "assemblyai_model": "universal-2",
-                "elevenlabs_model": "scribe_v2",
+                "elevenlabs_model": "scribe_v3",
             }
         ),
         encoding="utf-8",
@@ -396,7 +396,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
     assert settings.deepgram_model == "nova-2"
     assert settings.assemblyai_model == "universal-2"
-    assert settings.elevenlabs_model == "scribe_v2"
+    assert settings.elevenlabs_model == "scribe_v3"
 
 
 def test_removed_elevenlabs_model_falls_back_to_default(tmp_path):
@@ -1957,3 +1957,48 @@ def test_a_damaged_model_id_falls_to_the_default_without_a_notice(
 
     assert store.load().openai_model == DEFAULT_OPENAI_MODEL
     assert store.take_model_notice() == ""
+
+
+def _retired_moves():
+    from stt_app.config import RETIRED_REMOTE_MODELS
+
+    return [
+        (engine, old, new)
+        for engine, moves in RETIRED_REMOTE_MODELS.items()
+        for old, new in moves.items()
+    ]
+
+
+@pytest.mark.parametrize(("engine", "old", "new"), _retired_moves())
+def test_every_retired_model_moves_to_an_offered_successor(tmp_path, engine, old, new):
+    from stt_app.config import (
+        ASSEMBLYAI_MODELS,
+        AZURE_SPEECH_MODELS,
+        DEEPGRAM_MODELS,
+        ELEVENLABS_MODELS,
+        MISTRAL_MODELS,
+        OPENAI_MODELS,
+        SPEECHMATICS_MODELS,
+    )
+    from stt_app.settings_store import _REMOTE_MODEL_FIELDS
+
+    offered = {
+        "assemblyai": ASSEMBLYAI_MODELS,
+        "azure": AZURE_SPEECH_MODELS,
+        "deepgram": DEEPGRAM_MODELS,
+        "elevenlabs": ELEVENLABS_MODELS,
+        "mistral": MISTRAL_MODELS,
+        "openai": OPENAI_MODELS,
+        "speechmatics": SPEECHMATICS_MODELS,
+    }[engine]
+    assert old not in offered
+    assert new in offered
+    field = _REMOTE_MODEL_FIELDS[engine]
+    path = _write_settings(
+        tmp_path,
+        {"schema_version": CURRENT_SCHEMA_VERSION, "engine": engine, field: old},
+    )
+    store = SettingsStore(path)
+
+    assert getattr(store.load(), field) == new
+    assert old in store.take_model_notice()

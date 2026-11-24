@@ -218,7 +218,7 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "nova-2": "nova-2 (older generation)",
     "assemblyai-stt-3-7": "assemblyai-stt-3-7 (latest, highest accuracy; 32 languages)",
     "universal-2": "universal-2 (fast, broad language coverage)",
-    "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
+    "scribe_v3": "scribe_v3 (current default, highest published accuracy)",
     "mai-transcribe-2": "mai-transcribe-2 (current default, 60 languages)",
     "mai-transcribe-1.5": "mai-transcribe-1.5 (previous generation, 43 languages)",
     "mai-transcribe-1": "mai-transcribe-1 (deprecated by Microsoft)",
