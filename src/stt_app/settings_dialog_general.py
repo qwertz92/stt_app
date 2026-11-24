@@ -792,7 +792,7 @@ class _GeneralTabMixin:
 
         if engine == "assemblyai":
             return (
-                "Universal-3.5 Pro supports 18 languages at the highest accuracy. "
+                "AssemblyAI-STT-3.7 supports 32 languages at the highest accuracy. "
                 "Universal-2 is the lower-cost choice for broader coverage."
             )
 

@@ -1,7 +1,7 @@
 """AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
-Real-time streaming via AssemblyAI's Universal-3.6 Pro (v3) WebSocket API
+Real-time streaming via AssemblyAI-STT-3.7-Realtime (v3) WebSocket API
 (``assemblyai.streaming.v3.StreamingClient``); the legacy v2
 ``RealtimeTranscriber`` API has been retired by AssemblyAI.
 Requires: pip install assemblyai
@@ -216,6 +216,14 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         if self._word_boost:
             kwargs["keyterms_prompt"] = self._word_boost
 
+        # Dictation wants clean written text. AssemblyAI-STT-3.7 defaults
+        # `disfluencies` (filler words, false starts) to true and, on the
+        # account switch of 2026-12-08, every request without `speech_models`
+        # moves to it; Universal-2 defaults to false. Both are sent, so the
+        # result never depends on a vendor default.
+        kwargs["disfluencies"] = False
+        kwargs["format_text"] = True
+
         return aai.TranscriptionConfig(**kwargs)
 
     @staticmethod
@@ -223,11 +231,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         selected = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         if selected == "universal-2":
             return ["universal-2"]
-        if selected == "universal-3-5-pro":
-            return ["universal-3-5-pro"]
+        if selected == "assemblyai-stt-3-7":
+            return ["assemblyai-stt-3-7"]
         raise TranscriptionError(
             "Unsupported AssemblyAI model: "
-            f"{model}. Choose universal-3-5-pro or universal-2."
+            f"{model}. Choose assemblyai-stt-3-7 or universal-2."
         )
 
     @staticmethod
@@ -537,7 +545,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        """Start a Universal-3.6 Pro (v3) streaming session.
+        """Start an AssemblyAI-STT-3.7-Realtime (v3) streaming session.
 
         The ``on_partial`` callback receives the accumulated transcript text
         (all completed turns + the current turn) each time an update arrives
@@ -610,9 +618,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "speech_model": ASSEMBLYAI_STREAMING_MODEL,
             }
             if self._word_boost:
-                # U3.6 Pro accepts up to 100 terms of at most 50 characters
-                # each, keyterms included in its price (docs and pricing page,
-                # read 2026-10-01); a longer term is ignored by the service.
+                # The model accepts up to 100 terms of at most 50 characters
+                # each, keyterms included in its price (streaming WebSocket
+                # spec and prompting page, read 2026-11-24); a longer term is
+                # ignored by the service.
                 # The shared vocabulary parser already caps the input at 100.
                 stream_kwargs["keyterms_prompt"] = self._word_boost
             client.connect(StreamingParameters(**stream_kwargs))

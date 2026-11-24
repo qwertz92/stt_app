@@ -216,7 +216,7 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-1": "whisper-1 (legacy; removed by OpenAI on 2027-02-26)",
     "nova-3": "nova-3 (current default)",
     "nova-2": "nova-2 (older generation)",
-    "universal-3-5-pro": "universal-3-5-pro (latest, highest accuracy; 18 languages)",
+    "assemblyai-stt-3-7": "assemblyai-stt-3-7 (latest, highest accuracy; 32 languages)",
     "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
     "mai-transcribe-2": "mai-transcribe-2 (current default, 60 languages)",

@@ -423,16 +423,21 @@ def test_legacy_assemblyai_model_falls_back_to_default(tmp_path):
     assert settings.assemblyai_model == DEFAULT_ASSEMBLYAI_MODEL
 
 
-def test_universal_3_pro_migrates_to_universal_3_5_pro(tmp_path):
+@pytest.mark.parametrize("retired", ["universal-3-5-pro", "universal-3-pro"])
+def test_the_retired_universal_3_models_move_to_stt_3_7(tmp_path, retired):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"assemblyai_model": "universal-3-pro"}),
+        json.dumps({"engine": "assemblyai", "assemblyai_model": retired}),
         encoding="utf-8",
     )
+    store = SettingsStore(settings_path)
 
-    settings = SettingsStore(settings_path).load()
+    settings = store.load()
 
-    assert settings.assemblyai_model == "universal-3-5-pro"
+    assert settings.assemblyai_model == "assemblyai-stt-3-7"
+    notice = store.take_model_notice()
+    assert "AssemblyAI" in notice and retired in notice
+    assert "assemblyai-stt-3-7" in notice
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):

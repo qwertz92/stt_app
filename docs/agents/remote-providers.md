@@ -22,9 +22,34 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   everyone). An id that is neither current nor in the map is damage and falls
   to the default without a notice. A history row keeps the model id it was made
   with.
-- **AssemblyAI batch model**: send `speech_models`; `universal-3-5-pro` goes
-  alone, never with a silent `universal-2` fallback. Legacy
-  `universal-3-pro`/`best`/`nano` migrate to the default and are hidden.
+- **AssemblyAI models (2026-11-24, pages read that day: `llms/models.md`,
+  `docs/openapi.json`, `docs/streaming/api-spec/streaming-websocket.md`,
+  `docs/streaming/select-the-speech-model.md`).** Batch: send `speech_models`;
+  `assemblyai-stt-3-7` ($0.21/h, 32 languages, same price as the deprecated
+  `universal-3-5-pro`) goes alone, never with a silent `universal-2`
+  fallback. `universal-3-5-pro` and `universal-3-pro` (deprecated by
+  AssemblyAI 2026-11-17; accounts without `speech_models` are switched on
+  2026-12-08) move to it, and `best`/`nano` fall to it silently.
+  `universal-2` stays only as the cheaper choice for languages outside the 32.
+  - **Always send `disfluencies=false` and `format_text=true`.** STT-3.7
+    defaults `disfluencies` to true (the OpenAPI text: "Defaults to true when
+    `speech_models` includes `assemblyai-stt-3-7`"), which would put "um" and
+    false starts into dictated text; Universal-2 defaults to false. Sent for
+    both so no vendor default decides.
+  - **Language**: `language_code` (a pinned language) or `language_detection`
+    stays; `language_codes` replaces `language_detection_options.
+    expected_languages` only, which the app never sent. The 32 codes of
+    `ASSEMBLYAI_STT_3_7_LANGUAGE_MODES` are the streaming spec's accepted list;
+    AssemblyAI's OpenAPI spec also carries `yue`, `nn`, `xh`, `zu`.
+  - **Streaming**: `assemblyai-stt-3-7-realtime` ($0.30/h), not the `-agent`
+    voice-agent model ($0.45/h) and not `universal-3-6-pro`, which AssemblyAI
+    keeps supported as the previous generation. Same endpoint and message
+    protocol; the streaming spec has no `disfluencies` parameter, and the
+    prompting page says the transcription instruction is built in, so whether
+    filler words appear in streamed text is **unverified** (no key).
+  - **SDK 1.10.11** (was 1.6.1): the streaming `speech_model` is an enum, and
+    1.6.1 has no `assemblyai-stt-3-7-realtime` member, so `StreamingParameters`
+    would refuse it. 1.10.11 (2026-11-17) has no advisory on OSV on 2026-11-24.
 - **No remote batch wait may be unbounded; the AssemblyAI poll fetches a status
   and never calls something that waits.** `Transcript.wait_for_completion` is
   an unbounded loop and `Transcript.get_by_id` (SDK 0.64.33) calls it (still
@@ -331,7 +356,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     key; the AssemblyAI key was not used). Deepgram's page names the REST
     host only; `wss://api.eu.deepgram.com/v1/listen` is derived from it.
     AssemblyAI's pages say nothing about key or model availability in the EU,
-    so whether Universal-3.6 Pro streams there is open.
+    so whether STT-3.7-Realtime streams there is open; the streaming
+    data-zone page (read 2026-11-24) lists `streaming.eu.assemblyai.com`
+    without a per-model note.
 - **Deepgram streaming holds its socket open with a KeepAlive while no audio
   goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
   capture's audio over up to 12 s late, so the socket is open and silent for

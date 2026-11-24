@@ -444,7 +444,7 @@ def test_save_persists_only_supported_remote_keys():
     assert dialog._loaded_settings.openai_model in OPENAI_MODELS
     assert dialog._loaded_settings.deepgram_model in {"nova-3", "nova-2"}
     assert dialog._loaded_settings.assemblyai_model in {
-        "universal-3-5-pro",
+        "assemblyai-stt-3-7",
         "universal-2",
     }
     assert dialog._loaded_settings.elevenlabs_model == "scribe_v2"

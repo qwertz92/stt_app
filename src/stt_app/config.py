@@ -945,26 +945,44 @@ NEMOTRON_LANGUAGE_IDS: dict[str, int] = {
     "et": 60,
 }
 NEMOTRON_LANGUAGE_MODES = tuple(NEMOTRON_LANGUAGE_IDS)
-ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES = (
+# AssemblyAI-STT-3.7's 32 languages (https://www.assemblyai.com/llms/models.md
+# and the `language_codes` list of the streaming WebSocket spec, read
+# 2026-11-24; the codes also appear in AssemblyAI's OpenAPI spec). Universal-2
+# covers the 99 others and is the separate `universal-2` choice.
+ASSEMBLYAI_STT_3_7_LANGUAGE_MODES = (
     "auto",
-    "de",
-    "en",
+    "af",
     "ar",
+    "yue",
+    "ca",
     "da",
     "nl",
+    "en",
+    "et",
     "fi",
     "fr",
+    "gl",
+    "de",
     "he",
     "hi",
     "it",
     "ja",
+    "ko",
+    "zh",
+    "mr",
     "no",
+    "nn",
+    "fa",
     "pt",
+    "ro",
+    "ru",
     "es",
     "sv",
     "tr",
+    "ur",
     "vi",
-    "zh",
+    "xh",
+    "zu",
 )
 DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "auto",
@@ -1385,10 +1403,7 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", PARAKEET_ULTRA_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
-    (
-        "assemblyai",
-        "universal-3-5-pro",
-    ): ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
+    ("assemblyai", "assemblyai-stt-3-7"): ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
@@ -1606,19 +1621,31 @@ ENGINE_LABELS: dict[str, str] = {
 # the move back, so it happens once) with a tray notice at the next start. A
 # model absent from both here and the `*_MODELS` tuples is not a retired
 # choice but damage, and falls to the engine's default without a notice.
-RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {}
+RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
+    "assemblyai": {
+        "universal-3-5-pro": "assemblyai-stt-3-7",
+        "universal-3-pro": "assemblyai-stt-3-7",
+    },
+}
 
+# AssemblyAI-STT-3.7 (launched 2026-11-17) replaces Universal-3.5 Pro for
+# recorded audio at the same $0.21/h and covers 32 languages instead of 18;
+# `universal-2` stays only as the cheaper choice for the other 67 of its 99
+# languages (https://www.assemblyai.com/llms/models.md, read 2026-11-24).
 ASSEMBLYAI_MODELS = (
-    "universal-3-5-pro",
+    "assemblyai-stt-3-7",
     "universal-2",
 )
-DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
-# Realtime model. Universal-3.6 Pro (launched 2026-09-29) is streaming-only:
-# the batch `speech_models` list has no 3.6 id, so batch stays on 3.5 Pro.
-# Same price as 3.5 Pro realtime ($0.45/h), same parameters, 32 languages;
-# its code-switching needs no language parameter, so the UI keeps Auto only.
-ASSEMBLYAI_STREAMING_MODEL = "universal-3-6-pro"
-ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
+DEFAULT_ASSEMBLYAI_MODEL = "assemblyai-stt-3-7"
+# Realtime model. AssemblyAI-STT-3.7-Realtime ($0.30/h, against $0.45/h for
+# Universal-3.6 Pro) is the one AssemblyAI describes as for "live conversation
+# that ends in a transcript": notetakers, captions. Its `-agent` sibling is the
+# voice-agent model (turn-taking, $0.45/h) and is not what dictation needs.
+# 32 languages in one stream with automatic detection, so the UI keeps Auto
+# only. Pages read 2026-11-24: llms/models.md and docs/streaming/
+# select-the-speech-model.md.
+ASSEMBLYAI_STREAMING_MODEL = "assemblyai-stt-3-7-realtime"
+ASSEMBLYAI_STREAMING_MODEL_LABEL = "AssemblyAI-STT-3.7"
 
 # Data-residency regions (`assemblyai_region`, `deepgram_region`). Each
 # provider's default is its default endpoint, i.e. what every build before

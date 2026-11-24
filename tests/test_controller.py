@@ -28,7 +28,7 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
-    ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
+    ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
     AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -2101,7 +2101,7 @@ def test_overlay_language_change_rejects_unsupported_cohere_auto():
     [
         ("deepgram", "nova-3", DEEPGRAM_NOVA_3_LANGUAGE_MODES),
         ("deepgram", "nova-2", DEEPGRAM_NOVA_2_LANGUAGE_MODES),
-        ("assemblyai", "universal-3-5-pro", ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES),
+        ("assemblyai", "assemblyai-stt-3-7", ASSEMBLYAI_STT_3_7_LANGUAGE_MODES),
         ("azure", "mai-transcribe-1.5", AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES),
         ("azure", "mai-transcribe-1", AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES),
         ("speechmatics", "enhanced", SPEECHMATICS_LANGUAGE_MODES),
