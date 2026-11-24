@@ -3,6 +3,49 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: remote model rosters brought up to the vendors' newest generation
+
+Structurally: a generic "retired remote model" mechanism now carries every
+roster change (`config.RETIRED_REMOTE_MODELS`, `settings_store._current_remote_model`,
+`SettingsStore.take_model_notice()`, a tray notice "Speech model updated" from
+`main.py`). A saved removed id moves to its successor once, because `load()`
+already rewrites normalised settings, and the notice names the engine and both
+ids; it is shown only for the selected engine or one with a stored key. An
+unknown or damaged id still falls to the default silently. The earlier
+one-off Azure and OpenAI schema-adoption blocks were folded into it.
+
+Per provider (vendor pages and OpenAPI files were fetched raw on 2026-11-24;
+no API key was read and no authenticated request was sent, so every request
+shape below is pinned by tests against the documented shape and is **unverified
+against the live services**):
+
+- AssemblyAI: `universal-3-5-pro` -> `assemblyai-stt-3-7` (batch), realtime
+  `universal-3-6-pro` -> `assemblyai-stt-3-7-realtime`; `disfluencies=false`
+  and `format_text=true` are sent; 32 languages; SDK 1.10.11 (the first with
+  the realtime enum value).
+- ElevenLabs: `scribe_v2` -> `scribe_v3`.
+- OpenAI: `gpt-transcribe` only; whisper-1, gpt-4o-transcribe and
+  gpt-4o-mini-transcribe removed (the mini model was only a third cheaper and
+  its price is no longer published).
+- Azure: `mai-transcribe-2` only; the $0.10/h price is a promotion to the end
+  of 2026 (recorded in the docs, not coded).
+- Mistral: `voxtral-mini-2602` -> `voxtral-mini-transcribe-3-0`, plus
+  `voxtral-small-transcribe-3-0`; 53 languages; regional endpoints recorded,
+  no picker.
+- Speechmatics: `standard` removed (dearer, equal accuracy); Melia 1 now runs
+  in every region, so the au1 refusal is gone.
+- Fun-ASR: German is on the vendor's current `language_hints` list; the list
+  is the vendor's 30 codes (7 old ones dropped).
+- Deepgram: `nova-2` removed, nova-3 covers all its languages. Groq: nothing
+  newer is sold; unchanged.
+
+Learned: a roster change touches far more than the constant. Tests that used a
+removed model as "the model with a narrower language list" (Deepgram nova-2,
+Azure MAI 1, Speechmatics Standard) needed other examples (Speechmatics
+Enhanced for Auto, Fun-ASR for no Afrikaans). Still to do for the owner: the
+Meta "Muse Voice Transcribe" provider and the OpenRouter preset were out of
+scope.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`
