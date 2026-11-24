@@ -8,6 +8,19 @@ paints the overlay. "Above/below" refers to this file; "Known limitations" is
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (original AGENTS.md: `df2642a`).
 
+- **Owner's clarification of the stability rules (2026-11-24)**: "nothing may
+  jump" was never meant strictly. The goal is best-practice UI/UX: prevent
+  UNEXPECTED movement; small shifts and movement the user caused are fine;
+  stability is never bought with empty reserved space or with forced
+  over-engineering; when stability and usability pull apart, usability wins
+  and the trade-off is named. The full statement and how to apply it are in
+  `docs/agents/settings-dialog.md` (first entry); for the overlay it reads
+  the rules below ("never re-wrap or blink", the reserved heights and widths,
+  the equal button groups) as aims, not as a ban on every shift: a shift the
+  user caused, or a few pixels, is fine, and reserved empty space is not the
+  price. Existing reservations stay until the code around them is touched for
+  another reason.
+
 - **One event's changes go through `OverlayUI.batched_update()`** (geometry
   deferred to the end, resized with painting suppressed); otherwise queue plus
   state resized twice (183 -> 137 -> 269 px) with a stale frame. The

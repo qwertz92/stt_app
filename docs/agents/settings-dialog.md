@@ -9,6 +9,18 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md` (original AGENTS.md: `df2642a`).
 
+- **Owner's clarification of the stability rules (2026-11-24)**: "nothing may
+  jump" was never meant strictly. The goal is best-practice UI/UX: prevent
+  UNEXPECTED movement; small shifts and movement the user caused are fine;
+  stability is never bought with empty reserved space or with forced
+  over-engineering; when stability and usability pull apart, usability wins
+  and the trade-off is named. Read every "never moves", "reserves" and
+  "retains" rule below in that light. Reservations that exist today stay until
+  the code around them is touched for another reason; when one is touched,
+  first ask whether what appears is below what the user is pointing at (then
+  it needs no reserved room) and whether the reserved area is visible empty
+  space on every visit (then it is paid for more often than the shift it
+  prevents). The Models tab's group was the first one measured against this.
 - **The Models tab's group is as tall as its content** (2026-11-24, owner:
   "there is a scrollbar although everything would fit; the 'Local models' area
   is too tall and has empty space"). Measured on a copy of his data at the

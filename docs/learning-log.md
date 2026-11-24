@@ -3,6 +3,17 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: owner's clarification of the UI stability rules
+
+The owner clarified that "nothing may jump" was never meant strictly: the goal is
+best-practice UI/UX, preventing UNEXPECTED movement. Small shifts and movement
+the user caused are fine; stability is never bought with empty reserved space or
+forced over-engineering; when stability and usability pull apart, usability wins
+and the trade-off is named. Written as one dated entry at the top of
+`docs/agents/settings-dialog.md` and a short pointer entry in
+`docs/agents/overlay.md`; no existing rule was rewritten. The first rule measured
+against it was the Models tab's reserved download area (entry above).
+
 ## 2026-11-24: overlay steps behind the application's own windows
 
 Structurally: `OverlayUI._apply_native_z_order` now places a topmost overlay directly
