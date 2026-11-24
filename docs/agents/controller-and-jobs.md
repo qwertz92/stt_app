@@ -712,6 +712,41 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   as active until released. Terminal signals follow hook clearing and lease
   release. Shutdown marks closed first, ignores late signals, lets the final
   owner close. Resume uses the same admission lock.
+- **A wake from sleep loads the kept ONNX model again** (2026-11-24, owner's
+  log: 12 resumes in a month, the next dictation 7.8-13.1 s for short clips
+  against a median of 0.74 s, the load hidden in `transcribe_ms`).
+  `handle_system_resume` closes an idle Cohere/Granite runtime (its WebGPU
+  device does not survive the suspend) and then, when the engine is local,
+  the model is a WebGPU one and "Keep ONNX model loaded" is on
+  (`_resume_preload_wanted`), starts `_resume_preload_timer`:
+  - First attempt after `RESUME_PRELOAD_DELAY_MS` (3 s; the GPU driver may
+    not be back at once), then `_run_resume_preload` starts an ordinary
+    preload (`_start_local_model_preload(after_resume=True)`) only if
+    `_local_model_preload_needed` -- so a dictation that came first and
+    loaded at first use, or a second resume while the runtime is in use
+    (kept by the in-use rule above), loads nothing twice. A matching
+    preload already running is left alone and keeps the attempt budget.
+  - A dictation during the load waits for that preload
+    (`_wait_for_selected_model_preload`), as after startup: no second load,
+    and the lease rules above apply unchanged.
+  - A failed attempt is not recorded against the key (`record_failure=False`
+    in the worker; recorded, the next dictation would raise "could not be
+    loaded" instead of loading), is not painted as an Error, and is retried
+    after `RESUME_PRELOAD_RETRY_DELAY_MS` (10 s), `RESUME_PRELOAD_MAX_ATTEMPTS`
+    (3) attempts in all; then `resume_preload_gave_up` is logged and the next
+    dictation loads at first use, as before 2026-11-24. Several resume
+    notifications restart the timer and the budget.
+  - It paints only where a delayed writer may (`_preload_line_may_paint`,
+    shared with the 600 ms progress poll): never over a session, a Done or
+    an Error result, or a detail being read.
+  - Not changed: the runtime is still closed on every resume (recreating
+    the GPU backends is why), so a wake costs one background load (2-8 s of
+    GPU work) whether or not the user dictates.
+  - The log separates a load that still happens inside a transcription:
+    `transcription_timing ... load_ms=N transcribe_ms=M`, N from the
+    Cohere/Granite runtime's `runtime_starts` / `last_runtime_start_ms`
+    (spawn to "ready"), M without it; `load_ms=n/a` for runtimes that do not
+    count their starts.
 - **A quit is bounded by a native watchdog** (2026-10-03): `main` arms
   `faulthandler.dump_traceback_later(QUIT_WATCHDOG_TIMEOUT_S, exit=True)`
   into the session's `crash.log` (below; until 2026-10-23 a second handle

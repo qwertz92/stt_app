@@ -786,6 +786,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     progress: list[str] = []
     transcriber.set_progress_callback(progress.append)
 
+    assert transcriber.runtime_starts == 0
     try:
         text = transcriber.transcribe_batch(b"RIFF")
         assert transcriber.is_model_loaded is True
@@ -793,6 +794,9 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
         transcriber.close()
 
     assert text == "hello world"
+    # The controller reads these to log the load apart from the transcription.
+    assert transcriber.runtime_starts == 1
+    assert isinstance(transcriber.last_runtime_start_ms, int)
     assert transcriber.runtime_device == "cpu"
     assert transcriber.gpu_available is False
     assert "CPU" in transcriber.runtime_warning
