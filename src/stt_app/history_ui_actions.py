@@ -15,12 +15,36 @@ from pathlib import Path
 
 from PySide6 import QtWidgets
 
+from .settings_dialog_helpers import _ENGINE_LABELS, local_model_short_label
 from .transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     edited_entry,
     select_newest_entries,
 )
+
+# One name for the stored-entries limit on both History surfaces.
+HISTORY_LIMIT_LABEL = "History limit"
+
+# Shown over the empty transcript list on both History surfaces.
+HISTORY_EMPTY_TEXT = "No transcripts yet. They appear here after your first dictation."
+
+_LOCAL_ENGINE = "local"
+
+
+def history_engine_label(engine: str) -> str:
+    """The engine as the pickers name it, without the parenthetical ("Local")."""
+    label = _ENGINE_LABELS.get(engine, engine)
+    return label.split(" (", 1)[0].strip() or label
+
+
+def history_model_label(engine: str, model: str) -> str:
+    """The model as the pickers name it.
+
+    Only local models have a name apart from their id; a remote model's id is
+    what its picker shows.
+    """
+    return local_model_short_label(model) if engine == _LOCAL_ENGINE else model
 
 
 def notify_history_edit(
@@ -39,15 +63,14 @@ def notify_history_edit(
 
 
 def format_history_count_label(total: int, limit: int) -> str:
-    """Render the "Stored: N entries (...)" summary text for a history limit."""
+    """Render the "N entries stored (...)" summary text for a history limit."""
     count = int(total)
+    noun = "entry" if count == 1 else "entries"
     if limit == 0:
-        return f"Stored: {count} entries (unlimited; showing all)"
-
-    shown = min(count, limit)
+        return f"{count} {noun} stored (no limit)"
     if count <= limit:
-        return f"Stored: {count} entries (limit {limit}; showing all stored entries)"
-    return f"Stored: {count} entries (limit {limit}; showing latest {shown})"
+        return f"{count} {noun} stored (limit {limit})"
+    return f"{count} {noun} stored (limit {limit}); showing only the latest"
 
 
 def history_import_dialog_dir(history_store: TranscriptHistoryStore) -> str:

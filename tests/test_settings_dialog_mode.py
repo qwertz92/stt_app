@@ -942,7 +942,7 @@ def test_settings_history_list_formats_utc_display_timezone(tmp_path):
     assert (
         dialog.history_list.item(0)
         .text()
-        .startswith("2026-06-24 16:45:00 UTC | local/small")
+        .startswith("2026-06-24 16:45:00 UTC | Local/small")
     )
     _ = app
 
@@ -1320,7 +1320,7 @@ def test_settings_history_tab_has_export_import_clear_buttons_and_count_label(
     assert dialog.history_import_button.text() == "Import..."
     assert dialog.history_clear_button.text() == "Clear history"
     assert dialog.history_count_label.text() == (
-        "Stored: 2 entries (limit 1; showing latest 1)"
+        "2 entries stored (limit 1); showing only the latest"
     )
     _ = app
 
