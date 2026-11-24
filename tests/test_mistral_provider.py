@@ -109,7 +109,7 @@ def test_the_fifty_three_documented_languages_are_offered():
 
 
 def test_a_language_mistral_does_not_offer_falls_back_to_auto(recorder):
-    MistralTranscriber("k", language_mode="pl").transcribe_batch(wav_seconds(1.0))
+    MistralTranscriber("k", language_mode="ga").transcribe_batch(wav_seconds(1.0))
     assert all(name != "language" for name, _ in sent_fields(recorder.requests[0]))
 
 
