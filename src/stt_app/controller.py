@@ -1301,6 +1301,12 @@ class DictationController(QtCore.QObject):
                 self._unfinished_recording_store.directory,
             )
 
+    def has_active_session(self) -> bool:
+        """True while a recording or its foreground transcription runs: what
+        a long build on the Qt thread would hold up (`main`'s Settings
+        prebuild waits for it)."""
+        return self._overlay_session_active()
+
     def quit_pending_work(self) -> PendingQuitWork:
         """What quitting now would cut short; see `PendingQuitWork`."""
         live = [job for job in self._jobs.values() if not job.aborting]
