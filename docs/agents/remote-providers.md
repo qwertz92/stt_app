@@ -166,21 +166,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     Mistral instead shortens its parts to fit a fixed 300 s.
   - **Not verified live** (`docs/azure-llm-speech.md` says so). No phrase
     list is sent, so custom vocabulary stays unwired.
-- **OpenAI: `gpt-transcribe` is the default and the only model with a
-  different request shape (schema 25, 2026-09-21).** Offered with
-  `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` (removed from the
-  API 2027-02-26, labelled); not `gpt-4o-transcribe-diarize` (no speaker UI)
-  or realtime-only `gpt-live-transcribe`.
-  - **Branch on `OPENAI_ARRAY_FIELD_MODELS`**: `gpt-transcribe` sends
-    `languages[]=<code>` (never also `language`) and one `keywords[]` per
-    term; older models send `language` + comma-joined `prompt` (pinned by a
-    multipart-parsing test).
+- **OpenAI: `gpt-transcribe` is the only model (2026-11-24; pages read that
+  day: guides/speech-to-text, models/gpt-transcribe, deprecations).**
+  `whisper-1`, `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` (and
+  `gpt-4o-transcribe-diarize`, removed 2027-04-01) are on OpenAI's deprecations
+  page with removal on 2027-02-26 and replacement "gpt-live-transcribe or
+  gpt-transcribe". They are removed from the app now and a saved choice moves
+  to `gpt-transcribe` with a notice. The only one with a price argument was
+  `gpt-4o-mini-transcribe`: $0.003/min ($0.18/h, read 2026-09-21) against
+  $0.0045/min ($0.27/h), a third less, not "far cheaper", and the pricing page
+  no longer lists it, so nothing to cite. Re-add it only if OpenAI republishes
+  a price and the removal date moves. `gpt-live-transcribe` is a realtime
+  session model and does not answer on this endpoint.
+  - **One request shape**: `languages[]=<code>` (never also `language`) and one
+    `keywords[]` per term. The comma-joined `prompt` branch and the 180 s
+    token-cap part limit of the two `gpt-4o` models are gone with them.
   - **Drop terms containing `<`, `>`, CR or LF** (one rejects the whole
     request); log the count once at INFO, never the terms.
     `parse_custom_vocabulary` does not split on CR.
-  - All four models use the engine's language list.
-  - Schema 25 = schema 24 with `has_openai_key` for the endpoint (pre-25
-    files carry `gpt-4o-mini-transcribe`).
+  - The language list is the engine's (OpenAI's guide enumerates only code
+    formats). The schema-25 adoption (an OpenAI file without a key took the
+    default) is gone: every retired id moves, with or without a key.
   - **Not verified live** (no OpenAI key).
 - **Soniox was not added (2026-09-21)**: a new provider must be both more
   accurate and cheaper than what is offered (MAI-Transcribe-2 and ElevenLabs
@@ -255,10 +261,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Not verified live**: no Mistral key exists here.
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
-  16 kHz WAV); `gpt-4o-transcribe`/`gpt-4o-mini-transcribe` (2,000 output
-  tokens) truncate silently. `config.remote_batch_part_limit(engine, model)`
-  is the single answer (engine seconds + byte cap, tighter per-model seconds,
-  180 s for the token-capped two; vendor figures beside the constants).
+  16 kHz WAV). `config.remote_batch_part_limit(engine, model, api_mode)`
+  is the single answer (engine seconds + byte cap, the custom endpoint's chat
+  style tighter; vendor figures beside the constants; `model` is unused since
+  the two token-capped OpenAI models went, on 2026-11-24, and kept so that no
+  caller changes).
   `transcriber/_audio_parts.transcribe_in_parts` wraps the provider's own
   single-request method.
   - **Within both limits the recording goes out untouched** (same object,

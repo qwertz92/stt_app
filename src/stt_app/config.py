@@ -686,14 +686,12 @@ _NON_WHISPER_LANGUAGE_MODES = frozenset(
 WHISPER_LANGUAGE_MODES = tuple(
     value for value in VALID_LANGUAGE_MODES if value not in _NON_WHISPER_LANGUAGE_MODES
 )
-# Shared by all four OpenAI models, `gpt-transcribe` included. Its own guide
-# enumerates no list for it -- only the code *formats* it accepts ("ISO 639-1
-# codes, such as en, es, and fr", selected ISO 639-3 codes, and regional zh
-# locales) plus "The API rejects unsupported or incorrectly formatted language
-# codes" -- and points at the Whisper language list for `whisper-1`, which is
-# where this one comes from. Narrowing it for one model would need a source
-# that does not exist; a code the newer model refuses surfaces as the API's
-# own error rather than as a wrong transcript.
+# `gpt-transcribe`'s own guide enumerates no list -- only the code *formats* it
+# accepts ("ISO 639-1 codes, such as en, es, and fr", selected ISO 639-3 codes,
+# and regional zh locales) plus "The API rejects unsupported or incorrectly
+# formatted language codes" -- and points at the Whisper language list, which is
+# where this one comes from. A code the model refuses surfaces as the API's own
+# error rather than as a wrong transcript.
 OPENAI_LANGUAGE_MODES = (
     "auto",
     "de",
@@ -1468,8 +1466,7 @@ def language_modes_for_selection(
 # (or not) -- so the two cannot drift.
 #
 # Remote engines whose request carries the terms: AssemblyAI as
-# `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields
-# (`gpt-transcribe`) or as `prompt` (the three older models), Groq as
+# `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields, Groq as
 # `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
 # query parameters, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
@@ -1556,32 +1553,22 @@ def parse_custom_vocabulary(raw: str) -> list[str]:
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 
-# `POST /v1/audio/transcriptions` accepts five model ids. Four are offered
-# here; `gpt-4o-transcribe-diarize` is deliberately not, because the app has
-# no speaker UI and OpenAI's guide calls it a specialized model that "isn't
-# the recommended model for ordinary file transcription".
-#
-# `gpt-transcribe` is the current one -- "Start with gpt-transcribe. This is
-# the recommended model for transcribing recorded speech in its original
-# language." The other three were notified of deprecation on 2026-08-26 and
-# OpenAI's deprecations page gives 2027-02-26 as their removal date from the
-# API, so they stay selectable and their labels carry the date. (Both pages
-# read 2026-09-21; the replacement the deprecation notice names for realtime
-# use, `gpt-live-transcribe`, is a realtime-session model and does not answer
-# on this endpoint.)
-OPENAI_MODELS = (
-    "gpt-transcribe",
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe",
-    "whisper-1",
-)
+# `gpt-transcribe` is the only OpenAI model offered: "Start with
+# gpt-transcribe. This is the recommended model for transcribing recorded
+# speech in its original language." (pages read 2026-11-24:
+# developers.openai.com/api/docs/guides/speech-to-text and /models/
+# gpt-transcribe). `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`
+# (and `gpt-4o-transcribe-diarize`, never offered: no speaker UI) are listed
+# on the deprecations page as removed from the API on 2027-02-26, and
+# none is better at anything the app uses. `gpt-4o-mini-transcribe` was the
+# cheapest, about $0.003/min against $0.0045/min, but OpenAI's pricing page no
+# longer lists it, so no figure could be read; a third less is not "far
+# cheaper" for a model that disappears in three months. Saved choices of the
+# three move to `gpt-transcribe` (`RETIRED_REMOTE_MODELS`). The model's
+# realtime sibling, `gpt-live-transcribe`, is a realtime-session model and does
+# not answer on this endpoint.
+OPENAI_MODELS = ("gpt-transcribe",)
 DEFAULT_OPENAI_MODEL = "gpt-transcribe"
-# Which models take the repeated array fields `languages[]` and `keywords[]`
-# instead of the singular `language` and `prompt`: "For gpt-transcribe,
-# languages replaces the singular language field. Don't send both fields."
-# Named as a set rather than compared against `DEFAULT_OPENAI_MODEL` so the
-# request shape does not silently follow a change of default.
-OPENAI_ARRAY_FIELD_MODELS = ("gpt-transcribe",)
 # Characters OpenAI refuses inside a `keywords[]` term: "Keep each keyword on
 # one line and don't include <, >, a carriage return, or a line feed. The API
 # rejects the entire request when it encounters one of these characters."
@@ -1622,6 +1609,11 @@ ENGINE_LABELS: dict[str, str] = {
 # model absent from both here and the `*_MODELS` tuples is not a retired
 # choice but damage, and falls to the engine's default without a notice.
 RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
+    "openai": {
+        "whisper-1": "gpt-transcribe",
+        "gpt-4o-transcribe": "gpt-transcribe",
+        "gpt-4o-mini-transcribe": "gpt-transcribe",
+    },
     "elevenlabs": {"scribe_v2": "scribe_v3"},
     "assemblyai": {
         "universal-3-5-pro": "assemblyai-stt-3-7",
@@ -1882,18 +1874,9 @@ CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S = 3.0
 # 3 GB / 10 h and AssemblyAI 2.2 GB / 10 h, past any dictation, and Fun-ASR
 # streams the recording over a WebSocket.
 #
-# `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` state "2,000 max output
-# tokens" on their model pages, and a forum report shows the transcript cut
-# off silently after about 8-9 minutes of English at 2,048 output tokens, i.e.
-# about 230-255 tokens per minute. Fast speech (200 against 150 words per
-# minute) in a language that tokenizes denser than English can need 1.7 times
-# that, which reaches 2,000 tokens inside five minutes; three minutes leave a
-# margin of about 2.8 over the English rate. A part costs no more than the
-# minutes it holds, so the shorter bound only adds seams.
-OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS = 180.0
 # OpenAI takes 25 MB per file, about 13 minutes of this WAV. `gpt-transcribe`
-# and `whisper-1` state no token cap, and ten minutes also stays below the
-# 1,400 s duration cap that is reported second-hand only.
+# states no token cap, and ten minutes also stays below the 1,400 s duration
+# cap that is reported second-hand only.
 OPENAI_MAX_PART_SECONDS = 600.0
 # The speech-to-text guide: "Files can be up to 25 MB." Read as decimal
 # megabytes, the smaller of the two readings.
@@ -1959,11 +1942,6 @@ REMOTE_BATCH_API_MODE_LIMITS: dict[tuple[str, str], tuple[float, int]] = {
         CUSTOM_CHAT_MAX_REQUEST_BYTES,
     ),
 }
-# A model whose own limit is tighter than its engine's.
-REMOTE_BATCH_MODEL_MAX_PART_SECONDS: dict[tuple[str, str], float] = {
-    ("openai", "gpt-4o-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
-    ("openai", "gpt-4o-mini-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
-}
 
 
 class RemotePartLimit(NamedTuple):
@@ -1991,10 +1969,7 @@ def remote_batch_part_limit(
     )
     if api_mode_limit is not None:
         return RemotePartLimit(seconds=api_mode_limit[0], max_bytes=api_mode_limit[1])
-    model_key = (normalized_engine, str(model or "").strip())
-    seconds = REMOTE_BATCH_MODEL_MAX_PART_SECONDS.get(
-        model_key, REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)
-    )
+    seconds = REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)
     if seconds is None:
         return None
     return RemotePartLimit(

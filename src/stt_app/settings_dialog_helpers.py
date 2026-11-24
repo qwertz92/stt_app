@@ -206,14 +206,6 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-large-v3": "whisper-large-v3 (best quality, $0.111/hr)",
     "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
     "gpt-transcribe": "gpt-transcribe (current default, recommended by OpenAI)",
-    # OpenAI notified deprecation on 2026-08-26 and removes these three from
-    # the API on 2027-02-26, so the label carries the date rather than a
-    # quality claim: which to pick is now a question of how long it lasts.
-    "gpt-4o-mini-transcribe": (
-        "gpt-4o-mini-transcribe (removed by OpenAI on 2027-02-26)"
-    ),
-    "gpt-4o-transcribe": "gpt-4o-transcribe (removed by OpenAI on 2027-02-26)",
-    "whisper-1": "whisper-1 (legacy; removed by OpenAI on 2027-02-26)",
     "nova-3": "nova-3 (current default)",
     "nova-2": "nova-2 (older generation)",
     "assemblyai-stt-3-7": "assemblyai-stt-3-7 (latest, highest accuracy; 32 languages)",

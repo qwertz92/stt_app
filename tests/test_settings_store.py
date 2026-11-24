@@ -356,19 +356,17 @@ def test_elevenlabs_engine_is_valid(tmp_path):
 
 def test_openai_model_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
-    # At the current schema, so this pins the round trip and not the
-    # gpt-transcribe adoption, which has tests of its own below.
     settings_path.write_text(
         json.dumps(
             {
                 "schema_version": CURRENT_SCHEMA_VERSION,
-                "openai_model": "gpt-4o-transcribe",
+                "openai_model": "gpt-transcribe",
             }
         ),
         encoding="utf-8",
     )
     settings = SettingsStore(settings_path).load()
-    assert settings.openai_model == "gpt-4o-transcribe"
+    assert settings.openai_model == "gpt-transcribe"
 
 
 def test_openai_model_invalid_falls_back_to_default(tmp_path):
@@ -1098,74 +1096,22 @@ def test_an_azure_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypat
     assert settings.azure_speech_model == "mai-transcribe-1.5"
 
 
-def test_an_openai_engine_that_was_never_configured_adopts_the_current_model(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("schema", [0, 24, CURRENT_SCHEMA_VERSION])
+@pytest.mark.parametrize(
+    "retired", ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]
+)
+def test_the_three_retired_openai_models_load_as_gpt_transcribe(
+    tmp_path, monkeypatch, schema, retired
 ):
-    """Every file written before `gpt-transcribe` existed carries
-    `gpt-4o-mini-transcribe` for everyone, so the stored value is not a
-    choice -- and with no OpenAI key the engine could never run, so nothing
-    was chosen at all. Left alone, adding a key later would silently pick a
-    model OpenAI removes from the API on 2027-02-26."""
+    """Files written before `gpt-transcribe` existed carry `gpt-4o-mini-transcribe`
+    for everyone; whatever the schema or the key, none of the three is kept."""
     settings = _load_settings_file(
         tmp_path,
         monkeypatch,
-        {"schema_version": 24, "openai_model": "gpt-4o-mini-transcribe"},
+        {"schema_version": schema, "openai_model": retired},
     )
 
     assert settings.openai_model == "gpt-transcribe"
-
-
-def test_a_configured_openai_engine_keeps_its_model(tmp_path, monkeypatch):
-    """A stored key is this engine's equivalent of Azure's endpoint: it is
-    written on every save, so it is the evidence that the engine was set up
-    and that the model beside it was looked at."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": 24,
-            "openai_model": "gpt-4o-mini-transcribe",
-            "has_openai_key": True,
-        },
-    )
-
-    assert settings.openai_model == "gpt-4o-mini-transcribe"
-
-
-def test_an_openai_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
-    """The adoption happens once: a model picked before the key is entered
-    must not flip back on the next load."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "openai_model": "whisper-1",
-        },
-    )
-
-    assert settings.openai_model == "whisper-1"
-
-
-def test_an_openai_model_in_a_file_without_a_schema_version_is_adopted(
-    tmp_path, monkeypatch
-):
-    """A missing key reads as schema 0, which is older than 25."""
-    settings = _load_settings_file(tmp_path, monkeypatch, {"openai_model": "whisper-1"})
-
-    assert settings.openai_model == "gpt-transcribe"
-
-
-def test_a_schema_version_written_as_a_string_still_counts(tmp_path, monkeypatch):
-    """`_int_or_none` parses it, so a hand-edited "25" is the current schema
-    and not an unreadable value that would re-run the migration."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {"schema_version": str(CURRENT_SCHEMA_VERSION), "openai_model": "whisper-1"},
-    )
-
-    assert settings.openai_model == "whisper-1"
 
 
 def test_an_openai_model_id_this_build_does_not_know_falls_back(tmp_path, monkeypatch):

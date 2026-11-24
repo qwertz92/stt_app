@@ -3644,7 +3644,7 @@ def test_import_model_selector_tracks_selected_import_engine():
         AppSettings(
             engine="local",
             model_size="medium",
-            openai_model="whisper-1",
+            openai_model="gpt-transcribe",
         )
     )
     dialog = SettingsDialog(
@@ -3662,7 +3662,7 @@ def test_import_model_selector_tracks_selected_import_engine():
     # than restated, so adding a model cannot leave this test pinning an old
     # list that still passes.
     assert _combo_data(dialog.import_model_combo) == list(OPENAI_MODELS)
-    assert dialog.import_model_combo.currentData() == "whisper-1"
+    assert dialog.import_model_combo.currentData() == "gpt-transcribe"
     _ = app
 
 
@@ -4357,16 +4357,16 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
 
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
-    whisper1_idx = dialog.import_model_combo.findData("whisper-1")
-    dialog.import_model_combo.setCurrentIndex(whisper1_idx)
+    model_idx = dialog.import_model_combo.findData("gpt-transcribe")
+    dialog.import_model_combo.setCurrentIndex(model_idx)
     settings = dialog._build_current_settings(
         engine_override="openai",
-        model_override="whisper-1",
+        model_override="gpt-transcribe",
     )
     dialog._transcribe_import_file("dummy.wav", settings)
 
     assert controller.received_engine == "openai"
-    assert controller.received_model == "whisper-1"
+    assert controller.received_model == "gpt-transcribe"
     assert dialog.engine_combo.currentData() == "local"
     assert dialog.model_combo.currentData() == "small"
     _ = app

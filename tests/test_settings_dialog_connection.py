@@ -168,7 +168,7 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
             self,
             api_key: str,
             language_mode: str = "auto",
-            model: str = "gpt-4o-mini-transcribe",
+            model: str = "gpt-transcribe",
         ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode
@@ -192,7 +192,7 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
     dialog.openai_key_edit.setText("oa-key")
     engine_index = dialog.engine_combo.findData("openai")
     dialog.engine_combo.setCurrentIndex(engine_index)
-    model_index = dialog.remote_model_combo.findData("gpt-4o-transcribe")
+    model_index = dialog.remote_model_combo.findData("gpt-transcribe")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
     dialog._provider_test_buttons["openai"].click()
@@ -281,7 +281,7 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
             self,
             api_key: str,
             language_mode: str = "auto",
-            model: str = "gpt-4o-mini-transcribe",
+            model: str = "gpt-transcribe",
         ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode

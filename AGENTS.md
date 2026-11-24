@@ -271,8 +271,8 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
   azure, funasr, speechmatics, mistral, custom
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
-- **OpenAI** model select picks `gpt-transcribe` (default) or one of the three
-  models OpenAI removes on 2027-02-26.
+- **OpenAI** offers `gpt-transcribe` only; `whisper-1`, `gpt-4o-transcribe` and
+  `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
   secret store. Model select picks `mai-transcribe-2` (default),
