@@ -34,6 +34,14 @@ recordings, all local Cohere on WebGPU. Details in
 - **Log noise:** `audio_device_change_output` (352 lines in 143 bursts, 3.5 % of
   the log) moved to DEBUG; Qt's "monitorData: Unable to obtain handle for
   monitor" around display wakes is INFO.
+- **A duplicate Retry press was already ignored.** The lead decided that a
+  second Retry with unchanged settings should be ignored while the first runs;
+  v0.13.0 does exactly that since 2026-10-17 (`_running_retry_of_the_slot`
+  compares the whole request, the notice goes to the tray, a finished or
+  failed retry can be pressed again, all pinned in
+  `tests/test_controller_queue.py`). Only the known-limitations entry was
+  stale; it now describes the remaining, intended case (a changed request
+  restarts, and a remote provider's stopped retry still lands in history).
 - **The Settings prebuild** (2.4-3.3 s on the Qt thread, 2.5 s after start) now
   waits while a recording or its transcription runs; one session had started a
   recording 1 s after launch, whose stop press would have waited behind it.

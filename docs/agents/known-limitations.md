@@ -345,12 +345,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   comes forward once the newer is resolved. A second Retry while W's retry
   runs still stops it (W's late result is kept in history), so W stays
   behind the slot until a Retry resolves it.
-- **Two Retry presses can write two history entries**: a remote provider runs
-  the stopped first retry to completion and it is kept (a finished
-  transcription is never discarded). Local engines cancel cooperatively.
-  Kept 2026-10-03 (by design): the restart is how a hung request is re-run
-  with changed settings; ignoring a second press with unchanged settings is
-  an owner decision (~1 h).
+- **A Retry with changed settings can write two history entries**: the
+  second press stops the running retry and starts one with the new request;
+  a remote provider runs the stopped one to completion and its result is kept
+  in history (a finished transcription is never discarded). Local engines
+  cancel cooperatively. By design (lead's decision for the owner, 2026-11-24):
+  the restart is how a hung request is re-run with changed settings. A second
+  press with an unchanged request is ignored since 2026-10-17
+  (`_running_retry_of_the_slot`, notice on the tray;
+  `controller-and-jobs.md`); a press after the running retry finished or
+  failed retries again. Corrected 2026-11-24: this entry still called the
+  unchanged-settings case an open owner decision.
 - **Two recordings the store never received are told apart by bytes alone**:
   with `source_recording_id` "" on both, identical audio cross-retires the
   retry slot. Needs two refused writes and byte-identical audio. Kept
