@@ -30,8 +30,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
   SendInput into a real EDIT, deferred restore,
   foreground guard, the paste target check on an EDIT and on an Edge --app
   textarea and button, WM_PASTE refused for Edge),
-  `release_check_providers.py` (AssemblyAI batch/realtime,
-  Groq batch, quit during the poll), `release_check_frozen_bundle.py` (scan
+  `release_check_providers.py` (one batch request per clip for
+  every remote engine with a key, realtime for AssemblyAI and Deepgram, quit
+  during the poll last; `--engine` limits a run; the user's regions and the
+  Azure/custom endpoints are read from the real `settings.json` read-only;
+  selection and skip logic in `scripts/_release_check_provider_plan.py`,
+  tested by `tests/test_release_check_provider_plan.py`), `release_check_frozen_bundle.py` (scan
   worker, one model per runtime, GUI 40 s); plumbing in
   `scripts/_release_check_common.py`. Contract: one `OK`/`FAIL`/`SKIP` line
   per check; exit 0/1/2, 2 = nothing measured, never a code failure; an

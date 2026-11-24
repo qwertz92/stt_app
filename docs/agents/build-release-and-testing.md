@@ -86,6 +86,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-
     there is nothing to ration and no reason to skip it for a small release.
   - Order of a release: `release_check_*.py` scripts, dry run on `main`,
     green, `create_release.py`.
+  - **`release_check_providers.py` is the only check that calls the real
+    services** (the provider tests run against fakes), so run it before a
+    release after any roster, request-shape or SDK change: one batch
+    request per clip for every remote engine that has a key, realtime for
+    AssemblyAI and Deepgram, `SKIPPED` for an engine without a key (Azure
+    without an endpoint, custom without a base URL), `--engine NAME` to limit
+    it. It uses paid quota and the user's regions and endpoints, read
+    read-only from the real `settings.json`; the owner decides when to run it.
+    The roster update of 2026-11-24 changed ids and request fields that no
+    test could exercise live, so it is the first thing to run.
 - **`scripts/setup_node_windows.py`**: numeric `major.minor.patch` only,
   archives verified against `SHASUMS256.txt`, escaping ZIP members rejected.
   Keep all three.
