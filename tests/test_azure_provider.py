@@ -284,6 +284,9 @@ class TestAzureBatchTranscription:
         # example on Microsoft's page writes it this way.
         assert '"model": "MAI-Transcribe-2"' in body
         assert "mai-transcribe-2" not in body
+        # Dictation wants readable text: the documented "clean" style, nested
+        # under enhancedMode as in Microsoft's example (page read 2026-11-25).
+        assert '"modelOptions": {"transcribeStyle": "clean"}' in body
         assert "locales" in body
         assert '"de"' in body
         assert 'name="audio"' in body
@@ -481,7 +484,11 @@ class TestAzureLongRecordings:
         for call in mock_urlopen.call_args_list:
             definition, audio = _sent_parts(call.args[0])
             assert definition == {
-                "enhancedMode": {"enabled": True, "model": "MAI-Transcribe-2"},
+                "enhancedMode": {
+                    "enabled": True,
+                    "model": "MAI-Transcribe-2",
+                    "modelOptions": {"transcribeStyle": "clean"},
+                },
                 "locales": ["de"],
             }
             with wave.open(io.BytesIO(audio), "rb") as handle:

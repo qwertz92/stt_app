@@ -207,6 +207,11 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             "enhancedMode": {
                 "enabled": True,
                 "model": AZURE_API_MODEL_NAMES[self._model],
+                # Microsoft's MAI-Transcribe page (read 2026-11-25) documents
+                # `modelOptions.transcribeStyle` as "verbatim" (the default:
+                # fillers and false starts kept) or "clean", with an example
+                # request that nests it here. Dictation wants readable text.
+                "modelOptions": {"transcribeStyle": "clean"},
             }
         }
         if self._language_mode != DEFAULT_LANGUAGE_MODE:

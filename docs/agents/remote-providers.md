@@ -156,8 +156,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   **The $0.10/h price is a promotion**: "priced at $0.10 per hour as a
   limited-time offer until the end of the year" (2026); no 2027 price is
   published, so MAI-2 may end up dearer. Re-judge 1.5 ($0.36/h) when Microsoft
-  names it. The request is unchanged (`enhancedMode.enabled`, `enhancedMode.
-  model`, api-version 2025-10-15 on the page).
+  names it. The request is `enhancedMode.enabled`, `enhancedMode.model`,
+  api-version 2025-10-15 on the page, plus `enhancedMode.modelOptions.
+  transcribeStyle = "clean"` (added 2026-11-25): the page documents it for
+  MAI-Transcribe-2 with values "verbatim" (default, "including filler words
+  and false starts") and "clean" ("removes fillers"), and its example request
+  nests it exactly there. Pinned by `tests/test_azure_provider.py`.
+  **Untested against the live service** (no key): whether the service
+  accepts it on every resource and what "clean" does to the text is open.
   - Settings store the lower-case id; `AZURE_API_MODEL_NAMES` holds the
     documented spelling that is sent (e.g. `MAI-Transcribe-2`).
   - Languages follow that table via `AZURE_LOCALE_OVERRIDES` (`no` -> `nb`,
