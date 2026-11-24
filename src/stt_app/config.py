@@ -2186,6 +2186,16 @@ DEFAULT_SILENCE_GATE_THRESHOLD = 0.004
 SILENCE_GATE_THRESHOLD_MIN = 0.0005
 SILENCE_GATE_THRESHOLD_MAX = 0.1
 SILENCE_GATE_WINDOW_MS = 100
+# A recording, or every block of one so far, whose loudest 100 ms stays below
+# this RMS level holds no signal at all: a muted or dead capture endpoint, not
+# a quiet room. Measured on the owner's log (2026-10..11, 1029 recordings with
+# per-second levels, 664 with the loudest-100 ms level): ten recordings at
+# 0.0000 (below 0.00005; about -97 dBFS in every second, sub-LSB noise that
+# the 16-bit WAV turns into zeros), six of them right after an output-endpoint
+# change; the next quietest recording measured 0.0009, and the silence gate's
+# 26 silent room recordings measured 0.0006-0.0034. 0.0001 (-80 dBFS) is 9x
+# below the quietest live microphone and twice the highest dead one.
+AUDIO_NO_SIGNAL_LEVEL = 0.0001
 
 # A speech check beside the two energy gates: the Silero VAD v6 graph that
 # faster-whisper ships (`silero_vad.py` says where and why). It scores every

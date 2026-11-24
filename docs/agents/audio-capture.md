@@ -399,3 +399,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   with both, are in the `config.py` comment; do not quote one value for a
   noise. `silero_vad.check_speech_pcm16` / `check_speech_wav` are the one
   answer to "does this audio hold no speech" for any other caller.
+- **A recording that is digital silence throughout is reported as a device
+  problem** (2026-11-24, `_silence_gate_blocks`): with the gate on, a
+  recording whose loudest 100 ms is below `AUDIO_NO_SIGNAL_LEVEL` is skipped
+  with reason `no_signal` and the text "The microphone delivered no signal
+  (digital silence) ... Check that the microphone is connected, not muted,
+  and selected ...", never the advice to lower the silence gate, which
+  cannot help with zeros. `silence_gate_skipped` now logs
+  `silero_max_probability=not_run` when the level gate decided (it said
+  `unavailable`, which read as a broken speech model). With the gate off
+  such a recording is transcribed as before.

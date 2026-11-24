@@ -27,6 +27,7 @@ from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
     AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
+    AUDIO_NO_SIGNAL_LEVEL,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -166,6 +167,13 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording
 # recording) is reported as failed when history refused its entry.
 _TRANSCRIPT_NOT_SAVED_REASON = (
     "The transcript could not be saved to history (see the log)."
+)
+
+# What a recording, or the live overlay, says when the microphone sends no
+# signal at all (`AUDIO_NO_SIGNAL_LEVEL`): a device problem, not a setting.
+_NO_SIGNAL_TEXT = (
+    "The microphone delivered no signal (digital silence): it is muted, "
+    "disconnected or not working."
 )
 
 # The last-recording error for a transcript with a gap marker whose audio no
@@ -3429,7 +3437,20 @@ class DictationController(QtCore.QObject):
             if persisted
             else "the recording could not be kept as the last recording (see the log)"
         )
-        if peak_level < threshold:
+        if peak_level < AUDIO_NO_SIGNAL_LEVEL:
+            # Not a quiet room: the microphone sent zeros (muted, or a dead
+            # endpoint -- the owner's six such recordings followed an output
+            # device change). Lowering the gate cannot help, so the text
+            # names the device instead.
+            reason = "no_signal"
+            store_text = "Recording skipped: the microphone delivered no signal."
+            detail = (
+                f"{_NO_SIGNAL_TEXT} Nothing was transcribed. Check that the "
+                "microphone is connected, not muted, and selected in the "
+                "overlay's microphone menu or Settings -> Audio, then record "
+                "again."
+            )
+        elif peak_level < threshold:
             reason = "level"
             store_text = "Recording skipped by the silence gate."
             detail = (

@@ -100,3 +100,41 @@ def test_a_level_gate_skip_logs_that_the_speech_check_did_not_run(
     assert "silero_max_probability=not_run" in lines[0]
     controller.shutdown()
     _ = app
+
+
+def test_a_recording_without_signal_says_the_microphone_sent_nothing(
+    monkeypatch, tmp_path, caplog
+):
+    # The owner spoke 21 s into a dead stream and was told to lower the
+    # silence gate, which cannot help with zeros.
+    controller, app, overlay = _controller(monkeypatch, tmp_path)
+    caplog.set_level(logging.INFO)
+
+    _stop_with(controller, wav_bytes(_DEAD_MICROPHONE))
+
+    assert controller._executor.calls == []
+    state, detail = overlay.states[-1]
+    assert state == "Done"
+    assert "microphone delivered no signal" in detail
+    assert "silence gate" not in detail
+    assert "muted" in detail
+    lines = _messages(caplog, "silence_gate_skipped")
+    assert len(lines) == 1
+    assert "reason=no_signal" in lines[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_quiet_room_still_gets_the_silence_gate_advice(monkeypatch, tmp_path):
+    # A live microphone in a quiet room (the owner's quietest: 0.0009) is the
+    # gate's case, and lowering the gate is the right advice there.
+    controller, app, overlay = _controller(monkeypatch, tmp_path)
+
+    _stop_with(controller, wav_bytes(room_tone(3.0, rms=0.0004)))
+
+    state, detail = overlay.states[-1]
+    assert state == "Done"
+    assert "lower the silence gate" in detail
+    assert "no signal" not in detail
+    controller.shutdown()
+    _ = app

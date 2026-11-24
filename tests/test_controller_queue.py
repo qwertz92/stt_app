@@ -952,7 +952,13 @@ def test_silence_gate_skips_transcription_of_silent_recording(
         wav_file.setnchannels(1)
         wav_file.setsampwidth(2)
         wav_file.setframerate(16000)
-        wav_file.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
+        # Room tone at about -60 dBFS: a live microphone the gate refuses.
+        # Exact zeros are the microphone's fault and get their own text.
+        wav_file.writeframes(
+            (np.random.default_rng(0).standard_normal(16000) * 33)
+            .astype(np.int16)
+            .tobytes()
+        )
     silence = buffer.getvalue()
     monkeypatch.setattr(FakeCapture, "stop", lambda _self, **_kwargs: silence)
 
