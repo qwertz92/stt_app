@@ -420,6 +420,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     so whether STT-3.7-Realtime streams there is open; the streaming
     data-zone page (read 2026-11-24) lists `streaming.eu.assemblyai.com`
     without a per-model note.
+- **Fun-ASR host: something to watch (2026-11-25).** Alibaba's WebSocket guide
+  now lists the Singapore endpoint as
+  `wss://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference`
+  (a workspace-specific host, `{WorkspaceId}` being the user's own Workspace
+  ID) and says to migrate from `dashscope-intl.aliyuncs.com` to it, without
+  announcing a retirement of the old host. `FUNASR_WS_URL_INTL` still uses
+  `dashscope-intl.aliyuncs.com`; changing it would need a new setting for the
+  Workspace ID, so nothing was changed. If Fun-ASR requests start failing to
+  connect, this is the first thing to check. **Unverified live.**
 - **Deepgram offers `nova-3` only; Groq is unchanged (2026-11-24).**
   Deepgram's models page (read that day) still sells `nova-2` "for use cases
   with languages not yet supported by nova-3", but all 34 languages the app
