@@ -891,8 +891,14 @@ def test_recordings_retention_offers_unlimited_at_zero(
     spin.setValue(RECORDINGS_MAX_COUNT_UNLIMITED)
 
     assert spin.text() == "Unlimited (0)"
-    assert "0 = keep every recording" in dialog.recordings_max_hint_label.text()
+    hint = dialog.recordings_max_hint_label.text()
+    assert "0 = keep every recording" in hint
     assert "0 keeps every one" in spin.toolTip()
+    # D6 of 2026-11-24: it limits audio only, not History, and says what a
+    # History entry loses when its audio goes.
+    assert "audio files" in hint
+    assert "Independent of History Size" in hint
+    assert "can no longer be retranscribed" in hint
 
 
 def test_a_saved_unlimited_recordings_count_reloads_as_unlimited(

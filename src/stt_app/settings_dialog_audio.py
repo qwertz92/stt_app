@@ -323,11 +323,16 @@ class _AudioTabMixin:
         self.recordings_max_spin.setSpecialValueText("Unlimited (0)")
         self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
         self.recordings_max_spin.setToolTip(
-            "Keep only the newest N archived recordings; 0 keeps every one."
+            "Keep only the newest N audio files in the recordings folder; "
+            "0 keeps every one."
         )
+        # D6 of 2026-11-24: the owner keeps 500 of each and could not tell
+        # whether the two limits depend on each other.
         self.recordings_max_hint_label = QtWidgets.QLabel(
-            "Maximum number of archived WAV files; the oldest files are "
-            "removed first. 0 = keep every recording."
+            "Limits the audio files in the recordings folder, oldest removed "
+            "first; 0 = keep every recording. Independent of History Size: "
+            "History entries whose audio was removed stay, but can no longer "
+            "be retranscribed."
         )
         self.recordings_max_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.recordings_max_hint_label)
