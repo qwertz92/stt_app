@@ -28,8 +28,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `assemblyai-stt-3-7` ($0.21/h, 32 languages, same price as the deprecated
   `universal-3-5-pro`) goes alone, never with a silent `universal-2`
   fallback. `universal-3-5-pro` and `universal-3-pro` (deprecated by
-  AssemblyAI 2026-11-17; accounts without `speech_models` are switched on
-  2026-12-08) move to it, and `best`/`nano` fall to it silently.
+  AssemblyAI 2026-11-17; accounts whose default is one of them move to
+  STT-3.7 on 2026-12-08, while a `universal-2` default is not upgraded:
+  STT-3.7 migration guide, read 2026-11-25) move to it, and `best`/`nano` fall to it silently.
   `universal-2` stays only as the cheaper choice for languages outside the 32.
   - **Always send `disfluencies=false` and `format_text=true`.** STT-3.7
     defaults `disfluencies` to true (the OpenAPI text: "Defaults to true when

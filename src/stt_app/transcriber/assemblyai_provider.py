@@ -217,10 +217,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             kwargs["keyterms_prompt"] = self._word_boost
 
         # Dictation wants clean written text. AssemblyAI-STT-3.7 defaults
-        # `disfluencies` (filler words, false starts) to true and, on the
-        # account switch of 2026-12-08, every request without `speech_models`
-        # moves to it; Universal-2 defaults to false. Both are sent, so the
-        # result never depends on a vendor default.
+        # `disfluencies` (filler words, false starts) to true, and from
+        # 2026-12-08 accounts whose default is universal-3-5-pro or
+        # universal-3-pro move to it (a universal-2 default is not upgraded,
+        # migration guide read 2026-11-25); Universal-2 defaults to false.
+        # Both are sent, so the result never depends on a vendor default.
         kwargs["disfluencies"] = False
         kwargs["format_text"] = True
 
