@@ -3459,9 +3459,9 @@ class DictationController(QtCore.QObject):
             reason,
             peak_level,
             threshold,
-            "unavailable"
-            if speech is None
-            else f"{speech.natural.max_probability:.3f}",
+            # The level gate decides before the speech check is asked, so it
+            # did not run (`not_run`), which is not a failed model.
+            speech_note if speech is None else f"{speech.natural.max_probability:.3f}",
         )
         if persisted:
             try:
