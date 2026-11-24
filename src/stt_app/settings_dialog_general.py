@@ -685,8 +685,8 @@ class _GeneralTabMixin:
             )
         elif provider == "funasr":
             note = (
-                "Cloud, batch-only, with 31 languages focused on Chinese and "
-                "East/Southeast Asia, but no German. Use Azure or local for German."
+                "Cloud, batch-only, with 30 languages (German included) focused on "
+                "Chinese and East/Southeast Asia."
             )
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
@@ -809,8 +809,8 @@ class _GeneralTabMixin:
 
         if engine == "funasr":
             return (
-                "Fun-ASR is multilingual across 31 languages but does NOT support "
-                "German. 'Auto' auto-detects; selecting one sends a language hint."
+                "Fun-ASR is multilingual across 30 languages. 'Auto' auto-detects; "
+                "selecting one sends a language hint."
             )
 
         return ""

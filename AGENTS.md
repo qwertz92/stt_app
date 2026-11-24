@@ -102,7 +102,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Remote providers: AssemblyAI (SDK batch AssemblyAI-STT-3.7 + STT-3.7-Realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
-  Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German),
+  Fun-ASR / Alibaba (DashScope WebSocket, batch-only),
   Speechmatics (REST batch jobs, polled; EU/US/AU regions),
   Mistral Voxtral (REST, batch-only),
   Custom endpoint (any OpenAI-compatible REST API, batch-only)
@@ -136,7 +136,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
-| `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
+| `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only) |
 | `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced; region `eu1`/`us1`/`au1` |
 | `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
@@ -280,8 +280,8 @@ Short forms of rules that recur across areas; the area files hold the detail.
   Speech" is the service and MAI-Transcribe the model behind it: one engine,
   not two.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
-  driven over the realtime WebSocket in batch mode. It covers 31 languages but
-  **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
+  driven over the realtime WebSocket in batch mode. It covers 30 languages,
+  German included (vendor docs read 2026-11-24; unverified live).
 - **Speechmatics** (`speechmatics`): `speechmatics_model` `melia-1`
   (default; the only one with Auto), `enhanced` (`standard` is retired and
   moves to Melia 1); `speechmatics_region` `eu1` (default), `us1`, `au1`.

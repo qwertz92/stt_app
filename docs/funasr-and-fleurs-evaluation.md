@@ -11,8 +11,8 @@ the same decision-record style as
 | Name | What it actually is | Decision |
 |------|---------------------|----------|
 | **FLEURS** | A **benchmark dataset**, not a model | Cannot be "implemented" as an engine. Documented here so nobody tries. |
-| **Fun-ASR** (hosted) | Alibaba's ASR family, top of the Artificial Analysis leaderboard | **Implemented** as a remote, batch-only engine (`funasr`) for its broad non-German coverage. |
-| **Fun-ASR** (local weights) | Open weights, 7.7B / 0.8B nano | **Not** implemented — too big / wrong runtime / no German. |
+| **Fun-ASR** (hosted) | Alibaba's ASR family, top of the Artificial Analysis leaderboard | **Implemented** as a remote, batch-only engine (`funasr`) for its broad coverage (German included since the vendor's 2026-11-24 docs). |
+| **Fun-ASR** (local weights) | Open weights, 7.7B / 0.8B nano | **Not** implemented — too big / wrong runtime. |
 
 ---
 
@@ -54,9 +54,13 @@ Fun-ASR is Alibaba's end-to-end, LLM-based speech-recognition family
 - **Benchmark standing:** the hosted **Fun-Realtime-ASR-preview** currently tops
   the *Artificial Analysis* speech-to-text leaderboard at **~1.7% WER** — ahead
   of ElevenLabs Scribe v2 and Microsoft MAI-Transcribe-1.5.
-- **Languages:** **31 languages**, including Chinese (+ 7 dialects), Cantonese,
-  English, Japanese, Korean, Vietnamese, Thai, Indonesian, plus a set of
-  European languages — but **not German**.
+- **Languages:** **30 `language_hints` codes** (Python SDK page, read
+  2026-11-24), including Chinese, English, Japanese, Korean, Vietnamese, Thai,
+  Indonesian, and European languages **with German** (`de`). The model table
+  lists German for `fun-asr-realtime` too. The first evaluation (2026-09-21)
+  read "31 languages, no German"; that is superseded and Cantonese, Estonian,
+  Irish, Latvian, Lithuanian, Maltese and Slovenian are no longer listed.
+  Unverified live (no key was used).
 
 ### Why we implemented the hosted path
 
@@ -89,11 +93,9 @@ drives the **real-time WebSocket API in a batch fashion** (`funasr_provider.py`)
    field and **Save API Keys**.
 3. Press **Test** in the Fun-ASR row.
 4. Set **Engine → Remote (Fun-ASR / Alibaba)** and pick a language (or `Auto`).
-   German is intentionally absent from the language list.
 
 ### Caveats
 
-- **No German.** Use Azure LLM Speech or a local model for German.
 - Cloud-only; audio is processed on Alibaba infrastructure (Singapore region).
 - Implemented against the documented DashScope protocol; validate with a real
   key, since this repo's CI mocks the WebSocket.

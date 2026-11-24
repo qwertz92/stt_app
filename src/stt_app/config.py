@@ -1144,43 +1144,44 @@ AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES = (
 AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES
 # App language code -> Azure locale code, where they differ.
 AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb", "tl": "fil"}
-# Alibaba Fun-ASR (DashScope Model Studio) covers 31 languages. Notably it does
-# NOT document German support; its strength is Chinese (incl. dialects) and
-# East/Southeast-Asian languages. "auto" uses multilingual mode; a specific
-# language is sent as a language_hints entry.
+# Alibaba Fun-ASR (DashScope Model Studio): the Python SDK page's `language_hints`
+# list (read 2026-11-24) names 30 codes, German (`de`) among them, and the model
+# table lists German for `fun-asr-realtime`; the earlier "no German" reading
+# (2026-09-21) is superseded. The seven codes the old list carried beyond it
+# (yue, et, ga, lv, lt, mt, sl) are no longer documented and are dropped. "auto"
+# uses multilingual mode; a specific language is a language_hints entry.
 FUNASR_LANGUAGE_MODES = (
     "auto",
-    "en",
     "zh",
-    "yue",
+    "en",
     "ja",
     "ko",
     "vi",
-    "id",
     "th",
+    "id",
     "ms",
     "tl",
-    "ar",
     "hi",
+    "ar",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "ru",
+    "it",
+    "nl",
+    "sv",
+    "da",
+    "fi",
+    "no",
+    "el",
+    "pl",
+    "cs",
+    "hu",
+    "ro",
     "bg",
     "hr",
-    "cs",
-    "da",
-    "nl",
-    "et",
-    "fi",
-    "el",
-    "hu",
-    "ga",
-    "lv",
-    "lt",
-    "mt",
-    "pl",
-    "pt",
-    "ro",
     "sk",
-    "sl",
-    "sv",
 )
 # App language code -> Fun-ASR language_hints code, where they differ.
 # Most are identical bare codes; this maps only the exceptions.
