@@ -399,6 +399,62 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
   with both, are in the `config.py` comment; do not quote one value for a
   noise. `silero_vad.check_speech_pcm16` / `check_speech_wav` are the one
   answer to "does this audio hold no speech" for any other caller.
+- **A running recording's capture health is polled; a dead or silent
+  microphone is said at once** (2026-11-24; `_on_capture_health_tick`, a
+  `AUDIO_CAPTURE_HEALTH_POLL_MS` (500 ms) Qt timer armed and disarmed with
+  the first-callback watchdog; `AudioCapture.health()` is one short hold of
+  the capture's lock). Every engine, batch and streaming:
+  - **No block mid-recording** (device unplugged, driver stalled, stream
+    died; the first-callback watchdog covers only the first block): past
+    `AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS` (2 s) the overlay paints the
+    Listening state as the "No signal" warning (`OVERLAY_WARNING_NO_SIGNAL`,
+    burnt orange, Stop and Cancel unchanged); a stream PortAudio reports
+    stopped ends the recording at once, any other at
+    `AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS` (12 s, below the 0.85 x
+    20 s the buffer holds, so a starved thread's burst before it loses
+    nothing and clears the warning). The end is the normal stop with
+    `drain=False` (`_end_stalled_recording`): the audio captured so far is
+    persisted, archived, transcribed and delivered, or kept for Retry, like
+    any recording; the tray says "The microphone stopped sending audio
+    during the recording ... What was recorded until then is being
+    transcribed." (`busy_overlay_error`); a warm stream is restarted after.
+    Ending was chosen over reopening and continuing: a reopen during a
+    recording would have to splice two streams' audio and would open the
+    same dead endpoint when Windows did not switch the default (no evidence
+    that it helps); ending is the path every stop already takes. Deepgram's
+    own 30 s cap (`docs/agents/remote-providers.md`) stays as the backstop;
+    this fires first.
+  - **Thresholds from the owner's log** (1029 recordings, 2026-10..11): the
+    longest gap between blocks was 358 ms, 99.5 % at most 104 ms with 100 ms
+    blocks, so 2 s is 5.6x the worst. Silence still delivers callbacks; a
+    stall does not, so a silent user never triggers it.
+  - **System sleep is not a stall**: a tick that comes more than
+    `AUDIO_CAPTURE_HEALTH_SUSPEND_S` (2 s) late restarts the stall clock
+    (logged `audio_capture_health_resumed`), so a dead stream after a resume
+    is caught 2 s / 12 s after the resume, not at once.
+  - **Digital silence only** (owner's log, review of 2026-11-24: six
+    recordings of exact zeros, 31-221 s after an `audio_device_change_output`
+    event, one of them 21 s of speech): when every block since the start
+    stayed below `AUDIO_NO_SIGNAL_LEVEL` (0.0001 RMS, -80 dBFS) for
+    `AUDIO_NO_SIGNAL_HINT_S` (1.5 s) of audio, the same warning says "The
+    microphone delivered no signal (digital silence): it is muted,
+    disconnected or not working. What you say is not recorded ..."; the
+    recording runs on, and the first block with signal clears it ("The
+    microphone delivers audio again. Speak now."). Once seen, signal stays
+    seen: a pause after speech is not a dead microphone. Level: the dead
+    recordings measured below 0.00005 (about -97 dBFS per second, sub-LSB
+    noise the 16-bit WAV turns into zeros), the quietest live one 0.0009,
+    room tone 0.0006-0.0034. Two live recordings had a first second at
+    -96/-97 dBFS and signal in the second; the hint shows briefly there,
+    which is true and only paints.
+  - **No reopen on no signal** (judged 2026-11-24): the owner's dead
+    endpoint had no input-topology event and the default device did not
+    change, so a reopen would open the same endpoint; nothing measured shows
+    it would recover. Not built. An output-endpoint event still restarts
+    nothing (entry above).
+  - The warning is repainted on every tick while it holds (a streaming
+    partial could otherwise hide it); the tick never paints after the stop
+    began or for a capture that is no longer `_audio_capture`.
 - **A recording that is digital silence throughout is reported as a device
   problem** (2026-11-24, `_silence_gate_blocks`): with the gate on, a
   recording whose loudest 100 ms is below `AUDIO_NO_SIGNAL_LEVEL` is skipped

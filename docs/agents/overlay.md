@@ -64,7 +64,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     preload poll's `_offer_painted` check, the paste check's `overlay_shown`
     and `FakeOverlay` need no change, and the many tests that read
     `state == "Error"` keep their meaning. Only the label word and the
-    colour differ; `warning` is ignored for any other state.
+    colour differ; `warning` is ignored for any state but Error and
+    Listening. **Listening takes it since 2026-11-24** ("No signal",
+    `OVERLAY_WARNING_NO_SIGNAL`): the recording's microphone stopped
+    delivering or sends digital silence (`docs/agents/audio-capture.md`,
+    capture health). The state stays Listening, so Stop, Cancel and the
+    record button are unchanged
+    (`test_a_recording_without_signal_is_a_warning_that_keeps_recording`);
+    the word joins the label's width reservation, which "Not inserted"
+    still sets.
   - **One writer**: `DictationController._paint_not_inserted` picks the word
     and the action from one flag (`may_have_pasted`) and is the only
     `set_state` call that offers Insert. It has four call sites:

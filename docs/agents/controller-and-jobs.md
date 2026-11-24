@@ -903,3 +903,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   paste started before the answer (`_recording_started_since`, 2026-10-03
   review): the delayed tone would reach that recording's microphone. A
   queued paste mid-recording keeps its tone, as before the check.
+- **A microphone that stops delivering mid-recording ends the recording
+  through the normal stop** (2026-11-24, `_end_stalled_recording`, called by
+  the capture health poll, `docs/agents/audio-capture.md`):
+  `stop_recording(drain=False)` -- the stall outlasted the hard limit or
+  PortAudio reports the stream stopped, so no backlog is owed and nothing
+  waits on the Qt thread -- persists, archives, gates and submits the audio
+  captured so far like any stop (streaming: the finalize), and
+  `busy_overlay_error` sends the tray line. Every last-recording mark is the
+  stop's own, keyed by the id its persist returned.

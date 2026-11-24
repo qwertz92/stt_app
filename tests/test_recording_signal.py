@@ -7,6 +7,7 @@ into a dead stream, each answered with advice to lower the silence gate.
 """
 
 import logging
+from dataclasses import replace
 
 import numpy as np
 from conftest import (
@@ -20,7 +21,11 @@ from conftest import (
 )
 from speech_fixtures import room_tone, wav_bytes
 
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import (
+    AUDIO_NO_SIGNAL_HINT_S,
+    FALLBACK_HOTKEY,
+    OVERLAY_WARNING_NO_SIGNAL,
+)
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
 
@@ -136,5 +141,222 @@ def test_a_quiet_room_still_gets_the_silence_gate_advice(monkeypatch, tmp_path):
     assert state == "Done"
     assert "lower the silence gate" in detail
     assert "no signal" not in detail
+    controller.shutdown()
+    _ = app
+
+
+# --- While recording: the health poll -------------------------------------
+#
+# `_on_capture_health_tick` is driven directly with a fake clock; the fake
+# capture answers `health()` as a real one whose stream stopped calling back
+# (`silent_s` grows) or sends zeros (`no_signal_s` grows).
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def __call__(self):
+        return self.now
+
+
+def _recording(monkeypatch, tmp_path, *, mode="batch", **settings):
+    clock = _Clock()
+    monkeypatch.setattr("stt_app.controller._health_clock", clock)
+    controller, app, overlay = _controller(monkeypatch, tmp_path, **settings)
+    if mode == "streaming":
+        controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+    assert controller._audio_capture is capture
+    return controller, app, overlay, capture, clock
+
+
+def _tick(controller, clock, capture, *, silent_s=None, no_signal_s=None, step=0.5):
+    clock.now += step
+    if silent_s is not None:
+        capture.silent_s = silent_s
+    if no_signal_s is not None:
+        capture.no_signal_s = no_signal_s
+    controller._on_capture_health_tick()
+
+
+def _warning(overlay):
+    return overlay.state_kwargs[-1].get("warning")
+
+
+def test_a_microphone_sending_zeros_is_shown_at_once_and_cleared_by_signal(
+    monkeypatch, tmp_path
+):
+    controller, app, overlay, capture, clock = _recording(monkeypatch, tmp_path)
+
+    _tick(controller, clock, capture, no_signal_s=AUDIO_NO_SIGNAL_HINT_S - 0.5)
+    assert _warning(overlay) is None
+
+    _tick(controller, clock, capture, no_signal_s=AUDIO_NO_SIGNAL_HINT_S)
+    state, detail = overlay.states[-1]
+    assert state == "Listening"
+    assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+    assert "no signal" in detail
+    assert controller._audio_capture is capture, "the recording runs on"
+
+    _tick(controller, clock, capture, no_signal_s=0.0)
+    state, detail = overlay.states[-1]
+    assert state == "Listening"
+    assert _warning(overlay) is None
+    assert "Speak now" in detail
+    controller.stop_recording()
+    controller.shutdown()
+    _ = app
+
+
+def test_the_no_signal_warning_shows_in_streaming_too(monkeypatch, tmp_path):
+    controller, app, overlay, capture, clock = _recording(
+        monkeypatch, tmp_path, mode="streaming"
+    )
+    assert controller._streaming_recording
+
+    _tick(controller, clock, capture, no_signal_s=3.0)
+
+    assert overlay.states[-1][0] == "Listening"
+    assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+    controller.shutdown()
+    _ = app
+
+
+def test_normal_callback_jitter_raises_nothing(monkeypatch, tmp_path):
+    # The owner's worst gap between blocks in 1029 recordings: 358 ms.
+    controller, app, overlay, capture, clock = _recording(monkeypatch, tmp_path)
+    painted = len(overlay.states)
+
+    for _ in range(10):
+        _tick(controller, clock, capture, silent_s=0.36)
+
+    assert len(overlay.states) == painted
+    assert controller._audio_capture is capture
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stream_that_stops_mid_recording_warns_then_delivers_what_it_has(
+    monkeypatch, tmp_path, caplog
+):
+    controller, app, overlay, capture, clock = _recording(
+        monkeypatch, tmp_path, silence_gate_enabled=False
+    )
+    tray = []
+    controller.busy_overlay_error.connect(tray.append)
+    caplog.set_level(logging.INFO)
+
+    # A starved callback thread looks the same for a while: warn, keep going.
+    _tick(controller, clock, capture, silent_s=2.5, step=2.0)
+    _tick(controller, clock, capture, silent_s=3.0)
+    assert overlay.states[-1][0] == "Listening"
+    assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+    assert controller._audio_capture is capture
+    assert tray == []
+
+    # Past the hard limit the stream is dead: the recording ends, its audio
+    # goes through the normal stop and is transcribed.
+    for _ in range(19):
+        _tick(controller, clock, capture, silent_s=capture.silent_s + 0.5)
+    assert controller._audio_capture is None
+    assert capture.stopped
+    assert capture.stop_calls == [{"drain": False}]
+    assert len(controller._executor.calls) == 1, "what was recorded is transcribed"
+    assert len(tray) == 1
+    assert "stopped sending audio" in tray[0]
+    assert any("audio_capture_stalled" in r.getMessage() for r in caplog.records)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_burst_after_a_stall_clears_the_warning_and_loses_nothing(
+    monkeypatch, tmp_path
+):
+    controller, app, overlay, capture, clock = _recording(monkeypatch, tmp_path)
+
+    for silent_s in (2.0, 4.0, 6.0, 8.0):
+        _tick(controller, clock, capture, silent_s=silent_s, step=2.0)
+    assert _warning(overlay) is not None
+    _tick(controller, clock, capture, silent_s=0.1)
+
+    assert _warning(overlay) is None
+    assert controller._audio_capture is capture
+    assert not capture.stopped
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stream_portaudio_reports_stopped_ends_at_the_first_limit(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, capture, clock = _recording(
+        monkeypatch, tmp_path, silence_gate_enabled=False
+    )
+    capture.stream_active = False
+
+    _tick(controller, clock, capture, silent_s=1.5, step=1.5)
+    assert controller._audio_capture is capture
+    _tick(controller, clock, capture, silent_s=2.0)
+
+    assert controller._audio_capture is None
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_system_sleep_is_not_a_stalled_microphone(monkeypatch, tmp_path):
+    controller, app, overlay, capture, clock = _recording(monkeypatch, tmp_path)
+    painted = len(overlay.states)
+
+    # An hour asleep: no tick ran, the last block is an hour old.
+    _tick(controller, clock, capture, silent_s=3600.0, step=3600.0)
+    assert len(overlay.states) == painted
+    assert controller._audio_capture is capture
+
+    # A stream that stays dead after the resume is caught, counted from the
+    # resume, not from the last block before the sleep.
+    for silent_s in (3600.5, 3601.0, 3601.5):
+        _tick(controller, clock, capture, silent_s=silent_s)
+    assert len(overlay.states) == painted
+    _tick(controller, clock, capture, silent_s=3602.0)
+    assert _warning(overlay) is not None
+    assert controller._audio_capture is capture
+    controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_stream_that_stops_is_finalized_with_its_audio(
+    monkeypatch, tmp_path
+):
+    controller, app, _overlay, capture, clock = _recording(
+        monkeypatch, tmp_path, mode="streaming"
+    )
+    finalized = []
+    monkeypatch.setattr(
+        controller,
+        "_submit_stream_finalize",
+        lambda **kwargs: finalized.append(kwargs),
+    )
+
+    for _ in range(25):
+        _tick(controller, clock, capture, silent_s=capture.silent_s + 0.5)
+
+    assert controller._audio_capture is None
+    assert capture.stop_calls == [{"drain": False}]
+    assert len(finalized) == 1
+    assert finalized[0]["wav_bytes"] == capture._wav_bytes
+    controller.shutdown()
+    _ = app
+
+
+def test_the_health_poll_stops_with_the_recording(monkeypatch, tmp_path):
+    controller, app, _overlay, _capture, _clock = _recording(monkeypatch, tmp_path)
+    assert controller._capture_health_timer.isActive()
+
+    controller.stop_recording()
+
+    assert not controller._capture_health_timer.isActive()
     controller.shutdown()
     _ = app

@@ -446,6 +446,20 @@ class FakeCapture:
     def backlog_wait_expected(self):
         return False
 
+    # What `AudioCapture.health` and `stream_is_active` answer: a healthy,
+    # delivering microphone with signal unless a test says otherwise.
+    silent_s: float | None = 0.0
+    no_signal_s = 0.0
+    stream_active: bool | None = None
+
+    def health(self):
+        from stt_app.audio_capture import CaptureHealth
+
+        return CaptureHealth(silent_s=self.silent_s, no_signal_s=self.no_signal_s)
+
+    def stream_is_active(self):
+        return self.stream_active
+
     def deliver_first_block(self):
         """The microphone's first block, as `AudioCapture` announces it."""
         self.is_delivering_audio = True

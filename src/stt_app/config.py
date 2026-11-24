@@ -1973,6 +1973,29 @@ AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS = 2_000
 # AUDIO_INPUT_BUFFER_S, so a burst that comes just before it still holds every
 # frame since the start.
 AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS = 12_000
+# How often a running recording's capture health is checked on the Qt thread
+# (`DictationController._on_capture_health_tick`): a stream that stopped
+# calling back mid-recording, or one that has sent only digital silence.
+# A stall uses the two limits above: past the first the overlay warns (and a
+# stream PortAudio reports stopped ends the recording), past the second the
+# recording ends and what was captured is transcribed. The owner's log
+# (1029 recordings, 2026-10..11) never had a gap between blocks above 358 ms
+# (99.5 % at most 104 ms with 100 ms blocks), so 2 s is 5.6x the worst one,
+# and a starved callback thread's burst still fits the buffer at 12 s.
+AUDIO_CAPTURE_HEALTH_POLL_MS = 500
+# A tick that comes this much later than the poll interval means the process
+# did not run (system sleep, a Qt thread held by a modal wait): the stall
+# clock restarts there, so time asleep never counts as a stalled microphone.
+AUDIO_CAPTURE_HEALTH_SUSPEND_S = 2.0
+# A recording that has delivered nothing but digital silence
+# (`AUDIO_NO_SIGNAL_LEVEL`) since it started says so on the overlay after this
+# much audio. In the owner's log (1029 recordings) all but two live ones were
+# above -78 dBFS in their first second; two had a first second at -96/-97 and
+# signal in the second (the hint shows briefly and clears, which is true:
+# the microphone sent zeros for that second); the twelve dead ones stayed at
+# -97 dBFS throughout. The hint only paints, so a short threshold costs
+# nothing when it is wrong.
+AUDIO_NO_SIGNAL_HINT_S = 1.5
 # `recording_start_timing` is a warning from here on: a microphone open, or the
 # wait from the record hotkey press to the running capture, this long loses
 # the first words of anyone who starts speaking at the press.
@@ -2411,7 +2434,14 @@ OVERLAY_ERROR_ACTION_NONE = "none"
 # twice).
 OVERLAY_WARNING_NOT_INSERTED = "Not inserted"
 OVERLAY_WARNING_CHECK_WINDOW = "Check window"
-OVERLAY_WARNING_LABELS = (OVERLAY_WARNING_NOT_INSERTED, OVERLAY_WARNING_CHECK_WINDOW)
+# A recording whose microphone sends nothing (no blocks for seconds) or only
+# digital silence: painted over Listening, which it stays (2026-11-24).
+OVERLAY_WARNING_NO_SIGNAL = "No signal"
+OVERLAY_WARNING_LABELS = (
+    OVERLAY_WARNING_NOT_INSERTED,
+    OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_NO_SIGNAL,
+)
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100
 DEFAULT_OVERLAY_OPACITY_PERCENT = OVERLAY_OPACITY_MAX_PERCENT

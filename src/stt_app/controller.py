@@ -25,8 +25,11 @@ from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+    AUDIO_CAPTURE_HEALTH_POLL_MS,
+    AUDIO_CAPTURE_HEALTH_SUSPEND_S,
     AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
+    AUDIO_NO_SIGNAL_HINT_S,
     AUDIO_NO_SIGNAL_LEVEL,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
@@ -58,6 +61,7 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_NO_SIGNAL,
     OVERLAY_WARNING_NOT_INSERTED,
     PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
@@ -168,6 +172,10 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording
 _TRANSCRIPT_NOT_SAVED_REASON = (
     "The transcript could not be saved to history (see the log)."
 )
+
+# The clock the capture health poll measures a suspension with; tests replace
+# it. The same clock `AudioCapture` stamps its blocks with.
+_health_clock = time.perf_counter
 
 # What a recording, or the live overlay, says when the microphone sends no
 # signal at all (`AUDIO_NO_SIGNAL_LEVEL`): a device problem, not a setting.
@@ -983,6 +991,19 @@ class DictationController(QtCore.QObject):
         # True once the first timeout found a stream PortAudio still runs and
         # re-armed for the hard limit (`_on_audio_callback_watchdog_timeout`).
         self._audio_callback_watchdog_extended = False
+        # Mid-recording health of the running capture
+        # (`_on_capture_health_tick`): a stream that stopped calling back, or
+        # one that sends digital silence only.
+        self._capture_health_timer = QtCore.QTimer(self)
+        self._capture_health_timer.setInterval(AUDIO_CAPTURE_HEALTH_POLL_MS)
+        self._capture_health_timer.timeout.connect(self._on_capture_health_tick)
+        self._capture_health_capture: AudioCapture | None = None
+        self._capture_health_last_tick_at = 0.0
+        # Where the stall clock counts from: the arm, or the first tick after
+        # the process was suspended (system sleep).
+        self._capture_health_counted_from = 0.0
+        # The warning the overlay shows now: "stall", "no_signal" or None.
+        self._capture_warning: str | None = None
         # The capture `stop_recording` is stopping: its stop may wait for the
         # backlog of a starved callback thread, and those blocks must still
         # reach the streaming transcriber (`_on_stream_audio_chunk`).
@@ -2760,6 +2781,7 @@ class DictationController(QtCore.QObject):
         return (now_ms - press) % TICK_COUNT_MODULUS
 
     def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
+        self._arm_capture_health(capture)
         self._audio_callback_watchdog_capture = capture
         self._audio_callback_watchdog_extended = False
         self._audio_callback_watchdog_timer.start(
@@ -2770,6 +2792,8 @@ class DictationController(QtCore.QObject):
         self,
         capture: AudioCapture | None = None,
     ) -> None:
+        if capture is None or self._capture_health_capture is capture:
+            self._disarm_capture_health()
         if capture is not None and self._audio_callback_watchdog_capture is not capture:
             return
         self._audio_callback_watchdog_timer.stop()
@@ -2913,6 +2937,177 @@ class DictationController(QtCore.QObject):
             self.request_audio_device_refresh()
         else:
             self._maybe_resume_pending_audio_device_refresh()
+
+    def _arm_capture_health(self, capture: AudioCapture) -> None:
+        now = _health_clock()
+        self._capture_health_capture = capture
+        self._capture_health_last_tick_at = now
+        self._capture_health_counted_from = now
+        self._capture_warning = None
+        self._capture_health_timer.start()
+
+    def _disarm_capture_health(self) -> None:
+        self._capture_health_timer.stop()
+        self._capture_health_capture = None
+        self._capture_warning = None
+
+    def _on_capture_health_tick(self) -> None:
+        """A running recording's microphone: still delivering, and signal?
+
+        The first-callback watchdog covers the start; this covers the rest
+        of the recording, for every engine and both modes. Two conditions:
+
+        - **No block for a while** (a device unplugged, a driver stalled, a
+          stream that died): past `AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS`
+          the overlay shows the "No signal" warning, and a stream PortAudio
+          reports stopped ends the recording at once; past
+          `AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS` any stream does.
+          A starved callback thread delivers late, not never, and its audio
+          waits in the 20 s buffer, so a burst before the hard limit clears
+          the warning and loses nothing. The recording ends through the
+          normal stop (`_end_stalled_recording`), so what was captured is
+          transcribed and delivered like any other recording.
+        - **Digital silence only since the start** (`CaptureHealth.no_signal_s`
+          past `AUDIO_NO_SIGNAL_HINT_S`): callbacks come, every block below
+          `AUDIO_NO_SIGNAL_LEVEL` -- a muted or dead endpoint. The warning
+          says so; the recording runs on, because the user decides, and the
+          warning clears once a block carries signal.
+
+        The stall clock restarts at a tick that came
+        `AUDIO_CAPTURE_HEALTH_SUSPEND_S` late (system sleep, a held Qt
+        thread), so time the process did not run never counts as a stall.
+        Reads one snapshot under the capture's lock; never waits.
+        """
+        capture = self._capture_health_capture
+        if (
+            capture is None
+            or capture is not self._audio_capture
+            or self._shutdown_started
+        ):
+            self._disarm_capture_health()
+            return
+        if self._recording_stop_in_progress:
+            return
+        now = _health_clock()
+        late_s = now - self._capture_health_last_tick_at
+        self._capture_health_last_tick_at = now
+        if late_s > AUDIO_CAPTURE_HEALTH_SUSPEND_S:
+            self._capture_health_counted_from = now
+            self._logger.info(
+                "audio_capture_health_resumed tick_late_s=%.1f: the app did not "
+                "run (system sleep or a busy UI); the stall clock restarts",
+                late_s,
+            )
+        try:
+            health = capture.health()
+        except Exception:
+            self._logger.exception("Failed to read the capture's health")
+            self._disarm_capture_health()
+            return
+        stalled_s = (
+            None
+            if health.silent_s is None
+            else min(health.silent_s, now - self._capture_health_counted_from)
+        )
+        if stalled_s is not None and stalled_s * 1000 >= (
+            AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+        ):
+            try:
+                stream_active = capture.stream_is_active()
+            except (AttributeError, RuntimeError):
+                stream_active = None
+            if (
+                stalled_s * 1000 >= AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
+                or stream_active is False
+            ):
+                self._end_stalled_recording(capture, stalled_s, stream_active)
+                return
+            self._show_capture_warning(
+                "stall",
+                "The microphone stopped sending audio. If it does not resume "
+                f"within {AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS // 1000} s, "
+                "the recording ends and what was recorded is transcribed.",
+                stalled_s=stalled_s,
+                stream_active=stream_active,
+            )
+            return
+        if health.no_signal_s >= AUDIO_NO_SIGNAL_HINT_S:
+            self._show_capture_warning(
+                "no_signal",
+                f"{_NO_SIGNAL_TEXT} What you say is not recorded: stop, check "
+                "the microphone and record again.",
+                no_signal_s=health.no_signal_s,
+            )
+            return
+        if self._capture_warning is not None:
+            self._logger.info(
+                "audio_capture_warning_cleared kind=%s", self._capture_warning
+            )
+            self._capture_warning = None
+            with self._overlay_batch():
+                self._set_listening_overlay(
+                    "The microphone delivers audio again. Speak now."
+                )
+
+    def _show_capture_warning(self, kind: str, detail: str, **figures) -> None:
+        """Paint the recording's "No signal" warning; logged when it starts.
+
+        Repainted on every tick while it holds: a streaming partial painted
+        meanwhile would otherwise hide it for good. Identical paints move
+        nothing."""
+        if self._capture_warning != kind:
+            self._capture_warning = kind
+            self._logger.warning(
+                "audio_capture_warning kind=%s mode=%s %s",
+                kind,
+                self._active_session_mode,
+                " ".join(
+                    f"{name}={value:.1f}"
+                    if isinstance(value, float)
+                    else f"{name}={value}"
+                    for name, value in figures.items()
+                ),
+            )
+        with self._overlay_batch():
+            self._overlay.set_state(
+                "Listening",
+                detail,
+                compact=True,
+                warning=OVERLAY_WARNING_NO_SIGNAL,
+            )
+            self._overlay.ensure_compact_size()
+
+    def _end_stalled_recording(
+        self, capture: AudioCapture, stalled_s: float, stream_active: bool | None
+    ) -> None:
+        """The microphone stopped delivering mid-recording: end the recording
+        through the normal stop, so the audio captured so far is persisted,
+        archived, transcribed and delivered (or kept for Retry) like any
+        other recording, and tell the tray, which outlasts the overlay's
+        Processing and Done. No backlog wait: the stall outlasted the hard
+        limit, or PortAudio says the stream stopped, so nothing is owed. A
+        warm stream is restarted afterwards, as the first-callback watchdog
+        does, so the next recording opens the device afresh."""
+        warm_stream, callback_count = self._audio_capture_runtime_context(capture)
+        self._logger.error(
+            "audio_capture_stalled mode=%s stalled_s=%.1f stream_active=%s "
+            "warm_stream=%s callback_count=%d: ending the recording and "
+            "transcribing what was captured",
+            self._active_session_mode,
+            stalled_s,
+            stream_active,
+            warm_stream,
+            callback_count,
+        )
+        self._disarm_capture_health()
+        self.busy_overlay_error.emit(
+            "The microphone stopped sending audio during the recording "
+            "(disconnected or not responding), so the recording was ended. "
+            "What was recorded until then is being transcribed."
+        )
+        self.stop_recording(drain=False)
+        if warm_stream:
+            self.request_audio_device_refresh()
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
         vad = None
@@ -3198,7 +3393,12 @@ class DictationController(QtCore.QObject):
             self._pending_audio_device_refresh = False
             self._audio_device_change_timer.start()
 
-    def stop_recording(self) -> None:
+    def stop_recording(self, *, drain: bool = True) -> None:
+        """End the recording and transcribe it.
+
+        `drain` False skips the wait for a starved callback thread's backlog
+        (`AudioCapture.stop`): the stall detector's stop, whose stream owes
+        nothing any more."""
         if self._recording_stop_in_progress:
             return
         capture = self._audio_capture
@@ -3226,7 +3426,7 @@ class DictationController(QtCore.QObject):
             # through which the overlay kept saying "Speak now". Painted
             # directly: `processEvents` would deliver queued signals (a
             # stream abort, a finished job) into the middle of this stop.
-            waits = capture.backlog_wait_expected()
+            waits = drain and capture.backlog_wait_expected()
             if waits:
                 self._logger.info("audio_capture_stop_waits_for_backlog")
                 self._overlay.set_state(
@@ -3234,7 +3434,7 @@ class DictationController(QtCore.QObject):
                 )
                 self._overlay.paint_now()
             try:
-                wav_bytes = capture.stop()
+                wav_bytes = capture.stop(drain=drain)
             except Exception as exc:
                 self._logger.exception(
                     "Audio capture failed to stop mode=%s warm_stream=%s "

@@ -461,18 +461,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     If the session dies, the user sees "Deepgram streaming failed: WebSocket
     connection closed unexpectedly." and the audio is kept as the first entry
     of `docs/agents/streaming.md` describes.
-  - A microphone that stops delivering after its first block is not noticed
-    by the capture (the first-callback watchdog watches the first block only;
-    the device listener defers its refresh while a recording runs), so a
-    dying microphone ends a Deepgram stream only through the Deepgram sender
-    itself: it ends the stream about 33 s after the last block (it bridges a
-    gap for at most 30 s, `_STREAM_KEEPALIVE_MAX_GAP_S`, and the 11th 3 s
-    wait is the cap), independent of Deepgram, against ~10 s before the
-    KeepAlive existed, when Deepgram's own close was the detector. The user
-    reads "Deepgram streaming failed: The microphone delivered no audio for
-    more than 30 seconds, so the stream was ended." Not checked for the other
-    streaming engines (AssemblyAI, local): this entry does not claim whether
-    they notice it.
+  - A microphone that stops delivering after its first block is noticed by
+    the capture health poll since 2026-11-24 (`audio-capture.md`): the
+    overlay warns after 2 s, and the recording ends and is transcribed at
+    once when PortAudio reports the stream stopped, else after 12 s.
+    Whether an unplugged device makes PortAudio report its stream stopped
+    (the fast path) was not measured: no device was unplugged during a
+    recording here. What was said between the stall and the end is lost
+    whatever the path, and a starved callback thread that stays silent past
+    12 s ends the recording although its audio would still have come (the
+    first-callback watchdog's hard limit has the same cost). Deepgram's
+    sender still ends its stream about 33 s after the last block when the
+    capture somehow does not stop first.
 - **A source checkout's JavaScript package update** (2026-10-17,
   `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
   - A failure of npm or of what it installed waits 24 h before npm runs

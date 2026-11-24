@@ -20,7 +20,7 @@ from stt_app.audio_devices import (
     SYSTEM_DEFAULT_INPUT_DEVICE,
     InputDeviceNotFoundError,
 )
-from stt_app.config import AUDIO_INPUT_BUFFER_S
+from stt_app.config import AUDIO_INPUT_BUFFER_S, AUDIO_NO_SIGNAL_LEVEL
 from stt_app.vad import VadDecision
 
 
@@ -2621,3 +2621,64 @@ def test_the_first_block_announcement_runs_outside_the_capture_lock(monkeypatch)
     assert not worker.is_alive(), "the announcement deadlocked on the capture lock"
     assert seen == [True]
     capture.stop()
+
+
+# ---------------------------------------------------------------------------
+# Capture health mid-recording (2026-11-24): a stream that stops calling back,
+# and one that delivers digital silence only. The controller's health poll
+# reads `AudioCapture.health()`.
+# ---------------------------------------------------------------------------
+
+
+def test_health_reports_how_long_a_stream_has_been_silent_since_its_last_block(
+    monkeypatch,
+):
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    assert capture.health().silent_s is None, "the start is the watchdog's phase"
+
+    for _ in range(5):
+        clock.now += 0.1
+        callback(_block(), 1600, None, None)
+    assert capture.health().silent_s == pytest.approx(0.0)
+
+    # The device is unplugged: no callback comes any more.
+    clock.now += 7.5
+    assert capture.health().silent_s == pytest.approx(7.5)
+    capture.stop(drain=False)
+
+
+def test_health_counts_digital_silence_until_a_block_carries_signal(monkeypatch):
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+
+    # A muted endpoint as the owner's log shows it: about -97 dBFS.
+    for _ in range(20):
+        clock.now += 0.1
+        callback(_block(value=1.4e-5), 1600, None, None)
+    assert capture.health().no_signal_s == pytest.approx(2.0)
+
+    clock.now += 0.1
+    callback(_block(value=AUDIO_NO_SIGNAL_LEVEL * 2), 1600, None, None)
+    assert capture.health().no_signal_s == 0.0
+    # Signal once seen stays seen: a pause after speech is not a dead microphone.
+    for _ in range(30):
+        clock.now += 0.1
+        callback(_block(value=0.0), 1600, None, None)
+    assert capture.health().no_signal_s == 0.0
+    capture.stop(drain=False)
+
+
+def test_a_quiet_room_is_signal(monkeypatch):
+    # The owner's quietest live recording: loudest 100 ms 0.0009; room tone
+    # in the silence gate's measurements went down to 0.0006.
+    clock = _Clock()
+    capture, callback = _cold_capture(monkeypatch, clock)
+    rng = np.random.default_rng(0)
+    noise = (rng.standard_normal((1600, 1)) * 0.0006).astype(np.float32)
+
+    clock.now += 0.1
+    callback(noise, 1600, None, None)
+
+    assert capture.health().no_signal_s == 0.0
+    capture.stop(drain=False)
