@@ -54,7 +54,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   off** (VAD threshold, start and completion tone): `toggled` -> `setEnabled`,
   synced once at build (`setChecked(False)` emits nothing). **The
   silence-gate threshold is not linked**: streaming reads it with the gate
-  off.
+  off. The reason is on screen (2026-11-24): the VAD hint turns into "Used
+  only while auto-stop is on.", and each tone picker has a hint that is visible
+  only while it is greyed (a toggle the user made, so the shift is expected).
+- **Notes say facts in the neutral grey, problems in red** (2026-11-24): the
+  Transcription tab's model note is red only for the `unavailable_reason`
+  branch; "Batch mode only ..." (WebGPU) and the Nemotron chunk note are
+  information. The Providers tab says in visible text what "Save API Keys"
+  stores (keys, endpoints, regions of that tab) and that the other tabs still
+  need Save. The Import Audio tab says once, under Language, that service,
+  model and language apply to the imported file only; the local engine note
+  is hidden. The benchmark case caption names what Run Benchmark still waits
+  for ("choose an audio file", "tick a model").
+- **One name for the history limit, one empty state** (2026-11-24): "History
+  limit" on both History surfaces (`HISTORY_LIMIT_LABEL`); an empty list shows
+  `HISTORY_EMPTY_TEXT` through `ui_feedback.EmptyListNotice`, a label on the
+  view's viewport, not a row or span the refresh logic must know about.
 - **Model selection is on the Transcription tab; Models only manages.** One
   "Model" row hosts `model_selector_stack`: page 0 `model_combo` +
   `local_model_runtime_warning_label`, page 1 `remote_model_combo` /

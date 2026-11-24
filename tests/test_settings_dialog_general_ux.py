@@ -2045,3 +2045,77 @@ def test_melia_in_a_region_without_it_warns_on_the_transcription_tab(
     assert not _note_is_a_warning(dialog)
     dialog.close()
     app.processEvents()
+
+
+def test_only_an_unavailable_model_paints_its_note_in_error_red(
+    dialog: SettingsDialog,
+) -> None:
+    """A plain fact about a model (batch only, ONNX device) is not an error.
+
+    The WebGPU and Nemotron notes shared the error red with the one note that
+    reports a real problem, the runtime that cannot run here.
+    """
+    from stt_app import local_runtime_support
+    from stt_app.config import VALID_MODEL_SIZES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    for model in VALID_MODEL_SIZES:
+        index = dialog.model_combo.findData(model)
+        if index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(index)
+        app.processEvents()
+        is_red = "#b71c1c" in dialog.local_model_runtime_warning_label.styleSheet()
+        assert is_red == bool(local_runtime_support.unavailable_reason(model)), model
+
+
+def test_the_screens_say_why_a_value_is_greyed_or_what_a_button_stores(
+    dialog: SettingsDialog,
+) -> None:
+    """Reasons are visible text, not tooltips (review of 2026-11-24)."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    # Audio tab: a greyed tone picker has its reason showing, and loses it
+    # when the checkbox switches the picker on.
+    dialog.start_beep_checkbox.setChecked(False)
+    hint = dialog.start_beep_tone_combo.parentWidget().findChildren(QtWidgets.QLabel)[0]
+    dialog.tabs.setCurrentIndex(2)
+    app.processEvents()
+    assert not dialog.start_beep_tone_combo.isEnabled()
+    assert hint.isVisibleTo(dialog)
+    dialog.start_beep_checkbox.setChecked(True)
+    assert not hint.isVisibleTo(dialog)
+    dialog.vad_checkbox.setChecked(False)
+    vad_hint = dialog.vad_threshold_spin.parentWidget().findChildren(QtWidgets.QLabel)[
+        0
+    ]
+    assert vad_hint.text() == "Used only while auto-stop is on."
+    dialog.vad_checkbox.setChecked(True)
+    assert vad_hint.text().startswith("Lower values")
+
+    # Providers tab: the difference from the dialog's own Save is on screen.
+    notes = [
+        label.text()
+        for label in dialog.findChildren(QtWidgets.QLabel)
+        if label.text().startswith("Save API Keys stores")
+    ]
+    assert notes == [
+        (
+            "Save API Keys stores the keys, endpoints and regions on this tab now. "
+            "Changes on the other tabs still need Save."
+        )
+    ]
+
+    # Import tab: the local engine needs no note of its own.
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("local")
+    )
+    app.processEvents()
+    assert not dialog.import_engine_note.isVisibleTo(dialog)
+    assert not hasattr(dialog, "import_model_note")

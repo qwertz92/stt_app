@@ -71,19 +71,16 @@ class _ImportTabMixin:
         import_controls_layout.addWidget(self.import_engine_note)
 
         self.import_model_combo = _WheelPassthroughComboBox()
-        self.import_model_note = QtWidgets.QLabel("")
-        self.import_model_note.setWordWrap(True)
-        self._style_note_label(self.import_model_note)
         self.import_model_combo.currentIndexChanged.connect(
             self._on_import_model_changed
         )
         import_controls_layout.addWidget(QtWidgets.QLabel("Import Model"))
         import_controls_layout.addWidget(self.import_model_combo)
-        import_controls_layout.addWidget(self.import_model_note)
 
         self.import_language_combo = _WheelPassthroughComboBox()
         self.import_language_note = QtWidgets.QLabel(
-            "Used only for this imported file; it does not change the Transcription tab."
+            "Service, model and language apply only to this imported file; "
+            "the Transcription tab keeps its own."
         )
         self.import_language_note.setWordWrap(True)
         self._style_note_label(self.import_language_note)

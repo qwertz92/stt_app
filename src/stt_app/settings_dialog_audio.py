@@ -37,6 +37,10 @@ from .settings_dialog_helpers import (
     unlabelled_row_label,
 )
 
+_VAD_THRESHOLD_HINT = (
+    "Lower values detect quieter speech; higher values require louder audio."
+)
+
 
 class _AudioTabMixin:
     def _build_audio_tab(self) -> None:
@@ -146,9 +150,7 @@ class _AudioTabMixin:
         self.vad_threshold_spin.setToolTip(
             "Lower value = more sensitive for quiet speech/whispering."
         )
-        vad_threshold_hint = QtWidgets.QLabel(
-            "Lower values detect quieter speech; higher values require louder audio."
-        )
+        vad_threshold_hint = QtWidgets.QLabel(_VAD_THRESHOLD_HINT)
         vad_threshold_hint.setWordWrap(True)
         self._style_field_hint_label(vad_threshold_hint)
         audio_form.addRow(
@@ -211,7 +213,12 @@ class _AudioTabMixin:
             self.start_beep_tone_combo.addItem(
                 _START_BEEP_TONE_LABELS.get(value, value), value
             )
-        audio_form.addRow("Start Tone", self.start_beep_tone_combo)
+        start_tone_hint = QtWidgets.QLabel("Used only while the start tone is on.")
+        self._style_field_hint_label(start_tone_hint)
+        audio_form.addRow(
+            "Start Tone",
+            self._field_with_hint(self.start_beep_tone_combo, start_tone_hint),
+        )
 
         self.completion_beep_checkbox = QtWidgets.QCheckBox(
             "Play completion tone after text insertion"
@@ -240,18 +247,47 @@ class _AudioTabMixin:
             self.completion_beep_tone_combo.addItem(
                 _START_BEEP_TONE_LABELS.get(value, value), value
             )
-        audio_form.addRow("Completion Tone", self.completion_beep_tone_combo)
+        completion_tone_hint = QtWidgets.QLabel(
+            "Used only while the completion tone is on."
+        )
+        self._style_field_hint_label(completion_tone_hint)
+        audio_form.addRow(
+            "Completion Tone",
+            self._field_with_hint(
+                self.completion_beep_tone_combo, completion_tone_hint
+            ),
+        )
+
         # A value that is only read while its checkbox is on is greyed out
         # while it is off; enabled state never moves a row. The silence-gate
         # threshold is deliberately not linked: streaming reads it for its
         # pause handling even with the gate switched off.
-        for checkbox, dependent in (
-            (self.vad_checkbox, self.vad_threshold_spin),
-            (self.start_beep_checkbox, self.start_beep_tone_combo),
-            (self.completion_beep_checkbox, self.completion_beep_tone_combo),
-        ):
-            checkbox.toggled.connect(dependent.setEnabled)
-            dependent.setEnabled(checkbox.isChecked())
+        # The reason is said on screen, not in a tooltip: the VAD hint turns
+        # into it, and a tone picker's hint appears only while it is greyed.
+        def _link(checkbox, dependent, show_reason) -> None:
+            def _apply(checked: bool) -> None:
+                dependent.setEnabled(checked)
+                show_reason(not checked)
+
+            checkbox.toggled.connect(_apply)
+            _apply(checkbox.isChecked())
+
+        def _vad_reason(disabled: bool) -> None:
+            vad_threshold_hint.setText(
+                "Used only while auto-stop is on." if disabled else _VAD_THRESHOLD_HINT
+            )
+
+        _link(self.vad_checkbox, self.vad_threshold_spin, _vad_reason)
+        _link(
+            self.start_beep_checkbox,
+            self.start_beep_tone_combo,
+            start_tone_hint.setVisible,
+        )
+        _link(
+            self.completion_beep_checkbox,
+            self.completion_beep_tone_combo,
+            completion_tone_hint.setVisible,
+        )
         layout.addWidget(audio_box)
 
         # --- Recordings section ---
