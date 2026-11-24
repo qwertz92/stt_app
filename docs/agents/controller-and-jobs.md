@@ -716,9 +716,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   log: 12 resumes in a month, the next dictation 7.8-13.1 s for short clips
   against a median of 0.74 s, the load hidden in `transcribe_ms`).
   `handle_system_resume` closes an idle Cohere/Granite runtime (its WebGPU
-  device does not survive the suspend) and then, when the engine is local,
-  the model is a WebGPU one and "Keep ONNX model loaded" is on
-  (`_resume_preload_wanted`), starts `_resume_preload_timer`:
+  device does not survive the suspend) and then, only if it closed one (so a
+  model whose download was canceled or failed is never fetched because the
+  PC woke up), and when the engine is local, the model is a WebGPU one and
+  "Keep ONNX model loaded" is on (`_resume_preload_wanted`), starts
+  `_resume_preload_timer`:
   - First attempt after `RESUME_PRELOAD_DELAY_MS` (3 s; the GPU driver may
     not be back at once), then `_run_resume_preload` starts an ordinary
     preload (`_start_local_model_preload(after_resume=True)`) only if
@@ -735,8 +737,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     after `RESUME_PRELOAD_RETRY_DELAY_MS` (10 s), `RESUME_PRELOAD_MAX_ATTEMPTS`
     (3) attempts in all; then `resume_preload_gave_up` is logged and the next
     dictation loads at first use, as before 2026-11-24. Several resume
-    notifications restart the timer and the budget.
-  - It paints only where a delayed writer may (`_preload_line_may_paint`,
+    notifications that each close a runtime restart the timer and the
+    budget. The failure handler drops `_preload_future` before returning to
+    the idle line: the worker reports before its `finally` releases (and, for
+    a failed load, closes) the runtime, so the future is not done yet and
+    `show_idle_status` would refuse while the progress poll is already
+    stopped (review finding: the "Loading" line stayed for good).  - It paints only where a delayed writer may (`_preload_line_may_paint`,
     shared with the 600 ms progress poll): never over a session, a Done or
     an Error result, or a detail being read.
   - Not changed: the runtime is still closed on every resume (recreating
@@ -744,7 +750,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     GPU work) whether or not the user dictates.
   - The log separates a load that still happens inside a transcription:
     `transcription_timing ... load_ms=N transcribe_ms=M`, N from the
-    Cohere/Granite runtime's `runtime_starts` / `last_runtime_start_ms`
+    Cohere/Granite runtime's `runtime_start_ms_total` before and after
     (spawn to "ready"), M without it; `load_ms=n/a` for runtimes that do not
     count their starts.
 - **A quit is bounded by a native watchdog** (2026-10-03): `main` arms

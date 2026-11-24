@@ -303,12 +303,10 @@ def test_a_load_inside_a_transcription_is_logged_as_load_time(monkeypatch, caplo
     13.1 s, `init_ms` 1-2), so the load looked like slow transcription."""
 
     class _ColdRuntime(_GpuRuntime):
-        runtime_starts = 0
-        last_runtime_start_ms = 0
+        runtime_start_ms_total = 1_000
 
         def transcribe_batch(self, _audio) -> str:
-            self.runtime_starts += 1
-            self.last_runtime_start_ms = 9_000
+            self.runtime_start_ms_total += 9_000
             return "hello"
 
     settings = _settings()
@@ -333,6 +331,66 @@ def test_a_load_inside_a_transcription_is_logged_as_load_time(monkeypatch, caplo
         fields = dict(part.split("=", 1) for part in line.split() if "=" in part)
         assert fields["load_ms"] == "9000"
         assert int(fields["transcribe_ms"]) < 9_000
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_wake_loads_nothing_that_was_not_loaded_before_it(monkeypatch):
+    """A model whose download was canceled or failed is not fetched because
+    the PC woke up: the post-resume load only undoes the resume's close."""
+    plan = _LoadPlan()
+    settings = _settings()
+    controller, app, _overlay, _loaded = _controller_after_startup(
+        monkeypatch, plan, settings
+    )
+    try:
+        controller._transcriber_cache = None
+        controller._transcriber_cache_key = None
+
+        controller.handle_system_resume()
+
+        assert not controller._resume_preload_timer.isActive()
+        assert controller._preload_future is None
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_failed_attempt_returns_the_overlay_to_idle_before_its_worker_ends(
+    monkeypatch,
+):
+    """The worker reports before its `finally` releases the lease, and a failed
+    load's release closes the runtime, which takes seconds for the Node runner.
+    The idle line refused to paint while that future was not done, and the
+    progress poll had already stopped: "Loading selected model..." stayed."""
+
+    class _StillReleasing:
+        def done(self) -> bool:
+            return False
+
+        def cancel(self) -> bool:
+            return False
+
+    plan = _LoadPlan()
+    settings = _settings()
+    controller, app, overlay, _loaded = _controller_after_startup(
+        monkeypatch, plan, settings
+    )
+    try:
+        controller._resume_preload_attempts_left = 1
+        controller._start_local_model_preload = lambda **_kwargs: None
+        generation = controller._preload_generation
+        controller._resume_preload_generation = generation
+        controller._preload_future = _StillReleasing()
+        overlay.set_state("Processing", "Loading selected model...")
+
+        controller._on_model_preload_done(
+            generation, False, "Selected model could not be loaded: no adapter"
+        )
+
+        assert overlay.state != "Processing"
+        assert controller._resume_preload_timer.isActive()
     finally:
         controller.shutdown()
     _ = app

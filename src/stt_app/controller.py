@@ -4075,20 +4075,21 @@ class DictationController(QtCore.QObject):
             if reset_pending or self._shutdown_started:
                 self._reset_transcriber_cache()
 
-    def _reset_resume_sensitive_transcriber_cache(self) -> None:
+    def _reset_resume_sensitive_transcriber_cache(self) -> bool:
+        """Close an idle cached ONNX/WebGPU runtime; True when one was taken."""
         if self._transcription_runtime_active():
             self._logger.info(
                 "System resume detected during an active session; keeping "
                 "current transcriber runtime."
             )
-            return
+            return False
 
         if not self._transcriber_runtime_lock.acquire(blocking=False):
             self._logger.info(
                 "System resume detected during an active shared runtime; keeping "
                 "the current transcriber cache."
             )
-            return
+            return False
         try:
             with self._transcriber_cache_lock:
                 cached = self._transcriber_cache
@@ -4103,7 +4104,7 @@ class DictationController(QtCore.QObject):
                     or cache_model in LOCAL_WEBGPU_MODEL_SIZES
                 )
                 if not should_reset:
-                    return
+                    return False
                 self._logger.info(
                     "System resume detected; closing cached ONNX/WebGPU runtime "
                     "model=%s device=%s so GPU backends are recreated.",
@@ -4116,6 +4117,7 @@ class DictationController(QtCore.QObject):
                 self._transcriber_cache = None
                 self._transcriber_cache_key = None
                 self._close_cached_transcriber(cached)
+                return True
         finally:
             self._transcriber_runtime_lock.release()
 
@@ -4131,12 +4133,17 @@ class DictationController(QtCore.QObject):
             self.refresh_hotkey_registration()
         except BaseException:
             self._logger.exception("Failed to refresh hotkeys after resume")
+        closed_runtime = False
         try:
-            self._reset_resume_sensitive_transcriber_cache()
+            closed_runtime = bool(self._reset_resume_sensitive_transcriber_cache())
         except BaseException:
             self._logger.exception("Failed to reset the runtime cache after resume")
         try:
-            self._schedule_resume_preload()
+            # Only to undo this close: a model that was not loaded -- its
+            # download canceled or failed, never preloaded -- is not fetched
+            # or loaded because the PC woke up.
+            if closed_runtime:
+                self._schedule_resume_preload()
         except BaseException:
             self._logger.exception("Failed to plan the model load after resume")
         # Audio devices commonly change identity across suspend; reopen the
@@ -5931,12 +5938,14 @@ class DictationController(QtCore.QObject):
             preload_cached_bytes,
         )
         try:
+            # The keyword only when it differs from the default, so the
+            # ordinary preload's call is the one it always was.
             preload_future = self._preload_executor.submit(
                 self._preload_model_worker,
                 settings,
                 generation,
                 key,
-                record_failure=not after_resume,
+                **({"record_failure": False} if after_resume else {}),
             )
         except Exception as exc:
             # `Executor.submit` raises once the pool has been shut down and
@@ -6549,6 +6558,14 @@ class DictationController(QtCore.QObject):
                 "resume_preload_gave_up (the model loads at the next dictation): %s",
                 message,
             )
+        # The worker emitted before its `finally` releases the lease, and a
+        # failed load's release closes the runtime (seconds for the Node
+        # runner), so the future is not done yet and `show_idle_status` would
+        # still see a preload owning the overlay -- with the progress poll
+        # already stopped, "Loading selected model..." stayed for good. The
+        # attempt is over; the retry timer starts a new future.
+        with self._preload_result_lock:
+            self._preload_future = None
         if not session_active and (
             self._overlay.state == "Processing" or self._offer_painted_is_on_screen()
         ):
@@ -6571,7 +6588,7 @@ class DictationController(QtCore.QObject):
         runtime_lease: _TranscriberRuntimeLease | None = None
         init_elapsed_ms = 0
         transcribe_started_at: float | None = None
-        runtime_starts_before: object = None
+        runtime_start_ms_before: object = None
         outcome = "initialization_error"
         terminal_kind = "failed"
         terminal_payload = "Transcriber initialization failed."
@@ -6613,7 +6630,9 @@ class DictationController(QtCore.QObject):
             )
             if job is not None:
                 self._set_transcriber_cancel_check(transcriber, lambda: job.aborting)
-            runtime_starts_before = getattr(transcriber, "runtime_starts", None)
+            runtime_start_ms_before = getattr(
+                transcriber, "runtime_start_ms_total", None
+            )
             transcribe_started_at = time.perf_counter()
             text = transcriber.transcribe_batch(wav_bytes)
             if not str(text or "").strip() and (job is None or job.mode != "streaming"):
@@ -6699,7 +6718,7 @@ class DictationController(QtCore.QObject):
                     (time.perf_counter() - worker_started_at) * 1000
                 )
                 load_elapsed_ms = self._runtime_load_inside_transcription_ms(
-                    transcriber, runtime_starts_before
+                    transcriber, runtime_start_ms_before
                 )
                 if load_elapsed_ms is not None:
                     transcribe_elapsed_ms = max(
@@ -10699,21 +10718,20 @@ class DictationController(QtCore.QObject):
 
     @staticmethod
     def _runtime_load_inside_transcription_ms(
-        transcriber: object, runtime_starts_before: object
+        transcriber: object, runtime_start_ms_before: object
     ) -> int | None:
         """The model load a transcription ran first, or None if unknown.
 
-        Only the Cohere/Granite runtime counts its starts (`runtime_starts`,
-        `last_runtime_start_ms`); for every other runtime the load cannot be
+        Only the Cohere/Granite runtime sums its start times
+        (`runtime_start_ms_total`); for every other runtime the load cannot be
         told apart and stays inside ``transcribe_ms``. 0: it was loaded.
         """
-        if not isinstance(runtime_starts_before, int):
+        if not isinstance(runtime_start_ms_before, int):
             return None
-        starts_after = getattr(transcriber, "runtime_starts", runtime_starts_before)
-        if starts_after == runtime_starts_before:
-            return 0
-        last = getattr(transcriber, "last_runtime_start_ms", 0)
-        return last if isinstance(last, int) else 0
+        after = getattr(transcriber, "runtime_start_ms_total", runtime_start_ms_before)
+        if not isinstance(after, int):
+            return None
+        return max(0, after - runtime_start_ms_before)
 
     @staticmethod
     def _set_transcriber_cancel_check(
