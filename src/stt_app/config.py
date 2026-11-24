@@ -1761,7 +1761,15 @@ def normalize_speechmatics_region(value: object) -> str:
 # retirement "05/03/2027" (day/month order not stated there) and names Voxtral
 # Mini Transcribe 3 as its alternative. `voxtral-small-2507` is the audio-chat
 # model, not a transcription one.
-MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3-0")
+# Ids (pages re-read 2026-11-25): Mini keeps its dated id, which the migration
+# table gives as its Model ID with `voxtral-mini-transcribe-3` as an alias. Small
+# uses `voxtral-small-transcribe-3`: it is the form in the file-transcription
+# page's `model` field ("`voxtral-mini-transcribe-3` or
+# `voxtral-small-transcribe-3`"), in every request example, and in the
+# migration table's alias column, while that table gives Small's Model ID as
+# `voxtral-small-transcribe-latest` and only the models and languages pages
+# write `voxtral-small-transcribe-3-0`, so the dated form is not confirmed.
+MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3")
 DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a

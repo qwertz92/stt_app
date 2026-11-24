@@ -286,7 +286,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
   (default; the only one with Auto), `enhanced` (`standard` is retired and
   moves to Melia 1); `speechmatics_region` `eu1` (default), `us1`, `au1`.
 - **Mistral** (`mistral`): `voxtral-mini-transcribe-3-0` (default) or
-  `voxtral-small-transcribe-3-0`, no region choice.
+  `voxtral-small-transcribe-3`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
   `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
   picked on the Providers tab; a label claims only what the vendor

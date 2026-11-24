@@ -257,8 +257,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `file`, optional `language`, repeated `context_bias`; the answer's `text`.
   Models (2026-11-24; read: mistral.ai/news/voxtral-3, docs.mistral.ai models
   page and `llms/studio/audio/*` pages): `voxtral-mini-transcribe-3-0`
-  (default, $0.0035/min) and `voxtral-small-transcribe-3-0` ($0.0040/min,
+  (default, $0.0035/min) and `voxtral-small-transcribe-3` ($0.0040/min,
   slightly more accurate), pinned rather than the `-latest` aliases.
+  **Small's id was settled 2026-11-25** from the `llms/studio/audio/*` pages
+  read raw: the file-transcription page's `model` field says
+  "`voxtral-mini-transcribe-3` or `voxtral-small-transcribe-3`", all its
+  request examples use the `-3` forms, and the Voxtral 3 migration table lists
+  `voxtral-small-transcribe-3` as an alias of Small, while giving its Model ID
+  as `voxtral-small-transcribe-latest` (and Mini's as the dated
+  `voxtral-mini-transcribe-3-0`). Only the models and languages pages write
+  `voxtral-small-transcribe-3-0`; the API reference page still shows the old
+  `voxtral-mini-latest`/`-2507` ids (stale). So Small is sent as
+  `voxtral-small-transcribe-3`, and Mini keeps the dated id because the
+  migration page documents both forms as valid for it. **Unverified live**:
+  whether the service accepts each id was not tested.
   `voxtral-mini-2602` is deprecated (retirement "05/03/2027", day/month order
   not stated) and moves to Mini 3 with a notice; its migration table lists
   Mini 3 as the replacement. Same route and fields; the Voxtral 3 migration

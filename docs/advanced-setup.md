@@ -570,7 +570,7 @@ most 30 minutes.
    Settings -> **Providers**.
 2. On **Transcription**, set Engine to `Mistral (Voxtral)`. The model is
    `voxtral-mini-transcribe-3-0` ($0.0035 per minute) or the slightly more
-   accurate `voxtral-small-transcribe-3-0` ($0.0040 per minute), prices read
+   accurate `voxtral-small-transcribe-3` ($0.0040 per minute), prices read
    2026-11-24.
 3. Language: Auto or one of Mistral's 53 transcription languages (German
    and English included). The custom vocabulary is sent as Mistral's context bias, which

@@ -71,7 +71,7 @@ def test_the_models_are_pinned_voxtral_3_ids():
     assert DEFAULT_MISTRAL_MODEL == "voxtral-mini-transcribe-3-0"
     assert MISTRAL_MODELS == (
         "voxtral-mini-transcribe-3-0",
-        "voxtral-small-transcribe-3-0",
+        "voxtral-small-transcribe-3",
     )
 
 
@@ -84,7 +84,7 @@ def test_the_retired_voxtral_2_model_moves_to_mini_3():
 
 
 @pytest.mark.parametrize(
-    "model", ["voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3-0"]
+    "model", ["voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3"]
 )
 def test_each_offered_model_is_what_the_request_names(recorder, model):
     MistralTranscriber("k", model=model).transcribe_batch(wav_seconds(1.0))

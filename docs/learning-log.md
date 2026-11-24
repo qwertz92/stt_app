@@ -30,7 +30,7 @@ against the live services**):
 - Azure: `mai-transcribe-2` only; the $0.10/h price is a promotion to the end
   of 2026 (recorded in the docs, not coded).
 - Mistral: `voxtral-mini-2602` -> `voxtral-mini-transcribe-3-0`, plus
-  `voxtral-small-transcribe-3-0`; 53 languages; regional endpoints recorded,
+  `voxtral-small-transcribe-3`; 53 languages; regional endpoints recorded,
   no picker.
 - Speechmatics: `standard` removed (dearer, equal accuracy); Melia 1 now runs
   in every region, so the au1 refusal is gone.

@@ -1765,7 +1765,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     ("engine", "field", "model"),
     [
         ("speechmatics", "speechmatics_model", "enhanced"),
-        ("mistral", "mistral_model", "voxtral-small-transcribe-3-0"),
+        ("mistral", "mistral_model", "voxtral-small-transcribe-3"),
     ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):

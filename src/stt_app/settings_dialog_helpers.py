@@ -217,8 +217,8 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "voxtral-mini-transcribe-3-0": (
         "voxtral-mini-transcribe-3-0 (current default, $0.21/hr)"
     ),
-    "voxtral-small-transcribe-3-0": (
-        "voxtral-small-transcribe-3-0 (slightly more accurate, $0.24/hr)"
+    "voxtral-small-transcribe-3": (
+        "voxtral-small-transcribe-3 (slightly more accurate, $0.24/hr)"
     ),
 }
 
