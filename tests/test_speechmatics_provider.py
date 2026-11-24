@@ -142,11 +142,12 @@ class TestSpeechmaticsJob:
             SPEECHMATICS_API_HOSTS[DEFAULT_SPEECHMATICS_REGION]
         }
 
-    def test_melia_is_refused_in_australia(self):
-        # "Melia 1 is available for Batch transcription in the EU and US
-        # regions only": a job sent there could only be rejected.
-        with pytest.raises(TranscriptionError, match="Melia"):
-            _transcriber(model=SPEECHMATICS_MELIA_MODEL, region="au1")
+    def test_melia_runs_in_australia_too(self, service):
+        # "Melia 1 is available in all regions" (models page, 2026-11-24).
+        _transcriber(model=SPEECHMATICS_MELIA_MODEL, region="au1").transcribe_batch(
+            wav_seconds(1.0)
+        )
+        assert {r.host for r in service.requests} == {SPEECHMATICS_API_HOSTS["au1"]}
 
     def test_a_missing_key_is_refused(self):
         with pytest.raises(TranscriptionError, match="API key is missing"):
@@ -180,7 +181,7 @@ class TestSpeechmaticsConfig:
         )
         assert "additional_vocab" not in service.config()["transcription_config"]
 
-    @pytest.mark.parametrize("model", ["enhanced", "standard"])
+    @pytest.mark.parametrize("model", ["enhanced"])
     def test_a_language_model_sends_its_code_and_the_vocabulary(self, service, model):
         _transcriber(
             model=model, language_mode="de", custom_vocabulary="Kubernetes, Grafana"
@@ -197,7 +198,7 @@ class TestSpeechmaticsConfig:
         )
         assert service.config()["transcription_config"]["language"] == "cmn"
 
-    @pytest.mark.parametrize("model", ["enhanced", "standard"])
+    @pytest.mark.parametrize("model", ["enhanced"])
     def test_auto_is_not_offered_where_a_language_is_required(self, model):
         # Automatic identification needs "at least 60 seconds of speech" and
         # rejects the job by default otherwise -- the length of most
@@ -221,7 +222,7 @@ class TestSpeechmaticsConfig:
 
     def test_an_unknown_model_is_the_default(self):
         assert _transcriber(model="nope")._model == DEFAULT_SPEECHMATICS_MODEL
-        assert set(SPEECHMATICS_MODELS) == {"melia-1", "enhanced", "standard"}
+        assert set(SPEECHMATICS_MODELS) == {"melia-1", "enhanced"}
 
 
 class TestSpeechmaticsErrors:

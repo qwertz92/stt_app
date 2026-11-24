@@ -215,20 +215,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Melia 1 is the default model** because the app's default language is
     Auto: Melia "does not support the `auto` option", so Auto is sent as
     `"language": "multi"` and a chosen language as `language_hints`. Enhanced
-    ("the highest accuracy") and Standard offer no Auto, because automatic
+    ("the highest accuracy") offers no Auto, because automatic
     identification needs "at least 60 seconds of speech" and rejects the job
     otherwise; a stored Auto reaching them is sent as `de`, as the Cohere
     runtime does. `zh` is sent as `cmn`; the bilingual packs (`tl` is one),
     `eo`, `ia` and `ug` are not offered.
-  - **The custom vocabulary is per model**: Enhanced and Standard send it as
+  - **The custom vocabulary is per model**: Enhanced sends it as
     `additional_vocab` `{"content": term}` entries; Melia's custom dictionary
     is "Not yet.", so `config.CUSTOM_VOCABULARY_EXCLUDED_MODELS` makes
     `supports_custom_vocabulary` answer False for it, the factory does not
     hand the terms over, and the controller identity ignores them there.
   - **Region** `speechmatics_region`: `eu1` (default), `us1`, `au1`, read
     through `config.normalize_speechmatics_region`; the enterprise-only
-    `eu2`/`us2` are not offered. Melia in `au1` is refused at construction
-    ("EU and US regions only"), before an upload that could only be rejected.
+    `eu2`/`us2` are not offered. Melia 1 runs in every region (models page, read
+    2026-11-24: "Melia 1 is available in all regions", `au1` batch endpoint
+    listed; the page of 2026-09-27 said EU and US only), so the refusal at
+    construction and its dialog warning are gone. **Unverified live**.
+  - **`standard` is removed (2026-11-24; models and pricing pages read that
+    day).** Melia 1's accuracy is "on par with the Standard model", batch
+    list price is $0.24/h against $0.45/h, and Enhanced ($0.75/h) has the same
+    features as Standard at higher accuracy. A saved `standard` moves to Melia
+    1 with a notice; its custom dictionary does not carry over (Melia has
+    none), so move to Enhanced if that mattered. Judgement call: Speechmatics
+    still sells Standard ("for throughput"), it is not deprecated.
     A slot of the runtime identity through `_ENGINE_REGION_FIELDS`.
   - **Parts**: at most 1800 s and 999,000,000 bytes per job ("less than 1 GB";
     no duration limit is stated), so one job stays well inside the wait

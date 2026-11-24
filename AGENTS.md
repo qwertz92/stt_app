@@ -137,7 +137,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
-| `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced, Standard; region `eu1`/`us1`/`au1` |
+| `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced; region `eu1`/`us1`/`au1` |
 | `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
@@ -283,9 +283,8 @@ Short forms of rules that recur across areas; the area files hold the detail.
   driven over the realtime WebSocket in batch mode. It covers 31 languages but
   **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
 - **Speechmatics** (`speechmatics`): `speechmatics_model` `melia-1`
-  (default; the only one with Auto), `enhanced`, `standard`;
-  `speechmatics_region` `eu1` (default), `us1`, `au1` (Melia 1 not in
-  `au1`).
+  (default; the only one with Auto), `enhanced` (`standard` is retired and
+  moves to Melia 1); `speechmatics_region` `eu1` (default), `us1`, `au1`.
 - **Mistral** (`mistral`): `voxtral-mini-transcribe-3-0` (default) or
   `voxtral-small-transcribe-3-0`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),

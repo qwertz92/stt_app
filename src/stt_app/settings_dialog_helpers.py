@@ -215,7 +215,6 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "fun-asr-realtime": "fun-asr-realtime (31 languages; no German)",
     "melia-1": "melia-1 (current default; Auto detects the language)",
     "enhanced": "enhanced (highest accuracy; pick a language)",
-    "standard": "standard (pick a language)",
     "voxtral-mini-transcribe-3-0": (
         "voxtral-mini-transcribe-3-0 (current default, $0.21/hr)"
     ),

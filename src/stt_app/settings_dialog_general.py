@@ -97,7 +97,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "{name} uses the custom vocabulary as the request prompt, or as a "
         "spelling instruction in the chat style (batch only)."
     ),
-    # Enhanced and Standard only; Melia 1 gets the "ignores" sentence.
+    # Enhanced only; Melia 1 gets the "ignores" sentence.
     "speechmatics": (
         "{name} uses the custom vocabulary as its additional vocabulary (batch only)."
     ),

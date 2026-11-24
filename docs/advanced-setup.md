@@ -615,9 +615,8 @@ In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
 - Deepgram also runs endpoints in Australia and India
   (`api.au.deepgram.com`, `api.in.deepgram.com`); the app does not offer
   them yet.
-- **Speechmatics** runs Melia 1 in the EU and US only; with Australia
-  selected, pick Enhanced or Standard, or the request is refused before
-  anything is uploaded.
+- **Speechmatics** runs Melia 1 and Enhanced in all three regions
+  (models page, read 2026-11-24).
 - **ElevenLabs** offers no region choice to the app. It was founded by
   Poles and has a Warsaw company, Eleven Labs Poland sp. z o.o., which its
   privacy policy names as the EU representative and the controller for

@@ -1764,7 +1764,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
 @pytest.mark.parametrize(
     ("engine", "field", "model"),
     [
-        ("speechmatics", "speechmatics_model", "standard"),
+        ("speechmatics", "speechmatics_model", "enhanced"),
         ("mistral", "mistral_model", "voxtral-small-transcribe-3-0"),
     ],
 )

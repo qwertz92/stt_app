@@ -241,8 +241,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   has applied the box. The Test button differs on purpose: a test runs now,
   against the store's present state. For the custom endpoint a key command counts, as
   `CustomEndpointTranscriber` requires one of the two), then Azure's
-  endpoint, then Speechmatics Melia 1 outside eu1/us1
-  (`config.speechmatics_model_available_in`, the transcriber's own check). `_update_remote_model_note` shows it in red in place of the
+  endpoint (Speechmatics Melia 1 had a region rule until 2026-11-24, now
+  removed). `_update_remote_model_note` shows it in red in place of the
   model note, inside the same two reserved lines, so nothing moves; it is
   re-run on an engine/mode/model change, every key-row refresh of the
   selected engine, a region change, and edits of the Azure endpoint, base

@@ -1345,7 +1345,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # A bring-your-own endpoint: which languages work is the served model's
     # business, so every code the app knows is offered and sent as a hint.
     "custom": VALID_LANGUAGE_MODES,
-    # The default model's list; Enhanced and Standard have their own.
+    # The default model's list; Enhanced has its own.
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
 }
@@ -1374,7 +1374,6 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
     ("speechmatics", "melia-1"): SPEECHMATICS_MELIA_LANGUAGE_MODES,
     ("speechmatics", "enhanced"): SPEECHMATICS_LANGUAGE_MODES,
-    ("speechmatics", "standard"): SPEECHMATICS_LANGUAGE_MODES,
 }
 STREAMING_ENGINES = (
     "local",
@@ -1433,7 +1432,7 @@ def language_modes_for_selection(
 # `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
 # query parameters, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
-# entries (Enhanced and Standard), Mistral as repeated `context_bias`
+# entries (Enhanced), Mistral as repeated `context_bias`
 # fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
@@ -1462,7 +1461,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced/Standard, Mistral, and a custom endpoint"
+    "Enhanced, Mistral, and a custom endpoint"
 )
 
 
@@ -1579,6 +1578,7 @@ RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
     },
     "elevenlabs": {"scribe_v2": "scribe_v3"},
     "mistral": {"voxtral-mini-2602": "voxtral-mini-transcribe-3-0"},
+    "speechmatics": {"standard": "melia-1"},
     "azure": {
         "mai-transcribe-1.5": "mai-transcribe-2",
         "mai-transcribe-1": "mai-transcribe-2",
@@ -1746,7 +1746,11 @@ FUNASR_BATCH_MAX_WAIT_S = 1800.0
 # model). Melia 1 is the default because it is the one that transcribes
 # without a chosen language, which the app's default Auto needs.
 SPEECHMATICS_MELIA_MODEL = "melia-1"
-SPEECHMATICS_MODELS = (SPEECHMATICS_MELIA_MODEL, "enhanced", "standard")
+# `standard` is removed (2026-11-24): the models page (read that day) calls
+# Melia 1's accuracy "on par with the Standard model", the pricing page lists
+# Standard at $0.45/h against Melia 1's $0.24/h (batch), and Enhanced carries
+# the same custom dictionary at higher accuracy. Saved choices move to Melia 1.
+SPEECHMATICS_MODELS = (SPEECHMATICS_MELIA_MODEL, "enhanced")
 DEFAULT_SPEECHMATICS_MODEL = SPEECHMATICS_MELIA_MODEL
 # Batch hosts open to every customer
 # (https://docs.speechmatics.com/get-started/authentication, read
@@ -1760,17 +1764,9 @@ SPEECHMATICS_API_HOSTS = {
 }
 SPEECHMATICS_REGIONS = tuple(SPEECHMATICS_API_HOSTS)
 DEFAULT_SPEECHMATICS_REGION = "eu1"
-SPEECHMATICS_MELIA_REGIONS = ("eu1", "us1")
-
-
-def speechmatics_model_available_in(model: str, region: str) -> bool:
-    """Whether Speechmatics runs `model` in `region` (Melia 1: eu1 and us1)."""
-    return model != SPEECHMATICS_MELIA_MODEL or region in SPEECHMATICS_MELIA_REGIONS
-
-
-SPEECHMATICS_MELIA_UNAVAILABLE_TEXT = (
-    "Speechmatics Melia 1 runs in the EU and US regions only."
-)
+# Melia 1 runs in every region (models page, read 2026-11-24: "Melia 1 is
+# available in all regions", with the `au1` batch endpoint listed). The page
+# of 2026-09-27 said "EU and US regions only"; the refusal built on that is gone.
 # A job's total wait, as for AssemblyAI (`ASSEMBLYAI_BATCH_MAX_WAIT_S`),
 # and the pause between status requests: the GET limit is 50 per second,
 # so one per second is far inside it.
