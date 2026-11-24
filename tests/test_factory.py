@@ -94,7 +94,7 @@ def test_factory_azure_returns_azure_transcriber():
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():
-    settings = AppSettings(engine="deepgram", deepgram_model="nova-2")
+    settings = AppSettings(engine="deepgram", deepgram_model="nova-3")
 
     class FakeSecretStore:
         def get_api_key(self, name):
@@ -102,7 +102,7 @@ def test_factory_deepgram_returns_deepgram_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, DeepgramTranscriber)
-    assert t._model == "nova-2"
+    assert t._model == "nova-3"
 
 
 def test_factory_unknown_engine_falls_back_to_local():

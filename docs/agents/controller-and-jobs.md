@@ -42,7 +42,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   (newline/comma/semicolon split, case-insensitive dedupe, 100-term cap).
   Wired to faster-whisper `initial_prompt` (batch + rolling streaming),
   OpenAI/Groq `prompt`, AssemblyAI `keyterms_prompt` (batch STT-3.7,
-  streaming STT-3.7-Realtime), Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) with `doseq`.
+  streaming STT-3.7-Realtime), Deepgram repeated `keyterm` with `doseq`.
   ElevenLabs, Azure, Fun-ASR, Nemotron, Cohere/Granite ONNX: no input.
 - **Managed audio imports snapshot bytes plus `recording_id`** before
   submitting; completion/failure are compare-and-set, so an old import cannot

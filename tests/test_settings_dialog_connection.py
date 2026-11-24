@@ -442,7 +442,7 @@ def test_save_persists_only_supported_remote_keys():
     ]
     assert "azure" not in providers
     assert dialog._loaded_settings.openai_model in OPENAI_MODELS
-    assert dialog._loaded_settings.deepgram_model in {"nova-3", "nova-2"}
+    assert dialog._loaded_settings.deepgram_model in {"nova-3"}
     assert dialog._loaded_settings.assemblyai_model in {
         "assemblyai-stt-3-7",
         "universal-2",

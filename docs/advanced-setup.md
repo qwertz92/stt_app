@@ -608,7 +608,7 @@ In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
 
 - **Deepgram** states that the EU endpoint takes the same API keys as the
   global one, and that Whisper models are not offered there (the app uses
-  Nova-3 and Nova-2 only).
+  Nova-3 only).
 - **AssemblyAI** does not say on its region pages whether a key or every
   model works on the EU hosts; if a request fails there, check the key and
   the model in AssemblyAI's dashboard for the EU region.

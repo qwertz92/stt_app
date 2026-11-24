@@ -401,6 +401,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     so whether STT-3.7-Realtime streams there is open; the streaming
     data-zone page (read 2026-11-24) lists `streaming.eu.assemblyai.com`
     without a per-model note.
+- **Deepgram offers `nova-3` only; Groq is unchanged (2026-11-24).**
+  Deepgram's models page (read that day) still sells `nova-2` "for use cases
+  with languages not yet supported by nova-3", but all 34 languages the app
+  offered for nova-2 are in nova-3's list (compared against the page's
+  tables), so nova-2 is removed and a saved choice moves to nova-3 with a
+  notice. That also drops the `keywords` vocabulary parameter nova-2 needed;
+  nova-3's `keyterm` is the only path. Nova-2's filler-word identification is
+  not used by the app. Flux (`flux-general-en`, `flux-general-multi` with ten
+  languages) is a conversational voice-agent model and not offered. Groq's
+  speech-to-text page and deprecations page (read that day) list only
+  `whisper-large-v3` and `whisper-large-v3-turbo` as current (the `-en`
+  variants were retired 2025-08-23), which is what the app offers.
 - **Deepgram streaming holds its socket open with a KeepAlive while no audio
   goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
   capture's audio over up to 12 s late, so the socket is open and silent for

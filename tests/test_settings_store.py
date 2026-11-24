@@ -384,7 +384,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
     settings_path.write_text(
         json.dumps(
             {
-                "deepgram_model": "nova-2",
+                "deepgram_model": "nova-3",
                 "assemblyai_model": "universal-2",
                 "elevenlabs_model": "scribe_v3",
             }
@@ -392,7 +392,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
         encoding="utf-8",
     )
     settings = SettingsStore(settings_path).load()
-    assert settings.deepgram_model == "nova-2"
+    assert settings.deepgram_model == "nova-3"
     assert settings.assemblyai_model == "universal-2"
     assert settings.elevenlabs_model == "scribe_v3"
 

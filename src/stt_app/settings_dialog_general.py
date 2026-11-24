@@ -88,8 +88,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "and streaming."
     ),
     "deepgram": (
-        "{name} uses the custom vocabulary as keyterm (Nova-3) or keywords "
-        "(Nova-2), in batch and streaming."
+        "{name} uses the custom vocabulary as keyterm, in batch and streaming."
     ),
     "openai": "{name} uses the custom vocabulary as keywords, batch only.",
     "groq": "{name} uses the custom vocabulary as the request prompt (batch only).",

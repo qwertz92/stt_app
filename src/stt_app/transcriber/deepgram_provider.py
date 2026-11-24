@@ -233,22 +233,11 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             parts.append(self._stream_partial_text)
         return " ".join(p for p in parts if p).strip()
 
-    def _vocabulary_query_param_name(self) -> str:
-        """Return the biasing query param name for the selected model.
-
-        nova-3 models use the repeated ``keyterm`` parameter; nova-2 (and
-        earlier) models use the repeated ``keywords`` parameter instead.
-        """
-        return (
-            "keyterm"
-            if self._model.strip().lower().startswith("nova-3")
-            else "keywords"
-        )
-
     def _apply_vocabulary_params(self, params: dict[str, object]) -> None:
         if not self._vocabulary_terms:
             return
-        params[self._vocabulary_query_param_name()] = list(self._vocabulary_terms)
+        # nova-3's repeated `keyterm` (nova-2's `keywords` went with nova-2).
+        params["keyterm"] = list(self._vocabulary_terms)
 
     def _format_stream_error(self, error: Exception) -> str:
         detail = str(error)
@@ -493,7 +482,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         if self._language_mode == "auto":
             # The live API rejects detect_language; multilingual
             # code-switching ("multi") is the streaming equivalent on
-            # nova-2/nova-3.
+            # nova-3.
             params["language"] = "multi"
         else:
             params["language"] = self._language_mode

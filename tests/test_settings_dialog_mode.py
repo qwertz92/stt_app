@@ -764,14 +764,12 @@ def test_remote_model_selector_tracks_selected_provider():
 
     deepgram_idx = dialog.engine_combo.findData("deepgram")
     dialog.engine_combo.setCurrentIndex(deepgram_idx)
-    nova2_idx = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova2_idx)
 
     dialog._save()
 
     assert store.saved is not None
     assert store.saved.groq_model == "whisper-large-v3"
-    assert store.saved.deepgram_model == "nova-2"
+    assert store.saved.deepgram_model == "nova-3"
     _ = app
 
 
@@ -1527,18 +1525,21 @@ def test_language_options_follow_the_selected_local_model():
 
 def test_deepgram_language_options_follow_selected_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="deepgram", deepgram_model="nova-3"))
+    store = _FakeSettingsStore(
+        AppSettings(engine="speechmatics", speechmatics_model="melia-1")
+    )
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_item_enabled(dialog.language_combo, "ar") is True
-    nova_2_index = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova_2_index)
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    enhanced_index = dialog.remote_model_combo.findData("enhanced")
+    dialog.remote_model_combo.setCurrentIndex(enhanced_index)
 
-    assert _combo_offers(dialog.language_combo, "ar") is False
+    # Only Melia 1 has Auto; Enhanced needs a chosen language.
+    assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "fr") is True
     _ = app
 

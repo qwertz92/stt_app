@@ -207,7 +207,6 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
     "gpt-transcribe": "gpt-transcribe (current default, recommended by OpenAI)",
     "nova-3": "nova-3 (current default)",
-    "nova-2": "nova-2 (older generation)",
     "assemblyai-stt-3-7": "assemblyai-stt-3-7 (latest, highest accuracy; 32 languages)",
     "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v3": "scribe_v3 (current default, highest published accuracy)",

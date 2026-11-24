@@ -1035,42 +1035,6 @@ DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "ur",
     "vi",
 )
-DEEPGRAM_NOVA_2_LANGUAGE_MODES = (
-    "auto",
-    "de",
-    "en",
-    "bg",
-    "ca",
-    "zh",
-    "cs",
-    "da",
-    "nl",
-    "et",
-    "fi",
-    "fr",
-    "el",
-    "hi",
-    "hu",
-    "id",
-    "it",
-    "ja",
-    "ko",
-    "lv",
-    "lt",
-    "ms",
-    "no",
-    "pl",
-    "pt",
-    "ro",
-    "ru",
-    "sk",
-    "es",
-    "sv",
-    "th",
-    "tr",
-    "uk",
-    "vi",
-)
 # Azure LLM Speech (MAI-Transcribe). "auto" uses the model's default
 # multilingual mode; selecting a language sends a `locales` hint.
 # Copied from the language table on Microsoft's MAI-Transcribe page (read
@@ -1370,7 +1334,6 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("assemblyai", "assemblyai-stt-3-7"): ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
-    ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
     ("azure", "mai-transcribe-2"): AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES,
     ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
     ("speechmatics", "melia-1"): SPEECHMATICS_MELIA_LANGUAGE_MODES,
@@ -1430,8 +1393,8 @@ def language_modes_for_selection(
 #
 # Remote engines whose request carries the terms: AssemblyAI as
 # `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields, Groq as
-# `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
-# query parameters, a custom endpoint as `prompt` (transcription API) or as a
+# `prompt`, Deepgram as its repeated `keyterm`
+# query parameter, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
 # entries (Enhanced), Mistral as repeated `context_bias`
 # fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
@@ -1539,10 +1502,13 @@ DEFAULT_OPENAI_MODEL = "gpt-transcribe"
 # a lone CR inside a line survives its `strip()` and would reach the request.
 OPENAI_KEYWORD_FORBIDDEN_CHARACTERS = ("<", ">", "\r", "\n")
 
-DEEPGRAM_MODELS = (
-    "nova-3",
-    "nova-2",
-)
+# nova-2 is removed (2026-11-24): Deepgram's models page still sells it "for use
+# cases with languages not yet supported by nova-3", but every language the app
+# offered for it (34) is in nova-3's list (checked against the page's tables
+# that day), and nova-3 takes custom vocabulary as `keyterm`. A saved nova-2
+# moves to nova-3 (`RETIRED_REMOTE_MODELS`). Flux (conversational, English and 10
+# languages) is a voice-agent model, not a dictation one, and is not offered.
+DEEPGRAM_MODELS = ("nova-3",)
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
 
 # The provider names alone: the engine pickers group them under a "Cloud"
@@ -1577,6 +1543,7 @@ RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
         "gpt-4o-transcribe": "gpt-transcribe",
         "gpt-4o-mini-transcribe": "gpt-transcribe",
     },
+    "deepgram": {"nova-2": "nova-3"},
     "elevenlabs": {"scribe_v2": "scribe_v3"},
     "mistral": {"voxtral-mini-2602": "voxtral-mini-transcribe-3-0"},
     "speechmatics": {"standard": "melia-1"},
