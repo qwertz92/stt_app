@@ -640,8 +640,13 @@ class _LocalModelsMixin:
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
 
-        downloaded = [m for m in VALID_MODEL_SIZES if m in cached_set]
-        not_downloaded = [m for m in VALID_MODEL_SIZES if m not in cached_set]
+        # In Streaming only the models that can stream, plus the current one
+        # (`_local_model_offered`).
+        offered = [
+            m for m in VALID_MODEL_SIZES if self._local_model_offered(m, current_data)
+        ]
+        downloaded = [m for m in offered if m in cached_set]
+        not_downloaded = [m for m in offered if m not in cached_set]
 
         for value in downloaded:
             label = self._model_label(value)

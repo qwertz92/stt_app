@@ -19,7 +19,6 @@ from .config import (
     DEFAULT_MODEL_SIZE,
     DEVICE_AWARE_LOCAL_MODELS,
     LANGUAGE_MODE_LABELS,
-    LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_GRANITE_CTC_MODEL_SIZES,
@@ -123,6 +122,16 @@ _LOCAL_MODEL_DOWNLOAD_POINTER = "Download or remove local models on the Models t
 # the Fun-ASR note needed 45 px of the 42 reserved at the dialog's minimum
 # width, and "this provider" repeats what the row already shows.
 _REMOTE_MODEL_KEY_POINTER = "The API key is set on the Providers tab."
+# The Mode row's hint, per mode. The streaming one is the "why are the others
+# missing" line for the filtered engine and model lists. Both are about as
+# long, so a switch does not change the row's height.
+_MODE_HINTS: dict[str, str] = {
+    "batch": "Batch inserts the text when you stop. Every engine and model can do it.",
+    "streaming": (
+        "Streaming types text while you speak. Only engines and models that "
+        "can stream are listed."
+    ),
+}
 
 
 class _GeneralTabMixin:
@@ -175,6 +184,27 @@ class _GeneralTabMixin:
 
         # --- Engine / Mode section ---
         engine_box, engine_form = self._general_form_box("Engine && Mode")
+
+        # Mode comes first because it decides what the rows below offer: in
+        # Streaming the engine and model lists show only what can stream
+        # (`_update_mode_availability`). It used to sit below Vocabulary and
+        # follow the model instead -- a greyed-out Streaming entry whose
+        # reason was only a tooltip, and a silent flip to Batch when the
+        # engine or model changed (owner's request 2026-11-24).
+        self.mode_combo = _WheelPassthroughComboBox()
+        for value in VALID_MODES:
+            self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)
+        self.mode_combo.setToolTip(
+            "Streaming inserts only stable append-only text while speaking and "
+            "suspends live insertion on focus change. Batch remains the recommended default."
+        )
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self.mode_hint_label = QtWidgets.QLabel(_MODE_HINTS[DEFAULT_MODE])
+        self.mode_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.mode_hint_label)
+        engine_form.addRow(
+            "Mode", self._field_with_hint(self.mode_combo, self.mode_hint_label)
+        )
 
         self.engine_combo = _WheelPassthroughComboBox()
         fill_engine_combo(self.engine_combo, VALID_ENGINES)
@@ -309,22 +339,6 @@ class _GeneralTabMixin:
                 self.vocabulary_support_label,
             ),
         )
-
-        self.mode_combo = _WheelPassthroughComboBox()
-        for value in VALID_MODES:
-            self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)
-        self.mode_combo.setToolTip(
-            "Streaming inserts only stable append-only text while speaking and "
-            "suspends live insertion on focus change. Batch remains the recommended default."
-        )
-        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
-        mode_hint = QtWidgets.QLabel(
-            "Batch inserts the text when you stop. Streaming types stable text "
-            "while you speak."
-        )
-        mode_hint.setWordWrap(True)
-        self._style_field_hint_label(mode_hint)
-        engine_form.addRow("Mode", self._field_with_hint(self.mode_combo, mode_hint))
 
         self.streaming_full_final_check = QtWidgets.QCheckBox(
             "Re-transcribe the whole recording after streaming (faster-whisper)"
@@ -649,7 +663,10 @@ class _GeneralTabMixin:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         if provider == DEFAULT_ENGINE:
             return
-        issue = self._remote_engine_setup_issue(provider)
+        # A batch-only engine in Streaming first: a key does not help it.
+        issue = self._streaming_selection_issue() or self._remote_engine_setup_issue(
+            provider
+        )
         if issue is not None:
             note, error = issue, True
         else:
@@ -1007,9 +1024,15 @@ class _GeneralTabMixin:
             if engine == "local"
             else None
         )
+        streaming_issue = (
+            self._streaming_selection_issue() if engine == "local" else None
+        )
         if unavailable:
             style = warning_style
             text = unavailable
+        elif streaming_issue:
+            style = warning_style
+            text = streaming_issue
         elif engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             style = warning_style
             # The order Auto tries is no longer fixed -- a benchmark can put
@@ -1058,7 +1081,7 @@ class _GeneralTabMixin:
             style = note_style
             text = " "
 
-        if engine == "local" and model_name and not unavailable:
+        if engine == "local" and model_name and not (unavailable or streaming_issue):
             # Where the download lives, now that the tab is called Models
             # rather than Local: this row offers models that may not be on
             # disk yet, and nothing beside it said where to get them. It goes
@@ -1175,56 +1198,97 @@ class _GeneralTabMixin:
             "font-weight: bold; padding: 4px; border-radius: 4px; " + colors
         )
 
-    def _update_mode_availability(self) -> None:
-        """Enable/disable streaming option based on the selected engine."""
-        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        model_name = (
-            str(self.model_combo.currentData() or "")
-            if hasattr(self, "model_combo")
-            else ""
+    def _streaming_mode_selected(self) -> bool:
+        return (
+            hasattr(self, "mode_combo") and self.mode_combo.currentData() == "streaming"
         )
-        streaming_supported = supports_streaming(engine, model_name)
-        streaming_idx = self.mode_combo.findData("streaming")
 
-        if streaming_idx < 0:
+    def _local_model_offered(self, model_name: str, current: str) -> bool:
+        """Whether the local model list shows ``model_name`` in this mode.
+
+        In Streaming only models that can stream, plus the current selection
+        whatever it is: a selected local model is strict (AGENTS.md), so a
+        saved batch-only model stays selected and is flagged by
+        `_streaming_selection_issue` instead of being swapped for another.
+        """
+        return (
+            not self._streaming_mode_selected()
+            or model_name == current
+            or supports_streaming(DEFAULT_ENGINE, model_name)
+        )
+
+    def _streaming_selection_issue(self) -> str | None:
+        """Why the selected engine or model cannot stream, or None.
+
+        Shown in red in the reserved note under the Model row; the
+        controller refuses such a dictation with the same reason.
+        """
+        if not self._streaming_mode_selected():
+            return None
+        engine, model_name = self._pending_engine_selection()
+        if supports_streaming(engine, model_name):
+            return None
+        if engine == DEFAULT_ENGINE:
+            # The name the user recognises, not the raw settings value
+            # ('parakeet-tdt-0.6b-v3' matches nothing on screen).
+            name = local_model_short_label(model_name)
+            return (
+                f"{name} cannot stream; it works in Batch mode only. Pick a "
+                "model from this list, or set Mode to Batch."
+            )
+        return (
+            f"{self._provider_label(engine)} cannot stream; it works in Batch "
+            "mode only. Pick Local, AssemblyAI or Deepgram, or set Mode to Batch."
+        )
+
+    def _update_mode_availability(self) -> None:
+        """Let the engine and model lists offer what the selected mode can use.
+
+        In Streaming, engines and local models that cannot stream are hidden
+        (the Mode row's hint says so), except the current selection, which
+        is never switched silently: it stays and is flagged in red.
+        """
+        self._update_mode_hint()
+        streaming = self._streaming_mode_selected()
+        current_engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        view = self.engine_combo.view()
+        item_model = self.engine_combo.model()
+        for index in range(self.engine_combo.count()):
+            engine = self.engine_combo.itemData(index)
+            if engine not in VALID_ENGINES:
+                continue  # the separator and the "Cloud" header
+            hidden = (
+                streaming
+                and engine != current_engine
+                and not supports_streaming(str(engine))
+            )
+            view.setRowHidden(index, hidden)
+            item = item_model.item(index) if hasattr(item_model, "item") else None
+            if item is not None:
+                # Disabled as well as hidden: the arrow keys and the wheel
+                # on a closed combo still reach a hidden row, not a
+                # disabled one.
+                item.setEnabled(not hidden)
+        if hasattr(self, "model_combo"):
+            current_model = str(self.model_combo.currentData() or "")
+            shown = [
+                str(self.model_combo.itemData(index))
+                for index in range(self.model_combo.count())
+                if self.model_combo.itemData(index) is not None
+            ]
+            wanted = [
+                name
+                for name in VALID_MODEL_SIZES
+                if self._local_model_offered(name, current_model)
+            ]
+            if sorted(shown) != sorted(wanted):
+                self._refresh_model_combo()
+
+    def _update_mode_hint(self) -> None:
+        if not hasattr(self, "mode_hint_label"):
             return
-
-        # Disable the streaming item in the combo model (greys it out).
-        model = self.mode_combo.model()
-        item = model.item(streaming_idx)
-        if item is not None:
-            if streaming_supported:
-                item.setEnabled(True)
-                item.setToolTip("")
-            else:
-                item.setEnabled(False)
-                if engine == "local" and model_name in LOCAL_BATCH_ONLY_MODELS:
-                    # Name the model rather than a runtime: Parakeet and
-                    # Canary are batch-only too and do not run on the
-                    # ONNX/WebGPU path this used to claim.
-                    # The name the user recognises, not the raw settings
-                    # value ('parakeet-tdt-0.6b-v3' matches nothing on screen)
-                    # and not the full combo entry, whose size and runtime
-                    # parenthetical reads badly mid-sentence -- and which for
-                    # the Cohere/Granite models would put "ONNX/WebGPU" back
-                    # into the very tooltip that stopped claiming a runtime.
-                    item.setToolTip(
-                        f"Streaming is not supported by the local model "
-                        f"'{local_model_short_label(model_name)}'. Use batch "
-                        "mode, or a faster-whisper or Nemotron local model."
-                    )
-                else:
-                    item.setToolTip(
-                        f"Streaming is not supported by the {engine} provider. "
-                        "Use faster-whisper local models, AssemblyAI, or Deepgram "
-                        "for streaming."
-                    )
-
-        # If streaming is selected but not supported, switch to batch.
-        if not streaming_supported and self.mode_combo.currentData() == "streaming":
-            batch_idx = self.mode_combo.findData("batch")
-            if batch_idx >= 0:
-                self.mode_combo.setCurrentIndex(batch_idx)
+        mode = str(self.mode_combo.currentData() or DEFAULT_MODE)
+        self.mode_hint_label.setText(_MODE_HINTS.get(mode, _MODE_HINTS[DEFAULT_MODE]))
 
     def _update_streaming_full_final_availability(self) -> None:
         """Enabled only for local faster-whisper streaming, where it acts."""
@@ -1256,9 +1320,11 @@ class _GeneralTabMixin:
         self._update_import_engine_note()
 
     def _on_mode_changed(self, _index: int = 0) -> None:
+        self._update_mode_availability()
         self._update_language_availability()
         self._update_remote_model_selector()
         self._update_streaming_full_final_availability()
+        self._update_local_model_runtime_warning()
 
     def _on_model_changed(self, _index: int = 0) -> None:
         self._update_engine_indicator()

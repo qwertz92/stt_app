@@ -86,8 +86,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single
-  source. Cohere/Granite ONNX/WebGPU are batch-only; Nemotron streams; a
-  local model never disables AssemblyAI/Deepgram streaming.
+  source. Every local model in `LOCAL_BATCH_ONLY_MODELS` (Cohere, Granite
+  ONNX/WebGPU, Parakeet, Canary, Granite CTC) is batch-only; Nemotron and
+  the faster-whisper sizes stream; a local model never disables
+  AssemblyAI/Deepgram streaming.
+- **In Settings the mode is chosen first and filters the lists below it**
+  (2026-11-24, owner's request): the Mode row heads the Transcription tab;
+  in Streaming, engines and local models that cannot stream are hidden and
+  disabled (`_update_mode_availability`, `_local_model_offered`), and the
+  Mode row's hint says "Only engines and models that can stream are
+  listed." Streaming itself is always selectable. The current selection is
+  never switched: a saved or chosen engine/model that cannot stream stays
+  listed and selected and `_streaming_selection_issue` names it in red in
+  the reserved note under the Model row; the controller still refuses such
+  a dictation with its own message. Why not the other way round (the mode
+  follows the model, as before): a greyed-out Streaming entry with its
+  reason in a tooltip was a dead end for a user on a batch-only model, the
+  user who wants streaming had to find a model that streams by trial, and
+  the old `_update_mode_availability` flipped Mode to Batch without a word
+  whenever engine or model changed -- including on opening the dialog, so
+  the next Save wrote Batch over a stored Streaming.
 - **Streaming text state**: reconciliation lives in `streaming_text.py`; the
   controller only orchestrates. Insertion is append-only.
   - Local faster-whisper uses `merge_rolling_window_transcript`, not

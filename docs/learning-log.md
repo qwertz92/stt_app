@@ -3,6 +3,28 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: streaming review: the mode filters the engine and model lists
+
+Structurally: the Mode row moved to the top of the Transcription tab's "Engine &&
+Mode" group, and in Streaming the Engine and Model lists show only what can
+stream. Before, the mode followed the model: with a batch-only model (the
+default Parakeet, the owner's Cohere) the Streaming entry was greyed out and
+its reason was a tooltip, so a user who wanted streaming had to find a model
+that streams by trying them; and `_update_mode_availability` flipped Mode to
+Batch without a word whenever engine or model changed -- on opening the dialog
+too, so the next Save wrote Batch over a stored Streaming. Now Streaming is
+always selectable; engines and local models that cannot stream are hidden and
+disabled while it is selected; the Mode hint says "Only engines and models that
+can stream are listed."; a current selection that cannot stream is never
+switched but stays listed and is named in red in the Model row's reserved note.
+Measured on the owner's settings copy (offscreen, 900 px): the tab height is
+unchanged; Streaming lists 8 of 15 local models (the seven faster-whisper sizes
+and Nemotron) and 3 of 11 engines. Tests:
+`test_streaming_mode_lists_only_local_models_that_can_stream`,
+`test_streaming_mode_hides_engines_that_cannot_stream`,
+`test_a_saved_*_that_cannot_stream_is_kept_and_flagged` in
+`tests/test_settings_dialog_mode.py` (9 of them failed on the old code).
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`
