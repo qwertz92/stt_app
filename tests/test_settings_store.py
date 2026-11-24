@@ -1858,3 +1858,97 @@ def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
+
+
+_RETIRED = {"openai": {"gpt-4o-transcribe": "gpt-transcribe"}}
+
+
+def _write_settings(tmp_path, values):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(values), encoding="utf-8")
+    return path
+
+
+def test_a_retired_model_choice_moves_once_and_is_announced_once(tmp_path, monkeypatch):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "openai",
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+    settings = store.load()
+
+    assert settings.openai_model == "gpt-transcribe"
+    notice = store.take_model_notice()
+    assert "OpenAI" in notice
+    assert "gpt-4o-transcribe" in notice
+    assert "gpt-transcribe" in notice
+    assert store.take_model_notice() == ""
+    # The move is written back, so the next start has nothing to announce.
+    assert json.loads(path.read_text(encoding="utf-8"))["openai_model"] == (
+        "gpt-transcribe"
+    )
+    again = SettingsStore(path)
+    assert again.load().openai_model == "gpt-transcribe"
+    assert again.take_model_notice() == ""
+
+
+def test_a_retired_model_of_an_engine_in_use_by_key_is_announced(tmp_path, monkeypatch):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "has_openai_key": True,
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == "gpt-transcribe"
+    assert "OpenAI" in store.take_model_notice()
+
+
+def test_a_retired_model_of_an_unused_engine_moves_without_a_notice(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == "gpt-transcribe"
+    assert store.take_model_notice() == ""
+
+
+def test_a_damaged_model_id_falls_to_the_default_without_a_notice(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "openai",
+            "openai_model": "not-a-model",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == DEFAULT_OPENAI_MODEL
+    assert store.take_model_notice() == ""

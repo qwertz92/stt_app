@@ -1580,6 +1580,34 @@ DEEPGRAM_MODELS = (
 )
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
 
+# The provider names alone: the engine pickers group them under a "Cloud"
+# header (`fill_engine_combo`), so "Remote (...)" around every name repeated
+# what the header says. The local entry names where the audio stays rather
+# than two runtime names a user does not choose between here. Notices that
+# name a provider use the same labels.
+ENGINE_LABELS: dict[str, str] = {
+    "local": "Local (on this PC)",
+    "assemblyai": "AssemblyAI",
+    "groq": "Groq",
+    "openai": "OpenAI",
+    "deepgram": "Deepgram",
+    "elevenlabs": "ElevenLabs",
+    "azure": "Azure LLM Speech",
+    "funasr": "Fun-ASR / Alibaba",
+    "speechmatics": "Speechmatics",
+    "mistral": "Mistral (Voxtral)",
+    "custom": "Custom endpoint",
+}
+
+# Remote models the app no longer offers, per engine, each with the model a
+# saved choice of it moves to. The owner's rule: the app offers only a
+# vendor's newest generation, so a superseded model is removed and a saved
+# choice is moved once (`AppSettings.from_dict`; `SettingsStore.load` writes
+# the move back, so it happens once) with a tray notice at the next start. A
+# model absent from both here and the `*_MODELS` tuples is not a retired
+# choice but damage, and falls to the engine's default without a notice.
+RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {}
+
 ASSEMBLYAI_MODELS = (
     "universal-3-5-pro",
     "universal-2",

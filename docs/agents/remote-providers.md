@@ -9,6 +9,19 @@ history are in `docs/learning-log.md` and git history.
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.md` (original AGENTS.md: `df2642a`).
 
+- **A vendor's superseded model is removed, and a saved choice of it is moved
+  once with a notice (2026-11-24, owner's rule).** The app offers a vendor's
+  newest generation only; an older model stays only for a reason written in
+  this file (clearly better at something, or far cheaper). The map is
+  `config.RETIRED_REMOTE_MODELS` (engine -> retired id -> successor).
+  `AppSettings.from_dict` applies it through `_current_remote_model`;
+  `SettingsStore.load` rewrites the file in the same call, so the move happens
+  once, and `take_model_notice` hands `main` one tray message ("Speech model
+  updated") for the engines the user uses (the selected one, or one with a
+  stored key: a file written before an engine existed carries its default for
+  everyone). An id that is neither current nor in the map is damage and falls
+  to the default without a notice. A history row keeps the model id it was made
+  with.
 - **AssemblyAI batch model**: send `speech_models`; `universal-3-5-pro` goes
   alone, never with a silent `universal-2` fallback. Legacy
   `universal-3-pro`/`best`/`nano` migrate to the default and are hidden.

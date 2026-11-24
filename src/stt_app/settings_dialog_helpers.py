@@ -29,6 +29,7 @@ from .config import (
     DEFAULT_OPENAI_MODEL,
     DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
+    ENGINE_LABELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
@@ -322,25 +323,6 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
 }
 
 
-# The provider names alone: the engine pickers group them under a "Cloud"
-# header (`fill_engine_combo`), so "Remote (...)" around every name repeated
-# what the header says. The local entry names where the audio stays rather
-# than two runtime names a user does not choose between here.
-_ENGINE_LABELS: dict[str, str] = {
-    "local": "Local (on this PC)",
-    "assemblyai": "AssemblyAI",
-    "groq": "Groq",
-    "openai": "OpenAI",
-    "deepgram": "Deepgram",
-    "elevenlabs": "ElevenLabs",
-    "azure": "Azure LLM Speech",
-    "funasr": "Fun-ASR / Alibaba",
-    "speechmatics": "Speechmatics",
-    "mistral": "Mistral (Voxtral)",
-    "custom": "Custom endpoint",
-}
-
-
 _ENGINE_CLOUD_HEADER = "Cloud"
 
 
@@ -355,9 +337,7 @@ def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> N
     """
     remote = [engine for engine in engines if engine != DEFAULT_ENGINE]
     if DEFAULT_ENGINE in engines:
-        combo.addItem(
-            _ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE
-        )
+        combo.addItem(ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE)
         if remote:
             combo.insertSeparator(combo.count())
     if remote:
@@ -368,7 +348,7 @@ def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> N
             header.setEnabled(False)
             header.setSelectable(False)
     for engine in remote:
-        combo.addItem(_ENGINE_LABELS.get(engine, engine), engine)
+        combo.addItem(ENGINE_LABELS.get(engine, engine), engine)
 
 
 _HISTORY_TIMEZONE_LABELS: dict[str, str] = {

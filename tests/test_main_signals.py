@@ -1430,3 +1430,16 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert dialog is not None and dialog.isVisible()
     dialog.quit_now_button.click()
     assert quits == [True]
+
+
+def test_a_moved_model_choice_is_shown_as_one_tray_message():
+    shown = []
+    tray = SimpleNamespace(showMessage=lambda *args: shown.append(args))
+
+    main_module._show_model_notice(tray, "OpenAI: whisper-1 is no longer offered.")
+
+    assert len(shown) == 1
+    title, text, icon, _timeout = shown[0]
+    assert title == "Speech model updated"
+    assert text == "OpenAI: whisper-1 is no longer offered."
+    assert icon == QtWidgets.QSystemTrayIcon.Information

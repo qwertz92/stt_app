@@ -257,6 +257,7 @@ def run() -> int:
     unfinished_recording_store = UnfinishedRecordingStore()
     local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
+    model_notice = settings_store.take_model_notice()
     _schedule_startup_local_model_inventory_refresh(
         local_model_inventory_store,
         startup_settings.model_dir,
@@ -358,6 +359,10 @@ def run() -> int:
     )
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
+    if model_notice:
+        QtCore.QTimer.singleShot(
+            2000, lambda: _show_model_notice(tray_icon, model_notice)
+        )
 
     def _show_unfinished_recordings() -> None:
         # Kept on the tray icon: the notice has no parent to keep it alive.
@@ -712,6 +717,19 @@ class _TrayUpdateChecker(QtCore.QObject):
                     "No newer release is available."
                 ),
             )
+
+
+def _show_model_notice(tray_icon, notice: str) -> None:
+    """Tell the user which retired model choice this start moved to a successor.
+
+    `SettingsStore.load` made the move and wrote it back, so this appears once.
+    """
+    tray_icon.showMessage(
+        "Speech model updated",
+        notice,
+        QtWidgets.QSystemTrayIcon.Information,
+        15000,
+    )
 
 
 def _schedule_startup_update_check(checker: _TrayUpdateChecker) -> None:
