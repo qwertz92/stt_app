@@ -3930,6 +3930,16 @@ class DictationController(QtCore.QObject):
         if not self._settings.save_all_recordings:
             return ""
 
+        if self._holds_no_signal(wav_bytes):
+            # A muted or dead microphone recorded nothing worth keeping
+            # (owner, 2026-11-24); the managed last recording still holds it.
+            # A quiet recording with signal is archived, because the silence
+            # gate can be wrong about quiet speech.
+            self._logger.info(
+                "recording_not_archived reason=no_signal bytes=%d", len(wav_bytes)
+            )
+            return ""
+
         try:
             root = self._resolve_recordings_dir()
             target_dir = os.path.abspath(root)
@@ -3942,6 +3952,17 @@ class DictationController(QtCore.QObject):
         except Exception:
             self._logger.exception("Failed to archive recording")
             return ""
+
+    def _holds_no_signal(self, wav_bytes: bytes) -> bool:
+        """Whether a recording is digital silence throughout: its loudest
+        100 ms below `AUDIO_NO_SIGNAL_LEVEL`. Unmeasurable audio holds
+        signal, so a recording is never dropped on a failed measurement."""
+        try:
+            level = measure_peak_windowed_rms(wav_bytes)
+        except Exception:
+            self._logger.exception("Failed to measure recording peak level")
+            return False
+        return level is not None and level < AUDIO_NO_SIGNAL_LEVEL
 
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
         keep = int(keep_count or RECORDINGS_MAX_COUNT_UNLIMITED)
