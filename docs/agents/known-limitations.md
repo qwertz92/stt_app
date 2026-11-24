@@ -227,19 +227,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   transcript with a gap marker leaves its file in the unfinished folder,
   linked from its history entry, and nothing lists or cleans those files;
   the same holds for a transcribed unfinished recording whose move to the
-  recordings folder failed, and the `unfinished_*.wav` files "Keep last
-  recording after successful transcription" moves to the recordings folder
-  are never pruned (2026-10-09; the archive's count deletes only
-  `recording_*.wav`, and these are a few files per quit with pending work).
-  Kept: each needs a store or history failure, or is cosmetic.
-- **A crash keeps only the newest unfinished recording** (2026-10-09): the
-  quit writes every queued recording to the unfinished store, but a crash
-  or a killed process runs no `shutdown`, so only the managed last
-  recording survives, as before. A transcription the Import tab or the
-  startup notice runs when the app quits is not tracked as a job: the quit
-  window does not count it, and its file stays where it was (offered again
-  at the next start for the notice). Writing every recording to the store
-  at stop time would close the crash case; ~3 h, not asked for.
+  recordings folder failed. The copies "Keep last recording after
+  successful transcription" moves to the recordings folder are `kept_*.wav`
+  since 2026-11-24 and counted by "Keep Recordings" (D3,
+  `persistence-and-history.md`); the ones moved there before are named
+  `unfinished_*.wav` and are never pruned, because that name also marks
+  untranscribed files. Kept: each needs a store or history failure, or is
+  cosmetic.
+- **What a crash can still lose** (2026-10-09; narrowed 2026-11-24, D4):
+  every recording without a transcript is written to the unfinished store
+  when the managed slot moves on, so a crash keeps the slot plus every
+  older pending recording. Still lost to a crash or a killed process: the
+  recording being made at that moment (its audio is in memory until the
+  stop), and a pending recording whose bytes the store never received (no
+  recording id: the slot write had failed, so it was never in the slot
+  either). A transcription the Import tab or the startup notice runs when
+  the app quits is not tracked as a job: the quit window does not count it,
+  and its file stays where it was (offered again at the next start for the
+  notice).
 - **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
   a NULL owner, so a clipboard manager can still close it under us; three
   reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
@@ -340,8 +345,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Retry reaches the newest failed recording first, and only three are held**
   (2026-10-03): a failure pushes the slot's holder behind it
   (`_older_failed_audio`, `RETRY_OLDER_FAILURES_MAX`), the oldest of more than
-  three is dropped (`retry_failure_dropped` in the log; their audio is only in
-  memory), and the overlay and tray offer no way to pick an older one: it
+  three leaves the list (`retry_failure_dropped` in the log; since
+  2026-11-24 its audio is written to the unfinished store, and the next
+  start offers it), and the overlay and tray offer no way to pick an older one: it
   comes forward once the newer is resolved. A second Retry while W's retry
   runs still stops it (W's late result is kept in history), so W stays
   behind the slot until a Retry resolves it.
@@ -527,21 +533,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the tree; that runner then loads the new tree, or, inside the two
     renames' milliseconds, fails to start once with "runtime failed to
     load". Not reproduced; closing it needs the old build's cooperation.
-- **Archive retention can delete the audio of a queued retranscription**
-  (P3, found 2026-10-23; `persistence-and-history.md`, the retranscription
-  entries). History's Retranscribe waits in the controller's one
-  transcription lane behind a running dictation. When that dictation ends,
-  its recording is archived and `_prune_recordings` deletes the oldest
-  `recording_<stamp>.wav` past `recordings_max_count`, without knowing that
-  a waiting retranscription is about to read that very file. The
-  retranscription then fails with a missing file, and the entries that
-  linked the recording lose their audio -- which the same prune would have
-  removed a moment later anyway. It needs the archive at its count limit
-  (the owner's holds 500), the oldest file retranscribed, and a dictation
-  ending during the wait. Fix: a set of paths in use that
-  `transcribe_audio_file` holds for its run and the prune skips, about 1 h
-  with tests. Kept for now: rare, and what is lost is the retranscription
-  itself, which says why it failed; the audio was due for deletion anyway.
 - **A crash can be reported twice** (P4, found 2026-10-23;
   `controller-and-jobs.md`, crash reporting). A start whose `crash.log`
   cannot be opened (held or refused by another program) still reports how
@@ -568,3 +559,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+- **Audio retention residuals** (2026-11-24, after D1-D5,
+  `persistence-and-history.md`):
+  - A pending recording's durable copy is written on the Qt thread at the
+    next stop (11-32 ms measured); a disk that refuses it is only logged,
+    and the audio then lives in memory and, until that same stop, the slot.
+  - A secured copy whose delete fails after delivery, or one of a recording
+    cancelled by a path that does not end in `_on_transcription_canceled_result`
+    (for example a job stopped by the concurrent mode "cancel" while it was
+    still queued), stays in the unfinished folder and is offered at the next
+    start: a second transcript if the user takes it. Safe side; not chased.
+  - With the silence gate off, a recording of digital silence is still sent
+    to the engine (and archived only when it has signal): the device text of
+    the gate's `no_signal` skip needs the gate on.
+  - The live "No signal" hint repaints the overlay every 500 ms while it
+    holds; in streaming it replaces the live text until the next partial.

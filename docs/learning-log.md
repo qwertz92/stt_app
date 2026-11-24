@@ -3,6 +3,47 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: a microphone that dies or sends zeros, and audio retention
+
+Structurally: the controller got a capture health poll
+(`_on_capture_health_tick`, 500 ms, armed with the first-callback watchdog)
+reading `AudioCapture.health()`, a "No signal" warning for the Listening
+state, and a registry of recordings written to the unfinished store before
+the managed slot moves on (`_secured_recordings`); the recordings count
+now prunes `kept_*` copies with the archive and skips files a queued run
+needs; the startup slot check lost its timestamp guess.
+
+- **The owner's evidence.** His log (2026-10-25..11-24, 1067 recordings) had
+  six recordings of exact digital silence (`level=0.0000`, about -97 dBFS in
+  every logged second), all 31-221 s after an `audio_device_change_output`
+  event, four in a row on 11-02, the first 21 s long. Each was answered with
+  "lower the silence gate", which cannot help with zeros. Unproven
+  hypothesis (lead's reviewer): the default capture endpoint stays dead for
+  about a minute after an output-endpoint change. The overlay now says "No
+  signal" after 1.5 s of digital silence and the stop says the microphone
+  delivered nothing. A reopen was judged and not built: no input event fired
+  and the default did not change, so it would open the same endpoint.
+- **Thresholds measured, not chosen**: gaps between blocks never exceeded
+  358 ms in 1029 recordings (99.5 % at most 104 ms), so the 2 s / 12 s
+  limits of the first-callback watchdog serve mid-recording too; the
+  no-signal level 0.0001 sits between the dead recordings (below 0.00005)
+  and the quietest live one (0.0009; room tone 0.0006-0.0034).
+- **End, do not reopen, a stalled stream**: the stop path already persists,
+  archives, transcribes and keeps for Retry; a reopen would splice two
+  streams. `stop_recording(drain=False)`.
+- **Retention**: D1 a recording without signal is not archived; D2 the
+  count skips files Import or History's Retranscribe will read (closes the
+  2026-10-23 known limitation); D3 kept copies are `kept_*.wav` and counted;
+  D4 every pending recording is written to the unfinished store before the
+  slot is overwritten (11-32 ms per recording on the Qt thread), deleted
+  once its transcript is in History, and a failure pushed out of the Retry
+  list is written instead of dropped; D5 the startup check matches by
+  recording id only (the 0-180 s guess deleted a recording stopped while the
+  previous transcript was written, then a crash); D6 the "Keep Recordings"
+  hint says it limits audio files only.
+- Also fixed: `silence_gate_skipped` logged `silero_max_probability=unavailable`
+  whenever the level gate decided; it is `not_run`.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`
