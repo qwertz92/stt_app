@@ -192,14 +192,13 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.table.itemSelectionChanged.connect(self._update_buttons)
 
         note = QtWidgets.QLabel(
-            'Transcripts go to History and wait on the overlay as "From earlier '
-            'session" rows, counted as not inserted, '
-            f'for the re-paste hotkey or the tray\'s "{TRAY_REPASTE_ACTION_LABEL}". '
-            "Show in folder opens Explorer with the recordings selected, so you "
-            "can listen to them first; this window stays open.\n"
-            f"Keep files and close moves the remaining recordings to {self._keep_dir}"
-            " and does not ask again.\n"
-            f"Ask again next start leaves them in {self._store.directory}."
+            "The app closed before it could transcribe them. The audio is safe.\n"
+            "Transcribed text goes into History and waits for you to paste it "
+            f'with the re-paste hotkey or the tray\'s "{TRAY_REPASTE_ACTION_LABEL}".\n'
+            "Show in folder lets you listen first; this window stays open.\n"
+            "Keep files and close stops these questions and keeps the audio "
+            f'in a folder of its own. "{_LATER_TEXT}" leaves the audio here and '
+            "asks again at the next start."
         )
         note.setWordWrap(True)
         note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
@@ -228,6 +227,10 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         self.delete_button.clicked.connect(self._delete_selected)
         self.keep_button.clicked.connect(self._keep_and_close)
         self.later_button.clicked.connect(self.reject)
+        # The folders are reachable from the buttons that decide where the
+        # audio stays; a wrapped path in the text above only got in the way.
+        self.keep_button.setToolTip(f"Moves the audio to {self._keep_dir}")
+        self.later_button.setToolTip(f"The audio stays in {self._store.directory}")
 
         row_actions = QtWidgets.QHBoxLayout()
         row_actions.addWidget(self.transcribe_all_button)
