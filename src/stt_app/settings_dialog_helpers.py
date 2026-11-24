@@ -182,6 +182,22 @@ class WrappedStatusLabel(QtWidgets.QLabel):
         self.setToolTip(text)
 
 
+class CollapsingStatusLabel(WrappedStatusLabel):
+    """A `WrappedStatusLabel` that takes no room while it has nothing to say.
+
+    For a line below the controls it reports on: its text appearing moves
+    nothing above it, so it needs no reserved space.
+    """
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setVisible(bool(text))
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setVisible(bool(text))
+
+
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         view = self.view()

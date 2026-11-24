@@ -3856,9 +3856,6 @@ def test_local_model_lists_use_compact_item_spacing():
     assert dialog.local_models_list.uniformItemSizes() is True
     assert dialog.local_models_list.spacing() == 0
     assert "padding: 0px 4px" in dialog.local_models_list.styleSheet()
-    assert dialog.local_models_list.sizeAdjustPolicy() == (
-        QtWidgets.QAbstractScrollArea.AdjustToContents
-    )
     assert dialog.benchmark_models_list.sizeAdjustPolicy() == (
         QtWidgets.QAbstractScrollArea.AdjustToContents
     )
@@ -3938,16 +3935,11 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     _ = app
 
 
-def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
+def _models_tab_dialog(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "medium"]
-
-    monkeypatch.setattr(
-        "stt_app.settings_dialog.threading.Thread",
-        _IdleThread,
-    )
-
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _IdleThread)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
@@ -3956,29 +3948,67 @@ def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
     dialog.show()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     app.processEvents()
+    return app, dialog
 
-    initial_box_height = dialog.local_models_box.height()
-    initial_list_height = dialog.local_models_list.height()
 
-    # The box grows with the dialog's height, so the screen must have room
-    # above the frame. On the 1024x768 CI runner the dialog already sits at
-    # the clamped 749 px, a taller size is refused, and the box could not
-    # grow whatever the layout did (measured: 513 px before and after).
-    available = dialog.screen().availableGeometry()
-    room = available.height() - dialog.frameGeometry().height()
-    if room < 40:
-        pytest.skip(
-            f"the screen leaves {room} px above the dialog, so a taller "
-            "dialog cannot be granted here"
-        )
+def test_local_models_box_is_as_tall_as_its_content_and_does_not_stretch(monkeypatch):
+    """Owner, 2026-11-24: the Models tab scrolled although everything fit, and
+    the "Local Models" group had empty space under its buttons. The group took
+    all the page's spare height (stretch factor, Expanding policy) and held
+    room for a status line, a progress bar and a queue line nobody was
+    showing. Now the group is its content's height whatever the page's height,
+    and the list shows every row."""
+    app, dialog = _models_tab_dialog(monkeypatch)
+    try:
+        box = dialog.local_models_box
+        listing = dialog.local_models_list
+        content = dialog.tabs.currentWidget().widget()
+        assert dialog.local_models_action_label.isHidden()
+        assert dialog.local_model_download_progress_bar.isHidden()
+        assert dialog.local_model_download_queue_label.isHidden()
 
-    dialog.resize(dialog.width() + 120, dialog.height() + 220)
-    app.processEvents()
+        rows = listing.count()
+        assert listing.height() == dialog._minimum_list_height_for_rows(listing, rows)
+        assert not listing.verticalScrollBar().isVisible()
+        assert box.height() <= box.sizeHint().height()
 
-    assert dialog.local_models_box.height() > initial_box_height
-    assert dialog.local_models_list.height() > initial_list_height
-    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
-    _ = app
+        before = box.height()
+        content.setMinimumHeight(content.height() + 400)
+        app.processEvents()
+
+        assert box.height() == before, "the group grew to fill the page"
+    finally:
+        dialog.close()
+        settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+        app.processEvents()
+
+
+def test_local_models_list_follows_the_row_count(monkeypatch):
+    """The list is as tall as its rows, for few models and for many, instead of
+    a few rows scrolled in a box sized by the page."""
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.VALID_MODEL_SIZES", ["tiny", "base", "small"]
+    )
+    app, dialog = _models_tab_dialog(monkeypatch)
+    try:
+        listing = dialog.local_models_list
+        assert listing.count() == 3
+        few = listing.height()
+        assert few == dialog._minimum_list_height_for_rows(listing, 3)
+
+        names = [f"model-{index}" for index in range(40)]
+        monkeypatch.setattr("stt_app.settings_dialog_local.VALID_MODEL_SIZES", names)
+        dialog._apply_local_model_scan_result([])
+        app.processEvents()
+
+        assert listing.count() == 40
+        assert listing.height() == dialog._minimum_list_height_for_rows(listing, 40)
+        assert listing.height() > few
+        assert not listing.verticalScrollBar().isVisible()
+    finally:
+        dialog.close()
+        settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+        app.processEvents()
 
 
 # ------------------------------------------------------------------

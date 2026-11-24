@@ -40,8 +40,8 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _THREAD_START_ERRORS,
+    CollapsingStatusLabel,
     ElidingLabel,
-    WrappedStatusLabel,
     _emit_background_signal,
     _WheelPassthroughComboBox,
     hint_font,
@@ -330,10 +330,6 @@ class _LocalModelsMixin:
 
         # Unified local models section
         self.local_models_box = QtWidgets.QGroupBox("Local Models")
-        self.local_models_box.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
-        )
         local_models_layout = QtWidgets.QVBoxLayout(self.local_models_box)
         local_models_layout.setSpacing(4)
         self.local_models_label = QtWidgets.QLabel("Scanning...")
@@ -362,15 +358,11 @@ class _LocalModelsMixin:
         self.local_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
-        self._configure_compact_list_widget(
-            self.local_models_list,
-            expand=True,
-            adjust_to_contents=True,
-        )
+        self._configure_compact_list_widget(self.local_models_list)
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
         )
-        local_models_layout.addWidget(self.local_models_list, 1)
+        local_models_layout.addWidget(self.local_models_list)
 
         manage_buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(manage_buttons)
@@ -411,13 +403,9 @@ class _LocalModelsMixin:
         manage_buttons.addWidget(self.delete_selected_model_button)
         local_models_layout.addLayout(manage_buttons)
 
-        self.local_models_action_label = WrappedStatusLabel("")
+        self.local_models_action_label = CollapsingStatusLabel("")
         make_label_selectable(self.local_models_action_label)
         self.local_models_action_label.setWordWrap(True)
-        # Reserve the space: this label sits below the stretching model list,
-        # so a status message that wraps to a second line would otherwise
-        # shorten the list mid-scan/mid-download.
-        self._reserve_dynamic_hint_height(self.local_models_action_label)
         local_models_layout.addWidget(self.local_models_action_label)
 
         self.local_model_download_progress_bar = QtWidgets.QProgressBar()
@@ -439,34 +427,26 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar.setStyleSheet(
             _DOWNLOAD_PROGRESS_BAR_STYLESHEET
         )
-        # Keep its space while hidden, for the same reason the action label
-        # above it is reserved: without this the bar appearing the instant a
-        # download starts pulled Download/Cancel/Delete 28 px up -- with the
-        # cursor still on Download and Cancel sliding into its place -- and
-        # pushed them back down on completion, shrinking the model list twice.
-        policy = self.local_model_download_progress_bar.sizePolicy()
-        policy.setRetainSizeWhenHidden(True)
-        self.local_model_download_progress_bar.setSizePolicy(policy)
         self.local_model_download_progress_bar.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_progress_bar)
 
         # What the queue will start next. A row reading "Queued, 2 of 3" says
         # where a model stands in the line; while the user is watching this
-        # area it does not say what the line is. Elided rather than wrapped,
-        # and its space is retained, so neither a long model name nor the
-        # download starting or ending moves the buttons above it.
+        # area it does not say what the line is. Elided rather than wrapped, so
+        # a long model name cannot make it grow.
         self.local_model_download_queue_label = ElidingLabel()
         self._style_note_label(self.local_model_download_queue_label)
-        queue_policy = self.local_model_download_queue_label.sizePolicy()
-        queue_policy.setRetainSizeWhenHidden(True)
-        self.local_model_download_queue_label.setSizePolicy(queue_policy)
         self.local_model_download_queue_label.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_queue_label)
         self._show_local_model_unverified_state(
             "Open this tab to verify local model availability in the background."
         )
 
-        layout.addWidget(self.local_models_box, 1)
+        # The group is as tall as its rows and status lines need, never
+        # stretched: a spacer under it takes the page's spare height, so the
+        # page shows empty background instead of an empty group.
+        layout.addWidget(self.local_models_box)
+        layout.addStretch(1)
         # "Models": this tab downloads and deletes them. "Local" read as the
         # place to choose one, which is the Transcription tab.
         self._local_tab_index = self.tabs.addTab(tab, "Models")
@@ -782,11 +762,14 @@ class _LocalModelsMixin:
             )
         restore_vertical_scrollbar(self.local_models_list, scroll_value)
 
-        visible_rows = min(max(self.local_models_list.count(), 1), 5)
-        self.local_models_list.setMinimumHeight(
+        # Every row is shown: the list is as tall as its content. When the
+        # page is shorter than that, the page scrolls (one scroll bar, which
+        # keeps the buttons below the list reachable) rather than the list
+        # showing a few rows through its own.
+        self.local_models_list.setFixedHeight(
             self._minimum_list_height_for_rows(
                 self.local_models_list,
-                visible_rows,
+                self.local_models_list.count(),
             )
         )
         self._update_local_model_actions()

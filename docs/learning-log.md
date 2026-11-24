@@ -3,6 +3,25 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: Models tab group sized to its content
+
+Structurally: the "Local Models" group no longer stretches; its list is as tall
+as its rows, and the status line, progress bar and queue line take no room while
+hidden. Owner report: a scrollbar although everything would fit, and empty space
+in the group. Reproduced on a copy of his `settings.json` and
+`local_model_inventory.json` in a throwaway APPDATA at 860 x 960 (the default; he
+stores no size): content 864 px against a 829 px viewport, group 577 px with about
+100 px empty under the buttons. Cause: `Expanding` policy plus stretch 1 on the
+group and the list, and three widgets keeping their size while hidden (the
+2026-10 "nothing may move" rules). After: group 481 px, no scroll bar; at
+860 x 600 the page scrolls once instead of a five-row list scrolling inside a
+scrolling page. The owner's clarification of the same day (docs/agents/
+settings-dialog.md) replaces the rule that forced the empty space. Tests that
+encoded the old rule were rewritten to the new one (nothing above the bar moves;
+the idle group keeps no room for a download that is not running).
+- **Revert:** `git revert` the commit "fix(settings): size the Models tab's group
+  to its content".
+
 ## 2026-11-24: tray single click acts at once
 
 Structurally: `main._create_tray_icon` lost its single-shot timer. A left click

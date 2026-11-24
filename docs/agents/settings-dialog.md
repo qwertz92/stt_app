@@ -9,6 +9,26 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md` (original AGENTS.md: `df2642a`).
 
+- **The Models tab's group is as tall as its content** (2026-11-24, owner:
+  "there is a scrollbar although everything would fit; the 'Local models' area
+  is too tall and has empty space"). Measured on a copy of his data at the
+  default 860 x 960: the page scrolled (content 864 px, viewport 829) and the
+  group, 577 px, had about 100 px of empty space under its buttons. Cause: the
+  group had `Expanding` policy and stretch 1 and the list stretched inside it,
+  and the status line (two reserved lines), the progress bar and the queue line
+  kept their size while hidden. Now: the list is fixed at its rows' height
+  (`_apply_local_model_scan_result`, every row shown, any count), the group has
+  no stretch and a spacer under it takes the page's spare height, the three
+  status widgets take no room while hidden. After: group 481 px, no scroll bar
+  at the default size; at 860 x 600 the page (not the list) scrolls, with all
+  rows in one scroll area. A download starting grows the group below the
+  buttons; nothing above it moves
+  (`test_the_download_area_moves_nothing_above_it_from_start_to_finish`).
+  Trade-off named: when the page is too short, one scroll bar for the page
+  replaces a list that showed five rows through its own scroll bar. To revert:
+  `git revert` the commit "fix(settings): size the Models tab's group to its
+  content".
+
 - **`SettingsDialog` is a mixin facade** composed in `settings_dialog.py` from
   `_GeneralTabMixin`, `_AudioTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
   `_RemoteProvidersMixin`, `_HistoryTabMixin`, `_ImportTabMixin`,
@@ -160,7 +180,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   switches never move fields; delayed paint/prewarm uses dialog-owned
   `QTimer`s.
 - **A changing status line is reserved or elided, never left to grow**
-  (growing lines moved buttons under the cursor).
+  (growing lines moved buttons under the cursor). Exception since 2026-11-24: a
+  line below the controls it reports on (the Models tab's status line) takes no
+  room while empty (`CollapsingStatusLabel`), because nothing above it moves
+  when it appears.
   - Wrapping lines (the Providers tab's shared connection-test line, the
     Run Benchmark window status) use the two-line
     `_reserve_dynamic_hint_height` with the message as tooltip.
@@ -171,8 +194,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     with stretch 1 (not beside an `addStretch(1)`), right-aligned. Ctrl+C and
     the context-menu Copy go through `copy_message`, yielding the full
     message unless a part is selected.
-- **A widget that appears mid-interaction keeps its space while hidden**
-  (`retainSizeWhenHidden`, e.g. the Models download bar).
+- **A widget that appears mid-interaction keeps its space while hidden only
+  when its appearance would move something the user is pointing at**
+  (`retainSizeWhenHidden`). The Models tab's download bar, queue line and
+  status line are below the buttons and no longer keep any (2026-11-24, see
+  "The Models tab's group is as tall as its content" at the top).
 - **Multi-select lists use ExtendedSelection**, never `MultiSelection`.
   Exception: the Run Benchmark model list has checkboxes and no selection;
   Space toggles; a rebuild keeps check states (first fill all checked, later

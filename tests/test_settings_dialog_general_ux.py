@@ -1236,14 +1236,13 @@ def test_the_language_hint_never_contradicts_the_language_picker(dialog):
             )
 
 
-def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
-    """The Local tab's progress bar appears the instant a download starts.
+def test_the_local_download_bar_appearing_moves_nothing_above_it(dialog) -> None:
+    """The Models tab's progress bar appears the instant a download starts.
 
-    Without a retained size it took its 28 px out of the layout while hidden,
-    so pressing Download pulled Download/Cancel/Delete up under the cursor --
-    with Cancel sliding into the place the pointer was already on -- and pushed
-    them back down when the download finished, shrinking the model list twice
-    per download.
+    It sits below the buttons and takes no room while hidden (no reserved
+    empty space, owner 2026-11-24). Nothing above it may move when it
+    appears: the model list is as tall as its rows, never the stretching part
+    of the group, so Download/Cancel/Delete stay under the cursor.
     """
     dialog.show()
     _switch_to_tab(dialog, "Models")
@@ -1251,14 +1250,16 @@ def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
 
     watched = {
         "list": dialog.local_models_list,
-        "action label": dialog.local_models_action_label,
         "download": dialog.download_selected_models_button,
         "cancel": dialog.cancel_model_downloads_button,
         "delete": dialog.delete_selected_model_button,
     }
 
     def geometry() -> dict[str, tuple[int, int]]:
-        QtWidgets.QApplication.processEvents()
+        # Several passes: a hidden widget's relayout reaches the page through
+        # the group, one posted layout request per level.
+        for _ in range(3):
+            QtWidgets.QApplication.processEvents()
         return {
             name: (widget.mapTo(dialog, QtCore.QPoint(0, 0)).y(), widget.height())
             for name, widget in watched.items()
@@ -1268,12 +1269,16 @@ def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
     assert geometry() == hidden, "the tab had not settled before the measurement"
 
     bar = dialog.local_model_download_progress_bar
+    assert bar.isHidden()
+    idle_status = dialog.local_models_action_label.text()
     bar.setValue(42)
     bar.setFormat("small: 210/486 MB (43%)")
     bar.setVisible(True)
+    dialog.local_models_action_label.setText("Downloading 'small': approx. 43%")
     assert geometry() == hidden, "starting a download moved the controls"
 
     bar.setVisible(False)
+    dialog.local_models_action_label.setText(idle_status)
     assert geometry() == hidden, "finishing a download moved the controls"
     dialog.hide()
 
