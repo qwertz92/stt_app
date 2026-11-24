@@ -1259,25 +1259,65 @@ SPEECHMATICS_LANGUAGE_MODES = (
 SPEECHMATICS_MELIA_LANGUAGE_MODES = ("auto", *SPEECHMATICS_LANGUAGE_MODES)
 # App language code -> Speechmatics language code, where they differ.
 SPEECHMATICS_LANGUAGE_CODES: dict[str, str] = {"zh": "cmn"}
-# Mistral Voxtral Mini Transcribe 2: "English, Chinese, Hindi, Spanish,
-# Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian, and
-# Dutch" (https://mistral.ai/news/voxtral-transcribe-2/, 2026-02-04, read
-# 2026-09-27). Without `language` the model detects it.
+# The 53 languages both Voxtral 3 transcription models list for file
+# transcription (docs.mistral.ai `studio/audio/specs-and-limits/languages`,
+# read 2026-11-24; the page says a code outside the list is a 422). Without
+# `language` the model detects it.
 MISTRAL_LANGUAGE_MODES = (
     "auto",
-    "en",
-    "zh",
-    "hi",
-    "es",
     "ar",
-    "fr",
-    "pt",
-    "ru",
-    "de",
-    "ja",
-    "ko",
-    "it",
+    "bn",
+    "bg",
+    "my",
+    "ca",
+    "zh",
+    "cs",
+    "da",
     "nl",
+    "en",
+    "et",
+    "tl",
+    "fi",
+    "fr",
+    "de",
+    "el",
+    "gu",
+    "hi",
+    "hu",
+    "is",
+    "id",
+    "it",
+    "ja",
+    "kn",
+    "km",
+    "ko",
+    "lv",
+    "lt",
+    "lb",
+    "mk",
+    "ms",
+    "ml",
+    "mt",
+    "mr",
+    "no",
+    "or",
+    "fa",
+    "pl",
+    "pt",
+    "pa",
+    "ro",
+    "ru",
+    "sr",
+    "sk",
+    "sl",
+    "es",
+    "sv",
+    "ta",
+    "te",
+    "th",
+    "tr",
+    "uk",
+    "vi",
 )
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
@@ -1538,6 +1578,7 @@ RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
         "gpt-4o-mini-transcribe": "gpt-transcribe",
     },
     "elevenlabs": {"scribe_v2": "scribe_v3"},
+    "mistral": {"voxtral-mini-2602": "voxtral-mini-transcribe-3-0"},
     "azure": {
         "mai-transcribe-1.5": "mai-transcribe-2",
         "mai-transcribe-1": "mai-transcribe-2",
@@ -1741,12 +1782,17 @@ def normalize_speechmatics_region(value: object) -> str:
     return _known_region(value, SPEECHMATICS_REGIONS, DEFAULT_SPEECHMATICS_REGION)
 
 
-# Mistral Voxtral Mini Transcribe 2, released 2026-02-04, $0.003 per minute
-# (https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02, read
-# 2026-09-27). The dated id rather than `voxtral-mini-latest`, so the model
-# does not change under the user.
-MISTRAL_MODELS = ("voxtral-mini-2602",)
-DEFAULT_MISTRAL_MODEL = "voxtral-mini-2602"
+# Voxtral 3 (announced 2026-10-20; mistral.ai/news/voxtral-3 and the model
+# cards on docs.mistral.ai, read 2026-11-24). The dated ids, not the
+# `-latest` aliases, so the model does not change under the user. Mini is
+# $0.0035/min ($0.21/h), Small $0.0040/min ($0.24/h) and slightly more
+# accurate (Artificial Analysis, English: 2.1 % against 2.2 %). Mistral's
+# model table deprecates `voxtral-mini-2602` (Voxtral Mini Transcribe 2) with
+# retirement "05/03/2027" (day/month order not stated there) and names Voxtral
+# Mini Transcribe 3 as its alternative. `voxtral-small-2507` is the audio-chat
+# model, not a transcription one.
+MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3-0")
+DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The

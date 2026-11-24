@@ -1732,7 +1732,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         speechmatics_model="enhanced",
         speechmatics_region="us1",
         has_speechmatics_key=True,
-        mistral_model="voxtral-mini-2602",
+        mistral_model="voxtral-mini-transcribe-3-0",
         has_mistral_key=True,
     )
     store.save(saved)
@@ -1740,7 +1740,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
 
     older = AppSettings.from_dict({"schema_version": 25})
     assert (older.speechmatics_model, older.speechmatics_region) == ("melia-1", "eu1")
-    assert older.mistral_model == "voxtral-mini-2602"
+    assert older.mistral_model == "voxtral-mini-transcribe-3-0"
     assert not older.has_speechmatics_key and not older.has_mistral_key
 
     damaged = AppSettings.from_dict(
@@ -1754,7 +1754,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         "melia-1",
         "eu1",
     )
-    assert damaged.mistral_model == "voxtral-mini-2602"
+    assert damaged.mistral_model == "voxtral-mini-transcribe-3-0"
     assert (
         AppSettings.from_dict({"speechmatics_region": " AU1 "}).speechmatics_region
         == "au1"
@@ -1765,7 +1765,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     ("engine", "field", "model"),
     [
         ("speechmatics", "speechmatics_model", "standard"),
-        ("mistral", "mistral_model", "voxtral-mini-2602"),
+        ("mistral", "mistral_model", "voxtral-small-transcribe-3-0"),
     ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):

@@ -196,7 +196,7 @@ uv run python -m pytest
 | Azure LLM Speech / MAI-Transcribe (batch) | Stable (model in public preview) |
 | Fun-ASR / Alibaba (batch, no German) | Stable |
 | Speechmatics (batch; EU, US or Australian region) | New, not yet verified against the live service |
-| Mistral Voxtral Mini Transcribe 2 (batch) | New, not yet verified against the live service |
+| Mistral Voxtral Mini / Small Transcribe 3 (batch) | New, not yet verified against the live service |
 | Custom OpenAI-compatible endpoint (batch) | Stable (not verified against every server) |
 
 ## License

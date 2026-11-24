@@ -216,7 +216,12 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "melia-1": "melia-1 (current default; Auto detects the language)",
     "enhanced": "enhanced (highest accuracy; pick a language)",
     "standard": "standard (pick a language)",
-    "voxtral-mini-2602": "voxtral-mini-2602 (Voxtral Mini Transcribe 2)",
+    "voxtral-mini-transcribe-3-0": (
+        "voxtral-mini-transcribe-3-0 (current default, $0.21/hr)"
+    ),
+    "voxtral-small-transcribe-3-0": (
+        "voxtral-small-transcribe-3-0 (slightly more accurate, $0.24/hr)"
+    ),
 }
 
 

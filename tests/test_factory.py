@@ -456,5 +456,5 @@ def test_the_mistral_model_reaches_the_provider():
     built = create_transcriber(
         AppSettings(engine="mistral", language_mode="de"), secret_store=_AnyKeyStore()
     )
-    assert built._model == "voxtral-mini-2602"
+    assert built._model == "voxtral-mini-transcribe-3-0"
     assert built._language_mode == "de"

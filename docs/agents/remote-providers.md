@@ -239,10 +239,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
 - **Mistral is one synchronous request (`mistral_provider.py`, 2026-10-01).**
   `POST https://api.mistral.ai/v1/audio/transcriptions`, multipart `model`,
   `file`, optional `language`, repeated `context_bias`; the answer's `text`.
-  Model `voxtral-mini-2602` (Voxtral Mini Transcribe 2, released 2026-02-04,
-  $0.003/min), pinned rather than `voxtral-mini-latest`. Rules:
-  - **13 languages** (Mistral's announcement), plus Auto (no `language`
-    field); any other code is sent as Auto.
+  Models (2026-11-24; read: mistral.ai/news/voxtral-3, docs.mistral.ai models
+  page and `llms/studio/audio/*` pages): `voxtral-mini-transcribe-3-0`
+  (default, $0.0035/min) and `voxtral-small-transcribe-3-0` ($0.0040/min,
+  slightly more accurate), pinned rather than the `-latest` aliases.
+  `voxtral-mini-2602` is deprecated (retirement "05/03/2027", day/month order
+  not stated) and moves to Mini 3 with a notice; its migration table lists
+  Mini 3 as the replacement. Same route and fields; the Voxtral 3 migration
+  page lists no change to `context_bias` ("No" breaking change; entries may
+  now be phrases, "no fixed number", but a request over the 65,536-token
+  window shared with the audio is a 400) or to `text`; word timestamps are
+  gone, which this app never asked for. Rules:
+  - **53 languages** (the languages page for both models), plus Auto (no
+    `language` field); a code outside it is a 422, so any other code is sent
+    as Auto.
   - **The custom vocabulary is `context_bias`**, one repeated field per term
     (up to 100, the app's cap as well; "optimized for English ... experimental"
     for other languages). Repeated fields, not `context_bias[]` and not a
@@ -257,9 +267,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     without a string `text`, or a body that is not JSON. `"text": ""` is a
     valid empty answer. One reader for both providers asked for JSON,
     `_http_utils.transcript_from_json`, with `is_markup_page` (below).
-  - **No region**: `api.eu.mistral.ai` lists no audio route, and of the global
-    endpoint "Mistral does not commit to a specific inference location"
-    (regional-inference page, read 2026-09-27).
+  - **No region (yet)**: Mistral now documents regional endpoints
+    (`api.eu.mistral.ai`, `api.us.mistral.ai`, +10 % price, "Available models
+    vary by region", read 2026-11-24) and the Voxtral 3 announcement says it
+    is "hosted through our European, US, and global endpoints"; the global one
+    still "does not commit to a specific inference location". Whether the EU
+    host answers `/v1/audio/transcriptions` is unverified (no key, and no
+    model list was read), so no region picker is built; it is a candidate.
   - **Parts**: 1800 s and 500,000,000 bytes ("60 minutes", "500 MB"), with a
     300 s socket timeout for the synchronous request.
   - **Not verified live**: no Mistral key exists here.

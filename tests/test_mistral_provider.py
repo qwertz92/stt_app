@@ -65,10 +65,30 @@ def test_a_recording_is_sent_with_the_model_and_its_text_returned(recorder):
     assert seconds_of(body) == pytest.approx(1.0)
 
 
-def test_the_model_is_pinned_to_voxtral_mini_transcribe_2():
-    # A pinned id, not `voxtral-mini-latest`: an alias moves under the user.
-    assert DEFAULT_MISTRAL_MODEL == "voxtral-mini-2602"
-    assert MISTRAL_MODELS == ("voxtral-mini-2602",)
+def test_the_models_are_pinned_voxtral_3_ids():
+    # Pinned ids, not `voxtral-mini-transcribe-latest`: an alias moves under
+    # the user. Both are the ids on Mistral's model cards (read 2026-11-24).
+    assert DEFAULT_MISTRAL_MODEL == "voxtral-mini-transcribe-3-0"
+    assert MISTRAL_MODELS == (
+        "voxtral-mini-transcribe-3-0",
+        "voxtral-small-transcribe-3-0",
+    )
+
+
+def test_the_retired_voxtral_2_model_moves_to_mini_3():
+    from stt_app.config import RETIRED_REMOTE_MODELS
+
+    assert RETIRED_REMOTE_MODELS["mistral"] == {
+        "voxtral-mini-2602": "voxtral-mini-transcribe-3-0"
+    }
+
+
+@pytest.mark.parametrize(
+    "model", ["voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3-0"]
+)
+def test_each_offered_model_is_what_the_request_names(recorder, model):
+    MistralTranscriber("k", model=model).transcribe_batch(wav_seconds(1.0))
+    assert ("model", model) in sent_fields(recorder.requests[0])
 
 
 def test_a_chosen_language_is_sent_and_auto_is_not(recorder):
@@ -78,23 +98,13 @@ def test_a_chosen_language_is_sent_and_auto_is_not(recorder):
     assert all(name != "language" for name, _ in sent_fields(recorder.requests[1]))
 
 
-def test_the_thirteen_documented_languages_are_offered():
-    assert MISTRAL_LANGUAGE_MODES == (
-        "auto",
-        "en",
-        "zh",
-        "hi",
-        "es",
-        "ar",
-        "fr",
-        "pt",
-        "ru",
-        "de",
-        "ja",
-        "ko",
-        "it",
-        "nl",
-    )
+def test_the_fifty_three_documented_languages_are_offered():
+    assert MISTRAL_LANGUAGE_MODES[0] == "auto"
+    assert len(MISTRAL_LANGUAGE_MODES) == 1 + 53
+    assert len(set(MISTRAL_LANGUAGE_MODES)) == len(MISTRAL_LANGUAGE_MODES)
+    # Mistral answers a language outside its list with a 422.
+    assert {"de", "en", "fr", "uk", "is", "my"} <= set(MISTRAL_LANGUAGE_MODES)
+    assert "ga" not in MISTRAL_LANGUAGE_MODES
     assert language_modes_for_selection("mistral") == MISTRAL_LANGUAGE_MODES
 
 

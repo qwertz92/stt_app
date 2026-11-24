@@ -138,7 +138,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
 | `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced, Standard; region `eu1`/`us1`/`au1` |
-| `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Mini Transcribe 2); custom vocabulary as `context_bias` |
+| `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
@@ -286,7 +286,8 @@ Short forms of rules that recur across areas; the area files hold the detail.
   (default; the only one with Auto), `enhanced`, `standard`;
   `speechmatics_region` `eu1` (default), `us1`, `au1` (Melia 1 not in
   `au1`).
-- **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
+- **Mistral** (`mistral`): `voxtral-mini-transcribe-3-0` (default) or
+  `voxtral-small-transcribe-3-0`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
   `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
   picked on the Providers tab; a label claims only what the vendor

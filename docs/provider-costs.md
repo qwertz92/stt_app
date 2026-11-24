@@ -25,7 +25,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Azure LLM Speech | Batch | `mai-transcribe-2` (1.5 and 1 removed 2026-11-24) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" ([announcement](https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/), 2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.000047/second, Beijing region rate — the only region this model's own pricing page lists ([fun-asr-realtime pricing](https://www.alibabacloud.com/help/en/model-studio/fun-asr-realtime), checked 2026-09-21) | ~$0.169/hour |
 | Speechmatics | Batch | `melia-1` (default), `enhanced`, `standard` | Melia 1: $0.129/hour (a pricing summary read 2026-09-27; the vendor's [pricing page](https://www.speechmatics.com/pricing) shows $0.129 without naming the model); Enhanced and Standard: not read | $0.129/hour (Melia 1) |
-| Mistral | Batch | `voxtral-mini-2602` (Voxtral Mini Transcribe 2) | $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
+| Mistral | Batch | `voxtral-mini-transcribe-3-0` (default) or `voxtral-small-transcribe-3-0` (was `voxtral-mini-2602`) | Mini $0.0035/min, Small $0.0040/min ([announcement](https://mistral.ai/news/voxtral-3/), read 2026-11-24); was $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -273,7 +273,7 @@ move.
 
 **Update 2026-10-01**: Speechmatics and Mistral were integrated anyway, on
 request, as the `speechmatics` and `mistral` engines (section 1). The
-Mistral engine uses Voxtral Mini Transcribe 2 ($0.003/min, about $3.00
+Mistral engine uses Voxtral Mini Transcribe 3 ($0.0035/min, about $3.50
 per 1,000 minutes), not the Voxtral Small figure above; Artificial
 Analysis was not re-read for either.
 
