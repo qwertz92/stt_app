@@ -408,13 +408,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   settings open path (`main.open_settings_dialog`, `_present_dialog`,
   `SettingsDialog`) touches the overlay; what did was the tray's `Trigger`,
   which the shell sends twice around the `DoubleClick` that opens Settings.
-  `main._create_tray_icon` now waits out the double-click interval before a
-  single click reveals the overlay (`windows-platform.md`). A *pinned*
-  overlay is topmost and stays above the dialog where they overlap, by design
-  of Pinned, with or without any reveal (measured with the fix, so with no
-  reveal call: z-order overlay, dialog, window); only a floating one was moved
-  by this. Whether Pinned should step behind a
-  dialog the user just opened is an open design question (owner).
+  `main._create_tray_icon` dropped the `Trigger` that trails the
+  `DoubleClick` (`windows-platform.md`; since 2026-11-24 the first click
+  reveals at once and the dialog, being active, gets the front: "The overlay
+  steps behind the application's own window" below).
 - **No delayed writer paints over Done or Error** (they hold the transcript
   and the only Retry/Insert recovery). `_on_preload_progress_poll` (600 ms)
   reads `OverlayUI.state`; `FakeOverlay` in `tests/conftest.py` mirrors it.

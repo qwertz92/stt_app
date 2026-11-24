@@ -3,6 +3,27 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: tray single click acts at once
+
+Structurally: `main._create_tray_icon` lost its single-shot timer. A left click
+(`Trigger`) now calls `controller.bring_overlay_to_front` on the first click; only
+the `Trigger` that trails a `DoubleClick` is still dropped (for one double-click
+interval). Both tray implementations share this code, so the `QSystemTrayIcon`
+fallback is covered too.
+- **Why:** Microsoft's notification-area guidance asks a single click to show
+  something immediately and a double-click to run the default command. The 500 ms
+  wait made the icon feel unresponsive.
+- **Why it is safe:** the reveal is idempotent (`reveal_temporarily` raises and
+  restarts a timer, it does not toggle), so a double-click, which the shell sends
+  as `Trigger`, `DoubleClick`, `Trigger`, ends in one single click's state plus
+  Settings open. Keeping the overlay from covering Settings is the job of the activation
+  rule in the same-day entry "overlay steps behind the application's own windows".
+- **Tests** (`tests/test_main_signals.py`) fail on the old code: the single click
+  asserted zero calls right after the click; the double-click sequence asserted
+  zero calls in total.
+- **Revert:** `git revert` the commit "fix(tray): act on the first click of the tray
+  icon at once".
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`

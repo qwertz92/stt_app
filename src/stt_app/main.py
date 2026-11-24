@@ -554,14 +554,14 @@ def _create_tray_icon(
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
     # One double-click on the icon arrives as Trigger, DoubleClick, Trigger
-    # (0, 93 and 94 ms, measured with this app's own icon on Windows 11), so a
-    # Trigger is only a single click once a double-click interval has passed
-    # without a DoubleClick, and the Trigger that trails a DoubleClick is the
-    # second click's release. Acting on every Trigger raised the overlay before
-    # Settings opened and again right after, over the dialog.
-    surface_overlay_timer = QtCore.QTimer(menu)
-    surface_overlay_timer.setSingleShot(True)
-    surface_overlay_timer.timeout.connect(controller.bring_overlay_to_front)
+    # (0, 93 and 94 ms, measured with this app's own icon on Windows 11). The
+    # first Trigger acts at once, as the notification-area guidance asks of a
+    # single click (a delay of the double-click interval made it feel broken):
+    # it surfaces the overlay, which is idempotent, so a double-click ends in
+    # the state one click produces plus an open Settings dialog. The Trigger
+    # that trails the DoubleClick is the second click's release and is dropped
+    # for one double-click interval: surfacing again would raise the overlay
+    # over the dialog that just opened.
     last_double_click = QtCore.QElapsedTimer()
 
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
@@ -572,7 +572,6 @@ def _create_tray_icon(
         # way to find out what was there.
         controller.note_foreground_window()
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
-            surface_overlay_timer.stop()
             last_double_click.start()
             open_settings_dialog()
             return
@@ -586,7 +585,7 @@ def _create_tray_icon(
                 interval
             ):
                 return
-            surface_overlay_timer.start(interval)
+            controller.bring_overlay_to_front()
             return
         if reason == QtWidgets.QSystemTrayIcon.MiddleClick and bool(
             getattr(controller.settings, "tray_middle_click_toggle", True)

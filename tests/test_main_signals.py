@@ -474,12 +474,9 @@ def test_tray_double_click_connected():
     assert tray.receivers(sig) > 0
 
 
-# Long next to the gap between two emits in a test (`_CLICK_GAP_MS`): a stall
-# of the machine longer than the interval between a Trigger and the
-# DoubleClick that follows it would let the overlay timer fire first and fail
-# the test for no reason (an 80 ms interval did that to a 20 ms gap), so the
-# interval is a good deal longer than any stall seen and the tests wait for
-# it once, not several times over.
+# The interval during which a Trigger after a DoubleClick is dropped. Long next to
+# the gap between two emits in a test (`_CLICK_GAP_MS`), so a stall of the
+# machine cannot let it expire between them, and the tests wait for it once.
 _DOUBLE_CLICK_INTERVAL_MS = 400
 _CLICK_GAP_MS = 20
 
@@ -545,39 +542,40 @@ def _tray_with_a_recording_settings_dialog(monkeypatch):
     return tray, controller, opened
 
 
-def test_tray_left_click_reveals_overlay(short_double_click_interval, monkeypatch):
-    """A single left click must surface the overlay (keyboard-free access) --
-    once it is certain not to be the first half of a double-click."""
+def test_tray_left_click_reveals_overlay_at_once(
+    short_double_click_interval, monkeypatch
+):
+    """A single left click surfaces the overlay (keyboard-free access) on the
+    first click, with no wait for a possible second one: the notification-area
+    guidance asks a single click to show something immediately."""
     tray, controller, _opened = _tray_with_a_recording_settings_dialog(monkeypatch)
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.Trigger)
 
-    assert controller.bring_overlay_calls == 0, "answered before the interval ran"
-    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 1
     _ = tray
 
 
-def test_a_double_click_opens_settings_and_leaves_the_overlay_alone(
+def test_a_double_click_ends_in_one_click_state_plus_open_settings(
     short_double_click_interval, monkeypatch
 ):
-    """Owner: "the overlay always comes to the front when I open the settings".
+    """The shell sends one double-click on the icon as Trigger, DoubleClick,
+    Trigger (measured 0, 93 and 94 ms with this app's own icon on Windows 11).
 
-    The shell sends one double-click on the icon as Trigger, DoubleClick,
-    Trigger (measured 0, 93 and 94 ms with this app's own icon on Windows 11),
-    and a Trigger surfaces the overlay: the first click did it before the
-    dialog opened, the trailing one right after it, over the dialog."""
+    The first Trigger surfaces the overlay as one click does; the DoubleClick
+    opens Settings; the trailing Trigger is the second click's release and must
+    not surface the overlay again, over the dialog that just opened."""
     tray, controller, opened = _tray_with_a_recording_settings_dialog(monkeypatch)
     reason = QtWidgets.QSystemTrayIcon
 
     tray.activated.emit(reason.Trigger)
+    assert controller.bring_overlay_calls == 1, "the single click acts at once"
     QtTest.QTest.qWait(_CLICK_GAP_MS)
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
 
     assert len(opened) == 1, "the double-click must still open Settings"
-    assert controller.bring_overlay_calls == 0
+    assert controller.bring_overlay_calls == 1, "no second reveal"
     _ = tray
 
 
@@ -589,13 +587,11 @@ def test_clicks_after_a_double_click_surface_the_overlay_again(
     reason = QtWidgets.QSystemTrayIcon
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 0
 
-    tray.activated.emit(reason.Trigger)
     _wait_past_the_double_click_interval()
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
+    tray.activated.emit(reason.Trigger)
 
     assert controller.bring_overlay_calls == 2
     _ = tray
