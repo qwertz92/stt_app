@@ -645,6 +645,10 @@ class _FakeZOrderUser32:
         self.foreground_exstyle = foreground_exstyle
         self.foreground_iconic = foreground_iconic
         self.positions: list[int] = []
+        # The window each `positions` entry was placed, to tell one overlay's
+        # placements from another's (an overlay of an earlier test that was
+        # never closed still hears the application's focus changes).
+        self.targets: list[int] = []
         # Insert-after handles SetWindowPos refuses, as it does with
         # ERROR_ACCESS_DENIED behind an elevated window (Task Manager).
         self.refused: set[int] = set()
@@ -654,11 +658,12 @@ class _FakeZOrderUser32:
         self.window_at = 0
         self.roots: dict[int, int] = {}
 
-    def SetWindowPos(self, _hwnd, insert_after, _x, _y, _cx, _cy, flags):
+    def SetWindowPos(self, hwnd, insert_after, _x, _y, _cx, _cy, flags):
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE on every call: the overlay
         # never takes the focus from the window being dictated into.
         assert flags & 0x0013 == 0x0013
         self.positions.append(int(insert_after))
+        self.targets.append(int(hwnd))
         return 0 if int(insert_after) in self.refused else 1
 
     def GetForegroundWindow(self):
@@ -731,6 +736,130 @@ def test_dropping_topmost_keeps_a_floating_overlay_on_top_of_the_normal_band(
     app.processEvents()
     assert user32.positions == [_HWND_TOPMOST, _HWND_NOTOPMOST]
     overlay.hide()
+
+
+def _placements(user32, overlay) -> list[int]:
+    """What `SetWindowPos` was given as insert-after for this overlay, in order."""
+    hwnd = int(overlay.winId())
+    return [
+        after
+        for target, after in zip(user32.targets, user32.positions, strict=True)
+        if target == hwnd
+    ]
+
+
+def _pinned_overlay_with_an_own_dialog(monkeypatch, user32):
+    """A shown pinned overlay, a shown dialog of the same application and the
+    knob that tells the overlay which window is active."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    dialog = QtWidgets.QDialog()
+    dialog.show()
+    app.processEvents()
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+    active: list[QtGui.QWindow | None] = [None]
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: active[0])
+    user32.positions.clear()
+    user32.targets.clear()
+
+    def activate(window: QtGui.QWindow | None) -> None:
+        active[0] = window
+        QtGui.QGuiApplication.instance().focusWindowChanged.emit(window)
+
+    return overlay, dialog, activate
+
+
+def test_a_pinned_overlay_steps_behind_an_own_window_being_worked_in(monkeypatch):
+    # The overlay is topmost above other applications, but it covered the
+    # Settings window where they overlap (owner, 2026-11-24). While one of this
+    # application's windows is active it goes directly behind that window;
+    # when activation leaves, it is topmost again.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+    assert _HWND_TOPMOST not in _placements(user32, overlay)
+
+    user32.positions.clear()
+    user32.targets.clear()
+    activate(None)  # another application, or the last own window closed
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_reveal_while_an_own_window_is_active_stays_behind_it(monkeypatch):
+    # A recording started while Settings is active still shows the overlay,
+    # behind Settings where they overlap and nowhere else.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+
+    overlay.reveal_temporarily(duration_ms=20)
+
+    assert overlay.isVisible()
+    assert _placements(user32, overlay) == [int(dialog.winId())]
+    overlay.hide()
+    dialog.close()
+
+
+def test_the_overlay_state_follows_activation_not_a_count_of_events(monkeypatch):
+    # A missed event cannot strand the overlay out of the topmost band: the
+    # next placement asks which window is active instead of remembering.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: None)
+
+    overlay.reveal_temporarily(duration_ms=20)  # no focus event was delivered
+
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_missed_focus_event_is_repaired_by_the_periodic_recheck(monkeypatch):
+    # Measured with real windows: after the own dialog closed, no focus event
+    # reached the overlay and it stayed out of the topmost band.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+    overlay._recheck_own_window()
+    assert _placements(user32, overlay) == [], "nothing changed: nothing is placed"
+
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: None)
+    overlay._recheck_own_window()  # the dialog closed, no event was delivered
+
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_floating_overlay_ignores_the_activation_of_own_windows(monkeypatch):
+    # With the setting off nothing changes: not topmost, so there is nothing
+    # to step back from.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.set_always_on_top(False)
+    user32.positions.clear()
+    user32.targets.clear()
+
+    activate(dialog.windowHandle())
+    activate(None)
+
+    assert _placements(user32, overlay) == []
+    overlay.hide()
+    dialog.close()
 
 
 def _floating_overlay_above_the_editor(monkeypatch, user32):

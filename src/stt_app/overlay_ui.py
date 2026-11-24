@@ -65,6 +65,8 @@ _SWP_SHOWWINDOW = 0x0040
 _GW_HWNDPREV = 3
 _GA_ROOT = 2
 _Z_ORDER_WALK_LIMIT = 10_000
+# How often a topmost overlay re-asks which own window is active.
+_OWN_WINDOW_RECHECK_MS = 250
 
 
 @functools.cache
@@ -571,6 +573,20 @@ class OverlayUI(QtWidgets.QWidget):
         self._temporary_foreground_timer.timeout.connect(
             self._clear_temporary_foreground
         )
+        # The overlay stays topmost above other applications but never above
+        # one of this application's own windows being worked in
+        # (`_own_window_to_stay_behind`): activation moving decides.
+        app = QtGui.QGuiApplication.instance()
+        if app is not None:
+            app.focusWindowChanged.connect(self._on_focus_window_changed)
+        # The signal alone missed the end of an own window's life (measured
+        # with real windows: the overlay stayed out of the topmost band after
+        # the dialog closed), so the live state is also compared periodically.
+        self._behind_own_window = 0
+        self._own_window_recheck_timer = QtCore.QTimer(self)
+        self._own_window_recheck_timer.setInterval(_OWN_WINDOW_RECHECK_MS)
+        self._own_window_recheck_timer.timeout.connect(self._recheck_own_window)
+        self._own_window_recheck_timer.start()
         self._drag_active = False
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
@@ -1902,12 +1918,64 @@ class OverlayUI(QtWidgets.QWidget):
                 flags |= _SWP_SHOWWINDOW
             if self._wants_topmost():
                 self._waiting_for_click = False
+                behind = self._behind_own_window = self._own_window_to_stay_behind()
+                if behind:
+                    # Directly behind the own window being worked in: out of
+                    # the topmost band (a window placed behind a non-topmost
+                    # window is not topmost) yet above every other window.
+                    return bool(user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags))
                 return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
             # A hidden overlay starts waiting in its `showEvent`.
+            self._behind_own_window = 0
             self._waiting_for_click = shown
             return bool(user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags))
         except Exception:
             return False
+
+    def _active_own_window_handle(self) -> QtGui.QWindow | None:
+        """The application's active window other than the overlay, or None.
+
+        None while another application is active. A popup (combo list, menu)
+        stands for the window it belongs to.
+        """
+        window = QtGui.QGuiApplication.focusWindow()
+        popup_types = (QtCore.Qt.Popup, QtCore.Qt.ToolTip)
+        while window is not None and (
+            window.flags() & QtCore.Qt.WindowType_Mask in popup_types
+        ):
+            window = window.transientParent()
+        if window is None or window is self.windowHandle():
+            return None
+        return window
+
+    def _own_window_to_stay_behind(self) -> int:
+        """The native handle of the own window being worked in, or 0.
+
+        Asked of the live activation state each time, never counted up and down
+        from events, so a missed event cannot leave the overlay out of the
+        topmost band for good.
+        """
+        window = self._active_own_window_handle()
+        if window is None or not window.isVisible():
+            return 0
+        hwnd = int(window.winId())
+        return hwnd if hwnd != int(self.winId()) else 0
+
+    def _on_focus_window_changed(self, _window: QtGui.QWindow | None) -> None:
+        """Re-place a topmost overlay when activation moves between this
+        application's windows and others."""
+        if sys.platform == "win32" and self.isVisible() and self._wants_topmost():
+            self._apply_native_z_order()
+
+    def _recheck_own_window(self) -> None:
+        """Re-place a topmost overlay whose own-window state changed unnoticed."""
+        if (
+            sys.platform == "win32"
+            and self.isVisible()
+            and self._wants_topmost()
+            and self._own_window_to_stay_behind() != self._behind_own_window
+        ):
+            self._apply_native_z_order()
 
     def _sync_click_watch(self) -> None:
         """Watch mouse presses only while a floating overlay waits for one.

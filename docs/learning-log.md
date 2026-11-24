@@ -3,6 +3,28 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: overlay steps behind the application's own windows
+
+Structurally: `OverlayUI._apply_native_z_order` now places a topmost overlay directly
+behind the application's own active window (`SetWindowPos` with that window as
+`hWndInsertAfter`, no activate, no move, no size) instead of `HWND_TOPMOST`, and
+`focusWindowChanged` plus a 250 ms re-check re-place it when activation moves. Owner
+report: the pinned overlay covered Settings where they overlap.
+- **Real-window measurement** (pinned overlay, a dialog and another process's window
+  overlapping it, real z-order and `WS_EX_TOPMOST`): own dialog active -> not topmost,
+  behind the dialog; reveal while it is active -> shown, behind it; another
+  application active -> topmost, above both; dialog closed -> topmost again.
+- **The first measurement found a bug the unit tests could not**: with only the focus
+  signal the overlay stayed non-topmost after the dialog closed. The periodic
+  comparison of the live answer with the last placement fixed it (second
+  measurement above); the state is asked, never counted.
+- **Rejected:** dialogs made topmost (Settings would cover the browser the user copies
+  a key from); the overlay as the dialogs' owner (owned windows of a topmost owner
+  become topmost and lose their taskbar button); `WindowStaysOnTopHint` toggling
+  (recreates the native window).
+- **Revert:** `git revert` the commit "feat(overlay): step behind the application's own
+  active window".
+
 ## 2026-11-24: Models tab group sized to its content
 
 Structurally: the "Local Models" group no longer stretches; its list is as tall

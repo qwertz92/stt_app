@@ -404,6 +404,53 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   (`OVERLAY_RESULT_REVEAL_MS`), longer on errors (`OVERLAY_ERROR_REVEAL_MS`),
   best-effort; tray "Show overlay" (`controller.bring_overlay_to_front`) is
   the manual path. A floating overlay is a tool window and can hide.
+- **The overlay steps behind the application's own window being worked in**
+  (2026-11-24, owner via lead). A topmost overlay (Pinned, or a floating one
+  during its reveal) covered Settings where they overlap. It stays topmost
+  above OTHER applications, but while one of this application's top-level
+  windows (Settings, History, Run Benchmark, the edit and retranscribe
+  dialogs, the unfinished-recordings notice, the quit dialog, update dialogs,
+  message boxes) is the active window, `_apply_native_z_order` places the
+  overlay directly behind that window (`SetWindowPos` with the window as
+  `hWndInsertAfter`, no activate, no move, no size) instead of `HWND_TOPMOST`;
+  when activation moves to another application, or the last own window
+  closes, the same call makes it topmost again.
+  - **The state is asked, never counted.** `_own_window_to_stay_behind` reads
+    `QGuiApplication.focusWindow()` (popups resolved to their transient parent,
+    the overlay itself excluded) each time the overlay is placed;
+    `focusWindowChanged` only triggers a re-placement. A missed event is
+    repaired by the next placement (a reveal, `set_always_on_top`, a show) or
+    by `_recheck_own_window`, which compares the live answer with the last one
+    every 250 ms while the overlay is shown and topmost-wanted (the signal alone
+    left the overlay non-topmost after an own dialog closed, measured with real
+    windows). The window order of creation plays no part.
+  - **A recording started while Settings is active still shows the overlay**:
+    `reveal_temporarily` shows it and the same placement puts it behind
+    Settings, so it is hidden only where the two overlap. It never takes the
+    focus: every placement keeps `SWP_NOACTIVATE`.
+  - **Floating with no reveal running is not topmost, so nothing changes**; the
+    waiting-for-a-click machinery above is untouched.
+  - **Rejected: making the dialogs topmost too** (Settings would then cover
+    the browser the user copies an API key from) and **making the overlay the
+    dialogs' owner** (windows owned by a topmost window become topmost and lose
+    their taskbar button). Not used either: toggling `WindowStaysOnTopHint`,
+    which recreates the native window (the blink of the 2026-10-09 rule).
+  - Tests: `test_a_pinned_overlay_steps_behind_an_own_window_being_worked_in`,
+    `test_a_reveal_while_an_own_window_is_active_stays_behind_it`,
+    `test_the_overlay_state_follows_activation_not_a_count_of_events`,
+    `test_a_floating_overlay_ignores_the_activation_of_own_windows`
+    (`tests/test_overlay_ui.py`, the recording fake of `user32`: stable on a CI
+    runner, which does not always grant a real activation). The real z-order
+    was measured with real windows, see the learning log.
+  - To revert: `git revert` the commit "feat(overlay): step behind the
+    application's own active window"; the one switch is
+    `_own_window_to_stay_behind`, which returning 0 restores the old behaviour.
+  - Measured with real windows (a driver with a pinned overlay, a dialog and a
+    second process's window overlapping it, 2026-11-25; z-order from
+    `GetWindow(GW_HWNDPREV)`, topmost from `WS_EX_TOPMOST`): own dialog active
+    -> overlay not topmost and behind the dialog; reveal while it is active ->
+    overlay shown, behind it; another application active -> topmost and above
+    both; dialog closed with another application in front -> topmost again.
 - **Opening Settings never reveals the overlay** (2026-10-23). Nothing in the
   settings open path (`main.open_settings_dialog`, `_present_dialog`,
   `SettingsDialog`) touches the overlay; what did was the tray's `Trigger`,
