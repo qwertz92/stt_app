@@ -7,6 +7,7 @@ import os
 import re
 import sys
 import threading
+import time
 from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,7 +42,11 @@ _CRASH_SESSION_CLEAN_EXIT = f"{_CRASH_MARKER_PREFIX}session ended cleanly"
 _CRASH_SESSION_UNWATCHED = f"{_CRASH_MARKER_PREFIX}crash reporting unavailable"
 # How faulthandler starts a dump: a fatal error, a Windows exception (also a
 # handled one, which the process survives) or the quit watchdog's timeout.
-_DUMP_HEADERS = ("Fatal Python error", "Windows fatal exception", "Timeout (")
+_WINDOWS_EXCEPTION_HEADER = "Windows fatal exception:"
+_DUMP_HEADERS = ("Fatal Python error", _WINDOWS_EXCEPTION_HEADER, "Timeout (")
+# The name faulthandler gives an RPC/COM error code (FACILITY_RPC HRESULTs,
+# 0x8001xxxx): raised and caught inside Windows' RPC runtime, never a crash.
+_HANDLED_RPC_CODE = re.compile(r"code 0x8001[0-9a-f]{4}", re.IGNORECASE)
 # How many lines of a long dump's start the excerpt keeps: the header and
 # what follows it. The rest of `CRASH_TRACE_MAX_LINES` goes to its end.
 _TRACE_HEAD_LINES = 20
@@ -53,6 +58,9 @@ PREVIOUS_SESSION_END_LOG_MARKER = "previous_session_end"
 # diagnostics copy does not reach back for it; the name must therefore not
 # contain `PREVIOUS_SESSION_END_LOG_MARKER`.
 PREVIOUS_SESSION_STOPPED_DURING_QUIT_LOG_MARKER = "previous_session_stopped_during_quit"
+# Logged instead when the previous session quit cleanly and faulthandler
+# dumped only exceptions it survived. Not a crash either (same naming rule).
+PREVIOUS_SESSION_HANDLED_EXCEPTIONS_LOG_MARKER = "previous_session_handled_exceptions"
 # Set on the hooks `install_exception_logging` installs, so a second call does
 # not chain them twice and log every exception twice.
 _HOOK_MARK = "_stt_app_exception_logging"
@@ -303,28 +311,139 @@ def _log_previous_session_end(
     previous: PreviousSessionEnd,
     path: Path,
 ) -> None:
-    if previous.clean_quit and not previous.trace_lines:
+    trace, handled = _split_handled_exceptions(previous)
+    if previous.clean_quit and not trace and not handled:
         return
-    if previous.quit_started and not previous.trace_lines:
+    if _already_reported(path.parent, previous.started):
+        return
+    if not trace and (previous.clean_quit or previous.quit_started):
+        if previous.clean_quit:
+            if handled:
+                logger.info(
+                    "%s count=%d exceptions=%s crash_log=%s session_started=%s "
+                    "(the session survived them and quit cleanly; faulthandler "
+                    "writes every Windows exception, handled ones too)",
+                    PREVIOUS_SESSION_HANDLED_EXCEPTIONS_LOG_MARKER,
+                    len(handled),
+                    ",".join(dict.fromkeys(handled)),
+                    path,
+                    previous.started,
+                )
+            return
         logger.info(
-            "%s crash_log=%s session_started=%s (ended while it quit, for "
+            "%s crash_log=%s session_started=%s%s (ended while it quit, for "
             "example by a Windows shutdown or restart; no crash trace)",
             PREVIOUS_SESSION_STOPPED_DURING_QUIT_LOG_MARKER,
             path,
             previous.started,
+            f" handled_exceptions={len(handled)}" if handled else "",
         )
         return
+    windows_started = ""
+    if not previous.clean_quit and not previous.quit_started:
+        windows_started = _windows_started_since(previous.started)
     logger.warning(
-        "%s clean_quit=%s quit_started=%s native_trace_lines=%d crash_log=%s "
+        "%s clean_quit=%s quit_started=%s native_trace_lines=%d%s%s crash_log=%s "
         "session_started=%s%s",
         PREVIOUS_SESSION_END_LOG_MARKER,
         "yes" if previous.clean_quit else "no",
         "yes" if previous.quit_started else "no",
-        len(previous.trace_lines),
+        len(trace),
+        f" handled_exceptions={len(handled)}" if handled else "",
+        f" windows_started_since={windows_started}" if windows_started else "",
         path,
         previous.started,
-        "".join(f"\n{line}" for line in _trace_excerpt(previous.trace_lines, path)),
+        "".join(f"\n{line}" for line in _trace_excerpt(tuple(trace), path)),
     )
+
+
+def _split_handled_exceptions(
+    previous: PreviousSessionEnd,
+) -> tuple[list[str], list[str]]:
+    """The trace lines that may tell how the session ended, and the names of
+    the dumps that are handled exceptions (left out of those lines).
+
+    faulthandler on Windows dumps every exception whose code has the top bit
+    set, also one that something catches a moment later (Python 3.12 has no
+    option to leave those out: `faulthandler.enable` takes only `file` and
+    `all_threads`). Handled are: every Windows exception of a session that
+    quit cleanly, which survived them all; and in any session an RPC/COM
+    error code (0x8001xxxx, such as RPC_E_CANTCALLBACK_INPUTSYNC 0x8001010d),
+    which Windows' RPC runtime raises and catches inside one COM call.
+    """
+    trace: list[str] = []
+    handled: list[str] = []
+    skipping = False
+    for line in previous.trace_lines:
+        if line.startswith(_DUMP_HEADERS):
+            name = line.removeprefix(_WINDOWS_EXCEPTION_HEADER).strip()
+            skipping = line.startswith(_WINDOWS_EXCEPTION_HEADER) and (
+                previous.clean_quit or _HANDLED_RPC_CODE.fullmatch(name) is not None
+            )
+            if skipping:
+                handled.append(name)
+                continue
+        if not skipping:
+            trace.append(line)
+    return trace, handled
+
+
+def _already_reported(log_dir: Path, started: str) -> bool:
+    """Whether an earlier start already reported the session ``started``.
+
+    A start that could not open the crash log reported the previous session
+    but wrote no start line of its own, so the next start finds the same
+    last section. Its report is in `dictation.log` (or the backup the next
+    rotation made of it), named by the session's start time and pid.
+    """
+    if started == "unknown":
+        return False
+    needle = f"session_started={started}"
+    for name in (LOG_FILE_NAME, f"{LOG_FILE_NAME}.1"):
+        try:
+            text = (log_dir / name).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if needle in text:
+            return True
+    return False
+
+
+def _windows_started_since(started: str) -> str:
+    """The time Windows last started, when that is after ``started``.
+
+    A session that left no quit mark and no trace ended in a crash nothing
+    caught, a kill, or with Windows itself (a power loss, a hard reset, a
+    system crash); a Windows start since the session began says the last
+    is possible -- the owner's three such sessions each ended so (Windows'
+    event log: Kernel-Power 41). "" when unknown or not later.
+    """
+    boot = _windows_boot_time()
+    if boot is None:
+        return ""
+    try:
+        began = datetime.fromisoformat(started.split()[0])
+    except (ValueError, IndexError):
+        return ""
+    if began.tzinfo is None or boot <= began:
+        return ""
+    return boot.astimezone().isoformat(timespec="seconds")
+
+
+def _windows_boot_time() -> datetime | None:
+    """When Windows started (now minus `GetTickCount64`, which counts sleep
+    too); None on other systems or when it cannot be read."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+
+        get_tick_count = ctypes.windll.kernel32.GetTickCount64
+        get_tick_count.restype = ctypes.c_ulonglong
+        uptime_s = get_tick_count() / 1000
+    except (AttributeError, OSError):
+        return None
+    return datetime.fromtimestamp(time.time() - uptime_s).astimezone()
 
 
 def _trace_excerpt(trace_lines: tuple[str, ...], path: Path) -> list[str]:

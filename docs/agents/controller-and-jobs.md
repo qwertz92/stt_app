@@ -823,19 +823,60 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     handler is put back by `atexit`: a Qt message from a finalizer in the
     interpreter's last collection, into the Python handler, crashed the
     process with an access violation (reproduced 2026-10-23, 0xC0000005).
+  - **Handled exceptions are not presented as a crash** (2026-11-24; the
+    owner's log held three dumps `Windows fatal exception: code 0x8001010d`
+    in sessions that ran on for hours or days, and a WARNING
+    `clean_quit=yes` with 37 trace lines). faulthandler on Windows dumps
+    every exception whose code has the top bit set, also one caught a
+    moment later (only C++ and CLR codes are skipped), and Python 3.12
+    offers no switch for it: `faulthandler.enable` takes only `file` and
+    `all_threads`. So the reading side filters
+    (`_split_handled_exceptions`): a Windows-exception dump is handled when
+    the session quit cleanly (it survived them all) or its code is an
+    RPC/COM HRESULT `0x8001xxxx`, which Windows' RPC runtime raises and
+    catches inside one call. Handled dumps are left out of
+    `native_trace_lines` and the excerpt and counted as
+    `handled_exceptions=N`; a clean quit with only handled dumps logs INFO
+    `previous_session_handled_exceptions count=N exceptions=...` (the name
+    avoids `previous_session_end`, so "Copy diagnostics" does not reach
+    back). Not filtering at write time: the alternative, no faulthandler on
+    Windows, would lose the real crashes' stacks.
+    0x8001010d is RPC_E_CANTCALLBACK_INPUTSYNC: an outgoing COM call made
+    while the thread handles an input-synchronous message (a `SendMessage`
+    from another thread or process). All three dumps name the Qt thread in
+    `app.exec()` with no Python frame above it, so the call came from native
+    code inside Qt's event loop (accessibility/UI Automation, OLE clipboard
+    or text services are the candidates; not narrowed further in the
+    30 minutes spent). The call fails with that HRESULT and its caller goes
+    on; the sessions kept running, so it is harmless for the app.
+  - A section with no quit mark and no trace names a Windows start since
+    the session began (`windows_started_since=<time>`, boot time from
+    `GetTickCount64`): the owner's three such sessions (2026-10-25,
+    2026-11-04 twice) each ended with an unexpected Windows shutdown
+    (Kernel-Power 41 / EventLog 6008 in the System log), not an app crash.
+    The app cannot tell that from a kill or an untraced death, so it stays
+    a WARNING; the field only says Windows has started since.
   - A start that cannot open `crash.log` reports the previous session but
-    writes no start line, so the next start reports the same session again
-    (`known-limitations.md`); `session_started` shows that it is the same.
+    writes no start line, so the next start finds the same section; it is
+    not reported twice since 2026-11-24: `_already_reported` looks for the
+    session's `session_started=<time> pid=<pid> version=<v>` in
+    `dictation.log` and `dictation.log.1` first.
+  - The session of 2026-11-08 logged `app_quit_started` at 2026-11-15
+    03:03:20 and nothing after: Windows' System log has a restart chosen from
+    the Start menu at 03:03:18 (User32 1074), so Windows ended the process
+    inside WM_ENDSESSION, as described above; the next start reported it
+    correctly as `previous_session_stopped_during_quit`. A hang during that
+    quit would have left the watchdog's "Timeout (" dump; there is none.
   - Not changed, and why: `dictation.log` stays `RotatingFileHandler`
     (append, 1 MB x 3 backups). Verified 2026-10-23 that a restart never
     truncates it (the owner's file held the sessions of 17 and 22 October);
     the "outdated" `dictation.log.1` is a size backup. Per-session files would
-    only rename the problem. Faulthandler on Windows also reports a
-    first-chance exception that something later handles (any code with the
-    error bit, except C++ and CLR exceptions), so a dump followed by more
-    activity in the same section is not necessarily the crash, and the
-    WARNING then says `clean_quit=yes`. The size bound applies at each start,
-    so such noise cannot pile up across sessions.
+    only rename the problem. The size bound applies at each start, so dumps
+    of handled exceptions cannot pile up across sessions.
+  - `install_qt_message_logging` writes Qt warnings that describe the system,
+    not the app, at INFO (`_QT_INFORMATIONAL_WARNINGS`: "monitorData: Unable
+    to obtain handle for monitor ..., defaulting to 96 DPI.", seen around
+    display wakes).
 - **The tray's Quit asks first when work is pending** (owner decision
   2026-10-09; `quit_dialog.QuitCoordinator`). `quit_pending_work()`
   (`PendingQuitWork`) counts an open recording, jobs still transcribing,
