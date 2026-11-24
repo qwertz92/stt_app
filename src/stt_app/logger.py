@@ -84,6 +84,11 @@ _QT_MESSAGE_VARIABLE_PART = re.compile(r"0x[0-9a-fA-F]{4,}|\d+")
 # it cannot grow for the whole session; a message counted before may then be
 # logged up to `_QT_MESSAGE_REPEAT_LIMIT` times again.
 _QT_MESSAGE_KINDS_LIMIT = 500
+# Qt warnings about the system, not the app, logged at INFO. "monitorData:
+# Unable to obtain handle for monitor ..., defaulting to 96 DPI." comes while
+# a display wakes or is switched, before Windows reports it again (4 times
+# in the owner's log of 2026-10-25 to 2026-11-24, each around a display wake).
+_QT_INFORMATIONAL_WARNINGS = ("monitorData: Unable to obtain handle for monitor",)
 # The handler `install_qt_message_logging` installed; None before.
 _qt_message_handler = None
 
@@ -641,6 +646,8 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
 
     def handler(message_type, context, message) -> None:
         level = _QT_MESSAGE_LEVELS.get(message_type, logging.WARNING)
+        if level == logging.WARNING and message.startswith(_QT_INFORMATIONAL_WARNINGS):
+            level = logging.INFO
         if getattr(inside, "active", False) or not logger.isEnabledFor(level):
             return
         inside.active = True

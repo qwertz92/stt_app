@@ -744,6 +744,26 @@ def test_qt_messages_reach_the_log_once_per_kind_and_never_recurse(
     assert geometry[-1].endswith("(repeated too often; later ones are not logged)")
 
 
+def test_the_display_wake_monitor_warning_is_logged_as_information(
+    _restore_exception_hooks,
+):
+    """Qt warns "Unable to obtain handle for monitor" while a display wakes
+    and falls back to 96 DPI until the screen reports again; it is no fault
+    of the app and showed up as a WARNING after display wakes."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    log, records = _capturing_logger("test.qt_monitor_data")
+    logger_module.install_qt_message_logging(log)
+
+    QtCore.qWarning(
+        "monitorData: Unable to obtain handle for monitor '\\\\.\\DISPLAY1', "
+        "defaulting to 96 DPI."
+    )
+    QtCore.qWarning("QWindowsWindow::setGeometry: Unable to set geometry")
+
+    assert "monitorData" in records.lines[0]
+    assert records.levels == [logging.INFO, logging.WARNING]
+
+
 def test_qt_messages_with_other_pointers_count_as_one_and_the_count_is_bounded(
     monkeypatch, _restore_exception_hooks
 ):
