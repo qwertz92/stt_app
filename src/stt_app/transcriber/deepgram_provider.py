@@ -27,6 +27,7 @@ from ..config import (
     AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
     DEEPGRAM_API_HOSTS,
+    DEEPGRAM_KEYTERM_TOKEN_BUDGET,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DEEPGRAM_REGION,
@@ -48,6 +49,31 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _estimated_keyterm_tokens(term: str) -> int:
+    """A deliberately high token estimate for one keyterm.
+
+    Deepgram's tokenizer is not public. Every word counts one token per three
+    characters rounded up (a rare word such as "Kubernetes" is usually two to
+    four tokens, so this over-counts common words), plus one token per term for
+    the separator between terms.
+    """
+    return 1 + sum(math.ceil(len(word) / 3) for word in term.split())
+
+
+def fit_keyterms(terms: list[str]) -> tuple[list[str], int]:
+    """Return the leading terms whose estimated tokens fit the budget, and how
+    many were dropped from the end of the list."""
+    kept: list[str] = []
+    used = 0
+    for term in terms:
+        used += _estimated_keyterm_tokens(term)
+        if used > DEEPGRAM_KEYTERM_TOKEN_BUDGET:
+            break
+        kept.append(term)
+    return kept, len(terms) - len(kept)
+
 
 _STREAM_SEND_SENTINEL = object()
 # What the sender's queue answers when nothing arrived for a whole interval.
@@ -198,7 +224,16 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         # Needs self._model, so this must run after it is assigned above
         # (reordered from the model assignment's original position below it).
         self.set_language_mode(language_mode)
-        self._vocabulary_terms = parse_custom_vocabulary(custom_vocabulary)
+        self._vocabulary_terms, dropped = fit_keyterms(
+            parse_custom_vocabulary(custom_vocabulary)
+        )
+        if dropped:
+            logger.warning(
+                "Deepgram takes about %d tokens of custom vocabulary per request; "
+                "%d term(s) from the end of the list are not sent.",
+                DEEPGRAM_KEYTERM_TOKEN_BUDGET,
+                dropped,
+            )
         self._stream_lock = threading.Lock()
         self._stream_generation = 0
         self._stream_state = "idle"

@@ -1510,6 +1510,12 @@ OPENAI_KEYWORD_FORBIDDEN_CHARACTERS = ("<", ">", "\r", "\n")
 # languages) is a voice-agent model, not a dictation one, and is not offered.
 DEEPGRAM_MODELS = ("nova-3",)
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
+# Deepgram limits all `keyterm` values of one request to 500 tokens and answers
+# an over-limit pre-recorded request or streaming connection with an error
+# ("Keyterm limit exceeded", keyterm page read 2026-11-25). Its tokenizer is not
+# public, so the provider estimates (`deepgram_provider.fit_keyterms`) and keeps
+# the estimate under this budget: 400, a 20 % margin below the limit.
+DEEPGRAM_KEYTERM_TOKEN_BUDGET = 400
 
 # The provider names alone: the engine pickers group them under a "Cloud"
 # header (`fill_engine_combo`), so "Remote (...)" around every name repeated

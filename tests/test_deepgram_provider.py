@@ -239,6 +239,49 @@ class TestDeepgramTranscribeBatch:
         assert params["keyterm"] == ["Kubernetes", "Splunk SOAR"]
         assert "keywords" not in params
 
+    def test_keyterms_over_the_token_limit_drop_from_the_end(self):
+        # Deepgram answers more than 500 tokens of keyterms with an error. Each
+        # 12-letter term is estimated at 5 tokens, so 80 of 100 fit the 400
+        # budget and the last 20 are dropped.
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        kept, dropped = deepgram_provider.fit_keyterms(terms)
+        assert kept == terms[:80]
+        assert dropped == 20
+        assert deepgram_provider.fit_keyterms(terms[:10]) == (terms[:10], 0)
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_batch_request_stays_under_the_keyterm_limit_and_logs_once(
+        self, mock_urlopen, caplog
+    ):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        with caplog.at_level(logging.WARNING, logger=deepgram_provider.logger.name):
+            t = DeepgramTranscriber(
+                api_key="key", model="nova-3", custom_vocabulary=", ".join(terms)
+            )
+            t.transcribe_batch(b"RIFF fake")
+            t.transcribe_batch(b"RIFF fake")
+
+        for call in mock_urlopen.call_args_list:
+            query = urllib.parse.urlparse(call[0][0].full_url).query
+            assert urllib.parse.parse_qs(query)["keyterm"] == terms[:80]
+        warnings = [r for r in caplog.records if "20 term(s)" in r.getMessage()]
+        assert len(warnings) == 1
+
+    def test_stream_request_stays_under_the_keyterm_limit(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        t = DeepgramTranscriber(
+            api_key="key", model="nova-3", custom_vocabulary=", ".join(terms)
+        )
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        ws = _FakeWebSocketApp.instances[-1]
+        query = urllib.parse.urlparse(ws.url).query
+        assert urllib.parse.parse_qs(query)["keyterm"] == terms[:80]
+        t.abort_stream()
+
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_empty_custom_vocabulary_omits_vocabulary_params(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))

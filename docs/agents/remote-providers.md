@@ -420,6 +420,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   speech-to-text page and deprecations page (read that day) list only
   `whisper-large-v3` and `whisper-large-v3-turbo` as current (the `-en`
   variants were retired 2025-08-23), which is what the app offers.
+  - **Deepgram keyterm limit (2026-11-25, keyterm page).** "Key Terms are
+    limited to 500 tokens per request"; an over-limit pre-recorded request
+    or streaming connection returns "Keyterm limit exceeded". The app's
+    100-term cap is not a token cap, so `deepgram_provider.fit_keyterms`
+    keeps the leading terms whose estimate fits `DEEPGRAM_KEYTERM_TOKEN_BUDGET`
+    (400, a 20 % margin) and drops the rest from the end, with one warning in
+    the log per transcriber. Deepgram's tokenizer is not public; the estimate
+    is one token per term plus one per three characters of each word, which
+    over-counts common words. With 12-letter terms that keeps 80 of 100.
+    The page also advises 20 to 50 terms in practice. **Unverified live**:
+    the real tokenizer may count differently.
 - **Deepgram streaming holds its socket open with a KeepAlive while no audio
   goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
   capture's audio over up to 12 s late, so the socket is open and silent for
