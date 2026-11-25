@@ -249,28 +249,28 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   text and reported `unread`. Not reproduced (one instance on the
   development machine). Settle it with two distributions open, one paste
   into a window of each, and the `paste_receipt` lines of both.
-- **A true-miss "not in a text field" row ends with the next paste**
-  (2026-10-03, deliberate). Any later successful paste -- into any window
-  -- drops it (`_drop_superseded_doubtful_rows`), so a paste that really
-  missed is no longer listed or reachable by F10 once the user dictated
-  elsewhere. Accepted because the report was shown when it was made
-  (overlay with Insert, or the tray) and the text stays in history.
-  Rejected alternative: dropping only on a later paste into the same
-  window. An always-doubtful window (an Electron prompt may be one) would
-  still collect a row per dictation whenever the user also works in a
-  second window, and F10 would be left choosing among stale rows whose
-  verdicts may all be false. Kept 2026-10-03 (the owner's rule).
-  2026-11-25: the owner reported on 2026-11-24 "one is not inserted, the
-  next one is, and I am no longer shown which", and took it for a bug of an
-  older build on another machine. In v0.13.0 this rule is the only way a
-  listed row disappears through a later paste (since 04da05e, v0.11.0); a
-  paste that *raised* keeps its row (cf1a37a, v0.11.0). Which of the two
-  he saw cannot be told; his log of 2026-10-24..11-24 has three doubtful
-  verdicts in 1040 pastes. Since 2026-11-25 a paste with an `unread`
-  receipt is a failed row and stays, whatever the caret said, which covers
-  a miss in an Electron window; the doubtful row of a Chrome or Edge page
-  is still dropped, because the receipt cannot confirm it there. Put to
-  the owner again with the options.
+- **A true-miss "not in a text field" row ends with the paste of the next
+  dictation** (2026-10-03, deliberate; narrowed 2026-11-25). A paste of a
+  dictation recorded after the doubtful paste went out -- into any window
+  -- and every re-paste, Insert or live streaming insert drops the row
+  (`_drop_superseded_doubtful_rows`), so a paste that really missed is no
+  longer listed or reachable by F10 once the user dictated again.
+  Accepted because the report was shown when it was made (overlay with
+  Insert, or the tray) and the text stays in history. Since 2026-11-25
+  (lead's decision) results that were already recorded when the doubt
+  arose no longer drop it: the owner reported on 2026-11-24 that the
+  notice vanished when several results were queued, and the paste of the
+  next queued result is not something he did after seeing it. Rejected
+  again: keeping the row until dismissed. The reason given in 2026-10-03
+  -- a window that always reads doubtful (an Electron prompt may be one)
+  would collect a row per dictation -- carries less weight than it did:
+  his log of 2026-10-24..11-24 has three doubtful verdicts in 1040
+  pastes. But each of those rows may be a false alarm whose text is in
+  the document, and F10 pastes doubtful rows when no failed row waits, so
+  stale ones would be pasted a second time long after. A paste with an
+  `unread` receipt is a failed row and stays whatever the caret said,
+  which covers a miss in an Electron window; in Chrome and Edge the
+  receipt cannot confirm a miss (entry above).
 - **A hung paste target holds the check's one worker**: the MSAA call is a
   cross-process `WM_GETOBJECT`; while it waits, later pastes are not
   checked (refused at once, "unknown") and the completion tone of the

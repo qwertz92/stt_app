@@ -654,17 +654,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   doubtful insert is shown briefly and stops being listed once a re-paste
   inserted exactly it); if that paste is doubtful again, it gets a new row.
   F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
-  only when no failed row waits, and the next paste whose keystroke goes out
-  (any `_insert_text_at_target` that succeeded or may have landed,
-  `_paste_serial`) drops it (`_drop_superseded_doubtful_rows`; a keystroke
+  only when no failed row waits, and the paste of a later dictation whose
+  keystroke goes out (any `_insert_text_at_target` that succeeded or may
+  have landed; "later" as defined below) drops it
+  (`_drop_superseded_doubtful_rows`; a keystroke
   that went out and a cleanup that failed supersedes it as much as a clean
   paste, 2026-10-03, else F10 pasted the stale text next to it; the rows
   that paste is built from stay, `keep_rows`) -- except a row a paced re-paste
   (`_pending_repaste`) names, which the queued paste the pace lets go first
   used to drop, so the F10 pasted nothing and said nothing; a paced
   re-paste whose rows are gone now says so on the overlay or tray
-  (2026-10-03 second review); a verdict arriving after a later paste
-  lists no row and goes to the tray. Why: a false verdict leaves a row for
+  (2026-10-03 second review); a verdict arriving after the paste of a
+  later dictation lists no row and goes to the tray. *Later*
+  (2026-11-25, lead's decision): the pasted dictation was recorded after
+  the doubtful paste went out (`_TranscriptionJob.recorded_after_paste`
+  against the row's `doubt_serial`, both counts of `_paste_serial`; a
+  joined paste counts as its newest job), or the paste is made now (a
+  re-paste, an Insert, live streaming text). A result that was already
+  recorded when the doubt arose supersedes nothing: with several results
+  queued the next paste went out within a second and took the row with
+  it, or kept it from being listed at all (the owner, 2026-11-24: "the
+  not-inserted notice vanished when several results were queued").
+  Several doubtful rows can therefore wait, and F10 pastes them joined in
+  order when no failed row waits. Why a later dictation still drops them: a false verdict leaves a row for
   text that landed, and F10 joined it to the next failed paste, pasting the
   landed text again (2026-10-03 review); a window that always reads
   doubtful would also collect a row per dictation. A later "text field"

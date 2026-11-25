@@ -289,6 +289,89 @@ def test_a_window_that_always_reads_doubtful_keeps_only_the_latest_row(
     _ = app
 
 
+def _record(controller):
+    """Record one dictation and return its token; its result comes later."""
+    controller.start_recording()
+    controller.stop_recording()
+    return controller._active_request_token
+
+
+def test_a_doubtful_row_survives_the_paste_of_a_result_recorded_before_it(
+    monkeypatch, tmp_path
+):
+    """Several results were queued (the owner, 2026-11-24): the paste of the
+    next one, recorded before the doubt was reported, went out within a second
+    and took the row with it. Only the paste of a later dictation drops it.
+    Immediate mode pastes each result as it finishes."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 1
+
+    controller._on_transcription_ready("second words", request_token=second)
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert [call[0] for call in inserter.calls] == ["first words", "second words"]
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "first words" in rows[0]
+
+    _dictate(controller, "a later dictation")
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert _rows(overlay) == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_verdict_after_the_paste_of_an_earlier_recording_still_lists_its_row(
+    monkeypatch, tmp_path
+):
+    """The check answers after the next queued result went out. That result
+    was recorded before the doubtful paste, so it supersedes nothing. The
+    default mode: the earlier result waits for the newest and both are pasted
+    one after the other."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, _inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    controller._on_transcription_ready("second words", request_token=second)
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "first words" in rows[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_two_doubtful_queued_results_are_pasted_again_in_order(monkeypatch, tmp_path):
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    controller._on_transcription_ready("second words", request_token=second)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 2
+
+    controller.repaste_last_transcript()
+
+    assert "first words" in inserter.calls[-1][0]
+    assert "second words" in inserter.calls[-1][0]
+    assert inserter.calls[-1][0].index("first") < inserter.calls[-1][0].index("second")
+    controller.shutdown()
+    _ = app
+
+
 class _MayHavePastedInserter(FakeTextInserter):
     """Its paste keystroke goes out and the cleanup after it fails."""
 

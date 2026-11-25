@@ -284,6 +284,10 @@ class _TranscriptionJob:
     target_handle: int | None
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
+    # `DictationController._paste_serial` when the job was submitted: how
+    # many pastes had gone out by then. A doubtful paste's row survives the
+    # paste of a dictation recorded before it (`_note_paste_went_out`).
+    recorded_after_paste: int = 0
     source_recording_id: str = ""
     # `DictationController._credentials_generation` when the job was
     # submitted: a key replaced since then makes a retry a different request.
@@ -422,8 +426,10 @@ class _UndeliveredInsert:
     # (`paste_target_check`): most likely nothing was inserted. Insertable
     # like a failed paste -- the user decides after looking at the window --
     # but never joined to failed rows by the re-paste, and dropped by the
-    # next paste that goes out (`_drop_superseded_doubtful_rows`).
+    # paste of a later dictation (`_drop_superseded_doubtful_rows`).
     outside_text_field: bool = False
+    # `_paste_serial` right after the doubtful paste; 0 for every other row.
+    doubt_serial: int = 0
     # A transcript the startup notice of unfinished recordings saved: no insert
     # was ever attempted for it, so its row says so instead of "Not inserted"
     # (owner's decision 2026-10-17). Insertable like a failed paste, joined to
@@ -472,8 +478,8 @@ class _PasteCheck:
     # The window that had the foreground for the paste; a check that finds
     # another one in front answers "unknown".
     foreground: int | None
-    # `_paste_serial` right after this paste. A verdict for an older paste
-    # than the newest lists no row: the newer paste has superseded it.
+    # `_paste_serial` right after this paste. A verdict that arrives after
+    # a later dictation was pasted lists no row: that paste superseded it.
     paste_serial: int
     # The capture open at the paste (an immediate-mode queued paste lands
     # mid-recording), so a recording started while the check ran can be
@@ -939,8 +945,12 @@ class DictationController(QtCore.QObject):
         # The foreground window of the last paste that reported success, for
         # its target check (`_check_paste_target`).
         self._last_insert_foreground: int | None = None
-        # Counts the pastes that reported success, streaming inserts included.
+        # Counts the pastes whose keystroke went out, streaming inserts
+        # included.
         self._paste_serial = 0
+        # The newest dictation a paste delivered so far, as the
+        # `_paste_serial` it was recorded after (`_note_paste_went_out`).
+        self._newest_pasted_dictation = 0
         # `(state, detail)` of the informational offer the painter wrote last,
         # None once a plain status or a failure replaced it. The preload
         # progress poll compares it with what the overlay shows, to tell
@@ -4974,6 +4984,7 @@ class DictationController(QtCore.QObject):
             settings=replace(settings),
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
+            recorded_after_paste=self._paste_serial,
             source_recording_id=source_recording_id,
             credentials_generation=self._credentials_generation,
             language_fallback_from=language_fallback_from,
@@ -5157,6 +5168,7 @@ class DictationController(QtCore.QObject):
         created_at: datetime,
         history_entry: TranscriptHistoryEntry | None,
         outside_text_field: bool = False,
+        doubt_serial: int = 0,
         from_earlier_session: bool = False,
         parts: Sequence[tuple[TranscriptHistoryEntry | None, str]] = (),
     ) -> _UndeliveredInsert | None:
@@ -5175,6 +5187,7 @@ class DictationController(QtCore.QObject):
             may_have_pasted=may_have_pasted,
             created_at=created_at,
             outside_text_field=outside_text_field,
+            doubt_serial=doubt_serial,
             from_earlier_session=from_earlier_session,
             parts=tuple(parts) or ((history_entry, transcript),),
         )
@@ -5205,17 +5218,47 @@ class DictationController(QtCore.QObject):
         A "not in a text field" row only when no failed row waits. Its
         verdict can be wrong -- the text may be in the document -- so joining
         it to a failed paste pasted a text that had landed a second time (the
-        2026-10-03 review). It is the newest paste's row, if listed at all:
-        every later paste drops it (`_drop_superseded_doubtful_rows`).
+        2026-10-03 review). Several can wait, each a queued result pasted
+        before the next dictation: the paste of a later dictation drops
+        them (`_drop_superseded_doubtful_rows`).
         """
         insertable = self._insertable_undelivered()
         failed = [entry for entry in insertable if not entry.outside_text_field]
         return failed or insertable
 
-    def _drop_superseded_doubtful_rows(
-        self, keep: Sequence[_UndeliveredInsert] = ()
+    def _note_paste_went_out(
+        self,
+        keep_rows: Sequence[_UndeliveredInsert],
+        recorded_after_paste: int | None,
     ) -> None:
-        """A paste went out: earlier "not in a text field" rows go.
+        """Count a paste whose keystroke went out; retire what it supersedes.
+
+        ``recorded_after_paste`` is the pasted dictation's
+        `_TranscriptionJob.recorded_after_paste`, the newest one's for a
+        joined paste. None is a paste made now -- a re-paste, an Insert,
+        live streaming text -- which is later than every listed row.
+        """
+        dictated = (
+            self._paste_serial if recorded_after_paste is None else recorded_after_paste
+        )
+        self._paste_serial += 1
+        self._newest_pasted_dictation = max(self._newest_pasted_dictation, dictated)
+        self._drop_superseded_doubtful_rows(keep_rows, dictated)
+
+    def _drop_superseded_doubtful_rows(
+        self, keep: Sequence[_UndeliveredInsert], dictated: int
+    ) -> None:
+        """A paste went out: "not in a text field" rows older than its
+        dictation go.
+
+        ``dictated`` says how many pastes had gone out when the pasted
+        dictation was recorded. A row whose doubtful paste came after that
+        stays: the result was already recorded when the doubt was reported,
+        so its paste says nothing about whether the user saw the report.
+        Dropped by every paste, a doubtful row vanished as soon as the next
+        queued result went out, usually within a second (the owner,
+        2026-11-24: "the not-inserted notice vanished when several results
+        were queued").
 
         Whether such a paste missed cannot be settled later, and a window
         whose prompt always reads as no text field (a review probe got that
@@ -5224,7 +5267,7 @@ class DictationController(QtCore.QObject):
         stays in history. A later "text field" verdict in the same window
         is no proof the earlier element was one -- clicking into the field
         after pasting onto a button is the case the report exists for -- so
-        the rule is "superseded by the next paste", not "disproved".
+        the rule is "superseded by the next dictation", not "disproved".
 
         A row a paced re-paste names stays: the user pressed F10 or Insert
         for it, and the queued paste the pace let go first dropped it, so the
@@ -5243,6 +5286,7 @@ class DictationController(QtCore.QObject):
             entry
             for entry in self._undelivered_inserts
             if not entry.outside_text_field
+            or dictated < entry.doubt_serial
             or any(entry is named for named in requested)
         ]
         dropped = len(self._undelivered_inserts) - len(kept)
@@ -7639,6 +7683,9 @@ class DictationController(QtCore.QObject):
                 target_handle=target_handle,
                 target_signature=target_signature,
                 text_entry=history_entry,
+                recorded_after_paste=(
+                    job.recorded_after_paste if job is not None else None
+                ),
             ):
                 # The Error with its Insert is replaced by the next
                 # recording; the row keeps the transcript visible after that.
@@ -8115,6 +8162,7 @@ class DictationController(QtCore.QObject):
         *,
         job_count: int = 1,
         parts: Sequence[tuple[TranscriptHistoryEntry | None, str]] = (),
+        recorded_after_paste: int | None = None,
     ) -> tuple[bool, bool]:
         """Paste one delivered background transcript.
 
@@ -8123,7 +8171,8 @@ class DictationController(QtCore.QObject):
         here paints an Error carrying the transcript and the Insert action, and
         overwriting it a statement later leaves the text in history alone.
         ``parts`` are a coalesced paste's results with their entries, which a
-        row for it keeps (`_UndeliveredInsert.parts`).
+        row for it keeps (`_UndeliveredInsert.parts`), and
+        ``recorded_after_paste`` its newest job's (default: ``job``'s own).
         """
         target_handle, target_signature = self._resolve_insert_target(
             job.target_handle, job.target_signature
@@ -8135,6 +8184,11 @@ class DictationController(QtCore.QObject):
             target_handle=target_handle,
             target_signature=target_signature,
             show_overlay_error=False,
+            recorded_after_paste=(
+                job.recorded_after_paste
+                if recorded_after_paste is None
+                else recorded_after_paste
+            ),
         )
         if inserted:
             # The last text that reached a window, which the re-paste pastes
@@ -8653,11 +8707,12 @@ class DictationController(QtCore.QObject):
         the text retires the row. The overlay shows it, with Insert, while
         it still shows what it showed right after the paste; otherwise --
         and for every queued paste -- the tray carries it. A verdict that
-        arrives after a later paste went out lists no row and paints
+        arrives after a later dictation was pasted lists no row and paints
         nothing: that paste superseded it (`_drop_superseded_doubtful_rows`).
+        A queued result pasted in between does not.
         """
         transcript = pending.text.strip()
-        superseded = pending.paste_serial != self._paste_serial
+        superseded = self._newest_pasted_dictation >= pending.paste_serial
         entry = (
             None
             if superseded
@@ -8667,6 +8722,7 @@ class DictationController(QtCore.QObject):
                 created_at=pending.created_at,
                 history_entry=pending.history_entry,
                 outside_text_field=True,
+                doubt_serial=pending.paste_serial,
                 parts=pending.parts,
             )
         )
@@ -8810,6 +8866,7 @@ class DictationController(QtCore.QObject):
                     text,
                     job_count=len(jobs),
                     parts=parts,
+                    recorded_after_paste=max(job.recorded_after_paste for job in jobs),
                 )
                 claimed_overlay = claimed or claimed_overlay
             except Exception:
@@ -9698,6 +9755,7 @@ class DictationController(QtCore.QObject):
         carries_offer: bool = False,
         keep_rows: Sequence[_UndeliveredInsert] = (),
         text_entry: TranscriptHistoryEntry | None = None,
+        recorded_after_paste: int | None = None,
     ) -> bool:
         """Paste ``text``; True when it was inserted.
 
@@ -9707,6 +9765,8 @@ class DictationController(QtCore.QObject):
         ``text_entry`` is the history entry ``text`` belongs to, the whole
         of it or the dictation it is the tail of, for an offer this paints
         (`_insert_action_entry`); None when not known.
+        ``recorded_after_paste`` is the delivered job's, for the doubtful
+        rows this paste supersedes (`_note_paste_went_out`).
         """
         if not text.strip():
             return True
@@ -9819,8 +9879,7 @@ class DictationController(QtCore.QObject):
                 # The keystroke went out, so this is a paste like any other for
                 # the doubtful rows before it: the text in front of it is as
                 # stale as after a clean paste.
-                self._paste_serial += 1
-                self._drop_superseded_doubtful_rows(keep_rows)
+                self._note_paste_went_out(keep_rows, recorded_after_paste)
                 return False
             allow_clipboard_fallback = bool(
                 getattr(exc, "allow_clipboard_fallback", True)
@@ -9865,8 +9924,7 @@ class DictationController(QtCore.QObject):
         self._last_insert_foreground = (
             paste_foreground or self._current_foreground_window()
         )
-        self._paste_serial += 1
-        self._drop_superseded_doubtful_rows(keep_rows)
+        self._note_paste_went_out(keep_rows, recorded_after_paste)
         self._logger.info(
             "text_insertion outcome=success chars=%d target_hwnd=%s "
             "restore_focus=%s paste_mode=%s",
