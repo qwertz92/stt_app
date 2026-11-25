@@ -14,20 +14,14 @@ import pytest
 
 from stt_app.config import (
     DEFAULT_OPENAI_MODEL,
-    OPENAI_ARRAY_FIELD_MODELS,
     OPENAI_MAX_PART_SECONDS,
     OPENAI_MODELS,
-    OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
 )
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.openai_provider import (
     OPENAI_API_BASE,
     OpenAITranscriber,
 )
-
-# The three ids OpenAI notified for deprecation on 2026-08-26 and removes from
-# the API on 2027-02-26. Their request must not change while they still work.
-LEGACY_OPENAI_MODELS = ("gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1")
 
 
 def _sent_fields(request) -> list[tuple[str, str]]:
@@ -81,18 +75,6 @@ class TestOpenAIProviderInit:
         t = OpenAITranscriber(api_key="k", language_mode="am")
         assert t._language_mode == "auto"
 
-    def test_custom_vocabulary_builds_prompt(self):
-        t = OpenAITranscriber(
-            api_key="k",
-            model="gpt-4o-mini-transcribe",
-            custom_vocabulary="Kubernetes, Splunk SOAR",
-        )
-        assert t._prompt == "Kubernetes, Splunk SOAR"
-
-    def test_empty_custom_vocabulary_gives_empty_prompt(self):
-        t = OpenAITranscriber(api_key="k", model="gpt-4o-mini-transcribe")
-        assert t._prompt == ""
-
     def test_an_unknown_model_id_falls_back_to_the_default(self):
         """`gpt-live-transcribe` is the replacement OpenAI's deprecation
         notice names, and it answers on the realtime endpoint only -- the same
@@ -134,9 +116,7 @@ class TestOpenAIBatchTranscription:
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_transcribe_json_payload(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "Hallo Welt"}))
-        t = OpenAITranscriber(
-            api_key="key", language_mode="de", model="gpt-4o-mini-transcribe"
-        )
+        t = OpenAITranscriber(api_key="key", language_mode="de")
         result = t.transcribe_batch(b"RIFF fake")
         assert result == "Hallo Welt"
 
@@ -145,34 +125,9 @@ class TestOpenAIBatchTranscription:
         assert req.get_header("Authorization") == "Bearer key"
         body = req.data.decode("utf-8", errors="ignore")
         assert 'name="model"' in body
-        assert 'name="language"' in body
-        assert "gpt-4o-mini-transcribe" in body
+        assert 'name="languages[]"' in body
+        assert "gpt-transcribe" in body
         assert "de" in body
-
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_custom_vocabulary_included_in_request(self, mock_urlopen):
-        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
-        t = OpenAITranscriber(
-            api_key="key",
-            model="gpt-4o-mini-transcribe",
-            custom_vocabulary="Kubernetes, Splunk SOAR",
-        )
-        t.transcribe_batch(b"RIFF fake")
-
-        req = mock_urlopen.call_args[0][0]
-        body = req.data.decode("utf-8", errors="ignore")
-        assert 'name="prompt"' in body
-        assert "Kubernetes, Splunk SOAR" in body
-
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_empty_custom_vocabulary_omits_prompt_field(self, mock_urlopen):
-        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
-        t = OpenAITranscriber(api_key="key", model="gpt-4o-mini-transcribe")
-        t.transcribe_batch(b"RIFF fake")
-
-        req = mock_urlopen.call_args[0][0]
-        body = req.data.decode("utf-8", errors="ignore")
-        assert 'name="prompt"' not in body
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):
@@ -222,35 +177,37 @@ class TestOpenAIModelRoster:
         assert DEFAULT_OPENAI_MODEL == "gpt-transcribe"
         # The diarize id the endpoint also accepts is deliberately absent:
         # the app has no speaker UI.
-        assert set(OPENAI_MODELS) == {"gpt-transcribe", *LEGACY_OPENAI_MODELS}
+        assert OPENAI_MODELS == ("gpt-transcribe",)
 
-    def test_only_known_models_take_the_array_fields(self):
-        assert set(OPENAI_ARRAY_FIELD_MODELS) <= set(OPENAI_MODELS)
-        assert set(OPENAI_ARRAY_FIELD_MODELS) == {"gpt-transcribe"}
+    def test_the_models_openai_removes_on_2027_02_26_are_not_offered(self):
+        """`whisper-1`, `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` are on
+        OpenAI's deprecations page (read 2026-11-24) with that removal date;
+        a saved choice of one moves to `gpt-transcribe`."""
+        from stt_app.config import RETIRED_REMOTE_MODELS
 
-    def test_all_four_models_offer_the_same_languages(self):
+        retired = RETIRED_REMOTE_MODELS["openai"]
+        assert set(retired) == {
+            "whisper-1",
+            "gpt-4o-transcribe",
+            "gpt-4o-mini-transcribe",
+        }
+        assert set(retired.values()) == {"gpt-transcribe"}
+        assert not set(retired) & set(OPENAI_MODELS)
+
+    def test_the_language_list_is_the_engines_one(self):
         """OpenAI's guide enumerates no language list for `gpt-transcribe`,
-        only the code formats it accepts, so every model keeps the engine's
-        one list. A list narrowed for a single model would silently take
-        languages away from the others."""
+        only the code formats it accepts."""
         from stt_app.config import OPENAI_LANGUAGE_MODES, language_modes_for_selection
 
-        for model in OPENAI_MODELS:
-            assert language_modes_for_selection("openai", model) == (
-                OPENAI_LANGUAGE_MODES
-            )
+        assert language_modes_for_selection("openai", "gpt-transcribe") == (
+            OPENAI_LANGUAGE_MODES
+        )
         assert {"auto", "de", "en"} <= set(OPENAI_LANGUAGE_MODES)
 
-    def test_every_model_has_a_label_and_the_deprecated_ones_carry_the_date(
-        self,
-    ):
+    def test_the_model_has_a_label(self):
         from stt_app.settings_dialog_helpers import _REMOTE_MODEL_LABELS
 
-        for model in OPENAI_MODELS:
-            assert model in _REMOTE_MODEL_LABELS
         assert "current" in _REMOTE_MODEL_LABELS["gpt-transcribe"]
-        for model in LEGACY_OPENAI_MODELS:
-            assert "2027-02-26" in _REMOTE_MODEL_LABELS[model]
 
 
 class TestGptTranscribeRequestFields:
@@ -354,48 +311,6 @@ class TestGptTranscribeRequestFields:
         ]
 
 
-class TestLegacyOpenAIRequestFields:
-    @pytest.mark.parametrize("model", LEGACY_OPENAI_MODELS)
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_the_deprecated_models_send_exactly_what_they_always_sent(
-        self, mock_urlopen, model
-    ):
-        """They work until 2027-02-26 and have no `keywords[]`/`languages[]`
-        field, so the new shape must not leak into their request."""
-        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
-        transcriber = OpenAITranscriber(
-            api_key="key",
-            model=model,
-            language_mode="de",
-            custom_vocabulary="Kubernetes, Splunk SOAR",
-        )
-
-        transcriber.transcribe_batch(b"RIFF fake")
-
-        assert _sent_fields(mock_urlopen.call_args[0][0]) == [
-            ("model", model),
-            ("language", "de"),
-            ("prompt", "Kubernetes, Splunk SOAR"),
-            ("response_format", "json"),
-        ]
-
-    @pytest.mark.parametrize("model", LEGACY_OPENAI_MODELS)
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_a_term_with_an_angle_bracket_still_reaches_the_prompt(
-        self, mock_urlopen, model
-    ):
-        """The character ban is a `keywords[]` rule; dropping the term from a
-        `prompt` would remove biasing these models accept."""
-        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
-        transcriber = OpenAITranscriber(
-            api_key="key", model=model, custom_vocabulary="<div>"
-        )
-
-        transcriber.transcribe_batch(b"RIFF fake")
-
-        assert ("prompt", "<div>") in _sent_fields(mock_urlopen.call_args[0][0])
-
-
 def _wav_seconds(seconds: float) -> bytes:
     """A 16 kHz mono 16-bit WAV, the format the app records."""
     count = int(seconds * 16_000)
@@ -431,38 +346,19 @@ def _answers(*texts: str):
 class TestOpenAILongRecordings:
     """Past OpenAI's limits the recording goes out in parts.
 
-    25 MB per file is about 13 minutes of the app's WAV, and
-    `gpt-4o-transcribe` / `gpt-4o-mini-transcribe` stop at "2,000 max output
-    tokens" -- silently, with a transcript that reads like a complete one.
+    25 MB per file is about 13 minutes of the app's WAV; parts stay at ten.
     """
 
-    @pytest.mark.parametrize(
-        ("model", "seconds", "requests"),
-        [
-            ("gpt-4o-mini-transcribe", 181.0, 2),
-            ("gpt-4o-transcribe", 181.0, 2),
-            ("gpt-transcribe", 181.0, 1),
-            ("whisper-1", 181.0, 1),
-            ("gpt-transcribe", 601.0, 2),
-            ("whisper-1", 601.0, 2),
-        ],
-    )
+    @pytest.mark.parametrize(("seconds", "requests"), [(181.0, 1), (601.0, 2)])
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
-    def test_the_bound_is_the_models_own(self, mock_urlopen, model, seconds, requests):
-        bound = (
-            OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS
-            if "gpt-4o" in model
-            else OPENAI_MAX_PART_SECONDS
-        )
+    def test_the_bound_is_ten_minutes(self, mock_urlopen, seconds, requests):
         mock_urlopen.side_effect = _answers("eins", "zwei")
 
-        OpenAITranscriber(api_key="key", model=model).transcribe_batch(
-            _wav_seconds(seconds)
-        )
+        OpenAITranscriber(api_key="key").transcribe_batch(_wav_seconds(seconds))
 
         sent = [_sent_audio(call.args[0]) for call in mock_urlopen.call_args_list]
         assert len(sent) == requests
-        assert all(_seconds_of(part) <= bound for part in sent)
+        assert all(_seconds_of(part) <= OPENAI_MAX_PART_SECONDS for part in sent)
         assert sum(_seconds_of(part) for part in sent) == pytest.approx(seconds)
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
@@ -471,20 +367,20 @@ class TestOpenAILongRecordings:
         progress: list[str] = []
         transcriber = OpenAITranscriber(
             api_key="key",
-            model="gpt-4o-mini-transcribe",
             language_mode="de",
             custom_vocabulary="Kubernetes, Splunk SOAR",
         )
         transcriber.set_progress_callback(progress.append)
 
-        text = transcriber.transcribe_batch(_wav_seconds(301.0))
+        text = transcriber.transcribe_batch(_wav_seconds(601.0))
 
         assert text == "erster teil zweiter teil"
         for call in mock_urlopen.call_args_list:
             assert _sent_fields(call.args[0]) == [
-                ("model", "gpt-4o-mini-transcribe"),
-                ("language", "de"),
-                ("prompt", "Kubernetes, Splunk SOAR"),
+                ("model", "gpt-transcribe"),
+                ("languages[]", "de"),
+                ("keywords[]", "Kubernetes"),
+                ("keywords[]", "Splunk SOAR"),
                 ("response_format", "json"),
             ]
         assert progress == [
@@ -515,10 +411,10 @@ class TestOpenAILongRecordings:
                 url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
             ),
         ]
-        transcriber = OpenAITranscriber(api_key="key", model="gpt-4o-transcribe")
+        transcriber = OpenAITranscriber(api_key="key")
 
         with pytest.raises(TranscriptionError) as excinfo:
-            transcriber.transcribe_batch(_wav_seconds(301.0))
+            transcriber.transcribe_batch(_wav_seconds(601.0))
 
         message = str(excinfo.value)
         assert "part 2 of 2" in message
@@ -528,11 +424,11 @@ class TestOpenAILongRecordings:
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_a_cancel_between_parts_sends_no_further_request(self, mock_urlopen):
         mock_urlopen.side_effect = _answers("erster teil", "zweiter teil")
-        transcriber = OpenAITranscriber(api_key="key", model="gpt-4o-transcribe")
+        transcriber = OpenAITranscriber(api_key="key")
         transcriber.set_cancel_check(lambda: mock_urlopen.call_count >= 1)
 
         with pytest.raises(TranscriptionCanceled):
-            transcriber.transcribe_batch(_wav_seconds(301.0))
+            transcriber.transcribe_batch(_wav_seconds(601.0))
 
         assert mock_urlopen.call_count == 1
 

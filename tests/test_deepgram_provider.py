@@ -89,8 +89,8 @@ class TestDeepgramTranscriberInit:
         assert t._model == DEFAULT_DEEPGRAM_MODEL
 
     def test_custom_model(self):
-        t = DeepgramTranscriber(api_key="key", model="nova-2")
-        assert t._model == "nova-2"
+        t = DeepgramTranscriber(api_key="key", model="nova-3-medical")
+        assert t._model == "nova-3-medical"
 
     def test_default_language_mode(self):
         t = DeepgramTranscriber(api_key="key")
@@ -103,8 +103,8 @@ class TestDeepgramTranscriberInit:
     def test_language_not_supported_by_selected_model_falls_back_to_auto(self):
         t = DeepgramTranscriber(
             api_key="key",
-            language_mode="ar",
-            model="nova-2",
+            language_mode="zz",
+            model="nova-3",
         )
 
         assert t._language_mode == "auto"
@@ -215,12 +215,12 @@ class TestDeepgramTranscribeBatch:
     def test_model_sent_in_query_params(self, mock_urlopen):
         """The selected model is sent as a query parameter."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
-        t = DeepgramTranscriber(api_key="key", model="nova-2")
+        t = DeepgramTranscriber(api_key="key", model="nova-3-medical")
         t.transcribe_batch(b"RIFF fake")
 
         call_args = mock_urlopen.call_args
         req = call_args[0][0]
-        assert "model=nova-2" in req.full_url
+        assert "model=nova-3-medical" in req.full_url
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_custom_vocabulary_sends_keyterm_for_nova_3(self, mock_urlopen):
@@ -239,22 +239,54 @@ class TestDeepgramTranscribeBatch:
         assert params["keyterm"] == ["Kubernetes", "Splunk SOAR"]
         assert "keywords" not in params
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
-    def test_custom_vocabulary_sends_keywords_for_nova_2(self, mock_urlopen):
-        """nova-2 uses the repeated keywords query parameter."""
-        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
-        t = DeepgramTranscriber(
-            api_key="key",
-            model="nova-2",
-            custom_vocabulary="Kubernetes, Splunk SOAR",
-        )
-        t.transcribe_batch(b"RIFF fake")
+    def test_keyterms_over_the_token_limit_drop_from_the_end(self):
+        # Deepgram answers more than 500 tokens of keyterms with an error. Each
+        # 12-letter term is estimated at 5 tokens, so 80 of 100 fit the 400
+        # budget and the last 20 are dropped.
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        kept, dropped = deepgram_provider.fit_keyterms(terms)
+        assert kept == terms[:80]
+        assert dropped == 20
+        assert deepgram_provider.fit_keyterms(terms[:10]) == (terms[:10], 0)
 
-        req = mock_urlopen.call_args[0][0]
-        query = urllib.parse.urlparse(req.full_url).query
-        params = urllib.parse.parse_qs(query)
-        assert params["keywords"] == ["Kubernetes", "Splunk SOAR"]
-        assert "keyterm" not in params
+    def test_an_enormous_first_term_does_not_cost_the_whole_list(self):
+        short = [f"Term{index}" for index in range(10)]
+        kept, dropped = deepgram_provider.fit_keyterms(["x" * 3000, *short])
+        assert kept == short
+        assert dropped == 1
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_batch_request_stays_under_the_keyterm_limit_and_logs_once(
+        self, mock_urlopen, caplog
+    ):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        with caplog.at_level(logging.WARNING, logger=deepgram_provider.logger.name):
+            t = DeepgramTranscriber(
+                api_key="key", model="nova-3", custom_vocabulary=", ".join(terms)
+            )
+            t.transcribe_batch(b"RIFF fake")
+            t.transcribe_batch(b"RIFF fake")
+
+        for call in mock_urlopen.call_args_list:
+            query = urllib.parse.urlparse(call[0][0].full_url).query
+            assert urllib.parse.parse_qs(query)["keyterm"] == terms[:80]
+        warnings = [r for r in caplog.records if "20 term(s)" in r.getMessage()]
+        assert len(warnings) == 1
+
+    def test_stream_request_stays_under_the_keyterm_limit(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        terms = [f"Termnumber{index:02d}" for index in range(100)]
+        t = DeepgramTranscriber(
+            api_key="key", model="nova-3", custom_vocabulary=", ".join(terms)
+        )
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        ws = _FakeWebSocketApp.instances[-1]
+        query = urllib.parse.urlparse(ws.url).query
+        assert urllib.parse.parse_qs(query)["keyterm"] == terms[:80]
+        t.abort_stream()
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_empty_custom_vocabulary_omits_vocabulary_params(self, mock_urlopen):
@@ -574,23 +606,6 @@ class TestDeepgramStreaming:
         params = urllib.parse.parse_qs(query)
         assert params["keyterm"] == ["Kubernetes", "Splunk SOAR"]
         assert "keywords" not in params
-        t.abort_stream()
-
-    def test_custom_vocabulary_streams_with_keywords_for_nova_2(self, monkeypatch):
-        _FakeWebSocketApp.instances = []
-        t = DeepgramTranscriber(
-            api_key="key",
-            model="nova-2",
-            custom_vocabulary="Kubernetes, Splunk SOAR",
-        )
-        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
-
-        t.start_stream()
-        ws = _FakeWebSocketApp.instances[-1]
-        query = urllib.parse.urlparse(ws.url).query
-        params = urllib.parse.parse_qs(query)
-        assert params["keywords"] == ["Kubernetes", "Splunk SOAR"]
-        assert "keyterm" not in params
         t.abort_stream()
 
     def test_streaming_lifecycle(self, monkeypatch):

@@ -60,6 +60,11 @@ QPushButton[primary="true"]:pressed:enabled {
     background-color: #0d4779;
     border-color: #08375f;
 }
+QPushButton[primary="true"]:disabled {
+    color: #6b7280;
+    background-color: #e5e7eb;
+    border-color: #c7cdd4;
+}
 QProgressBar {
     min-height: 18px;
     color: #1f2933;

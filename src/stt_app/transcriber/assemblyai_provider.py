@@ -1,7 +1,7 @@
 """AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
-Real-time streaming via AssemblyAI's Universal-3.6 Pro (v3) WebSocket API
+Real-time streaming via AssemblyAI-STT-3.7-Realtime (v3) WebSocket API
 (``assemblyai.streaming.v3.StreamingClient``); the legacy v2
 ``RealtimeTranscriber`` API has been retired by AssemblyAI.
 Requires: pip install assemblyai
@@ -22,6 +22,7 @@ from ..app_paths import temp_audio_dir
 from ..config import (
     ASSEMBLYAI_API_BASE_URLS,
     ASSEMBLYAI_BATCH_MAX_WAIT_S,
+    ASSEMBLYAI_MIN_SDK_VERSION,
     ASSEMBLYAI_STREAMING_HOSTS,
     ASSEMBLYAI_STREAMING_MODEL,
     AUDIO_SAMPLE_RATE,
@@ -32,6 +33,7 @@ from ..config import (
     normalize_assemblyai_region,
     parse_custom_vocabulary,
 )
+from ..dependency_check import installed_version, version_at_least
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import format_ssl_error_message, http_error_suffix
@@ -48,11 +50,38 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+def sdk_version_problem() -> str | None:
+    """One sentence for an installed SDK older than this code needs, or None.
+
+    A source checkout keeps whatever packages were installed before a
+    `git pull`, so the SDK can be older than the pin; the failure then was a
+    raw pydantic text from deep inside the SDK. Naming both versions and both
+    update commands is what the user can act on.
+    """
+    installed = installed_version("assemblyai")
+    if installed is None or version_at_least(installed, ASSEMBLYAI_MIN_SDK_VERSION):
+        return None
+    version_text = f"version {installed}" if installed.strip() else "an unknown version"
+    return (
+        f"The installed AssemblyAI SDK is {version_text}, but this version of the app "
+        f"needs {ASSEMBLYAI_MIN_SDK_VERSION} or newer. Update the Python packages "
+        "in the app folder with `uv sync` (a uv environment) or "
+        "`pip install -r requirements-win.txt`, then restart the app."
+    )
+
+
+def _require_current_sdk() -> None:
+    problem = sdk_version_problem()
+    if problem:
+        raise TranscriptionError(problem)
+
+
 def _default_assemblyai():
     """Lazy import to avoid hard dependency at module level."""
     try:
         import assemblyai as aai  # type: ignore
 
+        _require_current_sdk()
         return aai
     except ImportError:
         raise TranscriptionError(
@@ -216,6 +245,15 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         if self._word_boost:
             kwargs["keyterms_prompt"] = self._word_boost
 
+        # Dictation wants clean written text. AssemblyAI-STT-3.7 defaults
+        # `disfluencies` (filler words, false starts) to true, and from
+        # 2026-12-08 accounts whose default is universal-3-5-pro or
+        # universal-3-pro move to it (a universal-2 default is not upgraded,
+        # migration guide read 2026-11-25); Universal-2 defaults to false.
+        # Both are sent, so the result never depends on a vendor default.
+        kwargs["disfluencies"] = False
+        kwargs["format_text"] = True
+
         return aai.TranscriptionConfig(**kwargs)
 
     @staticmethod
@@ -223,11 +261,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         selected = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         if selected == "universal-2":
             return ["universal-2"]
-        if selected == "universal-3-5-pro":
-            return ["universal-3-5-pro"]
+        if selected == "assemblyai-stt-3-7":
+            return ["assemblyai-stt-3-7"]
         raise TranscriptionError(
             "Unsupported AssemblyAI model: "
-            f"{model}. Choose universal-3-5-pro or universal-2."
+            f"{model}. Choose assemblyai-stt-3-7 or universal-2."
         )
 
     @staticmethod
@@ -398,6 +436,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         import urllib.error
         import urllib.request
 
+        problem = sdk_version_problem()
+        if problem:
+            return False, problem
+
         url = f"{ASSEMBLYAI_API_BASE_URLS[self._region]}/v2/transcript?limit=1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._api_key)
@@ -537,12 +579,13 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        """Start a Universal-3.6 Pro (v3) streaming session.
+        """Start an AssemblyAI-STT-3.7-Realtime (v3) streaming session.
 
         The ``on_partial`` callback receives the accumulated transcript text
         (all completed turns + the current turn) each time an update arrives
         from the server.
         """
+        _require_current_sdk()
         from assemblyai.streaming.v3 import (
             Encoding,
             StreamingClient,
@@ -610,9 +653,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "speech_model": ASSEMBLYAI_STREAMING_MODEL,
             }
             if self._word_boost:
-                # U3.6 Pro accepts up to 100 terms of at most 50 characters
-                # each, keyterms included in its price (docs and pricing page,
-                # read 2026-10-01); a longer term is ignored by the service.
+                # The model accepts up to 100 terms of at most 50 characters
+                # each, keyterms included in its price (streaming WebSocket
+                # spec and prompting page, read 2026-11-24); a longer term is
+                # ignored by the service.
                 # The shared vocabulary parser already caps the input at 100.
                 stream_kwargs["keyterms_prompt"] = self._word_boost
             client.connect(StreamingParameters(**stream_kwargs))

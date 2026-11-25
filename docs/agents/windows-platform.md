@@ -164,3 +164,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/windows-platform.m
   the thread error, so `Win32HotkeyApi.get_last_error` read 0 ("Unknown
   Windows hotkey registration error") instead of 1409. `wintypes.HWND` is
   `c_void_p`, so a declared call also accepts a legal 64-bit handle.
+- **A source checkout's Python packages are checked at start (2026-11-25,
+  `dependency_check.py`).** After a `git pull` that bumps a pin the installed
+  packages stay old until `uv sync` (this PC) or `pip install -r
+  requirements-win.txt` (the work PC) runs; with `assemblyai` 1.6.1 left in
+  place, every AssemblyAI streaming start failed with a raw pydantic text.
+  Two parts: (1) the AssemblyAI provider compares the installed SDK with
+  `config.ASSEMBLYAI_MIN_SDK_VERSION` (equal to the pin, tested) before using
+  the SDK, in batch, streaming and the Providers-tab connection test, and says
+  both versions and both commands in one sentence; (2) `main` starts one worker
+  thread that compares every pin of `requirements-win.txt` with
+  `importlib.metadata`, logs one `python_packages_out_of_date` WARNING and
+  posts one tray notice through a `GuiThreadReporter`, held until the tray icon
+  exists. Only for a source checkout (never a frozen build, the same test as
+  `local_webgpu_asr._find_source_package_root`); the command is `uv sync` when
+  the running interpreter is the checkout's `.venv` and `uv.lock` exists.
+  Nothing is installed automatically: that is a separate decision.
+  **Unverified live**: not run against a real stale checkout.

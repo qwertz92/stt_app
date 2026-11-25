@@ -100,6 +100,9 @@ class FakeController:
     def quit_pending_work(self):
         return self.pending_quit_work
 
+    def has_active_session(self):
+        return False
+
     def hold_for_quit(self):
         self.quit_holds += 1
 
@@ -1433,3 +1436,219 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert dialog is not None and dialog.isVisible()
     dialog.quit_now_button.click()
     assert quits == [True]
+
+
+def test_the_settings_prebuild_waits_while_a_dictation_runs(monkeypatch):
+    """The Settings dialog is built ahead on the Qt thread 2.5 s after start,
+    which took 2.4-3.3 s in the owner's log; a dictation started right after
+    launch (one did, 1 s after it) had its stop press, result and paste wait
+    behind it. The build now waits until no recording or transcription runs."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    built = []
+
+    class CountingSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
+        audio_device_refresh_requested = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            built.append(self)
+
+        def prepare_for_first_show(self):
+            return None
+
+    monkeypatch.setattr(main_module, "SettingsDialog", CountingSettingsDialog)
+    monkeypatch.setattr(main_module, "_SETTINGS_PREBUILD_DELAY_MS", 10)
+    controller = FakeController()
+    controller.session_active = True
+    controller.has_active_session = lambda: controller.session_active
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    QtTest.QTest.qWait(100)
+    assert built == [], "built while the dictation ran"
+    controller.session_active = False
+    QtTest.QTest.qWait(100)
+    assert len(built) == 1
+    QtTest.QTest.qWait(50)
+    assert len(built) == 1, "built once"
+    _ = tray
+
+
+def test_outdated_packages_reach_the_tray_from_the_worker_thread(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stale = [main_module.dependency_check.Outdated("assemblyai", "1.6.1", "1.10.11")]
+    worker_threads = []
+
+    def fake_check():
+        worker_threads.append(threading.current_thread())
+        return stale, "uv sync"
+
+    monkeypatch.setattr(
+        main_module.dependency_check, "check_checkout_packages", fake_check
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._start_dependency_check(tray)
+    deadline = time.monotonic() + 5
+    while not shown and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert len(shown) == 1
+    title, text = shown[0][:2]
+    assert title == "Update the Python packages"
+    assert "assemblyai" in text and "uv sync" in text
+    assert worker_threads and worker_threads[0] is not threading.main_thread()
+
+
+def test_an_up_to_date_checkout_shows_no_package_notice(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    done = threading.Event()
+
+    def fake_check():
+        done.set()
+
+    monkeypatch.setattr(
+        main_module.dependency_check, "check_checkout_packages", fake_check
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._start_dependency_check(tray)
+    assert done.wait(5)
+    for _ in range(20):
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert shown == []
+
+
+@pytest.fixture(autouse=True)
+def _fresh_start_notice_clock(monkeypatch):
+    monkeypatch.setattr(main_module, "_start_notice_not_before", 0.0)
+
+
+def test_two_start_notices_are_never_sent_closer_than_the_spacing(monkeypatch):
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args[:2])
+    )
+
+    main_module._show_tray_notice_when_ready(tray, "Update the Python packages", "a")
+    main_module._show_model_notice_when_ready(tray, "b")
+
+    # Same tick: the first goes out, the second is held for the spacing.
+    assert shown == [("Update the Python packages", "a")]
+    assert len(timers) == 1
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+
+    callback()  # fired too early (clock unchanged): held again, not sent
+    assert len(shown) == 1 and len(timers) == 1
+    timers.pop()
+
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+    assert shown[-1] == ("Speech model updated", "b")
+    assert timers == []
+
+
+def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
+    """The tray drops a balloon sent before the shell accepted the icon, and the
+    move the notice announces is already saved, so it must be held back."""
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: tray.visible,
+        showMessage=lambda *args: shown.append(args),
+    )
+
+    main_module._show_model_notice_when_ready(tray, "notice")
+    assert shown == []
+    assert len(timers) == 1
+
+    # Still not registered after a retry: held back again, not sent.
+    timers.pop()[1]()
+    assert shown == []
+    assert len(timers) == 1
+
+    tray.visible = True
+    timers.pop()[1]()
+    assert len(shown) == 1 and shown[0][1] == "notice"
+    assert timers == []
+
+
+def test_the_model_notice_is_sent_after_the_last_wait_even_without_an_icon(
+    monkeypatch,
+):
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: False, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._show_model_notice_when_ready(
+        tray, "notice", waited=main_module._MODEL_NOTICE_MAX_WAITS
+    )
+
+    assert len(shown) == 1
+    assert timers == []
+
+
+def test_a_moved_model_choice_is_shown_as_one_tray_message():
+    shown = []
+    tray = SimpleNamespace(showMessage=lambda *args: shown.append(args))
+
+    main_module._show_model_notice(tray, "OpenAI: whisper-1 is no longer offered.")
+
+    assert len(shown) == 1
+    title, text, icon, _timeout = shown[0]
+    assert title == "Speech model updated"
+    assert text == "OpenAI: whisper-1 is no longer offered."
+    assert icon == QtWidgets.QSystemTrayIcon.Information

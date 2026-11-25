@@ -43,9 +43,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   on a ~350 ms path.
 - **AssemblyAI realtime (v3)**: never reintroduce v2 realtime or
   earlier Universal-Streaming. `assemblyai.streaming.v3.StreamingClient`,
-  model `ASSEMBLYAI_STREAMING_MODEL` (`universal-3-6-pro` since 2026-10-01:
-  streaming-only, same price and parameters as 3.5 Pro, 32 languages; batch
-  stays on `universal-3-5-pro`), optional `keyterms_prompt`, no
+  model `ASSEMBLYAI_STREAMING_MODEL` (`assemblyai-stt-3-7-realtime` since
+  2026-11-24: $0.30/h against $0.45/h for `universal-3-6-pro`, 32 languages,
+  "for notetakers and ambient transcription"; its `-agent` sibling is the
+  voice-agent model and not used; the SDK must be >= 1.10, where the
+  streaming `SpeechModel` enum knows it), optional `keyterms_prompt`, no
   `language_detection` / `format_turns`; the batch selector does not affect
   it. Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
   thread with bounded joins; the 8 s budget covers the text-bearing teardown
@@ -86,8 +88,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single
-  source. Cohere/Granite ONNX/WebGPU are batch-only; Nemotron streams; a
-  local model never disables AssemblyAI/Deepgram streaming.
+  source. Every local model in `LOCAL_BATCH_ONLY_MODELS` (Cohere, Granite
+  ONNX/WebGPU, Parakeet, Canary, Granite CTC) is batch-only; Nemotron and
+  the faster-whisper sizes stream; a local model never disables
+  AssemblyAI/Deepgram streaming.
+- **In Settings the mode is chosen first and filters the lists below it**
+  (2026-11-24, owner's request): the Mode row heads the Transcription tab;
+  in Streaming, engines and local models that cannot stream are hidden and
+  disabled (`_update_mode_availability`, `_local_model_offered`), and the
+  Mode row's hint says "Only engines and models that can stream are
+  listed." Streaming itself is always selectable. The current selection is
+  never switched: a saved or chosen engine/model that cannot stream stays
+  listed and selected and `_streaming_selection_issue` names it in red in
+  the reserved note under the Model row; the controller still refuses such
+  a dictation with its own message. Why not the other way round (the mode
+  follows the model, as before): a greyed-out Streaming entry with its
+  reason in a tooltip was a dead end for a user on a batch-only model, the
+  user who wants streaming had to find a model that streams by trial, and
+  the old `_update_mode_availability` flipped Mode to Batch without a word
+  whenever engine or model changed -- including on opening the dialog, so
+  the next Save wrote Batch over a stored Streaming.
 - **Streaming text state**: reconciliation lives in `streaming_text.py`; the
   controller only orchestrates. Insertion is append-only.
   - Local faster-whisper uses `merge_rolling_window_transcript`, not
@@ -104,6 +124,40 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
     `committed_text` prefix** (`compute_stream_locked_prefix` then stays
     frozen): joining re-pasted the dictation on a provider revision (86
     words for 48).
+  - **"The committed prefix" means the same words, not the same spelling**
+    (2026-11-24): `compute_stream_locked_prefix`'s committed-prefix check
+    and `append_only_stream_extension_tail` (the finalize's tail) compare
+    words with `_same_words_prefix_len`, which ignores case and the marks
+    `_stream_word_key` strips; `committed_text` keeps the words as pasted.
+    Stability between two partials stays exact (`common_prefix_len`): with
+    the word test there too, faster-whisper `small` committed words one
+    partial earlier that its later windows revised (127 document word
+    errors against history instead of 112).
+    The exact test froze live insertion and emptied the finalize's tail
+    whenever a pasted word later read with other punctuation -- Nemotron
+    attaches a comma or period to the word before it one chunk later, so a
+    committed "supper" met a final "supper, which ...". Measured on 11 real
+    clips (MLS German, LibriSpeech, the owner's bench recording) at real-time
+    pace: Nemotron's document missed 102 words that history held, in 9 of 11
+    clips (document WER 34.6 % against 10.5 % for its own final text); with
+    the word test, 0 words and 10.5 %. A different word still ends the
+    prefix (test `test_a_revised_word_still_freezes_live_insertion`).
+  - **A partial that only adds marks or casing replaces the candidate**
+    (2026-11-25, review finding): in `append_only_stream_partial_candidate`,
+    whole-session text whose words equal the previous text's
+    (`_same_words_prefix_len`) is taken as it stands; the overlap branch
+    kept the previous text and dropped the mark before its word was
+    inserted. This replacement is not used for a rolling window
+    (`current_is_a_trailing_window`); the rolling merge's seam search does
+    use `_stream_word_key`, so since 2026-11-25 it also matches across
+    quotes, brackets and the ellipsis (`„hallo welt“` aligns with `hallo
+    welt`, test `test_a_quoted_window_aligns_with_the_unquoted_text`). Measured by replaying the 11
+    clips: Nemotron's document carries 32 of the final's 32 marks and equals
+    the final in 11 of 11 clips (before: 11 marks and 2 clips; after the
+    word-prefix fix alone: 17 and 2). The faster-whisper sizes are unchanged
+    (base 81 marks against 80 in the final, small 47 of 59, turbo 29 of 29):
+    what they lose are revised words, not marks. A mark added to a word
+    already inserted stays lost: that is the append-only price.
 - **Streaming finalization**: full re-transcription at stop is opt-in
   (`streaming_full_final_transcript`, default off); otherwise only the
   trailing window is merged, so stop is fast and history matches.
@@ -118,7 +172,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   20000 synthetic German merges, lost/duplicated words: old 17/74129,
   longest 29/16712, `overlap - skip` 2/62893.
 - **Punctuation is not corroboration**: `_stream_word_key` strips
-  `.,;:!?)]}`, so marks match each other. A seam needs at least one real
+  `_WORD_EDGE_MARKS` (sentence marks, the ellipsis, brackets, the German,
+  English and French quotation marks, inverted ? and !) at both edges of a
+  word, never inside it, so marks match each other. A seam needs at least one real
   word (`_substantive_word_count` > 0) while the raw count clears the
   threshold. Do not make marks non-matching in `_stream_words_match`
   ("hallo ... welt"), nor apply the threshold to the substantive count

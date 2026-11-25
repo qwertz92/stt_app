@@ -18,8 +18,12 @@ from .history_audio import (
     reveal_path_in_file_manager,
 )
 from .history_ui_actions import (
+    HISTORY_EMPTY_TEXT,
+    HISTORY_LIMIT_LABEL,
     format_history_count_label,
+    history_engine_label,
     history_import_dialog_dir,
+    history_model_label,
     notify_history_edit,
     prompt_import_overflow,
     run_history_clear,
@@ -42,6 +46,7 @@ from .transcript_history import (
 )
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
+    EmptyListNotice,
     reserve_button_width_for_texts,
     restore_vertical_scrollbar,
     set_button_feedback_state,
@@ -129,7 +134,7 @@ class HistoryDialog(QtWidgets.QDialog):
 
         controls = QtWidgets.QHBoxLayout()
         controls.setSpacing(6)
-        controls.addWidget(QtWidgets.QLabel("Stored history limit"))
+        controls.addWidget(QtWidgets.QLabel(HISTORY_LIMIT_LABEL))
         controls.addWidget(self._max_items_spin)
         controls.addWidget(self._open_recordings_button)
         controls.addStretch(1)
@@ -158,6 +163,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table.horizontalHeader().setSectionResizeMode(
             2, QtWidgets.QHeaderView.ResizeToContents
         )
+        self._empty_notice = EmptyListNotice(self._table, HISTORY_EMPTY_TEXT)
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
@@ -329,8 +335,14 @@ class HistoryDialog(QtWidgets.QDialog):
                 format_history_timestamp(entry.created_at, self._display_timezone)
             ),
         )
-        self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
-        self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
+        self._table.setItem(
+            row, 1, QtWidgets.QTableWidgetItem(history_engine_label(entry.engine))
+        )
+        self._table.setItem(
+            row,
+            2,
+            QtWidgets.QTableWidgetItem(history_model_label(entry.engine, entry.model)),
+        )
         self._table.setItem(
             row,
             3,
@@ -433,6 +445,7 @@ class HistoryDialog(QtWidgets.QDialog):
     ) -> None:
         self._last_total_entries = total
         self._update_history_count_label(total)
+        self._empty_notice.set_empty(not self._entries)
         if self._entries:
             fallback_row = previous_selected_rows[0] if previous_selected_rows else 0
             rows_to_select = (

@@ -29,6 +29,7 @@ from .config import (
     DEFAULT_OPENAI_MODEL,
     DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
+    ENGINE_LABELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
@@ -148,6 +149,9 @@ class ElidingLabel(QtWidgets.QLabel):
     control, which holds the elided text.
     """
 
+    # Which end of a too-long text is cut; a path keeps both ends (middle).
+    elide_mode = QtCore.Qt.ElideRight
+
     def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._full_text = ""
@@ -219,7 +223,7 @@ class ElidingLabel(QtWidgets.QLabel):
             super().setText(single_line)
             return
         super().setText(
-            self.fontMetrics().elidedText(single_line, QtCore.Qt.ElideRight, available)
+            self.fontMetrics().elidedText(single_line, self.elide_mode, available)
         )
 
 
@@ -277,27 +281,20 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-large-v3": "whisper-large-v3 (best quality, $0.111/hr)",
     "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
     "gpt-transcribe": "gpt-transcribe (current default, recommended by OpenAI)",
-    # OpenAI notified deprecation on 2026-08-26 and removes these three from
-    # the API on 2027-02-26, so the label carries the date rather than a
-    # quality claim: which to pick is now a question of how long it lasts.
-    "gpt-4o-mini-transcribe": (
-        "gpt-4o-mini-transcribe (removed by OpenAI on 2027-02-26)"
-    ),
-    "gpt-4o-transcribe": "gpt-4o-transcribe (removed by OpenAI on 2027-02-26)",
-    "whisper-1": "whisper-1 (legacy; removed by OpenAI on 2027-02-26)",
     "nova-3": "nova-3 (current default)",
-    "nova-2": "nova-2 (older generation)",
-    "universal-3-5-pro": "universal-3-5-pro (latest, highest accuracy; 18 languages)",
+    "assemblyai-stt-3-7": "assemblyai-stt-3-7 (latest, highest accuracy; 32 languages)",
     "universal-2": "universal-2 (fast, broad language coverage)",
-    "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
+    "scribe_v3": "scribe_v3 (current default, highest published accuracy)",
     "mai-transcribe-2": "mai-transcribe-2 (current default, 60 languages)",
-    "mai-transcribe-1.5": "mai-transcribe-1.5 (previous generation, 43 languages)",
-    "mai-transcribe-1": "mai-transcribe-1 (deprecated by Microsoft)",
-    "fun-asr-realtime": "fun-asr-realtime (31 languages; no German)",
+    "fun-asr-realtime": "fun-asr-realtime (30 languages)",
     "melia-1": "melia-1 (current default; Auto detects the language)",
     "enhanced": "enhanced (highest accuracy; pick a language)",
-    "standard": "standard (pick a language)",
-    "voxtral-mini-2602": "voxtral-mini-2602 (Voxtral Mini Transcribe 2)",
+    "voxtral-mini-transcribe-3-0": (
+        "voxtral-mini-transcribe-3-0 (current default, $0.21/hr)"
+    ),
+    "voxtral-small-transcribe-3": (
+        "voxtral-small-transcribe-3 (slightly more accurate, $0.24/hr)"
+    ),
 }
 
 
@@ -394,25 +391,6 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
 }
 
 
-# The provider names alone: the engine pickers group them under a "Cloud"
-# header (`fill_engine_combo`), so "Remote (...)" around every name repeated
-# what the header says. The local entry names where the audio stays rather
-# than two runtime names a user does not choose between here.
-_ENGINE_LABELS: dict[str, str] = {
-    "local": "Local (on this PC)",
-    "assemblyai": "AssemblyAI",
-    "groq": "Groq",
-    "openai": "OpenAI",
-    "deepgram": "Deepgram",
-    "elevenlabs": "ElevenLabs",
-    "azure": "Azure LLM Speech",
-    "funasr": "Fun-ASR / Alibaba",
-    "speechmatics": "Speechmatics",
-    "mistral": "Mistral (Voxtral)",
-    "custom": "Custom endpoint",
-}
-
-
 _ENGINE_CLOUD_HEADER = "Cloud"
 
 
@@ -427,9 +405,7 @@ def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> N
     """
     remote = [engine for engine in engines if engine != DEFAULT_ENGINE]
     if DEFAULT_ENGINE in engines:
-        combo.addItem(
-            _ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE
-        )
+        combo.addItem(ENGINE_LABELS.get(DEFAULT_ENGINE, DEFAULT_ENGINE), DEFAULT_ENGINE)
         if remote:
             combo.insertSeparator(combo.count())
     if remote:
@@ -440,7 +416,7 @@ def fill_engine_combo(combo: QtWidgets.QComboBox, engines: tuple[str, ...]) -> N
             header.setEnabled(False)
             header.setSelectable(False)
     for engine in remote:
-        combo.addItem(_ENGINE_LABELS.get(engine, engine), engine)
+        combo.addItem(ENGINE_LABELS.get(engine, engine), engine)
 
 
 _HISTORY_TIMEZONE_LABELS: dict[str, str] = {
