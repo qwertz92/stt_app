@@ -92,6 +92,9 @@ class ElidingLabel(QtWidgets.QLabel):
     control, which holds the elided text.
     """
 
+    # Which end of a too-long text is cut; a path keeps both ends (middle).
+    elide_mode = QtCore.Qt.ElideRight
+
     def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._full_text = ""
@@ -163,7 +166,7 @@ class ElidingLabel(QtWidgets.QLabel):
             super().setText(single_line)
             return
         super().setText(
-            self.fontMetrics().elidedText(single_line, QtCore.Qt.ElideRight, available)
+            self.fontMetrics().elidedText(single_line, self.elide_mode, available)
         )
 
 

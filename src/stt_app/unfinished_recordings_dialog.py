@@ -22,6 +22,7 @@ from .dialog_style import apply_dialog_style, make_label_selectable, styled_mess
 from .history_audio import reveal_paths_in_file_manager
 from .settings_dialog_helpers import (
     _THREAD_START_ERRORS,
+    ElidingLabel,
     _emit_background_signal,
     exception_reason,
 )
@@ -110,6 +111,12 @@ def _confirm_delete(parent: QtWidgets.QWidget, count: int) -> bool:
     return box.exec() == QtWidgets.QMessageBox.Yes
 
 
+class _PathLabel(ElidingLabel):
+    """One line that keeps both ends of a long path; the tooltip has it all."""
+
+    elide_mode = QtCore.Qt.ElideMiddle
+
+
 class UnfinishedRecordingsDialog(QtWidgets.QDialog):
     """One fixed-size window for the whole decision.
 
@@ -196,13 +203,18 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
             "Transcribed text goes into History and waits for you to paste it "
             f'with the re-paste hotkey or the tray\'s "{TRAY_REPASTE_ACTION_LABEL}".\n'
             "Show in folder lets you listen first; this window stays open.\n"
-            "Keep files and close stops these questions and keeps the audio "
-            f'in a folder of its own. "{_LATER_TEXT}" leaves the audio here and '
-            "asks again at the next start."
+            "Keep files and close moves the audio into your recordings folder "
+            "(set on the Audio tab; History's Recordings folder button opens it) "
+            f'and stops these questions. "{_LATER_TEXT}" leaves the audio where '
+            "it is and asks again at the next start."
         )
         note.setWordWrap(True)
         note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         make_label_selectable(note)
+
+        # The destination of "Keep files and close", shown before the click.
+        self.keep_folder_label = _PathLabel(f"Recordings folder: {self._keep_dir}")
+        make_label_selectable(self.keep_folder_label)
 
         self.status_label = QtWidgets.QLabel()
         self.status_label.setWordWrap(True)
@@ -248,6 +260,7 @@ class UnfinishedRecordingsDialog(QtWidgets.QDialog):
         layout.addWidget(self.table)
         layout.addLayout(row_actions)
         layout.addWidget(note)
+        layout.addWidget(self.keep_folder_label)
         layout.addWidget(self.status_label)
         layout.addLayout(closing)
 

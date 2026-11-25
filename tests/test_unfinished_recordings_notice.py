@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.config import LANGUAGE_MODE_LABELS
@@ -503,4 +503,23 @@ def test_with_nothing_left_the_closing_button_no_longer_promises_to_ask(
 
     assert dialog.later_button.text() == "Close"
     assert dialog.later_button.geometry() == geometry
+    dialog.close()
+
+
+def test_the_destination_of_keep_files_is_on_screen_before_the_click(
+    app, stores, tmp_path
+):
+    _last, _history, unfinished = stores
+    _keep(unfinished, "a1", stamp="2026-10-08T10:00:00")
+    dialog = _dialog(tmp_path, unfinished)
+    dialog.show()
+    app.processEvents()
+
+    label = dialog.keep_folder_label
+    folder = str(tmp_path / "recordings")
+    assert label.isVisible()
+    assert folder in label.text()
+    assert folder in label.toolTip()
+    assert label.textInteractionFlags() & QtCore.Qt.TextSelectableByMouse
+    assert label.height() > 0
     dialog.close()
