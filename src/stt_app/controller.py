@@ -198,6 +198,9 @@ _UNSAVED_AND_UNDELIVERED_KEPT_RECORDING_MESSAGE = (
 # entirely different reasons, and only the download has measurable progress --
 # a queued preload and a running load both have none, for opposite reasons.
 _PRELOAD_PHASE_QUEUED = "queued"
+# How often a finished post-resume load looks again whether the user still
+# reads its "Loading" line before replacing it with the idle line.
+_PRELOAD_IDLE_RECHECK_MS = 1000
 _PRELOAD_PHASE_DOWNLOAD = "download"
 _PRELOAD_PHASE_LOAD = "load"
 
@@ -6512,6 +6515,11 @@ class DictationController(QtCore.QObject):
                     f"Model '{ready_model}' is ready.",
                 )
                 QtCore.QTimer.singleShot(1800, self.show_idle_status)
+            elif not session_active:
+                # A post-resume load whose line the user is reading (or that
+                # never painted over a result): it is not replaced now, but
+                # it must not keep saying "Loading" once the reader lets go.
+                self._return_to_idle_after_preload_line()
             else:
                 self._logger.info(
                     "Model '%s' became ready during active recording.", ready_model
@@ -6536,6 +6544,23 @@ class DictationController(QtCore.QObject):
                     )
                 else:
                     self._paint_status_keeping_offer("Error", message)
+
+    @QtCore.Slot()
+    def _return_to_idle_after_preload_line(self) -> None:
+        """Replace a finished preload's "Loading" line with the idle line once
+        nobody reads it; leave anything else on screen alone."""
+        if (
+            self._shutdown_started
+            or self._overlay_session_active()
+            or self._overlay.state != "Processing"
+        ):
+            return
+        if self._overlay.detail_is_being_read:
+            QtCore.QTimer.singleShot(
+                _PRELOAD_IDLE_RECHECK_MS, self._return_to_idle_after_preload_line
+            )
+            return
+        self.show_idle_status()
 
     def _on_resume_preload_failed(self, message: str, *, session_active: bool) -> None:
         """Retry the post-resume load, or give up quietly past the budget.

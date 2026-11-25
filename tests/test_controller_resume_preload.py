@@ -378,6 +378,9 @@ def test_a_failed_attempt_returns_the_overlay_to_idle_before_its_worker_ends(
         monkeypatch, plan, settings
     )
     try:
+        # Registered, so the idle line is the hotkey line and not "Hotkey
+        # registration failed.", which paints before the preload check.
+        controller.refresh_hotkey_registration()
         controller._resume_preload_attempts_left = 1
         controller._start_local_model_preload = lambda **_kwargs: None
         generation = controller._preload_generation
@@ -389,8 +392,39 @@ def test_a_failed_attempt_returns_the_overlay_to_idle_before_its_worker_ends(
             generation, False, "Selected model could not be loaded: no adapter"
         )
 
-        assert overlay.state != "Processing"
+        assert overlay.states[-1][1].startswith("Hotkey: ")
         assert controller._resume_preload_timer.isActive()
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_successful_attempt_read_by_the_user_still_ends_in_the_idle_line(
+    monkeypatch,
+):
+    """The user scrolls or selects the "Loading selected model..." line when
+    the load succeeds: nothing is painted over it then, but once the reader
+    lets go the line must not keep saying the model is loading."""
+    plan = _LoadPlan()
+    settings = _settings()
+    controller, app, overlay, _loaded = _controller_after_startup(
+        monkeypatch, plan, settings
+    )
+    monkeypatch.setattr(
+        controller_module, "_PRELOAD_IDLE_RECHECK_MS", 10, raising=False
+    )
+    try:
+        controller.refresh_hotkey_registration()
+        controller.handle_system_resume()
+        controller._resume_preload_timer.stop()
+        controller._run_resume_preload()
+        assert overlay.state == "Processing"
+        overlay.detail_is_being_read = True
+        _finish_preload(controller, app)
+        assert overlay.state == "Processing", "painted under the reader's hands"
+
+        overlay.detail_is_being_read = False
+        _pump_until(app, lambda: overlay.states[-1][1].startswith("Hotkey: "))
     finally:
         controller.shutdown()
     _ = app

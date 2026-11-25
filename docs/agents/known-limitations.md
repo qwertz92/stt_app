@@ -564,3 +564,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+- **The post-resume model load can run twice for one wake, or keep a runtime
+  from before a second sleep** (P3, review of the 2026-11-24 resume load;
+  `controller-and-jobs.md`). `QtPowerResumeEventFilter` (`hotkey.py`) calls
+  `handle_system_resume` for both PBT_APMRESUMEAUTOMATIC and
+  PBT_APMRESUMESUSPEND, coalesced only within 750 ms (`main.py`). After a
+  timer or maintenance wake Windows sends RESUMESUSPEND when the user first
+  touches the PC, so the model loaded after the first event is closed and
+  loaded again, and a dictation in those seconds pays the load. And a real
+  second sleep while an attempt is loading closes nothing (the attempt holds
+  the runtime lock), so the attempt caches a runtime built before that sleep
+  (`test_a_second_resume_during_the_load_starts_no_second_load` pins it).
+  Both need a "suspend seen since" signal (PBT_APMSUSPEND, which the filter
+  does not read today); skipping a GPU reset on a signal Windows may not
+  deliver risks a stale runtime that only real hardware can show. Kept
+  2026-11-24: about 1-2 h with tests, plus a real sleep/wake check.
+- **Three P4s from the same review**, recorded only: `windows_started_since`
+  (boot time = now minus `GetTickCount64`) is wrong after a large clock
+  correction; the "already reported" check in `dictation.log` is fooled only
+  by another session with the same start second, pid and version; the
+  Settings prebuild's single-shot (`main.py`) is context-less and may build
+  the dialog during a "Wait and insert" quit.

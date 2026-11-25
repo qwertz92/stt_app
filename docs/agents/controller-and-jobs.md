@@ -742,9 +742,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     the idle line: the worker reports before its `finally` releases (and, for
     a failed load, closes) the runtime, so the future is not done yet and
     `show_idle_status` would refuse while the progress poll is already
-    stopped (review finding: the "Loading" line stayed for good).  - It paints only where a delayed writer may (`_preload_line_may_paint`,
+    stopped (review finding: the "Loading" line stayed for good).
+  - It paints only where a delayed writer may (`_preload_line_may_paint`,
     shared with the 600 ms progress poll): never over a session, a Done or
-    an Error result, or a detail being read.
+    an Error result, or a detail being read. A successful load whose line
+    the user is reading returns to the idle line once the reader lets go
+    (`_return_to_idle_after_preload_line`, rechecked every 1 s).
   - Not changed: the runtime is still closed on every resume (recreating
     the GPU backends is why), so a wake costs one background load (2-8 s of
     GPU work) whether or not the user dictates.
@@ -838,7 +841,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     offers no switch for it: `faulthandler.enable` takes only `file` and
     `all_threads`. So the reading side filters
     (`_split_handled_exceptions`): a Windows-exception dump is handled when
-    the session quit cleanly (it survived them all) or its code is an
+    it comes before the clean-exit line of a session that quit cleanly (it
+    survived it; `main` writes that line before the interpreter joins threads
+    and tears Qt down, so a dump after it is a crash in that teardown and is
+    reported as one) or its code is an
     RPC/COM HRESULT `0x8001xxxx`, which Windows' RPC runtime raises and
     catches inside one call. Handled dumps are left out of
     `native_trace_lines` and the excerpt and counted as
