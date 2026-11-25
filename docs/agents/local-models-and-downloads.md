@@ -113,8 +113,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     display does not freeze.
   - Progress bar and "Next: ..." line take no room while hidden (2026-11-24;
     until then `setRetainSizeWhenHidden`, because the stretching list above
-    them moved the buttons 25 px). They sit below the buttons and the list is
-    as tall as its rows, so appearing moves nothing above them
+    them moved the buttons 25 px). They sit below the buttons and the list gives
+    way instead of the page, so appearing moves nothing above them
     (`docs/agents/settings-dialog.md`, "The Models tab's group").
   - Already-complete files are invisible to the hook:
     `completed_download_bytes` measures a baseline first and

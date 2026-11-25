@@ -28,18 +28,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   group, 577 px, had about 100 px of empty space under its buttons. Cause: the
   group had `Expanding` policy and stretch 1 and the list stretched inside it,
   and the status line (two reserved lines), the progress bar and the queue line
-  kept their size while hidden. Now: the list is fixed at its rows' height
-  (`_apply_local_model_scan_result`, every row shown, any count), the group has
-  no stretch and a spacer under it takes the page's spare height, the three
-  status widgets take no room while hidden. After: group 481 px, no scroll bar
-  at the default size; at 860 x 600 the page (not the list) scrolls, with all
-  rows in one scroll area. A download starting grows the group below the
-  buttons; nothing above it moves
-  (`test_the_download_area_moves_nothing_above_it_from_start_to_finish`).
-  Trade-off named: when the page is too short, one scroll bar for the page
-  replaces a list that showed five rows through its own scroll bar. To revert:
-  `git revert` the commit "fix(settings): size the Models tab's group to its
-  content".
+  kept their size while hidden. Now: the three status widgets take no room while
+  hidden; the group (`ContentCappedGroupBox`) is no taller than its content (its
+  maximum is its preferred height with the list at all its rows, recomputed on
+  every layout request); and **the list is the flexible part**
+  (`MinimumHeightHintListWidget`): minimum six rows (fewer if the roster is
+  shorter), maximum all rows, preferred height = the minimum, stretch 1 in the
+  page. The preferred height has to be the minimum because a settings page is
+  a `QScrollArea` whose content never gets less than its layout's preferred
+  height (wrapped labels make the layout height-for-width): a list preferring
+  all rows made the page scroll before the list gave up any. Measured on his
+  data: idle at 860 x 960 the group is 481 px with no page scroll bar; a
+  download's status line, bar and queue line (+47 px) and a four-line error path
+  (+63 px) shrink the list instead (860 x 900: 306 -> 260 -> 244 px, the list
+  scrolls inside itself) and create no page scroll bar, so the page keeps its
+  834 px width; only below six rows does the page scroll (860 x 700: 822 px
+  wide). Nothing depends on 15 rows. Arrow keys on a page too short for the list
+  also scroll the page to the current row (`_keep_current_model_row_in_the_page`;
+  without it the selection moved out of sight at 801 x 400). Tests:
+  `test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar`,
+  `test_arrow_keys_keep_the_current_model_row_in_view_on_a_short_page`,
+  `test_the_download_area_moves_nothing_above_it_from_start_to_finish`. The first
+  version (list fixed at all its rows) scrolled the page as soon as a download
+  started in a dialog with little spare height: a page scroll bar narrows the
+  page and reflows it sideways, which is the movement worth preventing. To
+  revert the whole group: `git revert` the commits "fix(settings): size the
+  Models tab's group to its content" and its follow-up.
 
 - **`SettingsDialog` is a mixin facade** composed in `settings_dialog.py` from
   `_GeneralTabMixin`, `_AudioTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,

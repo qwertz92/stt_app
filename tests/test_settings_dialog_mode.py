@@ -3951,13 +3951,16 @@ def _models_tab_dialog(monkeypatch):
     return app, dialog
 
 
-def test_local_models_box_is_as_tall_as_its_content_and_does_not_stretch(monkeypatch):
-    """Owner, 2026-11-24: the Models tab scrolled although everything fit, and
-    the "Local Models" group had empty space under its buttons. The group took
-    all the page's spare height (stretch factor, Expanding policy) and held
-    room for a status line, a progress bar and a queue line nobody was
-    showing. Now the group is its content's height whatever the page's height,
-    and the list shows every row."""
+def _settle(app) -> None:
+    for _ in range(4):
+        app.processEvents()
+
+
+def test_local_models_box_is_no_taller_than_its_content(monkeypatch):
+    """Owner, 2026-11-24: the "Local Models" group had empty space under its
+    buttons because it took all the page's spare height and held room for a
+    status line, a progress bar and a queue line nobody was showing. With room
+    to spare the list takes every row and the group stops there."""
     app, dialog = _models_tab_dialog(monkeypatch)
     try:
         box = dialog.local_models_box
@@ -3966,17 +3969,19 @@ def test_local_models_box_is_as_tall_as_its_content_and_does_not_stretch(monkeyp
         assert dialog.local_models_action_label.isHidden()
         assert dialog.local_model_download_progress_bar.isHidden()
         assert dialog.local_model_download_queue_label.isHidden()
-
         rows = listing.count()
-        assert listing.height() == dialog._minimum_list_height_for_rows(listing, rows)
-        assert not listing.verticalScrollBar().isVisible()
-        assert box.height() <= box.sizeHint().height()
+        assert listing.maximumHeight() == dialog._minimum_list_height_for_rows(
+            listing, rows
+        )
 
-        before = box.height()
+        content.setMinimumHeight(content.height() + 2000)
+        _settle(app)
+        assert listing.height() == listing.maximumHeight(), "the list kept rows back"
+        full = box.height()
         content.setMinimumHeight(content.height() + 400)
-        app.processEvents()
+        _settle(app)
 
-        assert box.height() == before, "the group grew to fill the page"
+        assert box.height() == full, "the group grew to fill the page"
     finally:
         dialog.close()
         settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -3984,27 +3989,100 @@ def test_local_models_box_is_as_tall_as_its_content_and_does_not_stretch(monkeyp
 
 
 def test_local_models_list_follows_the_row_count(monkeypatch):
-    """The list is as tall as its rows, for few models and for many, instead of
-    a few rows scrolled in a box sized by the page."""
+    """The list's bounds follow the roster, few models and many: at least six
+    rows (fewer if the roster is shorter) up to all of them."""
     monkeypatch.setattr(
         "stt_app.settings_dialog_local.VALID_MODEL_SIZES", ["tiny", "base", "small"]
     )
     app, dialog = _models_tab_dialog(monkeypatch)
     try:
         listing = dialog.local_models_list
+        rows = dialog._minimum_list_height_for_rows
         assert listing.count() == 3
-        few = listing.height()
-        assert few == dialog._minimum_list_height_for_rows(listing, 3)
+        assert listing.minimumHeight() == rows(listing, 3)
+        assert listing.maximumHeight() == rows(listing, 3)
 
         names = [f"model-{index}" for index in range(40)]
         monkeypatch.setattr("stt_app.settings_dialog_local.VALID_MODEL_SIZES", names)
         dialog._apply_local_model_scan_result([])
-        app.processEvents()
+        _settle(app)
 
         assert listing.count() == 40
-        assert listing.height() == dialog._minimum_list_height_for_rows(listing, 40)
-        assert listing.height() > few
-        assert not listing.verticalScrollBar().isVisible()
+        assert listing.minimumHeight() == rows(listing, 6)
+        assert listing.maximumHeight() == rows(listing, 40)
+    finally:
+        dialog.close()
+        settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+        app.processEvents()
+
+
+def test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar(
+    monkeypatch,
+):
+    """A download's status line, progress bar and queue line (and a long error
+    path) used to push the page past its viewport: a scroll bar appeared, the
+    page narrowed by its width and everything reflowed sideways. The list is the
+    part that gives way, down to six rows."""
+    app, dialog = _models_tab_dialog(monkeypatch)
+    try:
+        page = dialog.tabs.currentWidget()
+        listing = dialog.local_models_list
+        rows = dialog._minimum_list_height_for_rows
+
+        def start_a_download() -> None:
+            dialog.local_model_download_progress_bar.setVisible(True)
+            dialog._set_download_queue_line(["a model", "another model"])
+            dialog.local_models_action_label.setText(
+                "Could not write C:\\" + "\\".join(["averyveryverylongfoldername"] * 6)
+            )
+            _settle(app)
+
+        # The page height at which the download area just fits with the list at
+        # its minimum; the idle page then has spare height for the list.
+        start_a_download()
+        needed = page.widget().sizeHint().height()
+        dialog.local_model_download_progress_bar.setVisible(False)
+        dialog._set_download_queue_line([])
+        dialog.local_models_action_label.setText("")
+        chrome = dialog.height() - page.viewport().height()
+        dialog.resize(dialog.width(), chrome + needed + 10)
+        _settle(app)
+        if dialog.height() < chrome + needed:
+            pytest.skip("this screen cannot give the dialog that height")
+        assert not page.verticalScrollBar().isVisible()
+        width = page.viewport().width()
+        assert listing.height() > rows(listing, 6), "no height to give up"
+
+        start_a_download()
+
+        assert not page.verticalScrollBar().isVisible()
+        assert page.viewport().width() == width
+        assert listing.height() >= rows(listing, 6)
+    finally:
+        dialog.close()
+        settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+        app.processEvents()
+
+
+def test_arrow_keys_keep_the_current_model_row_in_view_on_a_short_page(monkeypatch):
+    """On a short page the list is cut off by the page, not only by itself:
+    moving the selection with the arrow keys must scroll the page too."""
+    app, dialog = _models_tab_dialog(monkeypatch)
+    try:
+        dialog.resize(dialog.width(), 400)
+        _settle(app)
+        page = dialog.tabs.currentWidget()
+        listing = dialog.local_models_list
+        if not page.verticalScrollBar().isVisible():
+            pytest.skip("this screen shows the whole page, nothing to scroll")
+        listing.setFocus()
+        listing.setCurrentRow(0)
+        for _ in range(listing.count() - 1):
+            QtTest.QTest.keyClick(listing, QtCore.Qt.Key_Down)
+            _settle(app)
+            row = listing.visualItemRect(listing.currentItem())
+            top = listing.viewport().mapTo(page.viewport(), row.topLeft())
+            assert page.viewport().rect().contains(top), listing.currentRow()
     finally:
         dialog.close()
         settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()

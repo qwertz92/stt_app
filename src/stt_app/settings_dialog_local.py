@@ -41,7 +41,9 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _THREAD_START_ERRORS,
     CollapsingStatusLabel,
+    ContentCappedGroupBox,
     ElidingLabel,
+    MinimumHeightHintListWidget,
     _emit_background_signal,
     _WheelPassthroughComboBox,
     hint_font,
@@ -204,6 +206,10 @@ class _CleanupOutcome(NamedTuple):
     left_files: int = 0
 
 
+# Rows of the model list that stay visible when the page is short.
+_LOCAL_LIST_MIN_ROWS = 6
+
+
 class _LocalModelsMixin:
     def _build_local_tab(self) -> None:
         tab, content = self._create_scroll_tab()
@@ -329,7 +335,7 @@ class _LocalModelsMixin:
         self._apply_shared_form_label_width((form, runtime_form))
 
         # Unified local models section
-        self.local_models_box = QtWidgets.QGroupBox("Local Models")
+        self.local_models_box = ContentCappedGroupBox("Local Models")
         local_models_layout = QtWidgets.QVBoxLayout(self.local_models_box)
         local_models_layout.setSpacing(4)
         self.local_models_label = QtWidgets.QLabel("Scanning...")
@@ -352,15 +358,19 @@ class _LocalModelsMixin:
         self._style_note_label(download_hint)
         local_models_layout.addWidget(download_hint)
 
-        self.local_models_list = QtWidgets.QListWidget()
+        self.local_models_list = MinimumHeightHintListWidget()
+        self.local_models_box.flexible_child = self.local_models_list
         # Explorer-style selection (Shift for ranges, Ctrl for toggles), like
         # every other multi-select list in the app.
         self.local_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
-        self._configure_compact_list_widget(self.local_models_list)
+        self._configure_compact_list_widget(self.local_models_list, expand=True)
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
+        )
+        self.local_models_list.currentItemChanged.connect(
+            self._keep_current_model_row_in_the_page
         )
         local_models_layout.addWidget(self.local_models_list)
 
@@ -442,11 +452,13 @@ class _LocalModelsMixin:
             "Open this tab to verify local model availability in the background."
         )
 
-        # The group is as tall as its rows and status lines need, never
-        # stretched: a spacer under it takes the page's spare height, so the
-        # page shows empty background instead of an empty group.
-        layout.addWidget(self.local_models_box)
-        layout.addStretch(1)
+        # The group is no taller than its content (`ContentCappedGroupBox`) and
+        # the list is what gives way below that. The stretch-0 spacer is
+        # needed: without it the page's spare height, once the group is at its
+        # cap, went to the groups above it, which spread by up to 47 px and
+        # moved back when a download's status lines appeared.
+        layout.addWidget(self.local_models_box, 1)
+        layout.addStretch(0)
         # "Models": this tab downloads and deletes them. "Local" read as the
         # place to choose one, which is the Transcription tab.
         self._local_tab_index = self.tabs.addTab(tab, "Models")
@@ -762,15 +774,20 @@ class _LocalModelsMixin:
             )
         restore_vertical_scrollbar(self.local_models_list, scroll_value)
 
-        # Every row is shown: the list is as tall as its content. When the
-        # page is shorter than that, the page scrolls (one scroll bar, which
-        # keeps the buttons below the list reachable) rather than the list
-        # showing a few rows through its own.
-        self.local_models_list.setFixedHeight(
+        # The list expands up to all its rows and is the part of the page that
+        # gives way: when the download area appears below it, or the page is
+        # short, it shrinks to a minimum of `_LOCAL_LIST_MIN_ROWS` rows and
+        # scrolls inside itself, so the page itself only scrolls (and narrows
+        # for its scroll bar) when even that does not fit. Both bounds follow
+        # the roster, which may be shorter than the minimum.
+        rows = self.local_models_list.count()
+        self.local_models_list.setMinimumHeight(
             self._minimum_list_height_for_rows(
-                self.local_models_list,
-                self.local_models_list.count(),
+                self.local_models_list, min(rows, _LOCAL_LIST_MIN_ROWS)
             )
+        )
+        self.local_models_list.setMaximumHeight(
+            self._minimum_list_height_for_rows(self.local_models_list, rows)
         )
         self._update_local_model_actions()
 
@@ -1167,6 +1184,21 @@ class _LocalModelsMixin:
         if preloading:
             pending.add(preloading)
         return pending
+
+    def _keep_current_model_row_in_the_page(self, current, _previous) -> None:
+        """Scroll the page to the current row when the list is taller than the
+        page shows. The list scrolls its own rows into its own viewport, but a
+        short page cuts the list itself off, and arrow keys then moved the
+        selection out of sight."""
+        page = self.tabs.widget(self._local_tab_index or 0)
+        if current is None or not isinstance(page, QtWidgets.QScrollArea):
+            return
+        listing = self.local_models_list
+        row = listing.visualItemRect(current)
+        top = listing.viewport().mapTo(page.widget(), row.topLeft())
+        page.ensureVisible(
+            top.x(), top.y() + row.height() // 2, 0, row.height() // 2 + 4
+        )
 
     def _update_local_model_actions(self) -> None:
         if not hasattr(self, "download_selected_models_button"):
