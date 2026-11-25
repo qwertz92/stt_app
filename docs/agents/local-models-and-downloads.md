@@ -262,8 +262,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`LocalFasterWhisperTranscriber`, benchmark CLI).
   - The roster of 2026-11-25 is the next top-level entry below.
 - **Roster of 2026-11-25** (owner rule: only the newest generation; measured
-  on 25 + 25 FLEURS clips, `local-model-measurements.md` in the session
-  scratchpad, figures in the learning log). A saved choice of a removed model
+  on 25 + 25 FLEURS clips, `docs/benchmarks/local-model-roster-2026-11-25.md`,
+  figures in the learning log). A saved choice of a removed model
   moves once to its successor through
   `config.RETIRED_LOCAL_MODEL_SUCCESSORS` (applied in
   `AppSettings.from_dict`, which `SettingsStore.load` writes back), and the
@@ -521,7 +521,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Pinned (`_OnnxModelLayout.revision`, commit `fa588e9`), because the
     repository is days old and `main` can change under one name; pinned
     layouts never use the ModelScope mirror; `scripts/download_model.py`
-    gives the commit.
+    gives the commit. **Granite 5.0 2B is pinned for the same reason**
+    (`ibm-granite/granite-speech-5.0-2b-ONNX`, commit `a9cf1d1`, the
+    repository's head and second commit on 2026-11-25, verified against the
+    Hub API): both repositories are young, and the size table and the
+    measurements describe exactly these commits, so a later push must not
+    change what a user downloads. An unpinned model (the others) follows its
+    repository's default branch. Moving a pin means re-measuring size and
+    accuracy first.
   - Allow-patterns name the six files exactly (config, vocab, int8 encoder and
     decoder_joint with their `.data`) plus README, LICENSE and NOTICE: the
     repository also holds fp32 copies (2.67 GB), clean-mode graphs and

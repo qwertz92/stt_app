@@ -213,7 +213,8 @@ def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_
     assert "onnx/audio_encoder_q4.onnx_data" in kwargs["allow_patterns"]
     assert "onnx/decoder_model_merged_q4f16.onnx_data" in kwargs["allow_patterns"]
     assert "chat_template.jinja" in kwargs["allow_patterns"]
-    # The repository also holds fp32, fp16, int8 and q4f16 encoders.
+    # Only the q4 encoder and the q4f16 embedding and decoder graphs are
+    # named; no wildcard may pull in other `onnx/` variants.
     assert not [p for p in kwargs["allow_patterns"] if p.startswith("onnx/*")]
 
 
@@ -527,9 +528,29 @@ def test_fluid_speech_pro_is_fetched_at_its_pinned_revision(
     assert ("tqdm_class" in kwargs) is with_progress_hook
 
 
+_GRANITE_5_0_REVISION = "a9cf1d13d045d65813b4bc80bde8fdd62db4c35c"
+
+
+def test_granite_5_0_2b_is_fetched_at_its_pinned_revision(monkeypatch, tmp_path):
+    """IBM's export has two commits and the measurements describe the head;
+    pinned like Fluid's so a later push cannot change what the app runs."""
+    calls: list = []
+    _record_hub_downloads(monkeypatch, calls)
+
+    download_webgpu_model_snapshot("granite-speech-5.0-2b", str(tmp_path))
+
+    repo_id, kwargs = calls[0]
+    assert repo_id == "ibm-granite/granite-speech-5.0-2b-ONNX"
+    assert kwargs["revision"] == _GRANITE_5_0_REVISION
+
+
 @pytest.mark.parametrize(
     "model_name",
-    [name for name in LOCAL_ONNX_MODEL_SIZES if name != FLUID_SPEECH_PRO_MODEL_SIZE],
+    [
+        name
+        for name in LOCAL_ONNX_MODEL_SIZES
+        if name not in (FLUID_SPEECH_PRO_MODEL_SIZE, "granite-speech-5.0-2b")
+    ],
 )
 def test_a_model_without_a_pin_sends_no_revision(monkeypatch, tmp_path, model_name):
     """Absent rather than `None`: every other model's call stays exactly the

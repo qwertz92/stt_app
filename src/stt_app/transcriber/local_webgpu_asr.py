@@ -208,6 +208,10 @@ _GRANITE_5_0_Q4_REQUIRED_FILES = (
     "onnx/decoder_model_merged_q4f16.onnx",
     "onnx/decoder_model_merged_q4f16.onnx_data",
 )
+# IBM's own ONNX export of Granite Speech 5.0 2B. The commit is pinned like
+# Fluid Speech Pro's: the repository is a month old, holds two commits, and
+# `MODEL_ESTIMATED_SIZE_MB` and the measurements in `docs/models.md` describe
+# this one (verified 2026-11-25 as the repository's head).
 _GRANITE_5_0_Q4_LAYOUT = _OnnxModelLayout(
     name="granite_5_0_q4",
     precision="q4",
@@ -221,6 +225,7 @@ _GRANITE_5_0_Q4_LAYOUT = _OnnxModelLayout(
         "onnx/decoder_model_merged_q4f16.onnx_data",
     ),
     required_files=_GRANITE_5_0_Q4_REQUIRED_FILES,
+    revision="a9cf1d13d045d65813b4bc80bde8fdd62db4c35c",
 )
 
 # NeMo exports served by the pure-Python onnx-asr runtime. Both repos also ship
