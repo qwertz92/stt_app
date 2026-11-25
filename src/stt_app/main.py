@@ -14,6 +14,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import __version__
 from .app_icon import load_app_icon
 from .app_paths import appdata_root, resolve_recordings_dir
+from .clipboard_owner import ClipboardOwner
 from .config import (
     APP_DISPLAY_NAME,
     APP_LOGGER_NAME,
@@ -42,7 +43,7 @@ from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
-from .text_inserter import TextInserter
+from .text_inserter import TextInserter, Win32ClipboardBackend
 from .transcriber.base import transcript_has_gap
 from .transcriber.local_webgpu_asr import (
     NODE_PACKAGES_NOTICE_TITLE,
@@ -274,7 +275,9 @@ def run() -> int:
         hotkey_id=DEFAULT_SHOW_OVERLAY_HOTKEY_ID
     )
     repaste_hotkey_manager = HotkeyManager(hotkey_id=DEFAULT_REPASTE_HOTKEY_ID)
-    text_inserter = TextInserter()
+    # The transcript is announced on the clipboard and handed out by a window
+    # of this process, so a paste learns whether its target fetched the text.
+    text_inserter = TextInserter(backend=Win32ClipboardBackend(owner=ClipboardOwner()))
 
     controller = DictationController(
         settings_store=settings_store,
@@ -388,6 +391,9 @@ def run() -> int:
     app.aboutToQuit.connect(request_download_shutdown)
     app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
+    # After the controller put the clipboard back: the owner window writes out
+    # a transcript it still owes, which would vanish with the process.
+    app.aboutToQuit.connect(text_inserter.close)
     # A floating overlay's mouse raw-input watch (docs/agents/overlay.md).
     app.aboutToQuit.connect(overlay.shutdown)
     signal_timer = _install_signal_handlers(app)

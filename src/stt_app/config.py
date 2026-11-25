@@ -2487,6 +2487,14 @@ CLIPBOARD_RESTORE_DELAY_S = 1.5
 # good: a target this slow has demonstrably not read it yet, and restoring is
 # exactly what turns its eventual paste into the user's old content.
 CLIPBOARD_RESTORE_MAX_WAIT_S = 10.0
+# A transcript no program has fetched from the clipboard when its restore is
+# due (`clipboard_owner`: the read receipt) stays there until this long after
+# the keystroke, measured like the restore delay. Only then is the clipboard
+# put back and the paste reported as not inserted. Putting it back at the
+# restore delay made a target that reads later than that paste the user's old
+# clipboard content; waiting longer delays the report of a paste that went
+# to a button, and every paste queued behind it.
+PASTE_READ_RECEIPT_WAIT_S = 3.0
 # A restore that fails -- another program held the clipboard for longer than
 # one operation's opens, or closed our open after its `EmptyClipboard` -- is
 # written again from the captured state this many times, this far apart, on

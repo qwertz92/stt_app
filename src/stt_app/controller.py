@@ -22,6 +22,7 @@ from . import audio_devices, local_runtime_support, silero_vad
 from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
+from .clipboard_owner import RECEIPT_UNREAD
 from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
@@ -465,6 +466,15 @@ class _PasteCheck:
     # A coalesced paste's results with their entries, for the doubtful row
     # (`_UndeliveredInsert.parts`); empty for a single result.
     parts: tuple[tuple[TranscriptHistoryEntry | None, str], ...] = ()
+    # The paste's transaction id while its read receipt is still to come
+    # (`TextInserter.pending_receipt_id`); None when it has none.
+    receipt_id: int | None = None
+    # The target check's verdict once it answered, while the paste waits on
+    # for that receipt; None while the check still runs.
+    caret_verdict: str | None = None
+    # The row a "not a text field" verdict listed, which an "unread" receipt
+    # turns into a failed paste.
+    doubtful_row: _UndeliveredInsert | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -681,6 +691,10 @@ class DictationController(QtCore.QObject):
     # `PasteTargetCheck`'s worker thread; the queued connection brings it to
     # the Qt thread.
     paste_target_checked = QtCore.Signal(int, str, str)
+    # A paste's final read receipt: (transaction id, verdict, evidence).
+    # Emitted by `TextInserter` from its restore timer's thread, or from
+    # inside the next paste on the Qt thread.
+    paste_receipt_ready = QtCore.Signal(int, str, str)
     # Emitted from the device-refresh worker once PortAudio re-enumerated, so
     # the overlay's microphone caption names the current default device.
     audio_devices_refreshed = QtCore.Signal()
@@ -727,6 +741,11 @@ class DictationController(QtCore.QObject):
         )
         if callable(register_restore_failure):
             register_restore_failure(self.clipboard_restore_failed.emit)
+        register_paste_receipt = getattr(
+            text_inserter, "set_paste_receipt_handler", None
+        )
+        if callable(register_paste_receipt):
+            register_paste_receipt(self.paste_receipt_ready.emit)
         self._logger = logger
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
         self._secret_store = secret_store
@@ -1060,6 +1079,12 @@ class DictationController(QtCore.QObject):
         self.model_preload_done.connect(self._on_model_preload_done)
         self.audio_devices_changed.connect(self._on_audio_devices_changed)
         self.paste_target_checked.connect(self._on_paste_target_checked)
+        # Queued from the Qt thread as well: the receipt a paste settles for
+        # the one before it is emitted inside that paste's own call, and a
+        # report made there would paint in the middle of a delivery.
+        self.paste_receipt_ready.connect(
+            self._on_paste_receipt, QtCore.Qt.ConnectionType.QueuedConnection
+        )
         self.audio_devices_refreshed.connect(self.refresh_overlay_microphone_options)
         self.unfinished_transcript_saved.connect(self._list_unfinished_transcript)
         self.capture_audio_started.connect(self._on_capture_audio_started)
@@ -1308,7 +1333,12 @@ class DictationController(QtCore.QObject):
             waiting_to_insert=waiting + (self._pending_repaste is not None),
             not_inserted=len(self._undelivered_inserts),
             failed=bool(self._last_failed_wav_bytes) + len(self._older_failed_audio),
-            paste_settling=self._paste_pace_wait_s() > 0.0 or bool(self._paste_checks),
+            # A check that has answered and only waits for the read receipt
+            # is covered by the pace, which lasts as long as that wait.
+            paste_settling=self._paste_pace_wait_s() > 0.0
+            or any(
+                check.caret_verdict is None for check in self._paste_checks.values()
+            ),
         )
 
     def hold_for_quit(self) -> None:
@@ -8051,7 +8081,20 @@ class DictationController(QtCore.QObject):
             paste_serial=self._paste_serial,
             capture=self._audio_capture,
             parts=tuple(parts),
+            receipt_id=self._pending_receipt_id(),
         )
+
+    def _pending_receipt_id(self) -> int | None:
+        """The last paste's transaction id while its read receipt is to come."""
+        pending = getattr(self._text_inserter, "pending_receipt_id", None)
+        return pending() if callable(pending) else None
+
+    def _await_receipt_without_check(self, check_id: int, pending: _PasteCheck) -> None:
+        """No target check runs for this paste: its read receipt still may."""
+        if pending.receipt_id is not None and not self._shutdown_started:
+            self._paste_checks[check_id] = replace(
+                pending, caret_verdict=VERDICT_UNKNOWN
+            )
 
     def _check_paste_target(
         self, pending: _PasteCheck, *, tone_if_refused: bool = True
@@ -8070,19 +8113,30 @@ class DictationController(QtCore.QObject):
         that raised is not a refusal and always plays it). Nothing here
         waits.
 
+        A paste with a read receipt to come (`_PasteCheck.receipt_id`) stays
+        registered after the check answered, or without any check, until
+        `_on_paste_receipt` hears whether a program fetched the transcript.
+
         A check still waiting for a paste of the same text into the same
         window is dropped once this paste's own check has started: this
         paste repeated it, so the earlier verdict -- read before it -- would
         report as missing a text the user has just pasted again. When this
         check is refused, the earlier one stays and decides; dropping it
-        then left neither paste with a verdict (the second review).
+        then left neither paste with a verdict (the second review). Only a
+        check still running is dropped this way: an entry whose check has
+        answered waits for its read receipt alone, and that receipt is about
+        the earlier paste's own clipboard write, which no later paste
+        repeats.
         """
+        self._paste_check_counter += 1
+        check_id = self._paste_check_counter
+        if not tone_if_refused:
+            self._drop_receipts_of_repeated_text(pending)
         checker = self._paste_target_check
         if checker is None or self._shutdown_started:
             self._play_completion_beep()
+            self._await_receipt_without_check(check_id, pending)
             return
-        self._paste_check_counter += 1
-        check_id = self._paste_check_counter
         emit = self.paste_target_checked.emit
         try:
             started = checker.request(
@@ -8101,11 +8155,13 @@ class DictationController(QtCore.QObject):
             )
             if tone_if_refused:
                 self._play_completion_beep()
+            self._await_receipt_without_check(check_id, pending)
             return
         repeated = [
             waiting_id
             for waiting_id, waiting in self._paste_checks.items()
-            if waiting.text.strip() == pending.text.strip()
+            if waiting.caret_verdict is None
+            and waiting.text.strip() == pending.text.strip()
             and waiting.foreground == pending.foreground
         ]
         for waiting_id in repeated:
@@ -8119,6 +8175,22 @@ class DictationController(QtCore.QObject):
                 check_id, VERDICT_UNKNOWN, "note=timeout"
             ),
         )
+
+    def _drop_receipts_of_repeated_text(self, pending: _PasteCheck) -> None:
+        """A re-paste goes out: receipts for the same text are moot.
+
+        The user is pasting this text again, into whichever window, so an
+        "unread" receipt of its earlier paste would list as missing what they
+        have just dealt with. Only pastes whose target check has answered: a
+        running check keeps the rule of `_check_paste_target`.
+        """
+        for waiting_id, waiting in list(self._paste_checks.items()):
+            if (
+                waiting.caret_verdict is not None
+                and waiting.text.strip() == pending.text.strip()
+            ):
+                del self._paste_checks[waiting_id]
+                self._logger.info("paste_receipt id=%d dropped=repeated", waiting_id)
 
     def _log_paste_target_check(
         self, check_id: int, verdict: str, evidence: str, pending: _PasteCheck
@@ -8142,22 +8214,74 @@ class DictationController(QtCore.QObject):
     def _on_paste_target_checked(
         self, check_id: int, verdict: str, evidence: str
     ) -> None:
-        """The check's answer, or its timeout -- whichever comes first."""
-        pending = self._paste_checks.pop(check_id, None)
-        if pending is None:
+        """The check's answer, or its timeout -- whichever comes first.
+
+        A paste with a read receipt to come stays registered for
+        `_on_paste_receipt`, with this verdict. The receipt never overrules
+        the caret the other way round: a Chromium window fetches the
+        clipboard text on every Ctrl+V, with the focus on a text field, a
+        button or the page body alike (measured in Edge and Chrome,
+        2026-11-25), so a fetched transcript says nothing about the element.
+        """
+        pending = self._paste_checks.get(check_id)
+        if pending is None or pending.caret_verdict is not None:
             return
+        del self._paste_checks[check_id]
         self._log_paste_target_check(check_id, verdict, evidence, pending)
         if self._shutdown_started:
             return
-        if verdict != VERDICT_NOT_TEXT_FIELD:
-            if self._recording_started_since(pending):
-                self._logger.info(
-                    "completion_tone_skipped id=%d reason=recording", check_id
-                )
-                return
+        doubtful_row = None
+        if verdict == VERDICT_NOT_TEXT_FIELD:
+            doubtful_row = self._report_paste_outside_text_field(pending)
+        elif self._recording_started_since(pending):
+            self._logger.info(
+                "completion_tone_skipped id=%d reason=recording", check_id
+            )
+        else:
             self._play_completion_beep()
+        if pending.receipt_id is not None:
+            self._paste_checks[check_id] = replace(
+                pending, caret_verdict=verdict, doubtful_row=doubtful_row
+            )
+
+    @QtCore.Slot(int, str, str)
+    def _on_paste_receipt(
+        self, transaction_id: int, verdict: str, evidence: str
+    ) -> None:
+        """A paste's final read receipt (`clipboard_owner`).
+
+        "unread": the transcript left the clipboard without any program
+        having fetched it, so it is in no window -- reported as a failed
+        paste. Anything else changes nothing: the paste stands as reported.
+        Receipts of pastes nobody registered -- streaming inserts, a paste
+        the user repeated -- end here.
+        """
+        found = next(
+            (
+                (check_id, check)
+                for check_id, check in self._paste_checks.items()
+                if check.receipt_id == transaction_id
+            ),
+            None,
+        )
+        if found is None or self._shutdown_started:
             return
-        self._report_paste_outside_text_field(pending)
+        check_id, pending = found
+        self._logger.info(
+            "paste_receipt_applied id=%d check=%d verdict=%s caret=%s chars=%d",
+            transaction_id,
+            check_id,
+            verdict,
+            pending.caret_verdict,
+            len(pending.text),
+        )
+        if verdict != RECEIPT_UNREAD and pending.caret_verdict is None:
+            # The target check still runs and decides alone from here.
+            self._paste_checks[check_id] = replace(pending, receipt_id=None)
+            return
+        del self._paste_checks[check_id]
+        if verdict == RECEIPT_UNREAD:
+            self._report_paste_never_fetched(pending)
 
     def _recording_started_since(self, pending: _PasteCheck) -> bool:
         """Whether a recording other than the paste's own began meanwhile.
@@ -8171,7 +8295,62 @@ class DictationController(QtCore.QObject):
             capture is not None and capture is not pending.capture
         )
 
-    def _report_paste_outside_text_field(self, pending: _PasteCheck) -> None:
+    def _report_paste_never_fetched(self, pending: _PasteCheck) -> None:
+        """Report a paste whose transcript no program took from the clipboard.
+
+        Evidence, where the caret is a guess: the text is in no window. So
+        this is a failed paste -- its row stays listed whatever is pasted
+        after it and the re-paste joins it -- and it is reported even when a
+        later paste has gone out since. That is the case the owner lost
+        transcripts to with several results queued (2026-11-24): the
+        doubtful row of the one that missed was dropped by the next paste.
+        A row the target check already listed for this paste becomes that
+        failed row; the user has its report.
+        """
+        row = pending.doubtful_row
+        if row is not None and any(row is entry for entry in self._undelivered_inserts):
+            row.outside_text_field = False
+            self._logger.info("undelivered_insert_confirmed row=%d", row.row_id)
+            self._update_queue_overlay()
+            return
+        transcript = pending.text.strip()
+        entry = self._record_undelivered_insert(
+            transcript,
+            may_have_pasted=False,
+            created_at=pending.created_at,
+            history_entry=pending.history_entry,
+            parts=pending.parts,
+        )
+        message = (
+            f"{pending.identity} pasted, but no window took the text from the "
+            "clipboard, so nothing was inserted."
+        )
+        overlay_free = (
+            not self._overlay_session_active()
+            and not self._foreground_delivery_pending
+            # A None snapshot (not this paste's screen) never matches.
+            and (self._overlay.state, self._overlay.detail) == pending.overlay_shown
+        )
+        if pending.background or not overlay_free:
+            tray = f"{message} The text is saved in history."
+            hint = self._undelivered_hint()
+            if hint:
+                tray = f"{tray} {hint}"
+            self.background_insertion_failed.emit(tray)
+        if not overlay_free:
+            return
+        self._paint_insert_offer(
+            f"{message} Click into the field and press Insert.",
+            transcript,
+            row=entry,
+            history_entry=pending.history_entry,
+            may_have_pasted=False,
+            takes_shown_pair=pending.takes_shown_pair,
+        )
+
+    def _report_paste_outside_text_field(
+        self, pending: _PasteCheck
+    ) -> _UndeliveredInsert | None:
         """Report a paste whose focus did not look like a text field.
 
         No completion tone. Listed like a failed paste and insertable: the
@@ -8218,7 +8397,7 @@ class DictationController(QtCore.QObject):
                 tray = f"{tray} {hint}"
             self.background_insertion_failed.emit(tray)
         if not overlay_free:
-            return
+            return entry
         self._paint_insert_offer(
             f"{message} If nothing appeared, click into the field and press Insert.",
             transcript,
@@ -8227,6 +8406,7 @@ class DictationController(QtCore.QObject):
             may_have_pasted=False,
             takes_shown_pair=pending.takes_shown_pair,
         )
+        return entry
 
     def _flush_deferred_background_results(
         self,

@@ -3,6 +3,64 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: "inserted" without evidence -- two causes closed, a read receipt, and what Chromium hides
+
+Structurally: a new module `clipboard_owner.py` owns the clipboard for the
+length of a restoring paste (the transcript is announced, and the request for
+it is a read receipt); a new module `own_window_focus.py` answers for this
+app's own windows before a paste; `TextInserter` reads the modifier keys a
+second time right before the keystroke. Details in
+`docs/agents/text-insertion.md` and `docs/agents/known-limitations.md`.
+
+The owner's report (2026-11-24): the overlay says inserted, nothing arrived;
+with several results queued, the one that missed is no longer shown once the
+next one landed. His log of 2026-10-23..11-24 holds 1040 pastes, every one
+`outcome=pasted`, and about fifteen whose text was pasted again by hand within
+a minute.
+
+- **Proved and closed: a dictation aimed at our own Settings window.** One of
+  the fifteen (2026-11-24 22:48, target class `Qt6120QWindowIcon`). The focus
+  sat on a widget that takes no text. Qt is now asked before the clipboard is
+  touched; the result is the ordinary "Not inserted" report with Insert.
+- **Closed by reading the code: a modifier pressed in the 25 ms before the
+  keystroke.** The modifier wait ran before the clipboard write; a Ctrl+Alt
+  pressed afterwards turned the injected Ctrl+V into Ctrl+Alt+V. The keys are
+  now read again right before the keystroke. No incident in the log could be
+  pinned on it; the log does show hotkeys held while results arrive.
+- **New evidence: nobody fetched the transcript.** With delayed rendering the
+  app learns whether any program asked for the text. "Nobody" is a failed
+  paste whose row stays listed across later pastes. Measured with real
+  windows: one true miss in 20 EDIT pastes caught, no false alarm in 79 landed
+  pastes.
+- **Measured, and it limits the receipt: Chromium fetches the text on every
+  Ctrl+V.** Edge and Chrome fetched it a few milliseconds after the keystroke
+  with the focus on a textarea, a button or the page body, without naming a
+  window.
+  Two earlier assumptions fell with that: that a fetch by the target means
+  the paste landed, and that the receipt would show a late renderer. An
+  overrule of the caret check by a "read" receipt was written and removed the
+  same night: it would have silenced true reports.
+- **Measured for the first time: a busy page pastes the old clipboard.** A
+  page busy for 2.2 s received the previous clipboard text after the 1.5 s
+  restore. With an empty clipboard before the dictation (the owner's was
+  empty during the probes) that reads as "nothing arrived". A possible
+  remaining cause in the Claude desktop app, not a proved one: in the
+  owner's log that window once answered its target check only after 754 ms
+  (about 28 ms ordinarily), and a stall of 1.5 s cannot be read from the
+  log at all. Not closed.
+- **The second symptom is the rule of 2026-10-03**, not a regression: a
+  doubtful "not in a text field" row is dropped by the next paste (04da05e,
+  every release since v0.11.0). Failed pastes keep their row (cf1a37a).
+- **Three things the probes taught about probing.** (1) Edge's launcher
+  process exits and the browser lives on: `kill_process_tree(launcher)` left
+  an instance running, and the next run attached to its DevTools port and
+  measured the old window. (2) A page focused with JavaScript has no keyboard
+  focus until the window does (`document.hasFocus()`; `Page.bringToFront`
+  gave it). (3) Windows calls a window procedure from inside
+  `CreateWindowEx`: the first real owner window was never created because
+  the procedure needed a field set only after the call; the unit tests'
+  scripted Windows sent no creation message until one was added.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`
