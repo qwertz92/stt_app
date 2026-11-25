@@ -738,6 +738,17 @@ def test_dropping_topmost_keeps_a_floating_overlay_on_top_of_the_normal_band(
     overlay.hide()
 
 
+@pytest.fixture(autouse=True)
+def _no_real_focus_window(monkeypatch):
+    """No own window is active unless a test says so.
+
+    `OverlayUI` reads the process's real `QGuiApplication.focusWindow()`; a
+    window an earlier test of the run left open would otherwise decide where a
+    pinned overlay is placed.
+    """
+    monkeypatch.setattr(OverlayUI, "_active_own_window_handle", lambda self: None)
+
+
 def _placements(user32, overlay) -> list[int]:
     """What `SetWindowPos` was given as insert-after for this overlay, in order."""
     hwnd = int(overlay.winId())
@@ -792,19 +803,92 @@ def test_a_pinned_overlay_steps_behind_an_own_window_being_worked_in(monkeypatch
     dialog.close()
 
 
-def test_a_reveal_while_an_own_window_is_active_stays_behind_it(monkeypatch):
-    # A recording started while Settings is active still shows the overlay,
-    # behind Settings where they overlap and nowhere else.
+def test_a_live_session_stays_topmost_over_an_own_window(monkeypatch):
+    # The recording indicator is the application's main feedback: it must not
+    # vanish behind Settings while the user dictates into one of its fields.
+    # Only an idle pinned overlay steps behind; when the session ends it does.
     user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
     overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    for state in ("Listening", "Processing", "Done", "Error"):
+        overlay.set_state(state, "x")
+        assert _placements(user32, overlay)[-1] == _HWND_TOPMOST, state
+        overlay.set_state("Idle", "ready")
+        assert _placements(user32, overlay)[-1] == dialog_hwnd, state
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_reveal_while_an_own_window_is_active_is_topmost(monkeypatch):
+    # A reveal the user asked for (tray click, a recording's reveal) must be
+    # visible; when it ends the idle pinned overlay steps behind again.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+
+    overlay.reveal_temporarily(duration_ms=20)
+    assert overlay.isVisible()
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+
+    QtTest.QTest.qWait(80)
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+    overlay.hide()
+    dialog.close()
+
+
+def test_opening_an_own_window_after_a_reveal_ends_the_reveal(monkeypatch):
+    # The tray's double-click: the first click reveals, the second opens
+    # Settings, which then gets the front.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.reveal_temporarily(duration_ms=60_000)
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+
+    activate(dialog.windowHandle())
+
+    assert _placements(user32, overlay)[-1] == int(dialog.winId())
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_floating_overlay_reveals_and_runs_sessions_as_before(monkeypatch):
+    # With the setting off nothing differs: a reveal is topmost, its end is
+    # NOTOPMOST, and no own window is ever a reference.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.set_always_on_top(False)
     activate(dialog.windowHandle())
     user32.positions.clear()
     user32.targets.clear()
 
     overlay.reveal_temporarily(duration_ms=20)
+    overlay.set_state("Listening", "x")
+    QtTest.QTest.qWait(80)
 
-    assert overlay.isVisible()
-    assert _placements(user32, overlay) == [int(dialog.winId())]
+    assert set(_placements(user32, overlay)) <= {_HWND_TOPMOST, _HWND_NOTOPMOST}
+    assert _placements(user32, overlay)[0] == _HWND_TOPMOST
+    assert _placements(user32, overlay)[-1] == _HWND_NOTOPMOST
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_stale_own_window_falls_back_to_topmost_for_that_call_only(monkeypatch):
+    # The own window closed meanwhile, so SetWindowPos refuses it as a
+    # reference. The overlay is plain topmost then, and the failure must not
+    # switch the Qt window-flag fallback on (permanently topmost over everything,
+    # window recreated).
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    user32.refused.add(int(dialog.winId()))
+
+    activate(dialog.windowHandle())
+
+    assert _placements(user32, overlay) == [int(dialog.winId()), _HWND_TOPMOST]
+    assert overlay._topmost_uses_window_flag is False
     overlay.hide()
     dialog.close()
 
@@ -819,7 +903,7 @@ def test_the_overlay_state_follows_activation_not_a_count_of_events(monkeypatch)
     user32.targets.clear()
     monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: None)
 
-    overlay.reveal_temporarily(duration_ms=20)  # no focus event was delivered
+    overlay._apply_window_flags()  # no focus event was delivered
 
     assert _placements(user32, overlay) == [_HWND_TOPMOST]
     overlay.hide()

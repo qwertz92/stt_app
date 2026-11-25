@@ -568,3 +568,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+
+- **A native file dialog opened from an own window leaves the overlay topmost
+  above it** (2026-11-25, `docs/agents/overlay.md`, "The overlay steps behind
+  the application's own window"). A `QFileDialog` that uses the Windows dialog
+  is not a Qt window, so `QGuiApplication.focusWindow()` is None while it is
+  open and the overlay counts as "another application is active". It is the
+  behaviour of every earlier version; the overlay can cover the part of the
+  dialog under it, and moving the overlay or the dialog clears it. Not fixed:
+  recognising the foreground window's process instead of Qt's focus window
+  would cover it (about 1-2 h with a real-window check).
+

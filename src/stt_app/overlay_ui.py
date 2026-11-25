@@ -1156,9 +1156,10 @@ class OverlayUI(QtWidgets.QWidget):
             self.always_on_top_changed.emit(normalized)
 
     def reveal_temporarily(self, duration_ms: int = 1800) -> None:
-        if not self._always_on_top:
-            self._temporary_foreground_active = True
-            self._temporary_foreground_timer.start(max(1, int(duration_ms)))
+        # Also for a pinned overlay: while it runs the overlay is topmost over
+        # the application's own windows too (`_may_step_behind_own_window`).
+        self._temporary_foreground_active = True
+        self._temporary_foreground_timer.start(max(1, int(duration_ms)))
         self._apply_window_flags(raise_window=True)
         self._reposition_within_current_screen()
 
@@ -1177,7 +1178,7 @@ class OverlayUI(QtWidgets.QWidget):
         self.reveal_temporarily()
 
     def _clear_temporary_foreground(self) -> None:
-        if self._always_on_top or not self._temporary_foreground_active:
+        if not self._temporary_foreground_active:
             return
         self._temporary_foreground_active = False
         self._apply_window_flags()
@@ -1233,6 +1234,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_label.setText(detail)
         self._state = state
         self._detail = detail
+        # A session starting or ending changes whether the overlay may sit
+        # behind an own window: asked now, not at the next periodic re-check.
+        self._recheck_own_window()
         self._copy_text = copy_text
         has_detail = bool(detail.strip())
         if compact is None:
@@ -1919,11 +1923,15 @@ class OverlayUI(QtWidgets.QWidget):
             if self._wants_topmost():
                 self._waiting_for_click = False
                 behind = self._behind_own_window = self._own_window_to_stay_behind()
-                if behind:
+                if behind and user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags):
                     # Directly behind the own window being worked in: out of
                     # the topmost band (a window placed behind a non-topmost
                     # window is not topmost) yet above every other window.
-                    return bool(user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags))
+                    return True
+                # No own window, or it could not be used as the reference (it
+                # closed meanwhile): plain topmost for this call. The result
+                # is the topmost call's, so a stale handle never switches the
+                # Qt window-flag fallback on (`_apply_window_flags`).
                 return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
             # A hidden overlay starts waiting in its `showEvent`.
             self._behind_own_window = 0
@@ -1948,6 +1956,17 @@ class OverlayUI(QtWidgets.QWidget):
             return None
         return window
 
+    def _may_step_behind_own_window(self) -> bool:
+        """Only a pinned overlay that is idle yields to the application's own
+        windows. A live session or its result (Listening, Processing, Done,
+        Error) is the application's main feedback and a temporary reveal is
+        something the user asked to see: both stay topmost."""
+        return (
+            self._always_on_top
+            and not self._temporary_foreground_active
+            and self._state == "Idle"
+        )
+
     def _own_window_to_stay_behind(self) -> int:
         """The native handle of the own window being worked in, or 0.
 
@@ -1955,6 +1974,8 @@ class OverlayUI(QtWidgets.QWidget):
         from events, so a missed event cannot leave the overlay out of the
         topmost band for good.
         """
+        if not self._may_step_behind_own_window():
+            return 0
         window = self._active_own_window_handle()
         if window is None or not window.isVisible():
             return 0
@@ -1964,6 +1985,17 @@ class OverlayUI(QtWidgets.QWidget):
     def _on_focus_window_changed(self, _window: QtGui.QWindow | None) -> None:
         """Re-place a topmost overlay when activation moves between this
         application's windows and others."""
+        if (
+            self._always_on_top
+            and self._temporary_foreground_active
+            and self._state == "Idle"
+            and self._active_own_window_handle() is not None
+        ):
+            # The user opened one of the application's windows after asking for
+            # the overlay (tray click on a pinned overlay: the double-click that
+            # opens Settings): that act ends the reveal.
+            self._temporary_foreground_active = False
+            self._temporary_foreground_timer.stop()
         if sys.platform == "win32" and self.isVisible() and self._wants_topmost():
             self._apply_native_z_order()
 

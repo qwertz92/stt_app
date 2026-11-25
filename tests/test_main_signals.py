@@ -945,6 +945,7 @@ def test_history_presenter_reuses_open_dialog_and_reloads_on_refocus(
     assert instances[0].reload_calls == 3
     assert instances[0].reload_force_values == [True, False, True]
     assert len(callbacks) == 1
+    instances[0].close()
     _ = app
 
 
@@ -1116,6 +1117,12 @@ def test_every_tray_activation_notes_the_foreground_first(reason):
     assert controller.note_foreground_calls == 1, (
         "the foreground was not recorded before the menu takes it"
     )
+    # A double-click opens the real, shown Settings dialog; left open it keeps
+    # the process's focus window for every later test.
+    tray._shutdown_settings_dialog()
+    for widget in app.topLevelWidgets():
+        if widget.isVisible() and isinstance(widget, QtWidgets.QDialog):
+            widget.close()
 
 
 class _OverlaySignals(QtCore.QObject):

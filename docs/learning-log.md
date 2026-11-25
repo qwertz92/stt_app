@@ -3,6 +3,15 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: review round on the overlay and Models tab changes
+
+Structurally: the overlay yields to an own window only while it is pinned and idle; the Models tab's list became the flexible part of its page.
+- **P2, test order:** `test_dropping_topmost_keeps_a_floating_overlay...` failed after `tests/test_main_signals.py` because a real `SettingsDialog` (opened by a tray test) and a fake history dialog stayed open and held the process's focus window, which the overlay now reads. `tests/test_overlay_ui.py` has an autouse fixture answering "no own window active"; both leaking tests close their windows.
+- **Rule change (lead):** a live session (Listening, Starting, Processing, Done, Error) and any temporary reveal keep the overlay topmost over own windows; only pinned and idle steps behind. A pinned overlay's reveal now runs the timer too, and opening an own window after it ends the reveal (the tray double-click must leave Settings in front).
+- **Stale reference:** a refused "behind own window" call falls back to plain topmost for that call and returns its result, so it cannot turn on the Qt window-flag fallback (permanent topmost).
+- **Models tab:** the first version fixed the list at all its rows; a download (+47 px, a long error +63 px) then scrolled the page and narrowed it by 12 px. A `QScrollArea` page never gets less than its layout's preferred height, so the list now prefers its minimum (six rows) and expands to all rows; the group is capped at its content. Arrow keys also scroll the page to the current row (they moved out of sight at 801 x 400).
+- **Recorded, not fixed:** a native file dialog from an own window leaves the overlay topmost over it (known-limitations.md).
+
 ## 2026-11-24: owner's clarification of the UI stability rules
 
 The owner clarified that "nothing may jump" was never meant strictly: the goal is

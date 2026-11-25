@@ -418,9 +418,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   best-effort; tray "Show overlay" (`controller.bring_overlay_to_front`) is
   the manual path. A floating overlay is a tool window and can hide.
 - **The overlay steps behind the application's own window being worked in**
-  (2026-11-24, owner via lead). A topmost overlay (Pinned, or a floating one
-  during its reveal) covered Settings where they overlap. It stays topmost
-  above OTHER applications, but while one of this application's top-level
+  (2026-11-24, owner via lead; narrowed the same day by the lead's review). A
+  pinned overlay covered Settings where they overlap. It stays topmost above
+  OTHER applications, and it yields **only while it is pinned AND idle**
+  (`_may_step_behind_own_window`: `_always_on_top`, state `Idle`, no
+  temporary reveal running). A live session or its result (Listening,
+  "Starting", Processing, Done, Error) is the application's main feedback and
+  must not vanish behind Settings while the user dictates into one of its
+  fields; a temporary reveal (tray click, a recording's reveal of a floating
+  overlay) is something the user asked to see: all of these are topmost exactly
+  as before. With `overlay_always_on_top` off nothing differs from before.
+  While the overlay yields and one of this application's top-level
   windows (Settings, History, Run Benchmark, the edit and retranscribe
   dialogs, the unfinished-recordings notice, the quit dialog, update dialogs,
   message boxes) is the active window, `_apply_native_z_order` places the
@@ -437,19 +445,36 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     every 250 ms while the overlay is shown and topmost-wanted (the signal alone
     left the overlay non-topmost after an own dialog closed, measured with real
     windows). The window order of creation plays no part.
-  - **A recording started while Settings is active still shows the overlay**:
-    `reveal_temporarily` shows it and the same placement puts it behind
-    Settings, so it is hidden only where the two overlap. It never takes the
-    focus: every placement keeps `SWP_NOACTIVATE`.
+  - **A recording started while Settings is active shows the overlay on top**
+    (state Listening is not idle), and when the session ends and the overlay is
+    idle again it steps behind Settings again: `set_state` asks at once, the
+    250 ms re-check covers the rest. `reveal_temporarily` now also runs its
+    timer for a pinned overlay, so the end of a reveal re-places it.
+  - **Opening an own window after a reveal ends the reveal** for a pinned idle
+    overlay (`_on_focus_window_changed`): the tray's double-click reveals on the
+    first click and opens Settings on the second, and Settings must get the
+    front. A reveal for a floating overlay is not ended that way. Not asked of
+    the lead; the alternative (the reveal outlasting Settings' opening, so the
+    overlay covers it for the reveal's length) contradicts the tray rule.
+  - **A failed "behind the own window" call falls back to plain topmost for
+    that call only** (the window closed meanwhile): `_apply_native_z_order`
+    returns the topmost call's result, so a stale handle never turns on the Qt
+    window-flag fallback (`_topmost_uses_window_flag`, which would keep the
+    overlay topmost permanently and recreate the window).
   - **Floating with no reveal running is not topmost, so nothing changes**; the
-    waiting-for-a-click machinery above is untouched.
+    waiting-for-a-click machinery above is untouched. Known gap:
+    `docs/agents/known-limitations.md`, native file dialogs.
   - **Rejected: making the dialogs topmost too** (Settings would then cover
     the browser the user copies an API key from) and **making the overlay the
     dialogs' owner** (windows owned by a topmost window become topmost and lose
     their taskbar button). Not used either: toggling `WindowStaysOnTopHint`,
     which recreates the native window (the blink of the 2026-10-09 rule).
   - Tests: `test_a_pinned_overlay_steps_behind_an_own_window_being_worked_in`,
-    `test_a_reveal_while_an_own_window_is_active_stays_behind_it`,
+    `test_a_live_session_stays_topmost_over_an_own_window`,
+    `test_a_reveal_while_an_own_window_is_active_is_topmost`,
+    `test_opening_an_own_window_after_a_reveal_ends_the_reveal`,
+    `test_a_floating_overlay_reveals_and_runs_sessions_as_before`,
+    `test_a_stale_own_window_falls_back_to_topmost_for_that_call_only`,
     `test_the_overlay_state_follows_activation_not_a_count_of_events`,
     `test_a_floating_overlay_ignores_the_activation_of_own_windows`
     (`tests/test_overlay_ui.py`, the recording fake of `user32`: stable on a CI
@@ -458,11 +483,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   - To revert: `git revert` the commit "feat(overlay): step behind the
     application's own active window"; the one switch is
     `_own_window_to_stay_behind`, which returning 0 restores the old behaviour.
+    `tests/test_overlay_ui.py` has an autouse fixture answering "no own window
+    is active" unless a test says so (the real focus window of the process
+    otherwise depends on windows earlier tests left open).
   - Measured with real windows (a driver with a pinned overlay, a dialog and a
     second process's window overlapping it, 2026-11-25; z-order from
     `GetWindow(GW_HWNDPREV)`, topmost from `WS_EX_TOPMOST`): own dialog active
-    -> overlay not topmost and behind the dialog; reveal while it is active ->
-    overlay shown, behind it; another application active -> topmost and above
+    -> overlay not topmost and behind the dialog; tray reveal while it is active
+    -> topmost and above it, behind it again once the reveal ends; Listening
+    while it is active -> topmost, behind it again when idle; another application active -> topmost and above
     both; dialog closed with another application in front -> topmost again.
 - **Opening Settings never reveals the overlay** (2026-10-23). Nothing in the
   settings open path (`main.open_settings_dialog`, `_present_dialog`,
