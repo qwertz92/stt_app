@@ -3,6 +3,13 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: review round 2 of the overlay and Models tab changes
+
+Structurally: the Models tab's button row moved above the list, and the overlay's "may step behind an own window" test also asks whether anything in it waits for the user.
+- **Stacking gap:** an idle pinned overlay with a queue row (a transcription in flight, a "Not inserted" row with its Insert/Dismiss button) or the not-inserted badge stepped behind Settings or History, and nothing else on screen shows those. Both now keep it topmost; `set_transcription_queue` and `set_not_inserted_badge` re-place it when the last waiting item goes away.
+- **Movement the user did not cause:** with the buttons under the list, a download's area (or a four-line error) pulled them up 25-111 px and back when it collapsed. With the buttons above the list only the list's lower edge moves. Measured before and after in idle / download / error / collapsed states at 860 x 960 (15 and 40 rows) and 1600 x 1200 (15 rows); the numbers are in `docs/agents/settings-dialog.md`.
+- **Tests that pinned nothing** were rewritten to assert what differs from the old code and were run against it: the pinned-reveal test against 669a3a7, the two Models tests against 358d55a (the fixed-height list).
+
 ## 2026-11-25: review round on the overlay and Models tab changes
 
 Structurally: the overlay yields to an own window only while it is pinned and idle; the Models tab's list became the flexible part of its page.

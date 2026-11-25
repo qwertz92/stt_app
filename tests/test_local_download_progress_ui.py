@@ -266,10 +266,10 @@ def test_the_download_area_moves_nothing_above_it_from_start_to_finish(
         "queue line": dialog.local_model_download_queue_label,
     }
 
-    def geometry() -> dict[str, tuple[int, int]]:
+    def geometry() -> dict[str, int]:
         QtWidgets.QApplication.processEvents()
         return {
-            name: (widget.mapTo(dialog, QtCore.QPoint(0, 0)).y(), widget.height())
+            name: widget.mapTo(dialog, QtCore.QPoint(0, 0)).y()
             for name, widget in watched.items()
         }
 

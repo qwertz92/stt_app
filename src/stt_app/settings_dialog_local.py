@@ -411,7 +411,13 @@ class _LocalModelsMixin:
         manage_buttons.addWidget(self.cancel_model_downloads_button)
         manage_buttons.addStretch(1)
         manage_buttons.addWidget(self.delete_selected_model_button)
-        local_models_layout.addLayout(manage_buttons)
+        # Above the list, not below it: the list is the part of the group that
+        # gives way when the status line, progress bar and queue line appear
+        # below it, so nothing clickable may sit under it. The buttons stay
+        # where they are in every state, and only the list's lower edge moves.
+        local_models_layout.insertLayout(
+            local_models_layout.indexOf(self.local_models_list), manage_buttons
+        )
 
         self.local_models_action_label = CollapsingStatusLabel("")
         make_label_selectable(self.local_models_action_label)

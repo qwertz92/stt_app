@@ -1255,13 +1255,13 @@ def test_the_local_download_bar_appearing_moves_nothing_above_it(dialog) -> None
         "delete": dialog.delete_selected_model_button,
     }
 
-    def geometry() -> dict[str, tuple[int, int]]:
+    def geometry() -> dict[str, int]:
         # Several passes: a hidden widget's relayout reaches the page through
         # the group, one posted layout request per level.
         for _ in range(3):
             QtWidgets.QApplication.processEvents()
         return {
-            name: (widget.mapTo(dialog, QtCore.QPoint(0, 0)).y(), widget.height())
+            name: widget.mapTo(dialog, QtCore.QPoint(0, 0)).y()
             for name, widget in watched.items()
         }
 

@@ -43,7 +43,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   (+63 px) shrink the list instead (860 x 900: 306 -> 260 -> 244 px, the list
   scrolls inside itself) and create no page scroll bar, so the page keeps its
   834 px width; only below six rows does the page scroll (860 x 700: 822 px
-  wide). Nothing depends on 15 rows. Arrow keys on a page too short for the list
+  wide). Nothing depends on 15 rows. **The button row (Refresh, Download
+  Selected, Download All Missing, Cancel Downloads, Delete Selected) sits above
+  the list** (2026-11-25): the status line, bar and queue line below the list take
+  their height from the list, so only the list's lower edge moves and nothing
+  clickable does. With the buttons below the list they moved 25-111 px under a
+  resting pointer (860 x 960: 788 -> 738 with a four-line error; 40 rows: 849 ->
+  802 -> 738; back when the area collapsed). Measured after, in idle, download,
+  four-line-error and collapsed states (15 and 40 rows at 860 x 960, 15 rows at
+  1600 x 1200): button row at y = 478 / 478 / 448 in every state, the Local
+  runtime group at 174 in every state. Arrow keys on a page too short for the list
   also scroll the page to the current row (`_keep_current_model_row_in_the_page`;
   without it the selection moved out of sight at 801 x 400). Tests:
   `test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar`,
