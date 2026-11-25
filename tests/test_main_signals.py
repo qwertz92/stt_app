@@ -100,6 +100,9 @@ class FakeController:
     def quit_pending_work(self):
         return self.pending_quit_work
 
+    def has_active_session(self):
+        return False
+
     def hold_for_quit(self):
         self.quit_holds += 1
 
@@ -1430,3 +1433,49 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert dialog is not None and dialog.isVisible()
     dialog.quit_now_button.click()
     assert quits == [True]
+
+
+def test_the_settings_prebuild_waits_while_a_dictation_runs(monkeypatch):
+    """The Settings dialog is built ahead on the Qt thread 2.5 s after start,
+    which took 2.4-3.3 s in the owner's log; a dictation started right after
+    launch (one did, 1 s after it) had its stop press, result and paste wait
+    behind it. The build now waits until no recording or transcription runs."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    built = []
+
+    class CountingSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
+        audio_device_refresh_requested = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            built.append(self)
+
+        def prepare_for_first_show(self):
+            return None
+
+    monkeypatch.setattr(main_module, "SettingsDialog", CountingSettingsDialog)
+    monkeypatch.setattr(main_module, "_SETTINGS_PREBUILD_DELAY_MS", 10)
+    controller = FakeController()
+    controller.session_active = True
+    controller.has_active_session = lambda: controller.session_active
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    QtTest.QTest.qWait(100)
+    assert built == [], "built while the dictation ran"
+    controller.session_active = False
+    QtTest.QTest.qWait(100)
+    assert len(built) == 1
+    QtTest.QTest.qWait(50)
+    assert len(built) == 1, "built once"
+    _ = tray

@@ -3,6 +3,49 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: findings from a month of the owner's log (runtime, crash log, noise)
+
+Source: `%APPDATA%\stt_app\logs`, 2026-10-25 to 2026-11-24, 6 sessions, 1067
+recordings, all local Cohere on WebGPU. Details in
+`docs/agents/controller-and-jobs.md`.
+- **The first dictation after every wake took 8-13 s.** 12 lines `System resume
+  detected; closing cached ONNX/WebGPU runtime`, and the next transcription took
+  7.8-13.1 s for short clips (median 0.74 s), with `init_ms` 1-2: the Node runner
+  started inside `transcribe_batch`. Nothing loaded the model again, because the
+  preload ran only at start and after a save. A resume now starts a background
+  preload after 3 s, retried twice after 10 s, never recorded as a failure (a
+  recorded failure would refuse the next dictation), never painted over a
+  session or a result. The log line gained `load_ms` so such a load no longer
+  reads as transcription time.
+- **`crash.log` showed handled exceptions as crashes.** Three dumps
+  `Windows fatal exception: code 0x8001010d` (RPC_E_CANTCALLBACK_INPUTSYNC,
+  raised and caught inside a COM call on the Qt thread) in sessions that ran on
+  for days, and one `previous_session_end clean_quit=yes` WARNING with 37 trace
+  lines. Python 3.12's faulthandler has no switch for Windows exceptions, so
+  the next start now filters: every dump of a clean session, and RPC/COM codes
+  in any session, count as `handled_exceptions`. A start that could not open
+  `crash.log` no longer makes the next one report the same session again (a
+  known limitation, removed).
+- **The three sessions that ended without any mark** were Windows going down
+  (Kernel-Power 41 and EventLog 6008 in the System log at each time), not the
+  app; the one that stopped during its quit was a restart chosen from the Start
+  menu two seconds before. The report now names a Windows start since the
+  session began (`windows_started_since`).
+- **Log noise:** `audio_device_change_output` (352 lines in 143 bursts, 3.5 % of
+  the log) moved to DEBUG; Qt's "monitorData: Unable to obtain handle for
+  monitor" around display wakes is INFO.
+- **A duplicate Retry press was already ignored.** The lead decided that a
+  second Retry with unchanged settings should be ignored while the first runs;
+  v0.13.0 does exactly that since 2026-10-17 (`_running_retry_of_the_slot`
+  compares the whole request, the notice goes to the tray, a finished or
+  failed retry can be pressed again, all pinned in
+  `tests/test_controller_queue.py`). Only the known-limitations entry was
+  stale; it now describes the remaining, intended case (a changed request
+  restarts, and a remote provider's stopped retry still lands in history).
+- **The Settings prebuild** (2.4-3.3 s on the Qt thread, 2.5 s after start) now
+  waits while a recording or its transcription runs; one session had started a
+  recording 1 s after launch, whose stop press would have waited behind it.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`

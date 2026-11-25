@@ -90,12 +90,15 @@ can reuse its connection pool instead of creating a new client each time.
 Diagnostics include a line like:
 
 ```text
-transcription_timing engine=groq model=whisper-large-v3-turbo init_ms=8 transcribe_ms=920 total_ms=928 audio_bytes=123456 outcome=success
+transcription_timing engine=groq model=whisper-large-v3-turbo init_ms=8 load_ms=n/a transcribe_ms=920 total_ms=928 audio_bytes=123456 outcome=success
 ```
 
 Compare the first and later calls. A large `init_ms` points to local app/keyring
 setup. A large `transcribe_ms` with fast later calls points to network,
-TLS/proxy/Zscaler warmup, upload, or provider latency.
+TLS/proxy/Zscaler warmup, upload, or provider latency. `load_ms` is the
+Cohere/Granite model load a transcription had to run first (0 when the model
+was already loaded, `n/a` for every other engine, whose load cannot be told
+apart and stays in `transcribe_ms`).
 
 ---
 

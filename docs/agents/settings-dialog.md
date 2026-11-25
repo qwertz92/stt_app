@@ -152,6 +152,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   delivery must start and show nothing: `_request_local_model_scan` and
   `_start_local_model_download` refuse after `_shutdown_started`, and
   `_on_update_check_finished` shows no modal then.
+  - It is built ahead, `main._SETTINGS_PREBUILD_DELAY_MS` (2.5 s) after the
+    tray, on the Qt thread: `build_ui` took 2.4-3.3 s in the owner's log
+    (0.9 s once), during which a hotkey press, a finished transcription and
+    its paste wait. Since 2026-11-24 the prebuild waits, 2.5 s at a time,
+    while `controller.has_active_session()` (a recording or its foreground
+    transcription); opening Settings meanwhile still builds at once. Not
+    done: building the tabs over several event-loop turns, which would
+    remove the window entirely (~3-4 h, every tab mixin's build order).
 - **No settings-dialog stylesheet sets `font-size`** (ignores Windows' "Text
   size"); hints use `settings_dialog_helpers.hint_font()` (0.92 of the app
   font).

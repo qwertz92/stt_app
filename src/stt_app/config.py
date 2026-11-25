@@ -19,6 +19,14 @@ APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 # loaded WebGPU runtime (measured 2026-10-03), and the slowest bounded step,
 # killing a Node runtime that ignores its shutdown command, about 4 s.
 QUIT_WATCHDOG_TIMEOUT_S = 15.0
+# A wake from sleep closes a kept Cohere/Granite runtime (its GPU device does
+# not survive the suspend) and loads it again in the background: the first
+# attempt waits a moment, because the GPU driver may not be back yet, and a
+# failed one is retried after a longer pause, at most this many times in all.
+# Past that the model loads at the next dictation, as it did before.
+RESUME_PRELOAD_DELAY_MS = 3_000
+RESUME_PRELOAD_RETRY_DELAY_MS = 10_000
+RESUME_PRELOAD_MAX_ATTEMPTS = 3
 
 SCHEMA_VERSION = 25
 

@@ -421,6 +421,11 @@ def run() -> int:
     return exit_code
 
 
+# When the Settings dialog is built ahead of its first opening, and how long
+# that waits again while a dictation runs.
+_SETTINGS_PREBUILD_DELAY_MS = 2500
+
+
 def _create_tray_icon(
     app: QtWidgets.QApplication,
     controller: DictationController,
@@ -500,6 +505,14 @@ def _create_tray_icon(
 
     def prepare_settings_dialog() -> None:
         nonlocal _active_settings_dialog
+        # The build runs on the Qt thread for 2.4-3.3 s (owner's log): never
+        # while a dictation runs, whose stop press, result and paste would
+        # wait behind it. Opening Settings meanwhile still builds at once.
+        if _active_settings_dialog is None and controller.has_active_session():
+            QtCore.QTimer.singleShot(
+                _SETTINGS_PREBUILD_DELAY_MS, prepare_settings_dialog
+            )
+            return
         if _active_settings_dialog is None:
             _active_settings_dialog = create_settings_dialog()
         if not _active_settings_dialog.isVisible():
@@ -600,7 +613,7 @@ def _create_tray_icon(
     tray_icon._open_settings_dialog = open_settings_dialog
     tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
     tray_icon._quit_coordinator = quit_coordinator
-    QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
+    QtCore.QTimer.singleShot(_SETTINGS_PREBUILD_DELAY_MS, prepare_settings_dialog)
     return tray_icon
 
 

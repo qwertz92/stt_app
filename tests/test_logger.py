@@ -154,9 +154,11 @@ class _Records(logging.Handler):
     def __init__(self) -> None:
         super().__init__()
         self.lines: list[str] = []
+        self.levels: list[int] = []
 
     def emit(self, record: logging.LogRecord) -> None:
         self.lines.append(logging.Formatter().format(record))
+        self.levels.append(record.levelno)
 
 
 def _capturing_logger(name: str) -> tuple[logging.Logger, _Records]:
@@ -282,12 +284,13 @@ def test_only_a_session_that_did_not_quit_is_reported(
     assert [kwargs["all_threads"] for kwargs in enabled] == [True, True, True]
 
 
-def test_a_report_repeated_after_an_unopenable_crash_log_names_the_same_session(
+def test_a_report_is_not_repeated_after_an_unopenable_crash_log(
     monkeypatch, tmp_path, _restore_exception_hooks
 ):
     """A start that cannot open crash.log writes no start line of its own, so
-    the next start reports the same crash again (accepted, see
-    known-limitations.md); both reports name that session."""
+    the next start found the same last section and reported the same crash
+    a second time, as if it were another one. The report it logged into
+    dictation.log names the session; the next start finds it there."""
     (tmp_path / "crash.log").write_text(
         "=== stt_app session started 2026-10-23T10:00:00+02:00 pid=42 "
         "version=0.13.0 ===\n"
@@ -295,20 +298,189 @@ def test_a_report_repeated_after_an_unopenable_crash_log_names_the_same_session(
         encoding="utf-8",
     )
     log, records = _capturing_logger("test.crash_repeated")
+    dictation_log = logging.FileHandler(tmp_path / "dictation.log", encoding="utf-8")
+    log.addHandler(dictation_log)
 
     def _refused(*_args, **_kwargs):
         raise PermissionError("held by a virus scanner")
 
     monkeypatch.setattr(logger_module, "open", _refused, raising=False)
-    assert logger_module.start_crash_reporting(tmp_path, log, version="1") is None
-    monkeypatch.delattr(logger_module, "open")
-    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
-    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+    try:
+        assert logger_module.start_crash_reporting(tmp_path, log, version="1") is None
+        monkeypatch.delattr(logger_module, "open")
+        monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+        logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+    finally:
+        dictation_log.close()
 
     reports = [line for line in records.lines if line.startswith("previous_session")]
     session = "session_started=2026-10-23T10:00:00+02:00 pid=42 version=0.13.0"
-    assert len(reports) == 2
-    assert all(report.splitlines()[0].endswith(session) for report in reports)
+    assert len(reports) == 1
+    assert session in reports[0].splitlines()[0]
+
+
+def _handled_com_exception_dump(thread_count: int = 3) -> list[str]:
+    """What faulthandler wrote three times in the owner's crash.log: a COM
+    call refused inside an input-synchronous message, handled by Windows."""
+    lines = ["Windows fatal exception: code 0x8001010d", ""]
+    for index in range(thread_count):
+        lines += [
+            f"Thread 0x{index:08x} (most recent call first):",
+            '  File "threading.py", line 1012 in run',
+            "",
+        ]
+    lines += [
+        "Current thread 0x000063b4 (most recent call first):",
+        '  File "main.py", line 410 in run',
+    ]
+    return lines
+
+
+def test_a_clean_quit_after_handled_exceptions_is_reported_as_clean(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """The owner's log: `previous_session_end clean_quit=yes` as a WARNING
+    with 37 trace lines, for a session that quit cleanly days after a COM
+    exception Windows handled. faulthandler (3.12 has no option to leave
+    them out) dumps every exception code with the top bit set, handled or
+    not; a session that quit cleanly survived every one of them."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    (tmp_path / "crash.log").write_text(
+        "\n".join(
+            [
+                "=== stt_app session started 2026-11-04T23:29:53+01:00 pid=7 version=0.13.0 ===",
+                *_handled_com_exception_dump(),
+                "Windows fatal exception: access violation",
+                "",
+                "Current thread 0x000063b4 (most recent call first):",
+                '  File "main.py", line 410 in run',
+                "=== stt_app quit started 2026-11-05T23:21:57+01:00 ===",
+                "=== stt_app session ended cleanly 2026-11-05T23:21:57+01:00 ===",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_handled_clean")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert records.levels[records.lines.index(report)] == logging.INFO
+    assert report.startswith(
+        "previous_session_handled_exceptions count=2 "
+        "exceptions=code 0x8001010d,access violation crash_log="
+    )
+    assert "\n" not in report, "no excerpt for exceptions the session survived"
+    assert logger_module.PREVIOUS_SESSION_END_LOG_MARKER not in report, (
+        "the diagnostics copy would reach back into a session that quit cleanly"
+    )
+
+
+def test_a_dump_after_the_clean_mark_is_a_crash_during_teardown(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """`main` writes the clean mark before the interpreter joins threads and
+    tears Qt down, with faulthandler still on: a dump after the mark is a
+    crash in that teardown, not an exception the session survived."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    (tmp_path / "crash.log").write_text(
+        "\n".join(
+            [
+                "=== stt_app session started 2026-11-04T23:29:53+01:00 pid=7 version=0.13.0 ===",
+                *_handled_com_exception_dump(),
+                "=== stt_app quit started 2026-11-05T23:21:57+01:00 ===",
+                "=== stt_app session ended cleanly 2026-11-05T23:21:57+01:00 ===",
+                "Windows fatal exception: access violation",
+                "",
+                "Current thread 0x000063b4 (most recent call first):",
+                '  File "threading.py", line 1590 in _shutdown',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_after_clean_mark")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert records.levels[records.lines.index(report)] == logging.WARNING
+    assert report.startswith(
+        "previous_session_end clean_quit=yes quit_started=yes native_trace_lines=3 "
+        "handled_exceptions=1 "
+    )
+    assert report.splitlines()[1] == "Windows fatal exception: access violation"
+
+
+def test_a_handled_com_exception_is_no_crash_trace_of_a_session_that_did_not_quit(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """The session of 2026-10-25 20:31 had one 0x8001010d dump and ended
+    with the PC (Kernel-Power 41 in Windows' event log); the next start
+    presented the dump as its crash trace. An RPC/COM error code
+    (0x8001xxxx) is raised and caught inside Windows' RPC runtime."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    (tmp_path / "crash.log").write_text(
+        "\n".join(
+            [
+                "=== stt_app session started 2026-10-25T20:31:07+01:00 pid=8 version=0.13.0 ===",
+                *_handled_com_exception_dump(),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(logger_module, "_windows_boot_time", lambda: None)
+    log, records = _capturing_logger("test.crash_handled_unmarked")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert report.startswith(
+        "previous_session_end clean_quit=no quit_started=no native_trace_lines=0 "
+        "handled_exceptions=1 "
+    )
+    assert "\n" not in report
+
+
+def test_an_unmarked_session_names_a_windows_start_since_it_began(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """Three of the owner's sessions ended with no quit mark and no trace;
+    each time Windows had gone down unexpectedly (Kernel-Power 41). The app
+    cannot tell a power loss from a kill, but it can say that Windows has
+    started since the session did."""
+    from datetime import UTC, datetime
+
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-11-04T23:03:10+01:00 pid=9 "
+        "version=0.13.0 ===\n",
+        encoding="utf-8",
+    )
+    boot = datetime(2026, 11, 4, 22, 28, 33, tzinfo=UTC)
+    monkeypatch.setattr(logger_module, "_windows_boot_time", lambda: boot)
+    log, records = _capturing_logger("test.crash_with_windows")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert report.startswith("previous_session_end clean_quit=no quit_started=no ")
+    booted = boot.astimezone().isoformat(timespec="seconds")
+    assert f"windows_started_since={booted}" in report
+
+    # A boot before the session began says nothing about it.
+    early = datetime(2026, 11, 4, 20, 0, 0, tzinfo=UTC)
+    monkeypatch.setattr(logger_module, "_windows_boot_time", lambda: early)
+    (tmp_path / "crash.log").write_text(
+        "=== stt_app session started 2026-11-04T23:03:10+01:00 pid=9 "
+        "version=0.13.0 ===\n",
+        encoding="utf-8",
+    )
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+    later = [line for line in records.lines if line.startswith("previous_session")]
+    assert "windows_started_since" not in later[-1]
 
 
 def test_a_session_ended_during_its_quit_is_not_reported_as_a_crash(
@@ -606,6 +778,26 @@ def test_qt_messages_reach_the_log_once_per_kind_and_never_recurse(
     geometry = [line for line in records.lines if "setGeometry" in line]
     assert len(geometry) == 20
     assert geometry[-1].endswith("(repeated too often; later ones are not logged)")
+
+
+def test_the_display_wake_monitor_warning_is_logged_as_information(
+    _restore_exception_hooks,
+):
+    """Qt warns "Unable to obtain handle for monitor" while a display wakes
+    and falls back to 96 DPI until the screen reports again; it is no fault
+    of the app and showed up as a WARNING after display wakes."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    log, records = _capturing_logger("test.qt_monitor_data")
+    logger_module.install_qt_message_logging(log)
+
+    QtCore.qWarning(
+        "monitorData: Unable to obtain handle for monitor '\\\\.\\DISPLAY1', "
+        "defaulting to 96 DPI."
+    )
+    QtCore.qWarning("QWindowsWindow::setGeometry: Unable to set geometry")
+
+    assert "monitorData" in records.lines[0]
+    assert records.levels == [logging.INFO, logging.WARNING]
 
 
 def test_qt_messages_with_other_pointers_count_as_one_and_the_count_is_bounded(
