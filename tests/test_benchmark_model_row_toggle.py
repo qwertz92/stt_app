@@ -37,7 +37,7 @@ def _click(models, point: QtCore.QPoint) -> None:
 
 
 def test_a_click_on_the_checkbox_toggles_the_row_once(tmp_path):
-    dialog, app, models, changes = _shown_list(tmp_path, ["small", "base"])
+    dialog, app, models, changes = _shown_list(tmp_path, ["small", "distil-large-v3.5"])
     try:
         indicator = _indicator_rect(models, 0)
         assert models.visualRect(models.model().index(0, 0)).contains(indicator)
@@ -53,7 +53,7 @@ def test_a_click_on_the_checkbox_toggles_the_row_once(tmp_path):
 
 
 def test_a_click_on_the_label_or_the_row_end_toggles_the_row_once(tmp_path):
-    dialog, app, models, changes = _shown_list(tmp_path, ["small", "base"])
+    dialog, app, models, changes = _shown_list(tmp_path, ["small", "distil-large-v3.5"])
     try:
         row_rect = models.visualRect(models.model().index(1, 0))
         indicator = _indicator_rect(models, 1)
@@ -67,7 +67,10 @@ def test_a_click_on_the_label_or_the_row_end_toggles_the_row_once(tmp_path):
         _click(models, end_point)
         assert models.item(1).checkState() == QtCore.Qt.Checked
         assert len(changes) == 2
-        assert dialog._selected_benchmark_model_names() == ["small", "base"]
+        assert dialog._selected_benchmark_model_names() == [
+            "small",
+            "distil-large-v3.5",
+        ]
     finally:
         dialog.benchmark_window.close()
         _ = app

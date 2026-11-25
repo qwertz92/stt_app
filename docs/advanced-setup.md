@@ -677,14 +677,14 @@ The project includes a local benchmark script to compare model speed on your har
 uv run python scripts/benchmark_local.py --list-models --show-model-sizes
 
 # Benchmark with the included sample file:
-uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav --models tiny,base,small --device cpu --compute-types int8 --runs 3 --warmup
+uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav --models small,large-v3-turbo --device cpu --compute-types int8 --runs 3 --warmup
 ```
 
 ### Full benchmark with export
 
 ```powershell
 uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav `
-    --models tiny,base,small,medium `
+    --models small,large-v3-turbo,large-v3 `
     --device cpu `
     --compute-types int8,float32 `
     --runs 3 --warmup `
@@ -776,7 +776,7 @@ results, **Show Results** at the right end of that window's footer closes the
 window and shows the run on the Benchmark tab.
 
 Benchmark History is a real column-based table rather than a text summary;
-its **Models** column reads like "12 models: tiny, base, ..." (the models the
+its **Models** column reads like "12 models: small, large-v3, ..." (the models the
 run measured, shortened to the column's width, with the full list as a tooltip).
 Selecting a History row shows that run under **Results**; open the
 **Transcripts** result tab to compare the complete output from every model,

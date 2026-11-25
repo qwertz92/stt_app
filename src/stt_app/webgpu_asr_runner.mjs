@@ -34,13 +34,9 @@ const EXTENSIBLE_EXTENSION_BYTES = 22;
 const MAX_WAV_FRAMES = 16000 * 60 * 60 * 8;
 const MAX_PROTOCOL_LINE_CHARS = 1024 * 1024;
 
-// Models that load through the high-level Transformers.js
-// GraniteSpeechForConditionalGeneration pipeline (q4 packages). Granite 4.1 2B
-// shares Granite 4.0's component layout, so it uses the same path.
-const GRANITE_PIPELINE_MODELS = new Set([
-  "granite-4.0-1b-speech",
-  "granite-speech-4.1-2b",
-]);
+// The model that loads through the high-level Transformers.js
+// GraniteSpeechForConditionalGeneration pipeline (IBM's q4 package).
+const GRANITE_PIPELINE_MODELS = new Set(["granite-speech-5.0-2b"]);
 
 function parseArgs(argv) {
   const args = {
@@ -438,11 +434,13 @@ export function resolveDevice(
   return [preferred, ...devices.filter((device) => device !== preferred)];
 }
 
+// IBM's 5.0 package: only the audio encoder is a plain q4 file, the embedding
+// and the decoder are q4f16 (4-bit weights, fp16 activations).
 function graniteDtype(dtype) {
   return {
-    embed_tokens: dtype,
+    embed_tokens: "q4f16",
     audio_encoder: dtype,
-    decoder_model_merged: dtype,
+    decoder_model_merged: "q4f16",
   };
 }
 
@@ -455,12 +453,20 @@ const GRANITE_LANGUAGE_NAMES = {
   pt: "Portuguese",
 };
 
+// Measured on 25 German and 25 English FLEURS clips (docs/agents/local-models-and-downloads.md):
+// the 4.x-era "transcribe the <language> speech into a written format" prompt
+// made 5.0 paraphrase (German 15.0 % WER), IBM's punctuation prompt gave 3.5 %.
+// With a chosen language IBM's documented language-ID prefix is added, which
+// measured the same; Auto uses the plain punctuation prompt.
+const GRANITE_PUNCTUATION_PROMPT =
+  "transcribe the speech with proper punctuation and capitalization.";
+
 function granitePrompt(language) {
   const languageName = GRANITE_LANGUAGE_NAMES[language];
   if (languageName) {
-    return `<|audio|>transcribe the ${languageName} speech into a written format.`;
+    return `<|audio|>The speech is in ${languageName}. Transcribe it exactly; do not translate. ${GRANITE_PUNCTUATION_PROMPT}`;
   }
-  return "<|audio|>can you transcribe the speech into a written format?";
+  return `<|audio|>${GRANITE_PUNCTUATION_PROMPT}`;
 }
 
 function joinTranscriptChunks(texts) {

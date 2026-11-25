@@ -488,16 +488,15 @@ def _approximate_size_text(model_name: str) -> str:
 # entry is the display name plus the notes that are not the size; the size is
 # derived above.
 _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
-    "tiny": ("tiny", ""),
-    "base": ("base", ""),
     "small": ("small", ""),
-    "medium": ("medium", ""),
     "large-v3": ("large-v3", "multilingual"),
     "large-v3-turbo": ("large-v3-turbo", "multilingual, fast"),
     "distil-large-v3.5": ("distil-large-v3.5", "English only, improved"),
     "cohere-transcribe-03-2026": ("Cohere Transcribe 03-2026", "ONNX/WebGPU"),
-    "granite-4.0-1b-speech": ("IBM Granite 4.0 1B Speech", "ONNX/WebGPU"),
-    "granite-speech-4.1-2b": ("IBM Granite Speech 4.1 2B", "ONNX/WebGPU"),
+    "granite-speech-5.0-2b": (
+        "IBM Granite Speech 5.0 2B",
+        "ONNX/WebGPU, punctuated",
+    ),
     "nemotron-3.5-asr-streaming-0.6b-int4": (
         "NVIDIA Nemotron 3.5 ASR 0.6B",
         "true 560 ms streaming",
@@ -508,14 +507,7 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # the recording. A picker has no room for that qualifier, so it states
     # what is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
-    # No "post-trained by Moondream" here: the retranscribe dialog's model
-    # combo is 476 px wide at its 560 px minimum, and that note made this
-    # label need 572 px, clipped even at the 640 px default (measured
-    # 2026-09-27). docs/models.md carries the attribution.
-    "parakeet-tdt-0.6b-v3-ultra": (
-        "NVIDIA Parakeet TDT 0.6B v3 Ultra",
-        "CPU, multilingual",
-    ),
+    "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual"),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M",
@@ -523,13 +515,20 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md). They
-# are not in VALID_MODEL_SIZES, so they appear in no picker; these entries
-# exist only so a history row recorded with one still reads as a model name
-# instead of a raw identifier.
+# Retired models (Granite 4.1 Plus/NAR on 2026-08-26, see
+# docs/granite-speech-4.1-onnx-variants.md; the others on 2026-11-25). They are
+# not in VALID_MODEL_SIZES, so they appear in no picker; these entries exist
+# only so a history row recorded with one, and the notice that its saved
+# selection moved on, read as a model name instead of a raw identifier.
 _RETIRED_MODEL_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b-plus": "IBM Granite Speech 4.1 2B Plus (removed)",
     "granite-speech-4.1-2b-nar": "IBM Granite Speech 4.1 2B NAR (removed)",
+    "granite-4.0-1b-speech": "IBM Granite 4.0 1B Speech (removed)",
+    "granite-speech-4.1-2b": "IBM Granite Speech 4.1 2B (removed)",
+    "parakeet-tdt-0.6b-v3-ultra": "NVIDIA Parakeet TDT 0.6B v3 Ultra (removed)",
+    "tiny": "tiny (removed)",
+    "base": "base (removed)",
+    "medium": "medium (removed)",
 }
 
 
@@ -578,6 +577,24 @@ def local_model_short_label(model_name: str) -> str:
     """
     label = LOCAL_MODEL_LABELS.get(model_name, model_name)
     return label.split(" (", 1)[0].strip() or label
+
+
+def model_retirement_notice(retired: str, successor: str) -> tuple[str, str]:
+    """Tray title and text for a saved model this version retired.
+
+    The retired model's files stay where they are and no list offers them any
+    more, so the text says both; docs/models.md names the folders.
+    """
+    old = local_model_short_label(retired)
+    new = local_model_short_label(successor)
+    return (
+        f"{old} was removed",
+        (
+            f"{old} is no longer offered, so Settings now selects {new}. Files of "
+            f"{old} you already downloaded stay on disk; docs/models.md says "
+            "where, to delete them."
+        ),
+    )
 
 
 def model_choices_for_engine(

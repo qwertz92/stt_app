@@ -127,7 +127,7 @@ def test_factory_unknown_engine_falls_back_to_the_default_local_model():
 def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():
     settings = AppSettings(
         engine="unknown_provider_xyz",
-        model_size="granite-4.0-1b-speech",
+        model_size="granite-speech-5.0-2b",
     )
     t = create_transcriber(settings)
     assert isinstance(t, LocalOnnxWebGpuTranscriber)
@@ -216,7 +216,7 @@ def test_local_onnx_device_setting_reaches_the_transcriber():
     """The device is baked into the loaded runtime, so the setting has to reach
     the transcriber; the Benchmark tab could already pin a device but daily
     dictation always ran on `auto`."""
-    base = AppSettings(engine="local", model_size="granite-speech-4.1-2b")
+    base = AppSettings(engine="local", model_size="granite-speech-5.0-2b")
 
     for device in ("auto", "cpu", "webgpu", "dml", "gpu"):
         transcriber = create_transcriber(replace(base, local_onnx_device=device))
@@ -245,12 +245,12 @@ def test_a_measured_device_reaches_the_node_runtime_as_a_preference():
     """`auto` has to start with the device a benchmark measured as fastest
     for this model; without this the setting reached nothing and the runner
     kept its own WebGPU-first order."""
-    base = AppSettings(engine="local", model_size="granite-speech-4.1-2b")
+    base = AppSettings(engine="local", model_size="granite-speech-5.0-2b")
 
     measured = create_transcriber(
         replace(
             base,
-            onnx_auto_preferred_devices={"granite-speech-4.1-2b": "cpu"},
+            onnx_auto_preferred_devices={"granite-speech-5.0-2b": "cpu"},
         )
     )
     assert measured.preferred_device == "cpu"
@@ -271,8 +271,8 @@ def test_a_pinned_device_ignores_the_measurement_on_both_runtimes():
     """An explicit choice always wins; only `auto` consults the benchmark."""
     node_base = AppSettings(
         engine="local",
-        model_size="granite-speech-4.1-2b",
-        onnx_auto_preferred_devices={"granite-speech-4.1-2b": "cpu"},
+        model_size="granite-speech-5.0-2b",
+        onnx_auto_preferred_devices={"granite-speech-5.0-2b": "cpu"},
     )
     nemotron_base = AppSettings(
         engine="local",

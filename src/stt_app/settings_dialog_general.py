@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
     DEVICE_AWARE_LOCAL_MODELS,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     LANGUAGE_MODE_LABELS,
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
@@ -1025,10 +1026,19 @@ class _GeneralTabMixin:
                 "Batch mode only, CPU. Pick a language: this model has no "
                 "auto-detect and would otherwise translate into English."
             )
+        elif engine == "local" and model_name == FLUID_SPEECH_PRO_MODEL_SIZE:
+            style = note_style
+            # Measured 2026-11-25: about half Parakeet v3's word error rate in
+            # German and English at about three times its processing time.
+            text = (
+                "Batch mode only, CPU. Multilingual, no language selection "
+                "needed; more accurate than Parakeet in German and English, "
+                "about three times slower."
+            )
         elif engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
             style = note_style
-            # Not "the fastest local model here": `tiny` measured 0.033
-            # against Parakeet's 0.043 in the same run.
+            # Not "the fastest local model here": a Whisper size once measured
+            # 0.033 against Parakeet's 0.043 in the same run.
             text = (
                 "Batch mode only, CPU. Multilingual, no language selection "
                 "needed; the recommended default."

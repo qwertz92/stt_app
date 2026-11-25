@@ -82,19 +82,16 @@ EVENT_PREFIX = "@@STTBENCH@@"
 # second size measures nothing new here.
 PREFERRED = (
     "parakeet-tdt-0.6b-v3",  # onnx-asr, whose graphs are package data files
-    "tiny",
-    "base",
     "small",  # faster-whisper / CTranslate2
     "nemotron-3.5-asr-streaming-0.6b-int4",  # ONNX Runtime GenAI
     "cohere-transcribe-03-2026",  # Node.js and Transformers.js from the bundle
     # The app's own numpy features, the CPU ONNX Runtime and `tokenizers`.
     "granite-speech-5.0-470m-turboctc",
 )
-WHISPER_SIZES = ("tiny", "base", "small")
+WHISPER_SIZES = ("small",)
 NODE_MODELS = (
     "cohere-transcribe-03-2026",
-    "granite-speech-4.1-2b",
-    "granite-4.0-1b-speech",
+    "granite-speech-5.0-2b",
 )
 NODE_DEVICES = ("webgpu", "cpu")
 

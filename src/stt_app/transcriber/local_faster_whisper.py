@@ -746,7 +746,7 @@ def _download_faster_whisper_via_modelscope(
 _SNAPSHOT_REQUIRED_FILES = frozenset({"config.json", "model.bin", "tokenizer.json"})
 _SNAPSHOT_VOCABULARY_PREFIX = "vocabulary."
 # The repositories that ship `preprocessor_config.json` (their Hugging Face
-# file listings, read 2026-09-27); tiny to medium ship none and need none.
+# file listings, read 2026-09-27); `small` ships none and needs none.
 # `scripts/import_model.py` validates an import against the same set.
 PREPROCESSOR_CONFIG_MODELS = frozenset(
     {"large-v3", "large-v3-turbo", "distil-large-v3.5"}

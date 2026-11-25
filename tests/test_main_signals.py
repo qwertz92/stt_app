@@ -1430,3 +1430,26 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert dialog is not None and dialog.isVisible()
     dialog.quit_now_button.click()
     assert quits == [True]
+
+
+def test_a_retired_model_move_is_shown_once_in_the_tray(tmp_path):
+    from stt_app.config import TRAY_MESSAGE_MAX_CHARS
+    from stt_app.settings_store import SettingsStore, take_model_retirement_notices
+
+    take_model_retirement_notices()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        '{"engine": "local", "model_size": "granite-speech-4.1-2b"}',
+        encoding="utf-8",
+    )
+    SettingsStore(settings_path).load()
+    tray = _TrayMessages()
+
+    main_module._show_model_retirement_notices(tray)
+    main_module._show_model_retirement_notices(tray)
+
+    assert len(tray.messages) == 1
+    title, text = tray.messages[0]
+    assert "Granite" in title
+    assert "stay on disk" in text
+    assert len(text) <= TRAY_MESSAGE_MAX_CHARS

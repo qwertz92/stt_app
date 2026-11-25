@@ -269,7 +269,13 @@ class TestFormatTranscriptionErrorSSL:
 
 
 class TestFindCachedModels:
-    def _make_hf_cache(self, tmp_path: Path, model_short: str, repo_id: str):
+    def _make_hf_cache(
+        self,
+        tmp_path: Path,
+        model_short: str,
+        repo_id: str,
+        preprocessor_config: bool = True,
+    ):
         """Create a fake HF cache structure for a model."""
         folder_name = f"models--{repo_id.replace('/', '--')}"
         snapshot_dir = tmp_path / folder_name / "snapshots" / "abc123"
@@ -278,6 +284,9 @@ class TestFindCachedModels:
         (snapshot_dir / "model.bin").write_bytes(b"\x00")
         (snapshot_dir / "tokenizer.json").write_text("{}")
         (snapshot_dir / "vocabulary.txt").write_text("hello")
+        # Only the repositories of the larger sizes ship it, and only they need it.
+        if preprocessor_config:
+            (snapshot_dir / "preprocessor_config.json").write_text("{}")
         return snapshot_dir
 
     def test_finds_model_in_hf_cache(self, tmp_path):
@@ -290,13 +299,15 @@ class TestFindCachedModels:
         assert "small" in result
 
     def test_finds_model_in_custom_dir(self, tmp_path):
-        self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
+        self._make_hf_cache(
+            tmp_path, "large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+        )
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value="/nonexistent",
         ):
             result = find_cached_models(str(tmp_path))
-        assert "tiny" in result
+        assert "large-v3-turbo" in result
 
     def test_a_snapshot_missing_a_loader_file_is_not_cached(self, tmp_path):
         """`config.json` and `model.bin` alone are not a loadable model.
@@ -323,7 +334,10 @@ class TestFindCachedModels:
         128 mel bins; loaded without it, faster-whisper keeps its 80-mel
         default. The 80-mel repositories ship none."""
         snapshot = self._make_hf_cache(
-            tmp_path, "large-v3", "Systran/faster-whisper-large-v3"
+            tmp_path,
+            "large-v3",
+            "Systran/faster-whisper-large-v3",
+            preprocessor_config=False,
         )
         (snapshot / "vocabulary.txt").unlink()
         (snapshot / "vocabulary.json").write_text("[]")
@@ -354,7 +368,7 @@ class TestFindCachedModels:
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
-        assert "base" not in result
+        assert "distil-large-v3.5" not in result
 
     def test_returns_empty_when_no_models(self, tmp_path):
         # Both halves: `find_cached_models` hands the ONNX scan `model_dir`
@@ -392,17 +406,19 @@ class TestFindCachedModels:
         assert "small" not in result
 
     def test_multiple_models_found(self, tmp_path):
-        self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
+        self._make_hf_cache(
+            tmp_path, "large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+        )
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
-        assert "tiny" in result
+        assert "large-v3-turbo" in result
         assert "small" in result
         # Should be in canonical order.
-        assert result.index("tiny") < result.index("small")
+        assert result.index("small") < result.index("large-v3-turbo")
 
     def test_a_configured_model_dir_hides_the_default_cache(self, tmp_path):
         """`download_root` is one cache root, not a search path.
@@ -418,13 +434,15 @@ class TestFindCachedModels:
         custom_dir = tmp_path / "custom"
         custom_dir.mkdir()
         self._make_hf_cache(hf_dir, "small", "Systran/faster-whisper-small")
-        self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
+        self._make_hf_cache(
+            custom_dir, "large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+        )
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             result = find_cached_models(str(custom_dir))
-        assert result == ["tiny"]
+        assert result == ["large-v3-turbo"]
 
     def test_the_inventory_agrees_with_the_load_path_pre_fetch(self, tmp_path):
         """One directory decides both, so the two can never disagree.
@@ -436,13 +454,15 @@ class TestFindCachedModels:
         """
         custom_dir = tmp_path / "custom"
         custom_dir.mkdir()
-        self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
+        self._make_hf_cache(
+            custom_dir, "large-v3-turbo", "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
+        )
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path / "nowhere"),
         ):
             reported = set(find_cached_models(str(custom_dir)))
-        for model in ("tiny", "small"):
+        for model in ("large-v3-turbo", "small"):
             destination = download_destination_dir(model, str(custom_dir))
             assert destination is not None
             assert (model in reported) is _has_valid_model_snapshot(destination, model)
@@ -528,7 +548,7 @@ class TestEstimateCachedModelBytes:
         sibling `models--<repo>` folder. An unrelated full-repo copy left there
         (e.g. fp32 weights pulled by a conversion experiment) must not be
         reported as this download's progress."""
-        model_name = "granite-speech-4.1-2b"
+        model_name = "granite-speech-5.0-2b"
         repo_id = MODEL_REPO_MAP[model_name]
         repo_basename = repo_id.rsplit("/", 1)[-1]
 
@@ -594,7 +614,7 @@ class TestEstimateCachedModelBytes:
         reported a repo's fp32 conversion weights as this download's progress,
         which is the original 10078/2490 MB bug (found on the since-retired NAR
         variant)."""
-        model_name = "granite-speech-4.1-2b"
+        model_name = "granite-speech-5.0-2b"
         repo_id = MODEL_REPO_MAP[model_name]
 
         foreign = (
@@ -1116,27 +1136,31 @@ class TestDownloadProgressMeasuresTheDestination:
         default_cache.mkdir()
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        self._make_hf_cache(default_cache, "Systran/faster-whisper-tiny", b"0" * 4096)
+        self._make_hf_cache(
+            default_cache, "mobiuslabsgmbh/faster-whisper-large-v3-turbo", b"0" * 4096
+        )
 
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(default_cache),
         ):
-            assert estimate_cached_model_bytes("tiny", str(model_dir)) == 0
+            assert estimate_cached_model_bytes("large-v3-turbo", str(model_dir)) == 0
             # And the same copy is measured when it *is* the destination.
             # 4096 of weights plus the two bytes of config.json.
-            assert estimate_cached_model_bytes("tiny", "") == 4098
+            assert estimate_cached_model_bytes("large-v3-turbo", "") == 4098
 
     def test_the_destination_is_measured_once_it_exists(self, tmp_path):
         model_dir = tmp_path / "models"
         model_dir.mkdir()
-        self._make_hf_cache(model_dir, "Systran/faster-whisper-tiny", b"0" * 2048)
+        self._make_hf_cache(
+            model_dir, "mobiuslabsgmbh/faster-whisper-large-v3-turbo", b"0" * 2048
+        )
 
         with patch(
             "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path / "nowhere"),
         ):
-            assert estimate_cached_model_bytes("tiny", str(model_dir)) == 2050
+            assert estimate_cached_model_bytes("large-v3-turbo", str(model_dir)) == 2050
 
 
 # ---------------------------------------------------------------------------
@@ -1199,14 +1223,14 @@ class TestOrphanedHubPartials:
     def test_the_flat_onnx_layout_is_cleared_too(self, tmp_path):
         """There huggingface_hub keeps its partials in its own bookkeeping
         folder under the `local_dir` it downloads into."""
-        destination = tmp_path / "granite-4.0-1b-speech-ONNX"
+        destination = tmp_path / "granite-speech-5.0-2b-ONNX"
         downloads = destination / ".cache" / "huggingface" / "download"
         downloads.mkdir(parents=True)
         orphan = downloads / "onnx" / "model_q4.onnx.9f8e7d6c.incomplete"
         orphan.parent.mkdir()
         orphan.write_bytes(b"x" * 2_000)
 
-        outcome = remove_orphaned_hub_partials("granite-4.0-1b-speech", str(tmp_path))
+        outcome = remove_orphaned_hub_partials("granite-speech-5.0-2b", str(tmp_path))
 
         assert tuple(outcome) == (1, 2_000, 0)
         assert not orphan.exists()

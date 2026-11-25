@@ -624,7 +624,7 @@ def test_local_model_labels_show_onnx_precision_tags():
     )
     assert "[Q4]" in _combo_text_for_data(
         dialog.model_combo,
-        "granite-speech-4.1-2b",
+        "granite-speech-5.0-2b",
     )
     assert "[INT8]" in _combo_text_for_data(
         dialog.model_combo,
@@ -645,7 +645,7 @@ def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
         app_logger=_FakeLogger(),
     )
 
-    model_index = dialog.model_combo.findData("granite-speech-4.1-2b")
+    model_index = dialog.model_combo.findData("granite-speech-5.0-2b")
     assert model_index >= 0
     dialog.model_combo.setCurrentIndex(model_index)
 
@@ -1489,7 +1489,7 @@ def test_language_options_follow_the_selected_local_model():
     store = _FakeSettingsStore(
         AppSettings(
             engine="local",
-            model_size="granite-speech-4.1-2b",
+            model_size="granite-speech-5.0-2b",
         )
     )
     dialog = SettingsDialog(
@@ -1832,14 +1832,14 @@ def test_local_tab_can_download_selected_model(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    _wait_for_local_models(dialog, "tiny")
+    _wait_for_local_models(dialog, "large-v3-turbo")
 
-    _select_local_model_names(dialog, "tiny")
+    _select_local_model_names(dialog, "large-v3-turbo")
 
     dialog._download_selected_local_models()
 
-    assert "Downloaded: tiny" in dialog.local_models_action_label.text()
-    assert "tiny" in dialog.local_models_label.text()
+    assert "Downloaded: large-v3-turbo" in dialog.local_models_action_label.text()
+    assert "large-v3-turbo" in dialog.local_models_label.text()
     _ = app
 
 
@@ -1856,7 +1856,7 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
 
     def _start_download(model_name: str, _model_dir: str = ""):
         calls.append(model_name)
-        if model_name == "tiny":
+        if model_name == "large-v3-turbo":
             first_started.set()
             return _BlockingDownloadProcess(release_first)
         return _CompletedDownloadProcess()
@@ -1874,22 +1874,22 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     _wait_for_the_deferred_local_refresh(dialog)
 
-    dialog._start_local_model_download(["tiny"])
+    dialog._start_local_model_download(["large-v3-turbo"])
     worker = dialog._active_local_model_download_thread
     assert worker is not None
     assert first_started.wait(timeout=1.0)
     app.processEvents()
 
-    _select_local_model_names(dialog, "base")
+    _select_local_model_names(dialog, "distil-large-v3.5")
     assert dialog.download_selected_models_button.isEnabled() is True
     assert dialog.model_dir_edit.isEnabled() is False
 
     dialog._download_selected_local_models()
-    dialog._start_local_model_download(["base"])
+    dialog._start_local_model_download(["distil-large-v3.5"])
 
     active, queued, running = dialog._local_model_download_snapshot()
-    assert active is not None and active[0] == "tiny"
-    assert [name for name, _model_dir in queued] == ["base"]
+    assert active is not None and active[0] == "large-v3-turbo"
+    assert [name for name, _model_dir in queued] == ["distil-large-v3.5"]
     assert running is True
 
     release_first.set()
@@ -1897,8 +1897,11 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
     QtTest.QTest.qWait(50)
 
     assert worker.is_alive() is False
-    assert calls == ["tiny", "base"]
-    assert "Downloaded: tiny, base" in dialog.local_models_action_label.text()
+    assert calls == ["large-v3-turbo", "distil-large-v3.5"]
+    assert (
+        "Downloaded: large-v3-turbo, distil-large-v3.5"
+        in dialog.local_models_action_label.text()
+    )
     _ = app
 
 
@@ -1922,7 +1925,7 @@ def test_local_tab_can_cancel_active_and_queued_downloads(monkeypatch):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    dialog._start_local_model_download(["tiny", "base"])
+    dialog._start_local_model_download(["large-v3-turbo", "distil-large-v3.5"])
     worker = dialog._active_local_model_download_thread
     assert worker is not None
     assert started.wait(timeout=1.0)
@@ -1955,7 +1958,7 @@ def test_local_model_download_progress_shows_percent_speed_and_queue(monkeypatch
 
     with dialog._local_model_download_lock:
         dialog._local_model_download_active = ("small", "")
-        dialog._local_model_download_queue = [("base", "")]
+        dialog._local_model_download_queue = [("distil-large-v3.5", "")]
         dialog._local_model_download_worker_running = True
     dialog._local_model_download_speed_tracker.reset(
         "small",
@@ -1982,7 +1985,7 @@ def test_local_model_download_progress_shows_percent_speed_and_queue(monkeypatch
     assert "400.0 Mbit/s" in shown
     # The queue has a line of its own now, naming what starts next by the
     # name the list shows rather than by a bare count.
-    assert dialog.local_model_download_queue_label.text() == "Next: base"
+    assert dialog.local_model_download_queue_label.text() == "Next: distil-large-v3.5"
     assert dialog.local_model_download_queue_label.isHidden() is False
     _ = app
 
@@ -1992,7 +1995,7 @@ def test_download_selected_is_disabled_when_selection_is_cached(monkeypatch):
 
     monkeypatch.setattr(
         "stt_app.settings_dialog._scan_cached_models",
-        lambda _model_dir="": ["tiny"],
+        lambda _model_dir="": ["large-v3-turbo"],
     )
     monkeypatch.setattr(
         "stt_app.settings_dialog.threading.Thread",
@@ -2005,14 +2008,14 @@ def test_download_selected_is_disabled_when_selection_is_cached(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    _wait_for_local_models(dialog, "tiny", cached=True)
+    _wait_for_local_models(dialog, "large-v3-turbo", cached=True)
 
-    _select_local_model_names(dialog, "tiny")
+    _select_local_model_names(dialog, "large-v3-turbo")
 
     assert dialog.download_selected_models_button.isEnabled() is False
     assert dialog.delete_selected_model_button.isEnabled() is True
 
-    _select_local_model_names(dialog, "tiny", "base")
+    _select_local_model_names(dialog, "large-v3-turbo", "distil-large-v3.5")
 
     assert dialog.download_selected_models_button.isEnabled() is True
     assert dialog.delete_selected_model_button.isEnabled() is True
@@ -3254,7 +3257,7 @@ def test_settings_dialog_uses_session_cached_models_without_rescan(monkeypatch):
 def test_settings_dialog_uses_persistent_cache_before_auto_rescan(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
-    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
+    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["large-v3-turbo"]})
 
     monkeypatch.setattr(
         "stt_app.settings_dialog._scan_cached_models",
@@ -3273,7 +3276,7 @@ def test_settings_dialog_uses_persistent_cache_before_auto_rescan(monkeypatch):
     )
 
     assert calls == []
-    assert "tiny" in dialog.local_models_label.text()
+    assert "large-v3-turbo" in dialog.local_models_label.text()
     assert dialog.local_models_list.count() > 0
     assert "last known local models" in dialog.local_models_scan_status_label.text()
 
@@ -3290,7 +3293,7 @@ def test_settings_dialog_uses_persistent_cache_before_auto_rescan(monkeypatch):
 def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
-    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
+    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["large-v3-turbo"]})
 
     monkeypatch.setattr(
         "stt_app.settings_dialog._scan_cached_models",
@@ -3308,7 +3311,7 @@ def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
         local_model_inventory_store=inventory_store,
     )
 
-    assert "tiny" in dialog.local_models_label.text()
+    assert "large-v3-turbo" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     _wait_for_the_deferred_local_refresh(dialog)
     assert calls == ["/tmp/models"]
@@ -3523,7 +3526,7 @@ def test_benchmark_controls_explain_their_options():
     # and it names the Granite generations that can use a GPU: "Granite" alone
     # would take in Granite Speech 5.0, which always runs on the CPU.
     device_tooltip = dialog.benchmark_webgpu_device_combo.toolTip()
-    assert "Cohere, Granite 4.0/4.1 and Nemotron" in device_tooltip
+    assert "Cohere, Granite 5.0 2B and Nemotron" in device_tooltip
     assert "Granite Speech 5.0" not in device_tooltip
     assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
     assert (
@@ -3643,7 +3646,7 @@ def test_import_model_selector_tracks_selected_import_engine():
     store = _FakeSettingsStore(
         AppSettings(
             engine="local",
-            model_size="medium",
+            model_size="large-v3",
             openai_model="whisper-1",
         )
     )
@@ -3653,7 +3656,7 @@ def test_import_model_selector_tracks_selected_import_engine():
         app_logger=_FakeLogger(),
     )
 
-    assert dialog.import_model_combo.currentData() == "medium"
+    assert dialog.import_model_combo.currentData() == "large-v3"
 
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
@@ -3941,7 +3944,7 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
 def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
-    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "medium"]
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "large-v3"]
 
     monkeypatch.setattr(
         "stt_app.settings_dialog.threading.Thread",
@@ -4700,17 +4703,17 @@ def test_waiting_downloads_show_their_place_in_the_queue():
         app_logger=_FakeLogger(),
     )
     with dialog._local_model_download_lock:
-        dialog._local_model_download_active = ("tiny", "")
+        dialog._local_model_download_active = ("large-v3-turbo", "")
         dialog._local_model_download_worker_running = True
         dialog._local_model_download_queue.extend(
-            [("small", ""), ("medium", ""), ("large-v3", "")]
+            [("small", ""), ("distil-large-v3.5", ""), ("large-v3", "")]
         )
 
     dialog._refresh_local_models_list([])
 
-    assert "Downloading" in _local_model_row_text(dialog, "tiny")
+    assert "Downloading" in _local_model_row_text(dialog, "large-v3-turbo")
     assert "Queued, 1 of 3" in _local_model_row_text(dialog, "small")
-    assert "Queued, 2 of 3" in _local_model_row_text(dialog, "medium")
+    assert "Queued, 2 of 3" in _local_model_row_text(dialog, "distil-large-v3.5")
     assert "Queued, 3 of 3" in _local_model_row_text(dialog, "large-v3")
 
     dialog.deleteLater()
@@ -4726,7 +4729,7 @@ def test_a_single_waiting_download_shows_no_place_number():
         app_logger=_FakeLogger(),
     )
     with dialog._local_model_download_lock:
-        dialog._local_model_download_active = ("tiny", "")
+        dialog._local_model_download_active = ("large-v3-turbo", "")
         dialog._local_model_download_worker_running = True
         dialog._local_model_download_queue.append(("small", ""))
 

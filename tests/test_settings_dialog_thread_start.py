@@ -167,7 +167,7 @@ def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch, refusal
     dialog = _make_dialog()
     _refuse_new_threads(monkeypatch, refusal)
 
-    dialog._start_local_model_download(["tiny"])
+    dialog._start_local_model_download(["large-v3-turbo"])
 
     shown = dialog.local_models_action_label.text()
     assert "Could not start the download" in shown, shown
@@ -188,7 +188,7 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(
     coordinator = model_download_coordinator()
     _refuse_new_threads(monkeypatch, refusal)
 
-    dialog._start_local_model_download(["tiny"])
+    dialog._start_local_model_download(["large-v3-turbo"])
 
     active, queued, running = dialog._local_model_download_snapshot()
     assert active is None
@@ -196,7 +196,7 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(
     assert running is False
     assert dialog._active_local_model_download_thread is None
     assert dialog._background_work_active() is False
-    assert coordinator.has_explicit_interest("tiny", "") is False
+    assert coordinator.has_explicit_interest("large-v3-turbo", "") is False
     shown = dialog.local_models_action_label.text()
     assert "Could not start the download" in shown, shown
     assert dialog.local_model_download_progress_bar.isVisible() is False

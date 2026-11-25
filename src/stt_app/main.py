@@ -40,7 +40,8 @@ from .paste_target_check import PasteTargetCheck
 from .quit_dialog import QuitCoordinator
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
-from .settings_store import SettingsStore
+from .settings_dialog_helpers import model_retirement_notice
+from .settings_store import SettingsStore, take_model_retirement_notices
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcriber.base import transcript_has_gap
@@ -135,6 +136,17 @@ def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
     overlay.microphone_menu_requested.connect(
         controller.refresh_overlay_microphone_options
     )
+
+
+def _show_model_retirement_notices(tray_icon) -> None:
+    """Tell the user once that a saved local model was moved to its successor.
+
+    `SettingsStore.load` rewrites the file in the same call, so the next start
+    finds the successor saved and says nothing.
+    """
+    for retired, successor in take_model_retirement_notices().items():
+        title, text = model_retirement_notice(retired, successor)
+        tray_icon.showMessage(title, text, QtWidgets.QSystemTrayIcon.Information, 15000)
 
 
 def _connect_tray_notifications(tray_icon, controller) -> None:
@@ -353,6 +365,7 @@ def run() -> int:
     tray_icon.show()
 
     _connect_tray_notifications(tray_icon, controller)
+    _show_model_retirement_notices(tray_icon)
     update_checker = _TrayUpdateChecker(
         tray_icon=tray_icon, logger=logger, parent_widget=overlay
     )

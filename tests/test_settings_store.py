@@ -33,10 +33,17 @@ from stt_app.config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    RETIRED_LOCAL_MODEL_SUCCESSORS,
+    VALID_MODEL_SIZES,
     parse_custom_vocabulary,
 )
 from stt_app.persistence import backup_path
-from stt_app.settings_store import CURRENT_SCHEMA_VERSION, AppSettings, SettingsStore
+from stt_app.settings_store import (
+    CURRENT_SCHEMA_VERSION,
+    AppSettings,
+    SettingsStore,
+    take_model_retirement_notices,
+)
 
 
 def test_load_defaults_creates_file(tmp_path):
@@ -136,7 +143,7 @@ def test_load_fills_missing_values_with_defaults(tmp_path):
     settings_path = tmp_path / "settings.json"
     legacy = {
         "hotkey": "Ctrl+Shift+D",
-        "model_size": "base",
+        "model_size": "distil-large-v3.5",
         "language_mode": "de",
         "vad_enabled": False,
     }
@@ -147,7 +154,7 @@ def test_load_fills_missing_values_with_defaults(tmp_path):
 
     assert settings.schema_version == CURRENT_SCHEMA_VERSION
     assert settings.hotkey == "Ctrl+Shift+D"
-    assert settings.model_size == "base"
+    assert settings.model_size == "distil-large-v3.5"
     assert settings.language_mode == "de"
     assert settings.vad_enabled is False
     assert settings.mode == DEFAULT_MODE
@@ -1858,3 +1865,50 @@ def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
+
+
+@pytest.mark.parametrize(
+    ("retired", "successor"), sorted(RETIRED_LOCAL_MODEL_SUCCESSORS.items())
+)
+def test_a_retired_local_model_moves_once_to_its_successor(
+    tmp_path, retired, successor
+):
+    """The 2026-11-25 roster change: the saved choice becomes the successor
+    in the file itself, so the next start finds nothing to move, and the
+    notice is handed out once."""
+    take_model_retirement_notices()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "local", "model_size": retired}), encoding="utf-8"
+    )
+
+    first = SettingsStore(settings_path).load()
+    notices = take_model_retirement_notices()
+    second = SettingsStore(settings_path).load()
+
+    assert first.model_size == successor
+    assert json.loads(settings_path.read_text(encoding="utf-8"))["model_size"] == (
+        successor
+    )
+    assert notices == {retired: successor}
+    assert second.model_size == successor
+    assert take_model_retirement_notices() == {}
+
+
+def test_every_retirement_successor_is_offered():
+    assert set(RETIRED_LOCAL_MODEL_SUCCESSORS.values()) <= set(VALID_MODEL_SIZES)
+    assert not set(RETIRED_LOCAL_MODEL_SUCCESSORS) & set(VALID_MODEL_SIZES)
+
+
+def test_a_retired_model_under_a_remote_engine_is_moved_without_a_notice(tmp_path):
+    """A remote engine never reads `model_size`, so there is nothing to tell."""
+    take_model_retirement_notices()
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "openai", "model_size": "medium"}), encoding="utf-8"
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.model_size == RETIRED_LOCAL_MODEL_SUCCESSORS["medium"]
+    assert take_model_retirement_notices() == {}

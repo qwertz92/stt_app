@@ -47,10 +47,10 @@ Not tested on real ARM64 hardware yet. The x64 installer below should install
 on Windows 11 on ARM and run the whole app, Whisper models included, under
 Windows' x64 emulation. To run from source in a native ARM64 Python instead,
 use `uv` (the pip route cannot skip CTranslate2): CTranslate2 has no ARM64
-build, so the faster-whisper models (`tiny` to `distil-large-v3.5`) show as
+build, so the faster-whisper models (`small` to `distil-large-v3.5`) show as
 `[unavailable]` and are never downloaded. Parakeet (the default), Canary,
 Granite, Nemotron and every cloud engine need nothing that lacks an ARM64
-build. Cohere and Granite 4.x also need [Node.js](https://nodejs.org/en/download)
+build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
 22 or newer; an ARM64 `.msi` exists, and an x64 Node runs under emulation too.
 
 ## End-user Windows download
@@ -89,11 +89,12 @@ Right-click the **system tray icon** → **Settings**.
 ## Model recommendations
 
 There are five local families. **GPU-accelerated ONNX models** (Cohere, IBM
-Granite) are the most accurate — they run on the GPU via WebGPU, need Node.js,
-and are batch-only. **onnx-asr models** (Parakeet, Canary) are pure Python, CPU
+Granite) run on the GPU via WebGPU, need Node.js, and are batch-only.
+**onnx-asr models** (Parakeet, Fluid Speech Pro, Canary) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
-model here that transcribed the benchmark recording correctly (only Whisper
-`tiny` is quicker, and it is the weakest of the models that did).
+model here that transcribed the benchmark recording correctly, and Fluid
+Speech Pro halves its word error rate in German and English at about three
+times the processing time (2026-11-25 test, `docs/models.md`).
 **Granite Speech 5.0 470M TurboCTC** runs on ONNX Runtime on the CPU with no
 Node.js either; it is the fastest local model on English (RTF 0.014 on a
 Ryzen 5 7600X) and the smallest non-Whisper download, but it is English only
@@ -104,16 +105,16 @@ also support streaming.
 
 | Use case | Recommended model | Runtime | Size |
 |----------|-------------------|---------|------|
-| Best accuracy among this app's local models | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
+| Best accuracy without a GPU, German + English | `fluid-speech-pro` | onnx-asr int8 | ~801 MB |
+| High accuracy, punctuated text, on a GPU | `granite-speech-5.0-2b` | ONNX/WebGPU q4 | ~1.73 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
 | Zero-setup default: fastest accurate local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
-| Higher German accuracy than Parakeet, still CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
+| German accuracy above Parakeet, 25 explicit languages, CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
 | English only, fastest, plain lower-case text is acceptable | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
-| Quick testing / low resources | `tiny` | CTranslate2 | ~78 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
 measured a mean real-time factor of 0.043 on a Ryzen 5 7600X, against 0.154 for
@@ -122,7 +123,8 @@ languages (the list is in the model card) and
 detects the language itself. The one thing it cannot do is live streaming
 (batch only), so switch to `small` or `nemotron-3.5-asr-streaming-0.6b-int4`
 for that. For maximum accuracy with a GPU and Node.js, prefer
-`granite-speech-4.1-2b` or `cohere-transcribe-03-2026`. Then run the
+`granite-speech-5.0-2b` or `cohere-transcribe-03-2026`, and for the CPU
+`fluid-speech-pro`. Then run the
 [benchmark](docs/advanced-setup.md#benchmarking) to find the best model for
 *your* hardware. See [Models & Offline Setup](docs/models.md) for details. On
 first use, the selected model downloads automatically; after that it loads from

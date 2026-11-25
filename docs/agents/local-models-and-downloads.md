@@ -225,11 +225,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   files, stages a complete snapshot under a temporary name, repairs legacy
   partials, renames atomically, then updates `refs/main`; a failed copy leaves
   no final snapshot and no reference to it.
-- **Local ONNX ASR (Node)**: Cohere Transcribe, Granite Speech 4.0 and 4.1 via
+- **Local ONNX ASR (Node)**: Cohere Transcribe and Granite Speech 5.0 2B via
   `transcriber/local_webgpu_asr.py`, batch-only, Node.js required; supported
-  daily-use models, never "experimental". All are q4 through the
-  Transformers.js `GraniteSpeechForConditionalGeneration` pipeline; 4.1 2B is
-  `onnx-community/granite-speech-4.1-2b-ONNX`.
+  daily-use models, never "experimental". Granite is q4 through the
+  Transformers.js `GraniteSpeechForConditionalGeneration` pipeline; the 2B is
+  IBM's own `ibm-granite/granite-speech-5.0-2b-ONNX` (Apache-2.0): encoder
+  `audio_encoder_q4`, `embed_tokens` and decoder `q4f16` (the runner's
+  `graniteDtype`), 1,730 MB.
+  - **Granite prompt** (`granitePrompt` in `webgpu_asr_runner.mjs`): IBM's
+    punctuation instruction "transcribe the speech with proper punctuation
+    and capitalization", with "The speech is in <Language>. Transcribe it
+    exactly; do not translate." in front when a language is chosen. The
+    4.x-era instruction ("transcribe the speech into a written format") made
+    5.0-2b switch language and paraphrase (German WER 15.0 against 3.5).
+    Measured 2026-11-25 on 25 FLEURS clips per language: legacy prompt de
+    15.04 / en 6.20; language-ID prefix only (raw lower case) 4.88 / 5.45;
+    punctuation prompt 3.46 / 4.89; both 3.46 / 5.26.
+  - Granite 4.0 1B and 4.1 2B were retired 2026-11-25 (owner decision: 5.0
+    exists). On the same set, as shipped, 4.0-1b scored de 10.37 / en 11.47
+    and 4.1-2b 10.57 / 13.53.
   - Granite 4.1 Plus and NAR were retired 2026-08-26 with the raw
     `onnxruntime-node` graph runtime (RTF 0.447 / 4.149 on CPU vs 0.099 for
     base on WebGPU; broken output). Cause in
@@ -246,7 +260,28 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`SettingsStore.load` defaults absent keys).
     `DEFAULT_FASTER_WHISPER_MODEL_SIZE` (`small`) stays the in-runtime default
     (`LocalFasterWhisperTranscriber`, benchmark CLI).
-  - Keep `granite-4.0-1b-speech` selectable until benchmarks justify removal.
+  - The roster of 2026-11-25 is the next top-level entry below.
+- **Roster of 2026-11-25** (owner rule: only the newest generation; measured
+  on 25 + 25 FLEURS clips, `local-model-measurements.md` in the session
+  scratchpad, figures in the learning log). A saved choice of a removed model
+  moves once to its successor through
+  `config.RETIRED_LOCAL_MODEL_SUCCESSORS` (applied in
+  `AppSettings.from_dict`, which `SettingsStore.load` writes back), and the
+  tray says so once (`main._show_model_retirement_notices`).
+  - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
+    Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
+    `medium` -> `large-v3-turbo`.
+  - Added: Granite 5.0 2B (de 3.46 against 10.57 for 4.1 2B as shipped) and
+    Fluid Speech Pro (de 3.25 / en 3.57 against Parakeet v3's 6.50 / 4.89,
+    about three times slower at RTF 0.2).
+  - Kept: Canary (de 3.66 against v3's 6.50, so the rule keeps it, though
+    Fluid beats it in both languages), Whisper `small` (the one Whisper that
+    keeps the rolling-window streaming usable on a CPU-only laptop, RTF about
+    0.19 against 0.55 to 0.6 for the large ones), `large-v3`,
+    `large-v3-turbo`, `distil-large-v3.5`.
+  - Files of a removed model stay on disk, untouched; the Models tab lists
+    only offered models, so they no longer appear and cannot be deleted from
+    the app (`docs/models.md` names the folders and sizes).
 - **Nemotron 3.5 true streaming**: `nemotron-3.5-asr-streaming-0.6b-int4`
   (793 MB ORT GenAI export, `transcriber/local_nemotron.py`) reuses the
   encoder cache and emits RNNT tokens per fixed 560 ms chunk. The CPU ORT
@@ -444,7 +479,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
     Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
     streaming, at equal or better speed (2026-10-03, CPU).
-- **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)** in
+- **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro, Canary 1B v2)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
   `_OnnxModelLayout` in `local_webgpu_asr` (int8 allow-patterns only).
@@ -464,20 +499,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Both batch-only, excluded from the ONNX Device picker (CPU-only).
   - PyInstaller needs `collect_all('onnx_asr')` (mel/resampler graphs are
     package data via `importlib.resources`).
-- **Parakeet TDT 0.6B v3 Ultra is a pinned community export** (2026-09-27):
-  `Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx` (CC-BY-4.0, Moondream
-  post-train), run as `nemo-parakeet-tdt-0.6b-v3`, Auto only.
-  - Pinned (`_OnnxModelLayout.revision`, commit `dd20322`), because a
-    community upload can change under one name; pinned layouts never use the
-    ModelScope mirror; `scripts/download_model.py` gives the commit.
-  - `prepare_onnx_inference_dir` atomically copies root `vocab.txt` and
-    `config.json` into `int8/` (onnx-asr 0.12.0 reads one folder); a failed
-    write passes only if a re-read matches. Allow-patterns name the four files
-    exactly (fnmatch `*` crosses `/`; the repo holds fp32/fp16/w4a8, `.zst`
-    and a 2.5 GB `.nemo`).
-  - v3 stays default: Ultra is faster (RTF 0.030 vs 0.044) but had higher WER
-    (2.9% vs 2.2%, `docs/models.md`). The label omits the Moondream credit so
-    the retranscribe combo does not clip; attribution is in `docs/models.md`.
+- **Fluid Speech Pro is a pinned official export** (2026-11-25):
+  `FluidVoice-Labs/fluid-speech-pro-onnx` (CC-BY-4.0, FluidVoice Labs'
+  post-train of Parakeet TDT 0.6B v3), run by onnx-asr 0.12.0 as
+  `nemo-conformer-tdt` straight from the snapshot root, Auto only. It replaced
+  the community Ultra export (`Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx`),
+  which needed a copy of `vocab.txt` and `config.json` into `int8/`
+  (`prepare_onnx_inference_dir`, removed).
+  - Pinned (`_OnnxModelLayout.revision`, commit `fa588e9`), because the
+    repository is days old and `main` can change under one name; pinned
+    layouts never use the ModelScope mirror; `scripts/download_model.py`
+    gives the commit.
+  - Allow-patterns name the six files exactly (config, vocab, int8 encoder and
+    decoder_joint with their `.data`) plus README, LICENSE and NOTICE: the
+    repository also holds fp32 copies (2.67 GB), clean-mode graphs and
+    sherpa-onnx's decoder and joiner, 3.6 GB in all against 801 MB here.
+  - Measured against Parakeet v3 on the same 25 + 25 FLEURS clips: WER de 3.25
+    vs 6.50, en 3.57 vs 4.89. Slower: RTF about 0.2 against 0.05 to 0.09 (PC
+    shared with tests, so noisy). v3 stays the default for speed and size; the
+    label offers Fluid for accuracy. Ultra was never measured directly (no
+    official export); fluid-speech-pro has the same lineage, and the project's
+    own earlier measurement had Ultra behind v3 on WER.
 - **Granite Speech 5.0 470M TurboCTC: one INT8 graph on the CPU in pure
   Python** (`transcriber/local_granite_ctc.py`, 2026-09-19), fifth runtime
   (`LOCAL_MODEL_RUNTIME` `granite-ctc`), owning its `InferenceSession`:

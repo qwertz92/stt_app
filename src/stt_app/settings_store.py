@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import math
+import threading
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,7 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    RETIRED_LOCAL_MODEL_SUCCESSORS,
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
@@ -124,6 +126,22 @@ from .persistence import (
 _LOGGER = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
+
+# Saved local selections that `from_dict` moved to a successor since the last
+# `take_model_retirement_notices`, as {retired model: successor}. The settings
+# file is rewritten by the same `load`, so the move happens once and the next
+# start finds the successor already saved; the tray tells the user at that start.
+_RETIREMENT_NOTICES: dict[str, str] = {}
+_RETIREMENT_NOTICES_LOCK = threading.Lock()
+
+
+def take_model_retirement_notices() -> dict[str, str]:
+    """Return and clear the {retired model: successor} moves `load` made."""
+    with _RETIREMENT_NOTICES_LOCK:
+        taken = dict(_RETIREMENT_NOTICES)
+        _RETIREMENT_NOTICES.clear()
+    return taken
+
 
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
@@ -420,7 +438,19 @@ class AppSettings:
                 concurrent_transcription_mode = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
 
         model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).lower()
-        if model_size not in VALID_MODEL_SIZES:
+        successor = RETIRED_LOCAL_MODEL_SUCCESSORS.get(model_size)
+        if successor is not None:
+            # A model this version retired on purpose: the selection moves to
+            # its successor, and the user is told once (only when the local
+            # engine is the one in use -- a remote engine never reads it).
+            logger.warning(
+                "Stored model '%s' was retired; using '%s'.", model_size, successor
+            )
+            if engine == DEFAULT_ENGINE:
+                with _RETIREMENT_NOTICES_LOCK:
+                    _RETIREMENT_NOTICES[model_size] = successor
+            model_size = successor
+        elif model_size not in VALID_MODEL_SIZES:
             # A model this build no longer offers -- a typo, or one that was
             # retired between versions (Granite 4.1 Plus/NAR on 2026-08-26).
             # The substitution used to be completely silent, so a user whose

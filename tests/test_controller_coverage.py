@@ -249,7 +249,7 @@ def test_overlapping_runtime_uses_isolated_instance_without_closing_shared(
     controller.cancel_current_action()
     assert controller._active_request_token is None
     controller._settings_store._settings = replace(
-        controller.settings, model_size="medium"
+        controller.settings, model_size="large-v3"
     )
     controller.reload_settings(re_register_hotkey=False)
     isolated_lease = controller._acquire_transcriber_runtime(controller.settings)
@@ -8821,13 +8821,13 @@ def test_a_failed_replacement_never_leaves_the_closed_runtime_cached(monkeypatch
 
         def _create(settings, **_kwargs):
             built.append(settings.model_size)
-            if settings.model_size == "medium":
+            if settings.model_size == "large-v3":
                 raise RuntimeError("the model is not installed")
             return Runtime(settings.model_size)
 
         monkeypatch.setattr(controller_module, "create_transcriber", _create)
         small = AppSettings(engine="local", model_size="small")
-        medium = AppSettings(engine="local", model_size="medium")
+        medium = AppSettings(engine="local", model_size="large-v3")
 
         first = controller._get_or_create_transcriber(small)
         assert isinstance(first, Runtime)
@@ -8859,7 +8859,7 @@ def test_a_failed_replacement_never_leaves_the_closed_runtime_cached(monkeypatch
 
         again = controller._get_or_create_transcriber(small)
         assert again is not first, "a closed runtime was handed back"
-        assert built == ["small", "medium", "small"]
+        assert built == ["small", "large-v3", "small"]
     finally:
         controller.shutdown()
     _ = app
@@ -9400,7 +9400,7 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
         # A save that changes the model starts a preload, whose first line
         # is painted before any worker runs.
         store = controller._settings_store
-        store._settings = replace(store._settings, model_size="medium")
+        store._settings = replace(store._settings, model_size="large-v3")
         controller.on_settings_changed()
         assert "Loading selected model..." in overlay.states[-1][1]
     elif repaint == "copy_notice":

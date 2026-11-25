@@ -26,12 +26,12 @@ from ..config import (
     CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     PARAKEET_MODEL_SIZE,
     PARAKEET_MODEL_SIZES,
-    PARAKEET_ULTRA_MODEL_SIZE,
     language_modes_for_selection,
 )
 from .base import (
@@ -47,10 +47,12 @@ logger = logging.getLogger(__name__)
 
 # onnx-asr's registry name for each app model. The name selects the model type
 # (preprocessor, decoding loop), not the weights, which come from the folder:
-# Parakeet Ultra is Parakeet TDT 0.6B v3 post-trained, same architecture.
+# Fluid Speech Pro is Parakeet TDT 0.6B v3 post-trained, but its repository's
+# own `config.json` names the generic `nemo-conformer-tdt` type (onnx-asr's
+# documented way to load it), so that is what it is loaded as.
 _ONNX_ASR_MODEL_NAMES: dict[str, str] = {
     PARAKEET_MODEL_SIZE: "nemo-parakeet-tdt-0.6b-v3",
-    PARAKEET_ULTRA_MODEL_SIZE: "nemo-parakeet-tdt-0.6b-v3",
+    FLUID_SPEECH_PRO_MODEL_SIZE: "nemo-conformer-tdt",
     CANARY_MODEL_SIZE: "nemo-canary-1b-v2",
 }
 
@@ -286,7 +288,7 @@ def _decode_pcm16_blocks(
 
 
 class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
-    """Batch transcription for Parakeet TDT (v3, Ultra) and Canary via `onnx-asr`."""
+    """Batch transcription for Parakeet TDT (v3, Fluid Speech Pro) and Canary via `onnx-asr`."""
 
     def __init__(
         self,
@@ -373,8 +375,8 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
     def _recognize_kwargs(self) -> dict[str, str]:
         # Parakeet TDT v3 is implicitly multilingual and ignores the argument,
-        # so passing it would only invite the illusion of control. Ultra is the
-        # same model post-trained and is treated the same.
+        # so passing it would only invite the illusion of control. Fluid Speech
+        # Pro is the same model post-trained and is treated the same.
         if self.model_size in PARAKEET_MODEL_SIZES:
             return {}
         return {"language": self._language_mode}
@@ -406,16 +408,9 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             f"Loading {self.model_size}: {self.runtime_status_text()}..."
         )
         try:
-            # The layout's inference folder (Ultra: `int8/`, with the root's
-            # vocabulary and config copied in beside the graphs); the snapshot
-            # root itself for the others. Inside the `try`, so a copy that
-            # cannot be written fails the load with its reason.
-            from .local_webgpu_asr import prepare_onnx_inference_dir
-
-            load_dir = prepare_onnx_inference_dir(self.model_size, model_path)
             model = onnx_asr.load_model(
                 _ONNX_ASR_MODEL_NAMES[self.model_size],
-                str(load_dir),
+                str(model_path),
                 quantization="int8",
             )
         except Exception as exc:

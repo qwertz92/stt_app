@@ -2544,7 +2544,7 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     # Saving a setting the runtime is built from, while the job is active,
     # must not close the runtime now.
     controller._settings_store._settings = replace(
-        controller.settings, model_size="medium"
+        controller.settings, model_size="large-v3"
     )
     controller.reload_settings(re_register_hotkey=False)
 
@@ -5050,7 +5050,7 @@ def test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and
 
 @pytest.mark.parametrize(
     "change",
-    [{"engine": "groq"}, {"model_size": "base"}],
+    [{"engine": "groq"}, {"model_size": "distil-large-v3.5"}],
     ids=["another engine", "another model"],
 )
 def test_a_retry_with_another_engine_or_model_is_allowed_while_the_first_runs(

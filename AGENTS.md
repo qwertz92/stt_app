@@ -96,7 +96,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
-- onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary, CPU only
+- onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary and FluidVoice's
+  Fluid Speech Pro, CPU only
 - numpy + ONNX Runtime (CPU provider) + `tokenizers` for IBM Granite Speech 5.0
   470M TurboCTC (INT8, English only, batch only)
 - Remote providers: AssemblyAI (SDK batch Universal-3.5 Pro + Universal-3.6 Pro realtime),
@@ -124,7 +125,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_runtime_support.py` | Which local runtimes this environment can run (`unavailable_reason(model)`): on Windows ARM64 CTranslate2 is absent, so faster-whisper models are marked, never downloaded and refuse to transcribe with the reason |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
-| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |
+| `transcriber/local_onnx_asr.py` | Batch-only NeMo-family models (Parakeet TDT, Fluid Speech Pro, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |
 | `transcriber/local_granite_ctc.py` | Batch-only IBM Granite Speech 5.0 470M TurboCTC: numpy log-mel features, the INT8 CTC graph on ONNX Runtime's CPU provider, greedy CTC and `tokenizers` decode; English only, passes of at most 180 s, mid-run cancel via `RunOptions.terminate` |
 | `transcriber/_pcm_audio.py` | Linear resampling (Nemotron, Granite CTC), the quiet-point splitter (Granite CTC passes, remote batch parts) and the 16-bit mono WAV encoder |
 | `transcriber/_audio_parts.py` | Sends a remote batch recording past its engine's limit (`config.remote_batch_part_limit`) as consecutive WAV parts through the provider's own single-request code (OpenAI, Groq, Azure) |
@@ -292,6 +293,11 @@ Short forms of rules that recur across areas; the area files hold the detail.
   picked on the Providers tab; a label claims only what the vendor
   guarantees (`docs/agents/remote-providers.md`); the field map is
   `settings_store._REMOTE_REGION_FIELDS`.
+- **Local roster changes** follow one pattern: a retired model is listed in
+  `config.RETIRED_LOCAL_MODEL_SUCCESSORS`, a saved choice moves once to its
+  successor (`AppSettings.from_dict`) with a tray notice, and the retired
+  model's files stay on disk, unlisted (`docs/models.md`, "Reclaiming disk
+  from retired models").
 - **Custom endpoint** (`custom`): base URL, free-text model, API style
   (`transcriptions` or `chat`) and an optional key command that prints a
   short-lived Bearer token; the `custom` key is the static fallback.

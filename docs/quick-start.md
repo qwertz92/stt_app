@@ -88,7 +88,7 @@ Right-click the **system tray icon** → **Quit**.
 ## Next steps
 
 - **Best accuracy with a GPU?** If you have a GPU and Node.js, try
-  `granite-speech-4.1-2b` or `cohere-transcribe-03-2026` (ONNX/WebGPU). On a
+  `granite-speech-5.0-2b` or `cohere-transcribe-03-2026` (ONNX/WebGPU). On a
   machine with a working GPU these are usually *both* faster and more accurate
   than the Whisper models. See [Models & Offline Setup](models.md).
 - **Better Whisper quality (CPU)?** Try `large-v3-turbo` (multilingual, ~1.62 GB) or `distil-large-v3.5` (English-only, ~1.52 GB).

@@ -103,7 +103,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   comparison on resampled imports that would justify it about half a day.
 - **Windows on ARM64 runs the app, but not the faster-whisper models.**
   CTranslate2 has no `win_arm64` wheel in any release (and no sdist for 4.8.2),
-  so the seven Whisper models (`tiny` to `distil-large-v3.5`) cannot run in a
+  so the four Whisper models (`small` to `distil-large-v3.5`) cannot run in a
   native ARM64 Python; the picker marks them `[unavailable]`, the Models tab
   skips them in every download, and a transcription refuses with the reason
   before fetching anything (`local_runtime_support.py`). Everything else has an

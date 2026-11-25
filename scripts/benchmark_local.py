@@ -132,7 +132,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--models",
-        default="tiny,base,small,medium,large-v3",
+        default="small,large-v3",
         help="Comma-separated model names to benchmark.",
     )
     parser.add_argument(
