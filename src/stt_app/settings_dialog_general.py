@@ -1059,9 +1059,9 @@ class _GeneralTabMixin:
             # Measured 2026-11-25: about half Parakeet v3's word error rate in
             # German and English at about three times its processing time.
             text = (
-                "Batch mode only, CPU. Multilingual, no language selection "
-                "needed; more accurate than Parakeet in German and English, "
-                "about three times slower."
+                "Batch mode only, CPU. Multilingual; more accurate than "
+                "Parakeet in German and English, about three times slower. "
+                "FluidVoice Labs, CC-BY-4.0."
             )
         elif engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
             style = note_style

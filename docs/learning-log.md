@@ -24,7 +24,9 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
   and 10.6 % German, 11.5 and 13.5 % English as shipped), Parakeet Ultra
   (replaced, never measured directly: no official export), Whisper `tiny`,
   `base` and `medium`.
-- **Added.** Granite 5.0 2B: German 3.46, English 4.89. Fluid Speech Pro: German
+- **Added.** Granite 5.0 2B: German 3.46, English 4.89 in Auto (punctuation prompt
+  only) and 5.26 with a language chosen (language sentence plus punctuation, which is
+  what the app sends then). Fluid Speech Pro: German
   3.25, English 3.57, against Parakeet v3's 6.50 and 4.89, about three times
   slower (RTF 0.2 against 0.05 to 0.09).
 - **Kept.** Canary (German 3.66, better than v3's 6.50, so the rule keeps it,

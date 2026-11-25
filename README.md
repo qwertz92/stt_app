@@ -8,7 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
-- **GPU-accelerated models** — optional Cohere and IBM Granite Speech models run on your GPU (WebGPU); Granite Speech 4.1 2B led the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) at launch (2026-04-29) and remains the most accurate local model in this app — see [docs/models.md](docs/models.md#which-model-should-i-use) for whether it still leads the live leaderboard
+- **GPU-accelerated models** — optional Cohere and IBM Granite Speech 5.0 models run on your GPU (WebGPU). On the app's own test (25 German and 25 English FLEURS clips, [report](docs/benchmarks/local-model-roster-2026-11-25.md)) Whisper large-v3-turbo had the lowest error rate (2.6 % German, 3.4 % English), followed by Fluid Speech Pro (3.3 % and 3.6 %, CPU) and Granite 5.0 2B (3.5 % and 4.9 %); see [docs/models.md](docs/models.md#which-model-should-i-use) for which to pick
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)

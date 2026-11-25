@@ -483,7 +483,7 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # the recording. A picker has no room for that qualifier, so it states
     # what is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
-    "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual"),
+    "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual, CC-BY-4.0"),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M",

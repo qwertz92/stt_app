@@ -37,7 +37,8 @@ pipeline path, from IBM's own repository
 [`ibm-granite/granite-speech-5.0-2b-ONNX`](https://huggingface.co/ibm-granite/granite-speech-5.0-2b-ONNX)
 (Apache-2.0). It replaced Granite 4.0 1B and 4.1 2B on 2026-11-25 (the owner's
 rule is that only the newest generation is offered): on the same 25 German and
-25 English FLEURS clips, 5.0 2B scored 3.5 % and 4.9 % word error rate, 4.1 2B
+25 English FLEURS clips, 5.0 2B scored 3.5 % (German) and 4.9 % (English, Auto) or 5.3 % (English,
+language chosen: the app then adds the language sentence) word error rate, 4.1 2B
 as the app shipped it 10.6 % and 13.5 %. The 4.x models were handed an
 instruction that makes 5.0 paraphrase or answer in another language, so the
 app now sends IBM's punctuation instruction (and, when you pick a language,
@@ -57,7 +58,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `large-v3-turbo` | CTranslate2 | ~1.62 GB | Multilingual | Fast + high quality — pruned version of large-v3 |
 | `distil-large-v3.5` | CTranslate2 | ~1.52 GB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
-| `granite-speech-5.0-2b` | ONNX/WebGPU | ~1.73 GB q4 | Auto + the languages IBM lists | IBM's newest speech model (Apache-2.0); German 3.5 % and English 4.9 % on the 2026-11-25 test; batch mode only |
+| `granite-speech-5.0-2b` | ONNX/WebGPU | ~1.73 GB q4 | Auto + the languages IBM lists | IBM's newest speech model (Apache-2.0); German 3.5 % and English 4.9 % in Auto (5.3 % with a language chosen) on the 2026-11-25 test; batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): half v3's word error rate in German and English on the 2026-11-25 test, about 3x slower; pinned to one commit, batch mode only |

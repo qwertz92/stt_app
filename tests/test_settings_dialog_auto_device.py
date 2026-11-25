@@ -619,6 +619,7 @@ def test_the_runtime_note_no_longer_restates_a_device_order_that_can_move(
     fluid = runtime_note("fluid-speech-pro")
     assert "recommended default" not in fluid
     assert "more accurate than Parakeet" in fluid
+    assert "FluidVoice Labs, CC-BY-4.0" in fluid
     dialog.deleteLater()
     _ = app
 
