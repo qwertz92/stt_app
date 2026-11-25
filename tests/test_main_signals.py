@@ -1432,6 +1432,60 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert quits == [True]
 
 
+def test_outdated_packages_reach_the_tray_from_the_worker_thread(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stale = [main_module.dependency_check.Outdated("assemblyai", "1.6.1", "1.10.11")]
+    worker_threads = []
+
+    def fake_check():
+        worker_threads.append(threading.current_thread())
+        return stale, "uv sync"
+
+    monkeypatch.setattr(
+        main_module.dependency_check, "check_checkout_packages", fake_check
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._start_dependency_check(tray)
+    deadline = time.monotonic() + 5
+    while not shown and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert len(shown) == 1
+    title, text = shown[0][:2]
+    assert title == "Update the Python packages"
+    assert "assemblyai" in text and "uv sync" in text
+    assert worker_threads and worker_threads[0] is not threading.main_thread()
+
+
+def test_an_up_to_date_checkout_shows_no_package_notice(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    done = threading.Event()
+
+    def fake_check():
+        done.set()
+
+    monkeypatch.setattr(
+        main_module.dependency_check, "check_checkout_packages", fake_check
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._start_dependency_check(tray)
+    assert done.wait(5)
+    for _ in range(20):
+        app.processEvents()
+        time.sleep(0.01)
+
+    assert shown == []
+
+
 def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
     """The tray drops a balloon sent before the shell accepted the icon, and the
     move the notice announces is already saved, so it must be held back."""

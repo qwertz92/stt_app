@@ -176,6 +176,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `update_checker.py` | GitHub Releases update check and version comparison helpers |
 | `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
 | `update_installer.py` | Verified download and launch of a release installer |
+| `dependency_check.py` | A source checkout's installed packages against `requirements-win.txt` at start: one WARNING and one tray notice naming `uv sync` or `pip install -r`; installs nothing |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control, per-entry audio reveal and retranscription, recordings-folder shortcut |
 | `transcript_edit_dialog.py` | Edit one history entry's transcript |

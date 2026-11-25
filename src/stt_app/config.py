@@ -1567,6 +1567,13 @@ RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
 # recorded audio at the same $0.21/h and covers 32 languages instead of 18;
 # `universal-2` stays only as the cheaper choice for the other 67 of its 99
 # languages (https://www.assemblyai.com/llms/models.md, read 2026-11-24).
+# The oldest `assemblyai` SDK this code works with: the version in
+# `pyproject.toml` and `requirements-win.txt`. Older ones lack the
+# `assemblyai-stt-3-7-realtime` value of the streaming `SpeechModel` enum, so a
+# checkout whose packages were not updated after a `git pull` failed with a raw
+# validation error in the middle of a dictation
+# (`tests/test_assemblyai_provider.py` keeps this equal to the pin).
+ASSEMBLYAI_MIN_SDK_VERSION = "1.10.11"
 ASSEMBLYAI_MODELS = (
     "assemblyai-stt-3-7",
     "universal-2",

@@ -11,7 +11,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import __version__
+from . import __version__, dependency_check
 from .app_icon import load_app_icon
 from .app_paths import appdata_root, resolve_recordings_dir
 from .config import (
@@ -28,6 +28,7 @@ from .config import (
 )
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
+from .gui_thread import GuiThreadReporter
 from .history_dialog import HistoryDialog
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
@@ -359,6 +360,7 @@ def run() -> int:
     )
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
+    _start_dependency_check(tray_icon)
     if model_notice:
         QtCore.QTimer.singleShot(
             _MODEL_NOTICE_FIRST_DELAY_MS,
@@ -729,8 +731,10 @@ _MODEL_NOTICE_RETRY_MS = 1000
 _MODEL_NOTICE_MAX_WAITS = 25
 
 
-def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> None:
-    """Show the notice once the icon exists; retry every second until then.
+def _show_tray_notice_when_ready(
+    tray_icon, title: str, notice: str, waited: int = 0
+) -> None:
+    """Show a notice once the icon exists; retry every second until then.
 
     After the last wait it is sent anyway (a dropped balloon is logged by the
     tray, which is the old behaviour rather than a lost retry loop).
@@ -738,10 +742,55 @@ def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> No
     if waited < _MODEL_NOTICE_MAX_WAITS and not tray_icon.isVisible():
         QtCore.QTimer.singleShot(
             _MODEL_NOTICE_RETRY_MS,
-            lambda: _show_model_notice_when_ready(tray_icon, notice, waited + 1),
+            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited + 1),
         )
         return
-    _show_model_notice(tray_icon, notice)
+    _show_tray_notice(tray_icon, title, notice)
+
+
+def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> None:
+    _show_tray_notice_when_ready(tray_icon, "Speech model updated", notice, waited)
+
+
+def _start_dependency_check(tray_icon) -> None:
+    """In a source checkout, tell the user once per start when the installed
+    Python packages differ from `requirements-win.txt` (see `dependency_check`).
+
+    The lookups run on a worker thread; the notice is posted back to the GUI
+    thread through a `GuiThreadReporter`, which the worker never holds a widget
+    for. A frozen build and an up-to-date checkout say nothing.
+    """
+    receiver = _PackageNoticeReceiver(tray_icon)
+    # The reporter holds its receiver weakly; the tray icon keeps it alive.
+    tray_icon._package_notice_receiver = receiver
+    reporter = GuiThreadReporter(receiver)
+
+    def work() -> None:
+        try:
+            result = dependency_check.check_checkout_packages()
+        except Exception:
+            logging.getLogger(APP_LOGGER_NAME).exception("dependency_check_failed")
+            return
+        if result is None:
+            return
+        outdated, command = result
+        reporter.post(
+            "show", dependency_check.outdated_packages_message(outdated, command)
+        )
+
+    threading.Thread(target=work, name="stt_app_dependency_check", daemon=True).start()
+
+
+class _PackageNoticeReceiver:
+    """What the dependency check's worker posts to: runs on the GUI thread."""
+
+    def __init__(self, tray_icon) -> None:
+        self._tray_icon = tray_icon
+
+    def show(self, message: str) -> None:
+        _show_tray_notice_when_ready(
+            self._tray_icon, "Update the Python packages", message
+        )
 
 
 def _show_model_notice(tray_icon, notice: str) -> None:
@@ -749,8 +798,12 @@ def _show_model_notice(tray_icon, notice: str) -> None:
 
     `SettingsStore.load` made the move and wrote it back, so this appears once.
     """
+    _show_tray_notice(tray_icon, "Speech model updated", notice)
+
+
+def _show_tray_notice(tray_icon, title: str, notice: str) -> None:
     tray_icon.showMessage(
-        "Speech model updated",
+        title,
         notice,
         QtWidgets.QSystemTrayIcon.Information,
         15000,

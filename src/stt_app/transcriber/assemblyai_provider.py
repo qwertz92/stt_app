@@ -22,6 +22,7 @@ from ..app_paths import temp_audio_dir
 from ..config import (
     ASSEMBLYAI_API_BASE_URLS,
     ASSEMBLYAI_BATCH_MAX_WAIT_S,
+    ASSEMBLYAI_MIN_SDK_VERSION,
     ASSEMBLYAI_STREAMING_HOSTS,
     ASSEMBLYAI_STREAMING_MODEL,
     AUDIO_SAMPLE_RATE,
@@ -32,6 +33,7 @@ from ..config import (
     normalize_assemblyai_region,
     parse_custom_vocabulary,
 )
+from ..dependency_check import installed_version, version_at_least
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import format_ssl_error_message, http_error_suffix
@@ -48,11 +50,37 @@ from .base import (
 logger = logging.getLogger(__name__)
 
 
+def sdk_version_problem() -> str | None:
+    """One sentence for an installed SDK older than this code needs, or None.
+
+    A source checkout keeps whatever packages were installed before a
+    `git pull`, so the SDK can be older than the pin; the failure then was a
+    raw pydantic text from deep inside the SDK. Naming both versions and both
+    update commands is what the user can act on.
+    """
+    installed = installed_version("assemblyai")
+    if installed is None or version_at_least(installed, ASSEMBLYAI_MIN_SDK_VERSION):
+        return None
+    return (
+        f"The installed AssemblyAI SDK is {installed}, but this version of the app "
+        f"needs {ASSEMBLYAI_MIN_SDK_VERSION} or newer. Update the Python packages "
+        "in the app folder with `uv sync` (a uv environment) or "
+        "`pip install -r requirements-win.txt`, then restart the app."
+    )
+
+
+def _require_current_sdk() -> None:
+    problem = sdk_version_problem()
+    if problem:
+        raise TranscriptionError(problem)
+
+
 def _default_assemblyai():
     """Lazy import to avoid hard dependency at module level."""
     try:
         import assemblyai as aai  # type: ignore
 
+        _require_current_sdk()
         return aai
     except ImportError:
         raise TranscriptionError(
@@ -407,6 +435,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         import urllib.error
         import urllib.request
 
+        problem = sdk_version_problem()
+        if problem:
+            return False, problem
+
         url = f"{ASSEMBLYAI_API_BASE_URLS[self._region]}/v2/transcript?limit=1"
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", self._api_key)
@@ -552,6 +584,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         (all completed turns + the current turn) each time an update arrives
         from the server.
         """
+        _require_current_sdk()
         from assemblyai.streaming.v3 import (
             Encoding,
             StreamingClient,
