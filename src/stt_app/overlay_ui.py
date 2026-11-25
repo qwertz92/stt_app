@@ -65,6 +65,8 @@ _SWP_SHOWWINDOW = 0x0040
 _GW_HWNDPREV = 3
 _GA_ROOT = 2
 _Z_ORDER_WALK_LIMIT = 10_000
+# How often a topmost overlay re-asks which own window is active.
+_OWN_WINDOW_RECHECK_MS = 250
 
 
 @functools.cache
@@ -571,6 +573,20 @@ class OverlayUI(QtWidgets.QWidget):
         self._temporary_foreground_timer.timeout.connect(
             self._clear_temporary_foreground
         )
+        # The overlay stays topmost above other applications but never above
+        # one of this application's own windows being worked in
+        # (`_own_window_to_stay_behind`): activation moving decides.
+        app = QtGui.QGuiApplication.instance()
+        if app is not None:
+            app.focusWindowChanged.connect(self._on_focus_window_changed)
+        # The signal alone missed the end of an own window's life (measured
+        # with real windows: the overlay stayed out of the topmost band after
+        # the dialog closed), so the live state is also compared periodically.
+        self._behind_own_window = 0
+        self._own_window_recheck_timer = QtCore.QTimer(self)
+        self._own_window_recheck_timer.setInterval(_OWN_WINDOW_RECHECK_MS)
+        self._own_window_recheck_timer.timeout.connect(self._recheck_own_window)
+        self._own_window_recheck_timer.start()
         self._drag_active = False
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
@@ -1140,9 +1156,10 @@ class OverlayUI(QtWidgets.QWidget):
             self.always_on_top_changed.emit(normalized)
 
     def reveal_temporarily(self, duration_ms: int = 1800) -> None:
-        if not self._always_on_top:
-            self._temporary_foreground_active = True
-            self._temporary_foreground_timer.start(max(1, int(duration_ms)))
+        # Also for a pinned overlay: while it runs the overlay is topmost over
+        # the application's own windows too (`_may_step_behind_own_window`).
+        self._temporary_foreground_active = True
+        self._temporary_foreground_timer.start(max(1, int(duration_ms)))
         self._apply_window_flags(raise_window=True)
         self._reposition_within_current_screen()
 
@@ -1161,7 +1178,7 @@ class OverlayUI(QtWidgets.QWidget):
         self.reveal_temporarily()
 
     def _clear_temporary_foreground(self) -> None:
-        if self._always_on_top or not self._temporary_foreground_active:
+        if not self._temporary_foreground_active:
             return
         self._temporary_foreground_active = False
         self._apply_window_flags()
@@ -1218,6 +1235,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_label.setText(detail)
         self._state = state
         self._detail = detail
+        # A session starting or ending changes whether the overlay may sit
+        # behind an own window: asked now, not at the next periodic re-check.
+        self._recheck_own_window()
         self._copy_text = copy_text
         has_detail = bool(detail.strip())
         if compact is None:
@@ -1903,12 +1923,97 @@ class OverlayUI(QtWidgets.QWidget):
                 flags |= _SWP_SHOWWINDOW
             if self._wants_topmost():
                 self._waiting_for_click = False
+                behind = self._behind_own_window = self._own_window_to_stay_behind()
+                if behind and user32.SetWindowPos(hwnd, behind, 0, 0, 0, 0, flags):
+                    # Directly behind the own window being worked in: out of
+                    # the topmost band (a window placed behind a non-topmost
+                    # window is not topmost) yet above every other window.
+                    return True
+                # No own window, or it could not be used as the reference (it
+                # closed meanwhile): plain topmost for this call. The result
+                # is the topmost call's, so a stale handle never switches the
+                # Qt window-flag fallback on (`_apply_window_flags`).
                 return bool(user32.SetWindowPos(hwnd, _HWND_TOPMOST, 0, 0, 0, 0, flags))
             # A hidden overlay starts waiting in its `showEvent`.
+            self._behind_own_window = 0
             self._waiting_for_click = shown
             return bool(user32.SetWindowPos(hwnd, _HWND_NOTOPMOST, 0, 0, 0, 0, flags))
         except Exception:
             return False
+
+    def _active_own_window_handle(self) -> QtGui.QWindow | None:
+        """The application's active window other than the overlay, or None.
+
+        None while another application is active. A popup (combo list, menu)
+        stands for the window it belongs to.
+        """
+        window = QtGui.QGuiApplication.focusWindow()
+        popup_types = (QtCore.Qt.Popup, QtCore.Qt.ToolTip)
+        while window is not None and (
+            window.flags() & QtCore.Qt.WindowType_Mask in popup_types
+        ):
+            window = window.transientParent()
+        if window is None or window is self.windowHandle():
+            return None
+        return window
+
+    def _may_step_behind_own_window(self) -> bool:
+        """Only a pinned overlay that is idle yields to the application's own
+        windows. A live session or its result (Listening, Processing, Done,
+        Error) is the application's main feedback, a temporary reveal is
+        something the user asked to see, and a queue row (a transcription in
+        flight, a "Not inserted" row with its Insert/Dismiss button) or the
+        not-inserted badge waits for the user and is shown nowhere else: all
+        stay topmost."""
+        return (
+            self._always_on_top
+            and not self._temporary_foreground_active
+            and self._state == "Idle"
+            and not self._queue_entries
+            and not self._not_inserted_badge.text()
+        )
+
+    def _own_window_to_stay_behind(self) -> int:
+        """The native handle of the own window being worked in, or 0.
+
+        Asked of the live activation state each time, never counted up and down
+        from events, so a missed event cannot leave the overlay out of the
+        topmost band for good.
+        """
+        if not self._may_step_behind_own_window():
+            return 0
+        window = self._active_own_window_handle()
+        if window is None or not window.isVisible():
+            return 0
+        hwnd = int(window.winId())
+        return hwnd if hwnd != int(self.winId()) else 0
+
+    def _on_focus_window_changed(self, _window: QtGui.QWindow | None) -> None:
+        """Re-place a topmost overlay when activation moves between this
+        application's windows and others."""
+        if (
+            self._always_on_top
+            and self._temporary_foreground_active
+            and self._state == "Idle"
+            and self._active_own_window_handle() is not None
+        ):
+            # The user opened one of the application's windows after asking for
+            # the overlay (tray click on a pinned overlay: the double-click that
+            # opens Settings): that act ends the reveal.
+            self._temporary_foreground_active = False
+            self._temporary_foreground_timer.stop()
+        if sys.platform == "win32" and self.isVisible() and self._wants_topmost():
+            self._apply_native_z_order()
+
+    def _recheck_own_window(self) -> None:
+        """Re-place a topmost overlay whose own-window state changed unnoticed."""
+        if (
+            sys.platform == "win32"
+            and self.isVisible()
+            and self._wants_topmost()
+            and self._own_window_to_stay_behind() != self._behind_own_window
+        ):
+            self._apply_native_z_order()
 
     def _sync_click_watch(self) -> None:
         """Watch mouse presses only while a floating overlay waits for one.
@@ -2571,6 +2676,7 @@ class OverlayUI(QtWidgets.QWidget):
             restore_vertical_scrollbar(self._queue_scroll, previous_scroll)
         self._refresh_queue_layout_geometry()
         self._refresh_size_after_queue_change()
+        self._recheck_own_window()
         # Re-assert once the layout settles. Switching between very different
         # queue sizes (or hiding a queue that had grown the window) can leave a
         # stale pending resize from the previous state, so recompute the size
@@ -2592,6 +2698,7 @@ class OverlayUI(QtWidgets.QWidget):
         badge.setToolTip(str(tooltip))
         badge.setVisible(bool(text))
         self._sync_queue_title()
+        self._recheck_own_window()
 
     def _sync_queue_title(self) -> None:
         self._queue_title_label.setText(

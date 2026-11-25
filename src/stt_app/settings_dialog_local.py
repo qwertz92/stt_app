@@ -40,8 +40,10 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _THREAD_START_ERRORS,
+    CollapsingStatusLabel,
+    ContentCappedGroupBox,
     ElidingLabel,
-    WrappedStatusLabel,
+    MinimumHeightHintListWidget,
     _emit_background_signal,
     _WheelPassthroughComboBox,
     hint_font,
@@ -204,6 +206,10 @@ class _CleanupOutcome(NamedTuple):
     left_files: int = 0
 
 
+# Rows of the model list that stay visible when the page is short.
+_LOCAL_LIST_MIN_ROWS = 6
+
+
 class _LocalModelsMixin:
     def _build_local_tab(self) -> None:
         tab, content = self._create_scroll_tab()
@@ -329,11 +335,7 @@ class _LocalModelsMixin:
         self._apply_shared_form_label_width((form, runtime_form))
 
         # Unified local models section
-        self.local_models_box = QtWidgets.QGroupBox("Local Models")
-        self.local_models_box.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
-        )
+        self.local_models_box = ContentCappedGroupBox("Local Models")
         local_models_layout = QtWidgets.QVBoxLayout(self.local_models_box)
         local_models_layout.setSpacing(4)
         self.local_models_label = QtWidgets.QLabel("Scanning...")
@@ -356,21 +358,21 @@ class _LocalModelsMixin:
         self._style_note_label(download_hint)
         local_models_layout.addWidget(download_hint)
 
-        self.local_models_list = QtWidgets.QListWidget()
+        self.local_models_list = MinimumHeightHintListWidget()
+        self.local_models_box.flexible_child = self.local_models_list
         # Explorer-style selection (Shift for ranges, Ctrl for toggles), like
         # every other multi-select list in the app.
         self.local_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
-        self._configure_compact_list_widget(
-            self.local_models_list,
-            expand=True,
-            adjust_to_contents=True,
-        )
+        self._configure_compact_list_widget(self.local_models_list, expand=True)
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
         )
-        local_models_layout.addWidget(self.local_models_list, 1)
+        self.local_models_list.currentItemChanged.connect(
+            self._keep_current_model_row_in_the_page
+        )
+        local_models_layout.addWidget(self.local_models_list)
 
         manage_buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(manage_buttons)
@@ -409,15 +411,17 @@ class _LocalModelsMixin:
         manage_buttons.addWidget(self.cancel_model_downloads_button)
         manage_buttons.addStretch(1)
         manage_buttons.addWidget(self.delete_selected_model_button)
-        local_models_layout.addLayout(manage_buttons)
+        # Above the list, not below it: the list is the part of the group that
+        # gives way when the status line, progress bar and queue line appear
+        # below it, so nothing clickable may sit under it. The buttons stay
+        # where they are in every state, and only the list's lower edge moves.
+        local_models_layout.insertLayout(
+            local_models_layout.indexOf(self.local_models_list), manage_buttons
+        )
 
-        self.local_models_action_label = WrappedStatusLabel("")
+        self.local_models_action_label = CollapsingStatusLabel("")
         make_label_selectable(self.local_models_action_label)
         self.local_models_action_label.setWordWrap(True)
-        # Reserve the space: this label sits below the stretching model list,
-        # so a status message that wraps to a second line would otherwise
-        # shorten the list mid-scan/mid-download.
-        self._reserve_dynamic_hint_height(self.local_models_action_label)
         local_models_layout.addWidget(self.local_models_action_label)
 
         self.local_model_download_progress_bar = QtWidgets.QProgressBar()
@@ -439,34 +443,28 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar.setStyleSheet(
             _DOWNLOAD_PROGRESS_BAR_STYLESHEET
         )
-        # Keep its space while hidden, for the same reason the action label
-        # above it is reserved: without this the bar appearing the instant a
-        # download starts pulled Download/Cancel/Delete 28 px up -- with the
-        # cursor still on Download and Cancel sliding into its place -- and
-        # pushed them back down on completion, shrinking the model list twice.
-        policy = self.local_model_download_progress_bar.sizePolicy()
-        policy.setRetainSizeWhenHidden(True)
-        self.local_model_download_progress_bar.setSizePolicy(policy)
         self.local_model_download_progress_bar.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_progress_bar)
 
         # What the queue will start next. A row reading "Queued, 2 of 3" says
         # where a model stands in the line; while the user is watching this
-        # area it does not say what the line is. Elided rather than wrapped,
-        # and its space is retained, so neither a long model name nor the
-        # download starting or ending moves the buttons above it.
+        # area it does not say what the line is. Elided rather than wrapped, so
+        # a long model name cannot make it grow.
         self.local_model_download_queue_label = ElidingLabel()
         self._style_note_label(self.local_model_download_queue_label)
-        queue_policy = self.local_model_download_queue_label.sizePolicy()
-        queue_policy.setRetainSizeWhenHidden(True)
-        self.local_model_download_queue_label.setSizePolicy(queue_policy)
         self.local_model_download_queue_label.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_queue_label)
         self._show_local_model_unverified_state(
             "Open this tab to verify local model availability in the background."
         )
 
+        # The group is no taller than its content (`ContentCappedGroupBox`) and
+        # the list is what gives way below that. The stretch-0 spacer is
+        # needed: without it the page's spare height, once the group is at its
+        # cap, went to the groups above it, which spread by up to 47 px and
+        # moved back when a download's status lines appeared.
         layout.addWidget(self.local_models_box, 1)
+        layout.addStretch(0)
         # "Models": this tab downloads and deletes them. "Local" read as the
         # place to choose one, which is the Transcription tab.
         self._local_tab_index = self.tabs.addTab(tab, "Models")
@@ -787,12 +785,20 @@ class _LocalModelsMixin:
             )
         restore_vertical_scrollbar(self.local_models_list, scroll_value)
 
-        visible_rows = min(max(self.local_models_list.count(), 1), 5)
+        # The list expands up to all its rows and is the part of the page that
+        # gives way: when the download area appears below it, or the page is
+        # short, it shrinks to a minimum of `_LOCAL_LIST_MIN_ROWS` rows and
+        # scrolls inside itself, so the page itself only scrolls (and narrows
+        # for its scroll bar) when even that does not fit. Both bounds follow
+        # the roster, which may be shorter than the minimum.
+        rows = self.local_models_list.count()
         self.local_models_list.setMinimumHeight(
             self._minimum_list_height_for_rows(
-                self.local_models_list,
-                visible_rows,
+                self.local_models_list, min(rows, _LOCAL_LIST_MIN_ROWS)
             )
+        )
+        self.local_models_list.setMaximumHeight(
+            self._minimum_list_height_for_rows(self.local_models_list, rows)
         )
         self._update_local_model_actions()
 
@@ -1189,6 +1195,21 @@ class _LocalModelsMixin:
         if preloading:
             pending.add(preloading)
         return pending
+
+    def _keep_current_model_row_in_the_page(self, current, _previous) -> None:
+        """Scroll the page to the current row when the list is taller than the
+        page shows. The list scrolls its own rows into its own viewport, but a
+        short page cuts the list itself off, and arrow keys then moved the
+        selection out of sight."""
+        page = self.tabs.widget(self._local_tab_index or 0)
+        if current is None or not isinstance(page, QtWidgets.QScrollArea):
+            return
+        listing = self.local_models_list
+        row = listing.visualItemRect(current)
+        top = listing.viewport().mapTo(page.widget(), row.topLeft())
+        page.ensureVisible(
+            top.x(), top.y() + row.height() // 2, 0, row.height() // 2 + 4
+        )
 
     def _update_local_model_actions(self) -> None:
         if not hasattr(self, "download_selected_models_button"):

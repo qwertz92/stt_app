@@ -589,6 +589,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   - The live "No signal" hint repaints the overlay every 500 ms while it
     holds; in streaming a partial painted meanwhile shows until the next
     tick, and the live text comes back when sound returns.
+- **A native file dialog opened from an own window leaves the overlay topmost
+  above it** (2026-11-25, `docs/agents/overlay.md`, "The overlay steps behind
+  the application's own window"). A `QFileDialog` that uses the Windows dialog
+  is not a Qt window, so `QGuiApplication.focusWindow()` is None while it is
+  open and the overlay counts as "another application is active". It is the
+  behaviour of every earlier version; the overlay can cover the part of the
+  dialog under it, and moving the overlay or the dialog clears it. Not fixed:
+  recognising the foreground window's process instead of Qt's focus window
+  would cover it (about 1-2 h with a real-window check).
 - **The post-resume model load can run twice for one wake, or keep a runtime
   from before a second sleep** (P3, review of the 2026-11-24 resume load;
   `controller-and-jobs.md`). `QtPowerResumeEventFilter` (`hotkey.py`) calls

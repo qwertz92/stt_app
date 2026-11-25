@@ -28,6 +28,22 @@ counts consecutive digital silence at any time.
 - **Cost figure corrected**: 11-32 ms covered 10 s to 5 min; one 10-minute
   recording is about 40 ms and five pending ones 206 ms (reviewer).
 
+## 2026-11-25: review round 2 of the overlay and Models tab changes
+
+Structurally: the Models tab's button row moved above the list, and the overlay's "may step behind an own window" test also asks whether anything in it waits for the user.
+- **Stacking gap:** an idle pinned overlay with a queue row (a transcription in flight, a "Not inserted" row with its Insert/Dismiss button) or the not-inserted badge stepped behind Settings or History, and nothing else on screen shows those. Both now keep it topmost; `set_transcription_queue` and `set_not_inserted_badge` re-place it when the last waiting item goes away.
+- **Movement the user did not cause:** with the buttons under the list, a download's area (or a four-line error) pulled them up 25-111 px and back when it collapsed. With the buttons above the list only the list's lower edge moves. Measured before and after in idle / download / error / collapsed states at 860 x 960 (15 and 40 rows) and 1600 x 1200 (15 rows); the numbers are in `docs/agents/settings-dialog.md`.
+- **Tests that pinned nothing** were rewritten to assert what differs from the old code and were run against it: the pinned-reveal test against 669a3a7, the two Models tests against 358d55a (the fixed-height list).
+
+## 2026-11-25: review round on the overlay and Models tab changes
+
+Structurally: the overlay yields to an own window only while it is pinned and idle; the Models tab's list became the flexible part of its page.
+- **P2, test order:** `test_dropping_topmost_keeps_a_floating_overlay...` failed after `tests/test_main_signals.py` because a real `SettingsDialog` (opened by a tray test) and a fake history dialog stayed open and held the process's focus window, which the overlay now reads. `tests/test_overlay_ui.py` has an autouse fixture answering "no own window active"; both leaking tests close their windows.
+- **Rule change (lead):** a live session (Listening, Starting, Processing, Done, Error) and any temporary reveal keep the overlay topmost over own windows; only pinned and idle steps behind. A pinned overlay's reveal now runs the timer too, and opening an own window after it ends the reveal (the tray double-click must leave Settings in front).
+- **Stale reference:** a refused "behind own window" call falls back to plain topmost for that call and returns its result, so it cannot turn on the Qt window-flag fallback (permanent topmost).
+- **Models tab:** the first version fixed the list at all its rows; a download (+47 px, a long error +63 px) then scrolled the page and narrowed it by 12 px. A `QScrollArea` page never gets less than its layout's preferred height, so the list now prefers its minimum (six rows) and expands to all rows; the group is capped at its content. Arrow keys also scroll the page to the current row (they moved out of sight at 801 x 400).
+- **Recorded, not fixed:** a native file dialog from an own window leaves the overlay topmost over it (known-limitations.md).
+
 ## 2026-11-25: streaming review, round 2: the marks a model adds one chunk late
 
 Structurally: `append_only_stream_partial_candidate` takes whole-session text
@@ -42,6 +58,79 @@ final in 11 of 11 clips (2 before). An ellipsis, a quotation mark, an opening
 bracket or an inverted ? or ! at a word's edge froze insertion like a comma
 used to. A test now pins that stability between two partials stays exact; the
 streaming refusal for a remote engine names it ("OpenAI").
+
+## 2026-11-24: owner's clarification of the UI stability rules
+
+The owner clarified that "nothing may jump" was never meant strictly: the goal is
+best-practice UI/UX, preventing UNEXPECTED movement. Small shifts and movement
+the user caused are fine; stability is never bought with empty reserved space or
+forced over-engineering; when stability and usability pull apart, usability wins
+and the trade-off is named. Written as one dated entry at the top of
+`docs/agents/settings-dialog.md` and a short pointer entry in
+`docs/agents/overlay.md`; no existing rule was rewritten. The first rule measured
+against it was the Models tab's reserved download area (entry above).
+
+## 2026-11-24: overlay steps behind the application's own windows
+
+Structurally: `OverlayUI._apply_native_z_order` now places a topmost overlay directly
+behind the application's own active window (`SetWindowPos` with that window as
+`hWndInsertAfter`, no activate, no move, no size) instead of `HWND_TOPMOST`, and
+`focusWindowChanged` plus a 250 ms re-check re-place it when activation moves. Owner
+report: the pinned overlay covered Settings where they overlap.
+- **Real-window measurement** (pinned overlay, a dialog and another process's window
+  overlapping it, real z-order and `WS_EX_TOPMOST`): own dialog active -> not topmost,
+  behind the dialog; reveal while it is active -> shown, behind it; another
+  application active -> topmost, above both; dialog closed -> topmost again.
+- **The first measurement found a bug the unit tests could not**: with only the focus
+  signal the overlay stayed non-topmost after the dialog closed. The periodic
+  comparison of the live answer with the last placement fixed it (second
+  measurement above); the state is asked, never counted.
+- **Rejected:** dialogs made topmost (Settings would cover the browser the user copies
+  a key from); the overlay as the dialogs' owner (owned windows of a topmost owner
+  become topmost and lose their taskbar button); `WindowStaysOnTopHint` toggling
+  (recreates the native window).
+- **Revert:** `git revert` the commit "feat(overlay): step behind the application's own
+  active window".
+
+## 2026-11-24: Models tab group sized to its content
+
+Structurally: the "Local Models" group no longer stretches; its list is as tall
+as its rows, and the status line, progress bar and queue line take no room while
+hidden. Owner report: a scrollbar although everything would fit, and empty space
+in the group. Reproduced on a copy of his `settings.json` and
+`local_model_inventory.json` in a throwaway APPDATA at 860 x 960 (the default; he
+stores no size): content 864 px against a 829 px viewport, group 577 px with about
+100 px empty under the buttons. Cause: `Expanding` policy plus stretch 1 on the
+group and the list, and three widgets keeping their size while hidden (the
+2026-10 "nothing may move" rules). After: group 481 px, no scroll bar; at
+860 x 600 the page scrolls once instead of a five-row list scrolling inside a
+scrolling page. The owner's clarification of the same day (docs/agents/
+settings-dialog.md) replaces the rule that forced the empty space. Tests that
+encoded the old rule were rewritten to the new one (nothing above the bar moves;
+the idle group keeps no room for a download that is not running).
+- **Revert:** `git revert` the commit "fix(settings): size the Models tab's group
+  to its content".
+
+## 2026-11-24: tray single click acts at once
+
+Structurally: `main._create_tray_icon` lost its single-shot timer. A left click
+(`Trigger`) now calls `controller.bring_overlay_to_front` on the first click; only
+the `Trigger` that trails a `DoubleClick` is still dropped (for one double-click
+interval). Both tray implementations share this code, so the `QSystemTrayIcon`
+fallback is covered too.
+- **Why:** Microsoft's notification-area guidance asks a single click to show
+  something immediately and a double-click to run the default command. The 500 ms
+  wait made the icon feel unresponsive.
+- **Why it is safe:** the reveal is idempotent (`reveal_temporarily` raises and
+  restarts a timer, it does not toggle), so a double-click, which the shell sends
+  as `Trigger`, `DoubleClick`, `Trigger`, ends in one single click's state plus
+  Settings open. Keeping the overlay from covering Settings is the job of the activation
+  rule in the same-day entry "overlay steps behind the application's own windows".
+- **Tests** (`tests/test_main_signals.py`) fail on the old code: the single click
+  asserted zero calls right after the click; the double-click sequence asserted
+  zero calls in total.
+- **Revert:** `git revert` the commit "fix(tray): act on the first click of the tray
+  icon at once".
 
 ## 2026-11-24: a microphone that dies or sends zeros, and audio retention
 
