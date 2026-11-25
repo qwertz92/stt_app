@@ -1042,6 +1042,32 @@ def test_deliberate_silence_gate_off_is_kept(tmp_path, monkeypatch):
     assert settings.silence_gate_enabled is False
 
 
+def test_a_schema_version_written_as_a_string_still_counts(tmp_path, monkeypatch):
+    """`_int_or_none` parses it, so a hand-edited "<current>" is the current
+    schema and not an unreadable value that would re-run the migrations (here
+    the silence-gate default flip, which would turn a deliberate "off" on)."""
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {
+            "schema_version": str(CURRENT_SCHEMA_VERSION),
+            "silence_gate_enabled": False,
+        },
+    )
+
+    assert settings.silence_gate_enabled is False
+
+
+def test_a_string_schema_version_below_a_migration_still_runs_it(tmp_path, monkeypatch):
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {"schema_version": "21", "silence_gate_enabled": False},
+    )
+
+    assert settings.silence_gate_enabled is True
+
+
 def _load_settings_file(tmp_path, monkeypatch, payload):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     path = tmp_path / "stt_app" / "settings.json"
@@ -1792,6 +1818,34 @@ def _write_settings(tmp_path, values):
     path = tmp_path / "settings.json"
     path.write_text(json.dumps(values), encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize(
+    ("vocabulary", "mentioned"),
+    [("Kubernetes, Splunk", True), ("", False), ("   ", False)],
+)
+def test_standard_with_a_vocabulary_says_melia_ignores_it(
+    tmp_path, vocabulary, mentioned
+):
+    # Melia 1 has no custom dictionary and the move keeps the cheaper Melia 1,
+    # so only a user who had a vocabulary is told, and told what to pick.
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "speechmatics",
+            "speechmatics_model": "standard",
+            "custom_vocabulary": vocabulary,
+        },
+    )
+    store = SettingsStore(path)
+
+    assert store.load().speechmatics_model == "melia-1"
+
+    notice = store.take_model_notice()
+    assert "standard is no longer offered" in notice
+    assert ("does not use your custom vocabulary" in notice) is mentioned
+    assert ("Enhanced" in notice) is mentioned
 
 
 def test_a_retired_model_choice_moves_once_and_is_announced_once(tmp_path, monkeypatch):

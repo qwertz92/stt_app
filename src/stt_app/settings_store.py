@@ -89,6 +89,7 @@ from .config import (
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
+    SPEECHMATICS_MELIA_MODEL,
     SPEECHMATICS_MODELS,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
@@ -262,10 +263,25 @@ def retired_model_notice(raw: dict[str, Any]) -> str:
             continue
         if selected != engine and not parse_json_bool(raw.get(f"has_{engine}_key")):
             continue
-        lines.append(
+        line = (
             f"{ENGINE_LABELS[engine]}: {stored.strip()} is no longer offered, "
             f"your choice is now {successor}."
         )
+        vocabulary = raw.get("custom_vocabulary")
+        if (
+            engine == "speechmatics"
+            and successor == SPEECHMATICS_MELIA_MODEL
+            and isinstance(vocabulary, str)
+            and vocabulary.strip()
+        ):
+            # Melia 1 has no custom dictionary; the move stays on Melia 1
+            # because Enhanced costs three times as much (nothing is raised
+            # without the user's say), so the notice names the difference.
+            line += (
+                " Melia 1 does not use your custom vocabulary; "
+                "Speechmatics Enhanced does (pick it in Settings)."
+            )
+        lines.append(line)
     return "\n".join(lines)
 
 
