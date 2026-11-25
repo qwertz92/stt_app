@@ -859,7 +859,7 @@ def test_an_english_only_model_runs_with_auto_and_english(
     )
 
     assert called == list(LOCAL_ENGLISH_ONLY_MODELS)
-    assert [case.error for case in cases] == [None, None]
+    assert [case.error for case in cases] == [None]
 
 
 def test_a_case_runs_off_the_main_thread_so_ctrl_c_can_reach_the_model():

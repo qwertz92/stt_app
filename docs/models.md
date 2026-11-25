@@ -22,12 +22,16 @@ The app has five local runtime families:
   [onnx-asr models](#onnx-asr-models-parakeet-canary)). Batch mode only.
 - **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
   that runs on the CPU provider the app already ships, with numpy features and
-  the `tokenizers` package; no Node.js and no GPU. English only, batch only.
-  It is the fastest local model here on English: on one 29.4 s English
-  recording (Ryzen 5 7600X, CPU, mean of three runs, measured 2026-09-19) RTF
-  0.014, against 0.050 for Parakeet and 0.159 for `small`. The price is the text: lower case, no punctuation and no
-  apostrophes, so "Mr. Quilter's manner" comes out as "mister quilter is
-  manner". That is how the model was trained, not something the app strips.
+  the `tokenizers` package; no Node.js and no GPU. Batch only. Since
+  2026-11-25 it is IBM's multilingual revision (2026-10-21): English, French,
+  German, Spanish, Portuguese, Italian and Japanese, detected by the model
+  itself (no language selection), written with punctuation and capital
+  letters. It is the fastest local model here: RTF 0.023 on 25 German and 25
+  English FLEURS clips (Ryzen 5 7600X, CPU, PC shared with other work), with
+  4.3 % German and 4.1 % English word error rate against Parakeet v3's 6.5 %
+  and 4.9 % and Fluid Speech Pro's 3.3 % and 3.6 %. IBM's revision before it
+  was English only and wrote lower case without punctuation; the app no longer
+  uses that export.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -62,7 +66,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): half v3's word error rate in German and English on the 2026-11-25 test, about 3x slower; pinned to one commit, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | German 3.7 % against Parakeet's 6.5 % on the 2026-11-25 test, RTF about 0.15; Fluid Speech Pro beats it in both languages; batch mode only |
-| `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Fastest local model on English (RTF 0.014 on CPU) and the smallest that is not a Whisper size; writes lower case without punctuation or apostrophes, batch mode only |
+| `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | Fastest local model (RTF 0.023 on CPU) and the smallest that is not a Whisper size; punctuated text, German 4.3 % and English 4.1 % on the 2026-11-25 test, batch mode only |
 
 ### Which model should I use?
 
@@ -70,9 +74,9 @@ Accuracy and speed no longer point at the same model. For **accuracy** with a GP
 and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
 needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
 GPU model in the same run on its GPU. The English-only
-`granite-speech-5.0-470m-turboctc` is quicker (see above) but writes plain
-lower-case text and knows no other language, which is why the default is
-Parakeet. Where German or English accuracy matters more than speed,
+`granite-speech-5.0-470m-turboctc` is quicker still (see above) with seven
+languages and punctuation, which is why it is the pick for a CPU-only laptop
+where speed matters, while the default stays Parakeet. Where German or English accuracy matters more than speed,
 `fluid-speech-pro` halves Parakeet's word error rate on the 2026-11-25 test. Between
 models that both worked, that benchmark cannot tell you which is more
 accurate -- see the
@@ -92,7 +96,7 @@ hardware.
 | Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, punctuated text at Whisper quality | `distil-large-v3.5` |
-| English only, fastest, plain lower-case text is acceptable, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` (CPU) |
+| Fastest, seven languages, punctuated, no GPU and no Node.js | `granite-speech-5.0-470m-turboctc` (CPU) |
 | Very limited resources | `small` |
 
 > **Real-time factor (RTF)** measures speed: processing time ÷ audio length.
@@ -406,7 +410,7 @@ ML Applications" category rule (see
   | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` |
   | `fluid-speech-pro` | `FluidVoice-Labs/fluid-speech-pro-onnx` (by design, not probed: the app downloads it at one pinned commit, and a mirror serves a repository by name at whatever it holds now) |
   | `canary-1b-v2` | `istupakov/canary-1b-v2-onnx` |
-  | `granite-speech-5.0-470m-turboctc` | `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (checked 2026-09-19) |
+  | `granite-speech-5.0-470m-turboctc` | `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` (not yet probed: the repository is new) |
 
   On a network that blocks Hugging Face wholesale these models cannot be
   fetched at all, and the app says so instead of blaming the connection. The
@@ -523,7 +527,7 @@ git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 git clone https://huggingface.co/FluidVoice-Labs/fluid-speech-pro-onnx
 git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
 git clone https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4
-git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-onnx
+git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx
 ```
 
 The two `istupakov` repositories and `FluidVoice-Labs/fluid-speech-pro-onnx`
@@ -536,16 +540,17 @@ Face a clone from a machine that can reach it is the only route.
 A plain clone fetches every weight file a repository holds, which is far more
 than the app runs: the two `istupakov` repositories also ship fp32 graphs
 (2.4 GB and 3.3 GB), and
-`qwertz92/granite-speech-5.0-470m-turboctc-onnx` ships all three precisions of
-one graph — `onnx/model.onnx` (1.89 GB), `onnx/model_fp16.onnx` (947 MB) and
-`onnx/model_int8.onnx` (551 MB), of which the app uses only the int8 one.
+`qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` ships the
+one INT8 graph, `onnx/model_int8.onnx` (551 MB), with its conversion scripts and
+reports (the English-only repository it replaces also held the 1.89 GB fp32 and
+947 MB fp16 graphs).
 `scripts/download_model.py` fetches the required tier and nothing else, so
 prefer it where it can reach Hugging Face. To keep a clone to the same files,
 skip the weights and pull back only what is needed:
 
 ```bash
-GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-onnx
-cd granite-speech-5.0-470m-turboctc-onnx
+GIT_LFS_SKIP_SMUDGE=1 git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx
+cd granite-speech-5.0-470m-turboctc-multilingual-onnx
 git lfs pull --include "onnx/model_int8.onnx"
 ```
 
@@ -572,7 +577,7 @@ A cloned ONNX repository needs no import step (`scripts/import_model.py` is for
 the CTranslate2 models only): move the cloned folder, keeping its name, into
 the folder **Model Dir** points at. The app looks for these models in
 `<Model Dir>\<repository name>`, for example
-`D:\stt-models\granite-speech-5.0-470m-turboctc-onnx`.
+`D:\stt-models\granite-speech-5.0-470m-turboctc-multilingual-onnx`.
 
 </details>
 

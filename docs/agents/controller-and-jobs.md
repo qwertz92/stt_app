@@ -434,8 +434,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     provider because each provider's own `_normalize_language_mode` then picks a
     stand-in -- Canary falls back to the first language of its list (German),
     which makes it translate into it instead of transcribing, Cohere forces
-    German for `auto`, Granite CTC (English only) decodes German speech as
-    English -- while the selection is one the user picked for the engine in use.
+    German for `auto` -- while the selection is one the user picked for the engine in use.
     A saved selection the engine does not offer either (it stays saved when the
     engine is switched, and the overlay's menu shows the engine's first language
     instead) is clamped to that first language, the overlay's own rule

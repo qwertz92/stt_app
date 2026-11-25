@@ -21,7 +21,7 @@ from conftest import (
     make_controller,
 )
 
-from stt_app.config import CANARY_MODEL_SIZE, FALLBACK_HOTKEY, GRANITE_CTC_MODEL_SIZE
+from stt_app.config import CANARY_MODEL_SIZE, FALLBACK_HOTKEY
 from stt_app.controller import PendingQuitWork
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -372,12 +372,9 @@ def test_an_unfinished_recording_is_transcribed_in_the_language_it_was_made_in(
     [
         # Canary and Cohere never offer Auto: Canary would translate into its
         # first language instead of transcribing, Cohere would be forced to
-        # German. Granite CTC decodes English only, whatever was spoken.
+        # German.
         pytest.param(CANARY_MODEL_SIZE, "auto", "Auto", id="canary has no auto"),
         pytest.param(COHERE_MODEL_SIZE, "auto", "Auto", id="cohere has no auto"),
-        pytest.param(
-            GRANITE_CTC_MODEL_SIZE, "de", "German", id="granite ctc is english only"
-        ),
     ],
 )
 def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_it(

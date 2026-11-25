@@ -511,7 +511,7 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M",
-        "CPU, English, no punctuation",
+        "CPU, multilingual, punctuated",
     ),
 }
 

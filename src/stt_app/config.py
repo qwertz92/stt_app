@@ -287,12 +287,13 @@ LOCAL_ONNX_ASR_MODEL_SIZES = (
     CANARY_MODEL_SIZE,
 )
 
-# IBM Granite Speech 5.0 470M TurboCTC, a community INT8 ONNX export of IBM's
-# CTC encoder. It runs on the `onnxruntime` CPU provider the app already ships,
-# with numpy for the log-mel features and `tokenizers` (a faster-whisper
-# dependency) for the byte-level BPE decode -- no Node.js, no onnx-asr, no new
-# dependency. English only, batch only, and it writes lower-case text without
-# punctuation, which is what the model was trained to produce.
+# IBM Granite Speech 5.0 470M TurboCTC (the multilingual revision of
+# 2026-10-21), a community INT8 ONNX export of IBM's CTC encoder. It runs on
+# the `onnxruntime` CPU provider the app already ships, with numpy for the
+# log-mel features and `tokenizers` (a faster-whisper dependency) for the BPE
+# decode -- no Node.js, no onnx-asr, no new dependency. Batch only. It detects
+# English, French, German, Spanish, Portuguese, Italian and Japanese itself
+# (no language input) and writes punctuated, capitalised text.
 GRANITE_CTC_MODEL_SIZE = "granite-speech-5.0-470m-turboctc"
 LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
 
@@ -497,7 +498,7 @@ MODEL_REPO_MAP: dict[str, str] = {
     # layout in `local_webgpu_asr`).
     FLUID_SPEECH_PRO_MODEL_SIZE: "FluidVoice-Labs/fluid-speech-pro-onnx",
     CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
-    GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
+    GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx",
 }
 
 LOCAL_MODEL_RUNTIME: dict[str, str] = {
@@ -1365,7 +1366,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
 }
-LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
+LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 LOCAL_BATCH_ONLY_MODELS = (
     LOCAL_WEBGPU_MODEL_SIZES
     + LOCAL_ONNX_ASR_MODEL_SIZES
@@ -1381,6 +1382,8 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", FLUID_SPEECH_PRO_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
+    # No language input: the graph detects the language itself.
+    ("local", GRANITE_CTC_MODEL_SIZE): ("auto",),
     (
         "assemblyai",
         "universal-3-5-pro",

@@ -49,12 +49,12 @@ def test_the_model_is_registered_as_a_local_cpu_only_batch_only_model():
     assert LOCAL_GRANITE_CTC_MODEL_SIZES == (GRANITE_CTC_MODEL_SIZE,)
     assert GRANITE_CTC_MODEL_SIZE in LOCAL_ONNX_MODEL_SIZES
     assert GRANITE_CTC_MODEL_SIZE in LOCAL_BATCH_ONLY_MODELS
-    assert GRANITE_CTC_MODEL_SIZE in LOCAL_ENGLISH_ONLY_MODELS
+    assert GRANITE_CTC_MODEL_SIZE not in LOCAL_ENGLISH_ONLY_MODELS
     assert supports_streaming("local", GRANITE_CTC_MODEL_SIZE) is False
     assert LOCAL_MODEL_RUNTIME[GRANITE_CTC_MODEL_SIZE] == "granite-ctc"
     assert (
         MODEL_REPO_MAP[GRANITE_CTC_MODEL_SIZE]
-        == "qwertz92/granite-speech-5.0-470m-turboctc-onnx"
+        == "qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx"
     )
 
 
@@ -227,21 +227,30 @@ _REAL_PREPROCESSOR_CONFIG = {
 }
 
 # id 0 is the CTC blank; the leading "G-with-dot" is the byte-level BPE's space.
-_TINY_VOCABULARY = {"<blank>": 0, "hello": 1, "Ġworld": 2, "Ġagain": 3}
+_TINY_VOCABULARY = {
+    "<blank>": 0,
+    "hello": 1,
+    "Ġworld": 2,
+    "Ġagain": 3,
+    "<|nospeech|>": 4,
+}
+_NO_SPEECH_ID = 4
 
 
 def _write_tiny_tokenizer(path: Path) -> None:
-    from tokenizers import Tokenizer, decoders, models
+    from tokenizers import AddedToken, Tokenizer, decoders, models
 
     tokenizer = Tokenizer(models.BPE(vocab=dict(_TINY_VOCABULARY), merges=[]))
     tokenizer.decoder = decoders.ByteLevel()
+    # IBM's tokenizer.json registers its control tokens as special tokens.
+    tokenizer.add_special_tokens([AddedToken("<|nospeech|>", special=True)])
     tokenizer.save(str(path))
 
 
 def _model_root(tmp_path: Path, preprocessor: dict | None = None) -> str:
     """A cached snapshot of the model, in the flat layout the download writes."""
     root = tmp_path / "models"
-    folder = root / "granite-speech-5.0-470m-turboctc-onnx"
+    folder = root / "granite-speech-5.0-470m-turboctc-multilingual-onnx"
     (folder / "onnx").mkdir(parents=True, exist_ok=True)
     # Never opened: the test replaces `onnxruntime.InferenceSession`.
     (folder / "onnx" / "model_int8.onnx").write_bytes(b"")
@@ -561,31 +570,39 @@ def test_streaming_is_not_offered():
         LocalGraniteCtcTranscriber(GRANITE_CTC_MODEL_SIZE).start_stream()
 
 
-def test_the_language_picker_offers_auto_and_english_only():
-    assert language_modes_for_selection("local", GRANITE_CTC_MODEL_SIZE) == (
-        "auto",
-        "en",
-    )
+def test_the_language_picker_offers_auto_only():
+    assert language_modes_for_selection("local", GRANITE_CTC_MODEL_SIZE) == ("auto",)
 
 
-@pytest.mark.parametrize("mode", ["auto", "en"])
-def test_a_supported_language_is_kept(mode):
+def test_auto_is_kept():
     transcriber = LocalGraniteCtcTranscriber(GRANITE_CTC_MODEL_SIZE)
-    transcriber.set_language_mode(mode)
+    transcriber.set_language_mode("auto")
 
-    assert transcriber._language_mode == mode
+    assert transcriber._language_mode == "auto"
 
 
-def test_an_unsupported_language_falls_back_and_says_why(caplog):
-    """The model is English-only and takes no language input at all, so a
-    German selection would otherwise look like it had been applied."""
+@pytest.mark.parametrize("mode", ["de", "en"])
+def test_a_selected_language_falls_back_and_says_why(caplog, mode):
+    """The graph has no language input and detects the language itself, so a
+    selection would otherwise look like it had been applied."""
     with caplog.at_level(logging.WARNING):
         transcriber = LocalGraniteCtcTranscriber(
-            GRANITE_CTC_MODEL_SIZE, language_mode="de"
+            GRANITE_CTC_MODEL_SIZE, language_mode=mode
         )
 
     assert transcriber._language_mode == "auto"
-    assert any("English" in record.message for record in caplog.records)
+    assert any("detects the language" in record.message for record in caplog.records)
+
+
+def test_the_no_speech_token_decodes_to_an_empty_string(tmp_path, monkeypatch):
+    """The multilingual graph can emit `<|nospeech|>` for a silent or non-speech
+    window. It is a special token of IBM's `tokenizer.json`, so the decode drops
+    it and the transcript is empty rather than the token's text."""
+    transcriber, _fake = _transcriber(
+        tmp_path, monkeypatch, session=_FakeSession([[_NO_SPEECH_ID]])
+    )
+
+    assert transcriber.transcribe_batch(_speech_pcm(0.5).tobytes()) == ""
 
 
 # --- cancelling ----------------------------------------------------------
