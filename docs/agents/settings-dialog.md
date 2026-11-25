@@ -55,8 +55,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   synced once at build (`setChecked(False)` emits nothing). **The
   silence-gate threshold is not linked**: streaming reads it with the gate
   off. The reason is on screen (2026-11-24): the VAD hint turns into "Used
-  only while auto-stop is on.", and each tone picker has a hint that is visible
-  only while it is greyed (a toggle the user made, so the shift is expected).
+  only while auto-stop is on."; each tone picker sits beside its checkbox, so a
+  greyed picker explains itself and the tab needs no scrollbar at 860x960 or
+  801 wide (scroll range 41 and 71 px with the hints on their own rows, 0 now).
 - **Notes say facts in the neutral grey, problems in red** (2026-11-24): the
   Transcription tab's model note is red only for the `unavailable_reason`
   branch; "Batch mode only ..." (WebGPU) and the Nemotron chunk note are
@@ -64,7 +65,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   stores (keys, endpoints, regions of that tab) and that the other tabs still
   need Save. The Import Audio tab says once, under Language, that service,
   model and language apply to the imported file only; the local engine note
-  is hidden. The benchmark case caption names what Run Benchmark still waits
+  is hidden, and the tab's content is top-aligned so the note's coming
+  and going moves only what lies below it. The benchmark case caption names what Run Benchmark still waits
   for ("choose an audio file", "tick a model").
 - **One name for the history limit, one empty state** (2026-11-24): "History
   limit" on both History surfaces (`HISTORY_LIMIT_LABEL`); an empty list shows

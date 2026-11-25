@@ -123,6 +123,10 @@ class _ImportTabMixin:
         self.import_selected_file_label.setWordWrap(True)
         self.import_selected_file_label.setStyleSheet("color: #555;")
         import_controls_layout.addWidget(self.import_selected_file_label)
+        # Top-aligned: without it the splitter's spare height was shared out
+        # between the rows, so showing or hiding the engine note moved the
+        # service combo itself.
+        import_controls_layout.addStretch(1)
 
         import_result = QtWidgets.QWidget()
         import_result_layout = QtWidgets.QVBoxLayout(import_result)
