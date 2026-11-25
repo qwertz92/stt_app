@@ -230,9 +230,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   `Lang: Auto` when auto is the only mode) and provider validation. Cohere never exposes Auto. The controller asks
   it through `_offered_language_modes()` -- the active engine's own model
   (`_selected_model_name`), never `model_size`, which is the local model:
-  asked with it, every remote model with a list of its own (Deepgram nova-2 and
-  nova-3, AssemblyAI-STT-3.7,
-  Speechmatics Enhanced and Standard) showed, and `set_language_mode` accepted,
+  asked with it, every remote model with a list of its own (as of 2026-10-17: Deepgram
+  nova-2 and nova-3, AssemblyAI, Speechmatics Enhanced and Standard; nova-2 and
+  Standard were removed on 2026-11-24) showed, and `set_language_mode` accepted,
   the engine's default list (2026-10-17;
   `test_overlay_language_list_is_the_remote_models_own`).
 - **Concurrent mode + cooperative cancel: a finished transcription is never

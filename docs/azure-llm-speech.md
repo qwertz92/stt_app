@@ -2,8 +2,9 @@
 
 Azure LLM Speech is a **remote, cloud-only** transcription engine. Its enhanced
 mode is backed by Microsoft's **MAI-Transcribe** models
-(`mai-transcribe-2`, `mai-transcribe-1.5` and the deprecated
-`mai-transcribe-1`) from the Microsoft AI (MAI) team, served through Microsoft
+(`mai-transcribe-2`, the only one the app offers; the older
+`mai-transcribe-1.5` and `mai-transcribe-1` are removed and a saved choice moves
+to it) from the Microsoft AI (MAI) team, served through Microsoft
 Foundry / the Azure Speech service. "Azure LLM Speech" is the name of the
 service and MAI-Transcribe the name of the model behind it: they are one
 engine in this app, not two, and Microsoft offers no MAI API outside Azure.
