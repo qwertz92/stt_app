@@ -191,7 +191,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     `PASTE_MODIFIER_RECHECK_ROUNDS` (2) such waits, then a retryable
     `TextInsertionError` ("kept being pressed"). With no key down it costs
     one `GetAsyncKeyState` round and no sleep. WM_PASTE skips it. The
-    owner's log (2026-10-23..11-24) shows first waits of 200-400 ms because
+    owner's log (2026-10-24..11-24) shows first waits of 200-400 ms because
     a hotkey was still held when a result arrived (`press_to_handle_ms=219`
     next to one), so keys do move around pastes; no lost paste could be
     pinned on exactly this gap.
@@ -242,14 +242,39 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     keystroke (max 15). A page whose main thread was busy for 2.2 s:
     fetched 2-5 ms after the keystroke, and the field received the *old*
     clipboard text after the 1.5 s restore (Edge with the receipt and
-    without; Chrome with it, the run ended before the plain one). So in a
-    Chromium window the browser process fetches the text on every Ctrl+V
-    whatever has the focus, and the renderer's own read comes later,
-    unseen. Consequences: `read` and
-    `unknown` never claim "inserted" and never overrule the target check; in
-    Chromium and Electron windows the receipt catches only a keystroke that
-    reached nobody (`docs/agents/known-limitations.md`). No false alarm in
-    79 landed pastes (19 EDIT, 60 browser).
+    without; Chrome with it, the run ended before the plain one). So in
+    Chrome and Edge something fetches the text on every Ctrl+V whatever has
+    the focus, and the read that feeds the paste comes later, unseen.
+    *Electron is different* (a throwaway VS Code instance, Electron 43.8.9 /
+    Chromium 150, a textarea, a contenteditable and a button added to its
+    workbench page): textarea 8 of 8 and contenteditable 5 of 5 landed with
+    one fetch 7-39 ms after the keystroke (once 200 ms, right after the
+    window came to the front); focus on the button and on the page body
+    (5 + 5, the page saw every paste event): **no request at all**, so the
+    receipt reads `unread`; a page busy for 2.2 s fetched the text after
+    2.04 s and the field received the *transcript*, because the unfetched
+    transcript waited (next item). Consequences: `read` and `unknown` never
+    claim "inserted" and never overrule the target check; in an Electron
+    window a paste that reached no text field is `unread` and reported; in
+    Chrome and Edge the receipt catches only a keystroke that reached nobody
+    (`docs/agents/known-limitations.md`). No false alarm: every one of the
+    114 landed pastes had a fetch (19 EDIT, 60 + 22 browser, 13 Electron).
+    The Claude desktop app is an Electron app and was not driven itself
+    (it is the owner's running app); its `paste_receipt` lines will show
+    whether it behaves like the VS Code window.
+  - *Refusing the browser's first fetch was tried and is not shipped*
+    (2026-11-25, scratch code). Edge: with the first request after the
+    keystroke refused, 13 of 13 pastes landed through a second request 2-26
+    ms later, button and body (5 + 5) raised no second request, and the busy
+    page fetched after 2.06 s and received the transcript. Chrome: 13 of 13
+    landed, but with the focus on the body a second request came 220-267 ms
+    later all the same and the busy page still received the old text.
+    Electron: the textarea received nothing in 8 of 8, because its one
+    request is the paste itself (the contenteditable asked a second time
+    within a millisecond and landed 5 of 5). A rule that helps one browser,
+    half-helps another and breaks text fields in every Electron app is not
+    one to ship. Why Chrome and Edge make the extra request was not
+    established.
   - *`unread` is evidence, not a guess*: the transcript left the clipboard
     without any program having fetched it, so it is in no window, whatever
     the reason (focus on an element that takes no paste, a swallowed chord,

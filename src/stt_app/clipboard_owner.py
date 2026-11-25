@@ -25,7 +25,10 @@ window. A fetch does not mean an element took the text. Measured in Edge and
 Chrome (2026-11-25): the browser fetches the clipboard text a few
 milliseconds after every Ctrl+V, with the focus on a text field, a button or
 the page body alike, and opens the clipboard without naming a window, so
-its fetch is "unknown". "read" is kept for the log; nobody acts on it.
+its fetch is "unknown". An Electron window (a throwaway VS Code) asked only
+for a paste that landed and not at all with the focus on a button or the
+page body, so there "unread" finds the paste that reached no text field.
+"read" is kept for the log; nobody acts on it.
 
 The window lives on its own thread because the request is a *sent* message:
 the reader's `GetClipboardData` blocks until the window procedure returns.

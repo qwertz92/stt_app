@@ -3,7 +3,7 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
-## 2026-11-25: "inserted" without evidence -- two causes closed, a read receipt, and what Chromium hides
+## 2026-11-25: "inserted" without evidence -- two causes closed, a read receipt, and what Chrome and Edge hide
 
 Structurally: a new module `clipboard_owner.py` owns the clipboard for the
 length of a restoring paste (the transcript is announced, and the request for
@@ -14,7 +14,7 @@ second time right before the keystroke. Details in
 
 The owner's report (2026-11-24): the overlay says inserted, nothing arrived;
 with several results queued, the one that missed is no longer shown once the
-next one landed. His log of 2026-10-23..11-24 holds 1040 pastes, every one
+next one landed. His log of 2026-10-24..11-24 holds 1040 pastes, every one
 `outcome=pasted`, and about fifteen whose text was pasted again by hand within
 a minute.
 
@@ -30,27 +30,40 @@ a minute.
 - **New evidence: nobody fetched the transcript.** With delayed rendering the
   app learns whether any program asked for the text. "Nobody" is a failed
   paste whose row stays listed across later pastes. Measured with real
-  windows: one true miss in 20 EDIT pastes caught, no false alarm in 79 landed
-  pastes.
-- **Measured, and it limits the receipt: Chromium fetches the text on every
-  Ctrl+V.** Edge and Chrome fetched it a few milliseconds after the keystroke
+  windows: one true miss in 20 EDIT pastes caught, and every one of 114
+  landed pastes had a fetch (no false alarm).
+- **Measured, and it limits the receipt in two browsers: Chrome and Edge
+  fetch the text on every Ctrl+V.** A few milliseconds after the keystroke
   with the focus on a textarea, a button or the page body, without naming a
-  window.
-  Two earlier assumptions fell with that: that a fetch by the target means
-  the paste landed, and that the receipt would show a late renderer. An
-  overrule of the caret check by a "read" receipt was written and removed the
-  same night: it would have silenced true reports.
-- **Measured for the first time: a busy page pastes the old clipboard.** A
-  page busy for 2.2 s received the previous clipboard text after the 1.5 s
-  restore. With an empty clipboard before the dictation (the owner's was
-  empty during the probes) that reads as "nothing arrived". A possible
-  remaining cause in the Claude desktop app, not a proved one: in the
-  owner's log that window once answered its target check only after 754 ms
-  (about 28 ms ordinarily), and a stall of 1.5 s cannot be read from the
-  log at all. Not closed.
-- **The second symptom is the rule of 2026-10-03**, not a regression: a
-  doubtful "not in a text field" row is dropped by the next paste (04da05e,
-  every release since v0.11.0). Failed pastes keep their row (cf1a37a).
+  window. Two earlier assumptions fell with that: that a fetch by the target
+  means the paste landed, and that the receipt would show a late renderer
+  there. An overrule of the caret check by a "read" receipt was written and
+  removed the same night: it would have silenced true reports.
+- **The first conclusion was too wide: Electron is not Chrome.** The entry
+  first said "blind in Chromium and Electron", from two browsers. A
+  throwaway VS Code window (Electron 43.8.9) made no request at all with the
+  focus on a button or the page body, and one request per paste that landed:
+  there the receipt is evidence. The owner pastes into an Electron app (the
+  Claude desktop app), which could not be driven itself. Measure the kind of
+  window the claim is about before writing the claim.
+- **Tried and rejected: refusing the browsers' first fetch.** Edge then
+  pasted through a second request and asked nothing for a button; Chrome
+  asked again 220-267 ms later even for the page body; Electron's text field
+  stayed empty in 8 of 8, because its only request is the paste.
+- **Measured for the first time: a busy page pastes the old clipboard.** In
+  Chrome and Edge a page busy for 2.2 s received the previous clipboard text
+  after the 1.5 s restore. With an empty clipboard before the dictation (the
+  owner's was empty during the first probes) that reads as "nothing
+  arrived". In the Electron window the same page fetched the text after 2.04
+  s and received the transcript, because an unfetched transcript now waits
+  up to 3 s. In the owner's log the Claude window once answered its target
+  check only after 754 ms (about 28 ms ordinarily); a stall of 1.5 s cannot
+  be read from the log at all, so this stays a possible cause, not a proved
+  one.
+- **The second symptom**: in v0.13.0 a failed paste keeps its row (cf1a37a,
+  v0.11.0); the only row a later paste removes is the doubtful "not in a text
+  field" one (the rule of 2026-10-03, 04da05e). Which of the two the owner
+  saw cannot be told. An `unread` paste is now a failed row that stays.
 - **Three things the probes taught about probing.** (1) Edge's launcher
   process exits and the browser lives on: `kill_process_tree(launcher)` left
   an instance running, and the next run attached to its DevTools port and

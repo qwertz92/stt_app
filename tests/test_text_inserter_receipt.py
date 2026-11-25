@@ -1,7 +1,7 @@
 """The paste transaction with a read receipt (`clipboard_owner`).
 
 A SendInput paste used to be "pasted" the moment the keystroke went out. The
-owner's log of 2026-10-23..11-24 holds about fifteen pastes reported that way
+owner's log of 2026-10-24..11-24 holds about fifteen pastes reported that way
 whose text he pasted again by hand seconds later. With the transcript
 announced instead of written, the transaction learns whether a program
 fetched it, and reports that once per paste.

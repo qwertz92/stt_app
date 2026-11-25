@@ -8218,10 +8218,10 @@ class DictationController(QtCore.QObject):
 
         A paste with a read receipt to come stays registered for
         `_on_paste_receipt`, with this verdict. The receipt never overrules
-        the caret the other way round: a Chromium window fetches the
-        clipboard text on every Ctrl+V, with the focus on a text field, a
-        button or the page body alike (measured in Edge and Chrome,
-        2026-11-25), so a fetched transcript says nothing about the element.
+        the caret the other way round: Chrome and Edge fetch the clipboard
+        text on every Ctrl+V, with the focus on a text field, a button or
+        the page body alike (measured 2026-11-25), so a fetched transcript
+        says nothing about the element.
         """
         pending = self._paste_checks.get(check_id)
         if pending is None or pending.caret_verdict is not None:
