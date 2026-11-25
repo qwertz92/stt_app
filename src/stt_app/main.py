@@ -1124,9 +1124,13 @@ def _without_transcribed_recordings(
     (`transcribe_unfinished_recording` and the Import tab write mode
     "import"): a dictation entry under the same id can be a partial
     transcript (`_is_partial_transcript`), and offering a recording twice
-    costs a second transcript, deleting it costs the recording. An
-    unreadable history answers no entries, and every recording is offered:
-    nothing is deleted on a guess.
+    costs a second transcript, deleting it costs the recording. A file that
+    any entry links, whatever its mode, is neither offered nor deleted: a
+    dictation's gap copy whose move failed stays in this folder as the only
+    audio of its entry (review 2026-11-25), and the notice's Delete or
+    Transcribe would remove or move it under that entry. An unreadable
+    history answers no entries, and every recording is offered: nothing is
+    deleted on a guess.
     """
     try:
         entries = history_store.load() if history_store is not None else []
@@ -1135,21 +1139,21 @@ def _without_transcribed_recordings(
     texts_by_id: dict[str, list[str]] = {}
     linked_audio: set[str] = set()
     for entry in entries:
+        audio = str(getattr(entry, "source_audio_path", "") or "").strip()
+        if audio:
+            linked_audio.add(_path_key(audio))
         recording_id = str(getattr(entry, "source_recording_id", "") or "").strip()
         if recording_id and str(getattr(entry, "mode", "") or "") == "import":
             texts_by_id.setdefault(recording_id, []).append(str(entry.text or ""))
-            audio = str(getattr(entry, "source_audio_path", "") or "").strip()
-            if audio:
-                linked_audio.add(_path_key(audio))
     offered = []
     for recording in recordings:
+        if _path_key(recording.path) in linked_audio:
+            # An entry links to this very file (a gap transcript, or one whose
+            # move to the recordings folder failed): the only audio.
+            continue
         texts = texts_by_id.get(recording.recording_id)
         if texts is None:
             offered.append(recording)
-            continue
-        if _path_key(recording.path) in linked_audio:
-            # Its entry links to this very file (a gap transcript, or one
-            # whose move to the recordings folder failed): the only audio.
             continue
         if not any(transcript_has_gap(text) for text in texts):
             try:

@@ -571,8 +571,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   - A pending recording's durable copy is written on the Qt thread at the
     next stop (11-21 ms for 10 s to 5 min of audio, about 40 ms for one
     10-minute recording, 206 ms for five pending at once); a disk that
-    refuses it tells the tray once, and the audio then lives in memory and,
-    until that same stop, the slot: a crash before the transcript loses it.
+    refuses it tells the tray (again at each further unsaved recording), and
+    the audio then lives in memory and, until that same stop, the slot: a
+    crash before the transcript loses it.
+  - With the unfinished folder unwritable for a whole session, failures
+    whose write fails stay in memory (`_older_failed_audio`) past
+    `RETRY_OLDER_FAILURES_MAX`, bounded only by the session (about 2 MB per
+    minute of audio each); the tray names each one.
   - A secured copy whose delete fails after delivery, or one of a recording
     cancelled by a path that does not end in `_on_transcription_canceled_result`
     (for example a job stopped by the concurrent mode "cancel" while it was

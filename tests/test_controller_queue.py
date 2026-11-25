@@ -4227,7 +4227,11 @@ def test_a_refused_history_write_leaves_a_fallback_retrys_audio_to_the_managed_r
     )
 
     assert history.load() == []
-    assert _files_kept_anywhere(controller, recordings) == []
+    # The copy left; the recording is secured in the unfinished folder
+    # because its transcript is in no History entry (2026-11-25), so the next
+    # recording overwriting the slot cannot lose it.
+    [secured] = _files_kept_anywhere(controller, recordings)
+    assert secured.parent == controller._unfinished_recording_store.directory
     assert tray == [
         _FALLBACK_NOTICE
         + "The transcript could not be saved to History (see the log); the last "
@@ -4698,7 +4702,11 @@ def test_a_gap_transcript_whose_history_write_was_refused_keeps_the_managed_reco
     )
 
     assert history.load() == []
-    assert _files_kept_anywhere(controller, recordings) == []
+    # The copy left; the recording is secured in the unfinished folder
+    # because its transcript is in no History entry (2026-11-25), so the next
+    # recording overwriting the slot cannot lose it.
+    [secured] = _files_kept_anywhere(controller, recordings)
+    assert secured.parent == controller._unfinished_recording_store.directory
     store = controller._last_recording_store
     state = store.load()
     assert state is not None and state.status == "failed"

@@ -459,3 +459,96 @@ def test_a_gap_transcript_whose_copy_failed_keeps_the_secured_file(
     assert secured.path.read_bytes() == audio_a
     controller.shutdown()
     _ = app
+
+
+def test_the_startup_notice_never_offers_a_file_history_links(monkeypatch, tmp_path):
+    # Review round 2, A1: the gap's only audio stayed in the unfinished folder
+    # (its move failed) and History (mode batch) links it there; the startup
+    # notice matched only import entries, offered it, and its Delete or
+    # Transcribe removed or moved the file the entry links.
+    from stt_app.main import _without_transcribed_recordings
+
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_bytes(b"x")
+    monkeypatch.setattr(controller, "_resolve_recordings_dir", lambda: str(blocker))
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+    [entry] = controller._history_store.load()
+    linked = Path(entry.source_audio_path)
+    assert linked.parent == unfinished.directory
+    controller.shutdown()
+
+    offered = _without_transcribed_recordings(
+        unfinished.list_recordings(), controller._history_store, unfinished
+    )
+
+    assert linked not in [item.path for item in offered]
+    assert linked.read_bytes() == audio_a
+    _ = app
+
+
+def test_a_deferred_result_whose_history_write_was_refused_is_secured(
+    monkeypatch, tmp_path
+):
+    # Review round 2, A2: A's gap transcript arrives while B records, so its
+    # paste waits, and History refuses it; B's stop overwrote the slot without
+    # securing A, because every deferred job counted as transcribed.
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    recording_a = controller._jobs[token_a].source_recording_id
+    controller.start_recording()
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    monkeypatch.setattr(controller._history_store, "add_entry", _refuse)
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+    job = controller._jobs[token_a]
+    assert job.insertion_deferred and job.history_refused
+
+    FakeCapture.instances[-1]._wav_bytes = wav_bytes(room_tone(1.0, rms=0.05, seed=2))
+    controller.stop_recording()
+
+    secured = [
+        item
+        for item in unfinished.list_recordings()
+        if item.recording_id == recording_a
+    ]
+    assert len(secured) == 1 and secured[0].path.read_bytes() == audio_a
+    controller.shutdown()
+    _ = app
+
+
+def test_a_locked_archive_file_does_not_stop_the_prune(monkeypatch, tmp_path, caplog):
+    caplog.set_level(logging.INFO)
+    controller, app, _unfinished = _controller(monkeypatch, tmp_path)
+    folder = tmp_path / "recordings"
+    locked, middle, newest = _files(
+        folder,
+        [
+            ("recording_20261101_100000_000000.wav", 0),
+            ("recording_20261101_110000_000000.wav", 1),
+            ("recording_20261101_120000_000000.wav", 2),
+        ],
+    )
+    real_remove = os.remove
+
+    def _remove(path):
+        if Path(path) == locked:
+            raise PermissionError("open in another program")
+        real_remove(path)
+
+    monkeypatch.setattr("stt_app.controller.os.remove", _remove)
+
+    controller._prune_recordings(str(folder), 2)
+
+    assert locked.exists()
+    assert not middle.exists(), "the next file goes instead"
+    assert newest.exists()
+    assert caplog.text.count("recording_prune_failed") == 1
+    controller.shutdown()
+    _ = app

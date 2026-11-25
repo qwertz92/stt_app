@@ -185,3 +185,31 @@ def test_a_language_that_cannot_stand_in_a_file_name_is_made_safe(tmp_path):
     [recording] = store.list_recordings()
     assert recording.recording_id == "r1"
     assert recording.language_mode == "de-t"
+
+
+def test_a_kept_copy_taken_back_in_the_store_folder_itself_is_renamed(tmp_path):
+    # The recordings folder is the unfinished folder: the kept copy sits in
+    # the store's own directory, where a kept_ name is never listed.
+    store = UnfinishedRecordingStore(tmp_path)
+    kept = tmp_path / "kept_20261125_100000_rec-a.de.wav"
+    kept.write_bytes(b"RIFF")
+
+    back = store.take_back(kept)
+
+    assert back == tmp_path / "unfinished_20261125_100000_rec-a.de.wav"
+    assert [item.recording_id for item in store.list_recordings()] == ["rec-a"]
+
+
+def test_a_kept_copy_taken_back_onto_a_taken_name_gets_a_free_one(tmp_path):
+    store = UnfinishedRecordingStore(tmp_path / "unfinished")
+    store.directory.mkdir()
+    taken = store.directory / "unfinished_20261125_100000_rec-a.wav"
+    taken.write_bytes(b"first")
+    kept = tmp_path / "kept_20261125_100000_rec-a.wav"
+    kept.write_bytes(b"second")
+
+    back = store.take_back(kept)
+
+    assert back.name.startswith("unfinished_") and back != taken
+    assert back.read_bytes() == b"second" and taken.read_bytes() == b"first"
+    assert len(store.list_recordings()) == 2, "both are offered"

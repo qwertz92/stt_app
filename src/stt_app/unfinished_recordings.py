@@ -178,19 +178,27 @@ class UnfinishedRecordingStore:
         to this store as `unfinished_<stamp>_<id>[.<language>].wav`, so that
         the next start offers it: its transcript reached no History entry.
 
-        A file of another name, or one already in this store, stays where it
-        is and its path is answered. Raises `OSError` when the move fails and
-        `FileExistsError` when the store already holds that name; the file
-        then stays where it was.
+        Also in this store's own folder (the recordings folder set to it),
+        where a `kept_` name is never listed. A taken name gets `-<n>` on the
+        id, which the listing still reads. A file of another name stays where
+        it is and its path is answered. Raises `OSError` when the move fails;
+        the file then stays where it was.
         """
         path = Path(path)
         match = KEPT_RECORDING_NAME_RE.fullmatch(path.name)
-        if match is None or path.parent == self.directory:
+        if match is None:
             return path
         self.directory.mkdir(parents=True, exist_ok=True)
-        target = self.directory / f"unfinished_{match['stamp']}_{match['rest']}.wav"
-        if target.exists():
-            raise FileExistsError(str(target))
+        identity, dot, language = match["rest"].partition(".")
+        suffix = f"{dot}{language}"
+        target = self.directory / f"unfinished_{match['stamp']}_{identity}{suffix}.wav"
+        counter = 1
+        while target.exists():
+            counter += 1
+            target = (
+                self.directory
+                / f"unfinished_{match['stamp']}_{identity}-{counter}{suffix}.wav"
+            )
         return Path(shutil.move(str(path), str(target)))
 
 

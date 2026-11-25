@@ -332,6 +332,11 @@ class _TranscriptionJob:
     # and so does one whose text did not get delivered either
     # (`_mark_last_recording_completed`).
     history_refused: bool = False
+    # The recording's audio from the moment its result arrived until its
+    # History write was tried: the delivery retires the request audio first,
+    # and a refused write must still secure the recording
+    # (`_secure_audio_of_an_unsaved_transcript`).
+    delivery_audio: bytes = b""
     future: object | None = None
     # The provider handshake thread, when this job finalizes a stream that may
     # still be connecting. The worker joins it before calling `stop_stream()`.
@@ -1352,7 +1357,9 @@ class DictationController(QtCore.QObject):
         this process holds in memory without a transcript in History: each
         job still transcribing (its request audio) and the failures held for
         Retry. Not a finished result waiting for its paste (its text is in
-        History) and not an aborting job (the user stopped it). Each comes
+        History) and not an aborting job (the user stopped it); a result
+        whose History write was refused counts as without a transcript (its
+        text is only in memory; review 2026-11-25). Each comes
         with the language it was made in where this process knows it -- a
         retry that fell back to the selected language ran under that one
         (`_pin_recorded_language`) and the next start would pin the fallback
@@ -1361,7 +1368,7 @@ class DictationController(QtCore.QObject):
         now = datetime.now()  # noqa: DTZ005 (local wall clock, as the queue rows show it)
         found: list[tuple[bytes, str, datetime, str]] = []
         for job in self._jobs.values():
-            if job.aborting or job.insertion_deferred:
+            if job.aborting or (job.insertion_deferred and not job.history_refused):
                 continue
             payload = self._request_audio_by_token.get(job.token)
             if payload is not None:
@@ -4295,8 +4302,14 @@ class DictationController(QtCore.QObject):
                 continue
             try:
                 os.remove(path)
-            except OSError:
-                break
+            except OSError as exc:
+                # Open in another program, say: skipped and still counted, so
+                # the next oldest goes instead (a `break` here pruned nothing
+                # at all while the oldest file was locked).
+                self._logger.warning(
+                    "recording_prune_failed path=%s error=%s", path, exc
+                )
+                continue
             excess -= 1
 
     def _reset_streaming_state(self, *, keep_session_text: bool = False) -> None:
@@ -4987,8 +5000,11 @@ class DictationController(QtCore.QObject):
         without an entry, and tell the tray about a fallback retry."""
         if job is not None:
             job.history_refused = entry is None
+            delivery_audio, job.delivery_audio = job.delivery_audio, b""
             if entry is None and job.audio_copied:
                 self._settle_the_audio_copy_of_an_unsaved_transcript(job)
+            if entry is None:
+                self._secure_audio_of_an_unsaved_transcript(job, delivery_audio)
             needs_audio = (
                 bool(job.language_fallback_from or transcript_has_gap(entry.text))
                 if entry is not None
@@ -5006,6 +5022,41 @@ class DictationController(QtCore.QObject):
                     job.source_recording_id, linked_path=entry.source_audio_path
                 )
         self._announce_language_fallback(job, entry)
+
+    def _secure_audio_of_an_unsaved_transcript(
+        self, job: _TranscriptionJob, wav_bytes: bytes
+    ) -> None:
+        """A refused History write leaves the text only in memory (a paste,
+        perhaps still waiting), so the recording counts as not transcribed:
+        its audio goes to the unfinished store now, before the next stop can
+        overwrite the managed slot that still holds it (review 2026-11-25: a
+        gap transcript pasted while History refused it kept no audio
+        anywhere once the slot moved on). Skipped where a file already holds
+        it (secured earlier, or a copy that stayed). The next start offers
+        it; nothing in the session releases it."""
+        recording_id = job.source_recording_id
+        if not recording_id or not wav_bytes:
+            return
+        if recording_id in self._secured_recordings or (
+            job.audio_copied and job.source_audio_path
+        ):
+            return
+        path = self._write_unfinished_recording(
+            wav_bytes,
+            recording_id,
+            job.created_at,
+            self._recorded_language_by_recording_id.get(recording_id)
+            or job.settings.language_mode,
+        )
+        if path is None:
+            self.busy_overlay_error.emit(
+                "A recording whose transcript could not be saved to History "
+                "could not be saved to "
+                f"{self._unfinished_recording_store.directory} either (see the "
+                "log); a crash or the next recordings lose its audio."
+            )
+            return
+        self._secured_recordings[recording_id] = path
 
     def _settle_the_audio_copy_of_an_unsaved_transcript(
         self, job: _TranscriptionJob
@@ -7933,6 +7984,9 @@ class DictationController(QtCore.QObject):
                 request_token=request_token,
             )
             return
+        if job is not None:
+            payload = self._request_audio_by_token.get(job.token)
+            job.delivery_audio = payload[0] if payload is not None else b""
         if job is not None and (job.language_fallback_from or transcript_has_gap(text)):
             # Before either road writes its History entry: the entry links it.
             self._keep_audio_of_a_delivery(job)

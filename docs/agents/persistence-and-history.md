@@ -290,7 +290,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
     `kept_*.wav` (`UnfinishedRecordingStore.move_to(as_kept_copy=True)`,
     `app_paths.KEPT_RECORDING_NAME_RE`), and `_prune_recordings` counts and
     deletes only `recording_*.wav`, as before 2026-11-24, keeping D2's
-    protection. Why: part of a gap's recording returned no text, and the
+    protection; a file it cannot remove (open in another program) is
+    skipped and logged `recording_prune_failed`, and the next oldest goes
+    instead (it used to stop the whole prune). Why: part of a gap's recording returned no text, and the
     review showed that with the limit at 1 the next recording deleted a gap
     copy and that lowering the limit wiped all of them -- the deletion of
     not fully transcribed audio the owner forbade. `unfinished_*` files are
@@ -326,12 +328,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
     (`_keep_dropped_failure`, logged `retry_failure_dropped ... kept=<path>`)
     and leaves the registry, so nothing in the session deletes it; when that
     write fails it stays in memory past the limit instead of being dropped.
-    A secure write or a dropped failure's write that fails tells the tray
-    once, naming the unfinished recordings folder (`busy_overlay_error`,
+    A secure write or a dropped failure's write that fails tells the tray,
+    naming the unfinished recordings folder and the count, at every stop or
+    failure that leaves a recording unsaved: each is a new failure (five
+    recordings into an unwritable folder give four notices; `busy_overlay_error`,
     the generic tray warning: the "Transcription failed" title of
     `background_transcription_failed` would be wrong). A crash
     now leaves the slot plus every older pending recording; the next start's
-    notice offers them. A gap or fallback copy of the same recording takes
+    notice offers them. A result whose History write was refused counts as
+    without a transcript and is secured too, also while its paste waits
+    (review 2026-11-25: such a gap transcript was pasted with no audio left
+    anywhere). The startup notice never offers, deletes or moves a file
+    that any History entry links, whatever the entry's mode
+    (`main._without_transcribed_recordings`; it matched only import entries,
+    so a dictation's gap copy whose move failed was offered and its Delete
+    removed the entry's only audio). `take_back` renames a kept copy also
+    in the store's own folder (the recordings folder set to it) and picks a
+    free name (`<id>-<n>`) when the name is taken. A gap or fallback copy of the same recording takes
     the secured file over (`_keep_audio_in_recordings_folder` asks `find`
     first and moves what it finds, so it needs no write: a full disk that
     refused the fresh copy left the retry's audio unkept before). Cost: one
