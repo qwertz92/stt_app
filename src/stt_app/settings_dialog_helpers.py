@@ -40,7 +40,7 @@ from .config import (
     VALID_MODEL_SIZES,
 )
 from .local_benchmark import _format_seconds
-from .settings_store import _REMOTE_MODEL_FIELDS
+from .settings_store import _REMOTE_MODEL_FIELDS, remote_move_line
 
 # What `Thread.start()` raises when the worker cannot be created: the OS refuses
 # the thread (`RuntimeError`) or the interpreter cannot allocate its
@@ -553,6 +553,42 @@ def local_model_short_label(model_name: str) -> str:
     """
     label = LOCAL_MODEL_LABELS.get(model_name, model_name)
     return label.split(" (", 1)[0].strip() or label
+
+
+def model_move_notice(
+    moves: list[dict[str, str]], *, successor_on_disk: bool, offline_mode: bool
+) -> str:
+    """The tray text for the retired-model moves a start found.
+
+    A model is named by what the pickers call it, never by its settings id. The
+    local line also says what the app does next, because the successor is
+    usually not on this PC: it is being downloaded (and dictation works when
+    that has finished), or, in offline mode where nothing downloads by itself,
+    where the user fetches it. A successor already on disk needs neither.
+    """
+    lines: list[str] = []
+    for move in moves:
+        if move["engine"] != DEFAULT_ENGINE:
+            lines.append(remote_move_line(move))
+            continue
+        old = local_model_short_label(move["from"])
+        new = local_model_short_label(move["to"])
+        line = (
+            f"{ENGINE_LABELS[DEFAULT_ENGINE]}: {old} is no longer offered, "
+            f"your choice is now {new}."
+        )
+        size = _approximate_size_text(move["to"])
+        size = f" ({size})" if size else ""
+        if offline_mode and not successor_on_disk:
+            line += (
+                f" Offline mode is on: download it{size} under Settings > Models,"
+                " or choose another model."
+            )
+        elif not successor_on_disk:
+            line += f" Downloading it now{size}; dictation works when it is done."
+        lines.append(line)
+    # Local first, as `retired_model_moves` orders them.
+    return "\n".join(lines)
 
 
 def model_choices_for_engine(

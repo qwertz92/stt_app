@@ -268,8 +268,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   `config.RETIRED_LOCAL_MODEL_SUCCESSORS` (applied in
   `AppSettings.from_dict`, which `SettingsStore.load` writes back), and the
   one "Speech model updated" tray notice says so once
-  (`settings_store.retired_model_notice` -> `take_model_notice`, shared with
-  the remote retirements; a local and a remote line arrive in one notice).
+  (`settings_store.retired_model_moves` -> `AppSettings.pending_model_moves`,
+  shared with the remote retirements; a local and a remote line arrive in one
+  notice). The moves stay in the settings file until the tray has shown the
+  balloon (`SettingsStore.clear_model_notice`, called by `main` right after
+  `showMessage`), because the balloon appears 2 to 27 s after the load that
+  rewrote the file and a start closed in between would otherwise never tell.
+  The local line names both models as the pickers do and says what the app
+  does next (`settings_dialog_helpers.model_move_notice`, decided when the
+  balloon is built): successor not on this PC and downloads allowed, "Downloading
+  it now (size); dictation works when it is done"; offline mode, where to
+  download it; successor already on disk, nothing more. A notice never names
+  a docs path: an installer user cannot open it.
   - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
     Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
     `medium` -> `large-v3-turbo`.

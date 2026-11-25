@@ -37,6 +37,7 @@ from stt_app.config import (
     parse_custom_vocabulary,
 )
 from stt_app.persistence import backup_path
+from stt_app.settings_dialog_helpers import local_model_short_label, model_move_notice
 from stt_app.settings_store import (
     CURRENT_SCHEMA_VERSION,
     AppSettings,
@@ -438,7 +439,7 @@ def test_the_retired_universal_3_models_move_to_stt_3_7(tmp_path, retired):
     settings = store.load()
 
     assert settings.assemblyai_model == "assemblyai-stt-3-7"
-    notice = store.take_model_notice()
+    notice = _notice(store)
     assert "AssemblyAI" in notice and retired in notice
     assert "assemblyai-stt-3-7" in notice
 
@@ -1846,10 +1847,132 @@ def test_standard_with_a_vocabulary_says_melia_ignores_it(
 
     assert store.load().speechmatics_model == "melia-1"
 
-    notice = store.take_model_notice()
+    notice = _notice(store)
     assert "standard is no longer offered" in notice
     assert ("does not use your custom vocabulary" in notice) is mentioned
     assert ("Enhanced" in notice) is mentioned
+
+
+def _notice(store, *, successor_on_disk=False, offline_mode=False):
+    """The tray text of the moves `store` still holds, as `main` builds it."""
+    return model_move_notice(
+        store.load().pending_model_moves,
+        successor_on_disk=successor_on_disk,
+        offline_mode=offline_mode,
+    )
+
+
+def _local_retirement_store(tmp_path, **extra):
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "model_size": "granite-speech-4.1-2b",
+            **extra,
+        },
+    )
+    return SettingsStore(path)
+
+
+def test_the_local_notice_says_the_successor_is_downloading_and_how_big_it_is(
+    tmp_path,
+):
+    notice = _notice(_local_retirement_store(tmp_path))
+
+    assert "IBM Granite Speech 4.1 2B is no longer offered" in notice
+    assert "your choice is now IBM Granite Speech 5.0 2B" in notice
+    assert "Downloading it now (~1.73 GB)" in notice
+    assert "dictation works when it is done" in notice
+    assert "granite-speech" not in notice
+    assert "docs/" not in notice
+
+
+def test_the_local_notice_in_offline_mode_says_where_to_download(tmp_path):
+    notice = _notice(_local_retirement_store(tmp_path), offline_mode=True)
+
+    assert "your choice is now IBM Granite Speech 5.0 2B" in notice
+    assert "Offline mode is on" in notice
+    assert "Settings > Models" in notice
+    assert "~1.73 GB" in notice
+    assert "ownloading" not in notice
+
+
+@pytest.mark.parametrize("offline_mode", [False, True])
+def test_the_local_notice_adds_nothing_when_the_successor_is_on_disk(
+    tmp_path, offline_mode
+):
+    notice = _notice(
+        _local_retirement_store(tmp_path),
+        successor_on_disk=True,
+        offline_mode=offline_mode,
+    )
+
+    assert notice == (
+        "Local (on this PC): IBM Granite Speech 4.1 2B is no longer offered, "
+        "your choice is now IBM Granite Speech 5.0 2B."
+    )
+
+
+def test_a_local_and_a_remote_notice_fit_one_tray_balloon(tmp_path):
+    from stt_app.config import TRAY_MESSAGE_MAX_CHARS
+
+    store = _local_retirement_store(
+        tmp_path, openai_model="whisper-1", has_openai_key=True
+    )
+    lines = _notice(store).split("\n")
+
+    assert len(lines) == 2
+    assert lines[0].startswith("Local (on this PC): ")
+    assert lines[1].startswith("OpenAI: whisper-1 is no longer offered")
+    assert len(_notice(store)) <= TRAY_MESSAGE_MAX_CHARS
+
+
+def test_a_notice_not_yet_shown_survives_a_start_that_is_closed_first(tmp_path):
+    """The load that moves the model rewrites the file, but the balloon appears
+    2-27 s later. The pending move stays in the file until `clear_model_notice`
+    (called after `showMessage`), so a start closed in between announces it at
+    the next one -- once."""
+    first = _local_retirement_store(tmp_path)
+    assert first.load().model_size == "granite-speech-5.0-2b"
+    # No clear: the app was closed before the tray showed the notice.
+
+    second = SettingsStore(first.path)
+    assert second.load().model_size == "granite-speech-5.0-2b"
+    assert [m["to"] for m in second.load().pending_model_moves] == [
+        "granite-speech-5.0-2b"
+    ]
+    second.clear_model_notice()
+
+    third = SettingsStore(first.path)
+    assert third.load().pending_model_moves == []
+
+
+def test_a_retired_id_with_stray_blanks_is_treated_alike_everywhere(tmp_path):
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "model_size": " base ",
+        },
+    )
+    store = SettingsStore(path)
+
+    assert store.load().model_size == "small"
+    assert [m["from"] for m in store.load().pending_model_moves] == ["base"]
+
+
+def test_a_damaged_pending_move_is_dropped(tmp_path):
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "pending_model_moves": ["x", {"engine": "local"}, 3],
+        },
+    )
+
+    assert SettingsStore(path).load().pending_model_moves == []
 
 
 def test_a_retired_model_choice_moves_once_and_is_announced_once(tmp_path, monkeypatch):
@@ -1867,18 +1990,19 @@ def test_a_retired_model_choice_moves_once_and_is_announced_once(tmp_path, monke
     settings = store.load()
 
     assert settings.openai_model == "gpt-transcribe"
-    notice = store.take_model_notice()
+    notice = _notice(store)
     assert "OpenAI" in notice
     assert "gpt-4o-transcribe" in notice
     assert "gpt-transcribe" in notice
-    assert store.take_model_notice() == ""
+    store.clear_model_notice()
+    assert store.load().pending_model_moves == []
     # The move is written back, so the next start has nothing to announce.
     assert json.loads(path.read_text(encoding="utf-8"))["openai_model"] == (
         "gpt-transcribe"
     )
     again = SettingsStore(path)
     assert again.load().openai_model == "gpt-transcribe"
-    assert again.take_model_notice() == ""
+    assert again.load().pending_model_moves == []
 
 
 def test_a_retired_model_of_an_engine_in_use_by_key_is_announced(tmp_path, monkeypatch):
@@ -1896,7 +2020,7 @@ def test_a_retired_model_of_an_engine_in_use_by_key_is_announced(tmp_path, monke
     store = SettingsStore(path)
 
     assert store.load().openai_model == "gpt-transcribe"
-    assert "OpenAI" in store.take_model_notice()
+    assert "OpenAI" in _notice(store)
 
 
 def test_a_retired_model_of_an_unused_engine_moves_without_a_notice(
@@ -1915,7 +2039,7 @@ def test_a_retired_model_of_an_unused_engine_moves_without_a_notice(
     store = SettingsStore(path)
 
     assert store.load().openai_model == "gpt-transcribe"
-    assert store.take_model_notice() == ""
+    assert store.load().pending_model_moves == []
 
 
 def test_a_damaged_model_id_falls_to_the_default_without_a_notice(
@@ -1934,7 +2058,7 @@ def test_a_damaged_model_id_falls_to_the_default_without_a_notice(
     store = SettingsStore(path)
 
     assert store.load().openai_model == DEFAULT_OPENAI_MODEL
-    assert store.take_model_notice() == ""
+    assert store.load().pending_model_moves == []
 
 
 def _retired_moves():
@@ -1979,7 +2103,7 @@ def test_every_retired_model_moves_to_an_offered_successor(tmp_path, engine, old
     store = SettingsStore(path)
 
     assert getattr(store.load(), field) == new
-    assert old in store.take_model_notice()
+    assert old in _notice(store)
 
 
 def _local_retired_moves():
@@ -2005,15 +2129,18 @@ def test_a_retired_local_model_moves_once_saved_and_announced(tmp_path, old, new
 
     store = SettingsStore(path)
     assert store.load().model_size == new
-    notice = store.take_model_notice()
+    notice = _notice(store)
     assert "Local (on this PC)" in notice
-    assert f"{old} is no longer offered, your choice is now {new}" in notice
-    assert "stay on disk" in notice
-    assert store.take_model_notice() == ""
+    assert local_model_short_label(old) in notice
+    assert local_model_short_label(new) in notice
+    assert old not in notice or old == local_model_short_label(old)
+    assert "is no longer offered, your choice is now" in notice
+    store.clear_model_notice()
+    assert store.load().pending_model_moves == []
     assert json.loads(path.read_text(encoding="utf-8"))["model_size"] == new
     again = SettingsStore(path)
     assert again.load().model_size == new
-    assert again.take_model_notice() == ""
+    assert again.load().pending_model_moves == []
 
 
 def test_a_retired_local_model_under_a_remote_engine_moves_without_a_notice(tmp_path):
@@ -2028,7 +2155,7 @@ def test_a_retired_local_model_under_a_remote_engine_moves_without_a_notice(tmp_
     store = SettingsStore(path)
 
     assert store.load().model_size == "large-v3-turbo"
-    assert store.take_model_notice() == ""
+    assert store.load().pending_model_moves == []
 
 
 def test_a_local_and_a_remote_retirement_share_one_notice(tmp_path):
@@ -2047,9 +2174,10 @@ def test_a_local_and_a_remote_retirement_share_one_notice(tmp_path):
     store = SettingsStore(path)
     store.load()
 
-    lines = store.take_model_notice().split("\n")
+    lines = _notice(store).split("\n")
     assert len(lines) == 2
     assert lines[0].startswith("Local (on this PC): base is no longer offered")
+    assert "small" in lines[0]
     assert lines[1].startswith("OpenAI: whisper-1 is no longer offered")
 
 
@@ -2068,7 +2196,7 @@ def test_a_model_that_is_only_not_downloaded_is_never_replaced(tmp_path):
     store = SettingsStore(path)
 
     assert store.load().model_size == "fluid-speech-pro"
-    assert store.take_model_notice() == ""
+    assert store.load().pending_model_moves == []
 
 
 def test_a_retirement_never_moves_a_streaming_choice_to_a_batch_only_model():

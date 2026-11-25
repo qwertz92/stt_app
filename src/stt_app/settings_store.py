@@ -160,6 +160,7 @@ DEFAULTS = {
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
     "streaming_full_final_transcript": DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
+    "pending_model_moves": [],
     "concurrent_transcription_mode": DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     "immediate_background_insert": DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     "insert_target": DEFAULT_INSERT_TARGET,
@@ -242,27 +243,26 @@ def _current_remote_model(
     (`config.RETIRED_REMOTE_MODELS`); any other value this build does not
     offer is damage and becomes the engine's default.
     """
+    stored = stored.strip()
     stored = RETIRED_REMOTE_MODELS.get(engine, {}).get(stored, stored)
     return stored if stored in valid else default
 
 
-def retired_model_notice(raw: dict[str, Any]) -> str:
-    """One line per retired model a saved choice moves away from; "" if none.
+def retired_model_moves(raw: dict[str, Any]) -> list[dict[str, str]]:
+    """The retired models a saved choice moves away from, local ones first.
 
-    Local models first, then the remote engines. Only for an engine the user
-    uses: the selected one, or one with a stored key. A file written before the engine existed carries its default for
-    everyone (`openai_model` once did), and telling a user about a provider
-    they never set up is noise. Reads the file's own values, before
+    One `{"engine", "from", "to", "extra"}` per move; `extra` is a sentence the
+    notice appends. Only for an engine the user uses: the selected one, or one
+    with a stored key. A file written before the engine existed carries its
+    default for everyone (`openai_model` once did), and telling a user about a
+    provider they never set up is noise. Reads the file's own values, before
     `AppSettings.from_dict` replaces them.
     """
-    lines: list[str] = []
-    selected = str(raw.get("engine", DEFAULT_ENGINE)).lower()
+    moves: list[dict[str, str]] = []
+    selected = str(raw.get("engine", DEFAULT_ENGINE)).strip().lower()
     local_model = raw.get("model_size")
-    local_successor = (
-        RETIRED_LOCAL_MODEL_SUCCESSORS.get(local_model.strip().lower())
-        if isinstance(local_model, str)
-        else None
-    )
+    local_old = local_model.strip().lower() if isinstance(local_model, str) else ""
+    local_successor = RETIRED_LOCAL_MODEL_SUCCESSORS.get(local_old)
     if local_successor is not None and selected == DEFAULT_ENGINE:
         # The local roster uses the same notice as the remote ones. A remote
         # engine never reads `model_size`, so there it moves without a word.
@@ -270,10 +270,13 @@ def retired_model_notice(raw: dict[str, Any]) -> str:
         # successor is (tiny, base and medium move to Whisper sizes; Granite
         # 4.x and Ultra were batch-only like their successors), so a saved
         # streaming choice never lands on a model that cannot stream.
-        lines.append(
-            f"{ENGINE_LABELS[DEFAULT_ENGINE]}: {local_model.strip()} is no longer "
-            f"offered, your choice is now {local_successor}. Files you already "
-            "downloaded for it stay on disk (docs/models.md)."
+        moves.append(
+            {
+                "engine": DEFAULT_ENGINE,
+                "from": local_old,
+                "to": local_successor,
+                "extra": "",
+            }
         )
     for engine, retired in RETIRED_REMOTE_MODELS.items():
         stored = raw.get(_REMOTE_MODEL_FIELDS[engine])
@@ -282,10 +285,7 @@ def retired_model_notice(raw: dict[str, Any]) -> str:
             continue
         if selected != engine and not parse_json_bool(raw.get(f"has_{engine}_key")):
             continue
-        line = (
-            f"{ENGINE_LABELS[engine]}: {stored.strip()} is no longer offered, "
-            f"your choice is now {successor}."
-        )
+        extra = ""
         vocabulary = raw.get("custom_vocabulary")
         if (
             engine == "speechmatics"
@@ -296,12 +296,56 @@ def retired_model_notice(raw: dict[str, Any]) -> str:
             # Melia 1 has no custom dictionary; the move stays on Melia 1
             # because Enhanced costs three times as much (nothing is raised
             # without the user's say), so the notice names the difference.
-            line += (
-                " Melia 1 does not use your custom vocabulary; "
+            extra = (
+                "Melia 1 does not use your custom vocabulary; "
                 "Speechmatics Enhanced does (pick it in Settings)."
             )
-        lines.append(line)
-    return "\n".join(lines)
+        moves.append(
+            {"engine": engine, "from": stored.strip(), "to": successor, "extra": extra}
+        )
+    return moves
+
+
+def remote_move_line(move: dict[str, str]) -> str:
+    """The notice line of one remote move (the local line is built where the
+    model names and the disk are known: `settings_dialog_helpers`)."""
+    line = (
+        f"{ENGINE_LABELS[move['engine']]}: {move['from']} is no longer offered, "
+        f"your choice is now {move['to']}."
+    )
+    return f"{line} {move['extra']}" if move.get("extra") else line
+
+
+_MOVE_KEYS = ("engine", "from", "to", "extra")
+
+
+def _pending_model_moves(raw: dict[str, Any]) -> list[dict[str, str]]:
+    """The moves still waiting to be announced: those the file already holds
+    (an earlier start moved them and was closed before the tray showed them)
+    followed by the ones this load found. Damage is dropped, repeats merged."""
+    stored = raw.get("pending_model_moves")
+    candidates = list(stored) if isinstance(stored, list) else []
+    candidates.extend(retired_model_moves(raw))
+    moves: list[dict[str, str]] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        move = {
+            key: candidate.get(key, "")
+            for key in _MOVE_KEYS
+            if isinstance(candidate.get(key, ""), str)
+        }
+        if len(move) != len(_MOVE_KEYS) or not (
+            move["engine"] and move["from"] and move["to"]
+        ):
+            continue
+        if not any(
+            (m["engine"], m["from"], m["to"])
+            == (move["engine"], move["from"], move["to"])
+            for m in moves
+        ):
+            moves.append(move)
+    return moves
 
 
 def _exact_int_or_none(value: Any) -> int | None:
@@ -355,6 +399,10 @@ class AppSettings:
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
     streaming_full_final_transcript: bool = DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT
+    # Retired-model moves not yet announced in the tray (`retired_model_moves`),
+    # kept in the file until the tray has shown them, so a start that is closed
+    # before the balloon appears still tells the user at the next one.
+    pending_model_moves: list[dict[str, str]] = field(default_factory=list)
     concurrent_transcription_mode: str = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
     immediate_background_insert: bool = DEFAULT_IMMEDIATE_BACKGROUND_INSERT
     insert_target: str = DEFAULT_INSERT_TARGET
@@ -492,13 +540,14 @@ class AppSettings:
             else:
                 concurrent_transcription_mode = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
 
-        model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).lower()
+        model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).strip().lower()
         successor = RETIRED_LOCAL_MODEL_SUCCESSORS.get(model_size)
         if successor is not None:
             # A model this version retired on purpose
             # (`config.RETIRED_LOCAL_MODEL_SUCCESSORS`): the selection moves to
             # its successor here, `SettingsStore.load` saves it, and
-            # `retired_model_notice` tells the user at the next start. Only
+            # `retired_model_moves` records it in `pending_model_moves`, which the tray
+            # notice reads and clears. Only
             # a model the app retired moves; a model that is merely not
             # downloaded stays selected (the selected local model is strict).
             logger.warning(
@@ -751,6 +800,7 @@ class AppSettings:
             ),
             engine=engine,
             mode=mode,
+            pending_model_moves=_pending_model_moves(raw),
             streaming_full_final_transcript=parse_json_bool(
                 merged.get(
                     "streaming_full_final_transcript",
@@ -932,10 +982,6 @@ class SettingsStore:
         # the overlay pin button and the opacity slider all do -- writes them
         # back instead of deleting a newer build's settings.
         self._unknown_keys: dict[str, object] = {}
-        # Set by a `load` that moved a retired model choice; shown once at
-        # the next start (`take_model_notice`). The same load rewrites the
-        # file, so a later start finds nothing to move.
-        self._model_notice = ""
 
     @property
     def path(self) -> Path:
@@ -983,7 +1029,6 @@ class SettingsStore:
 
             raw = dict(payload)
 
-            self._model_notice = retired_model_notice(raw) or self._model_notice
             settings = AppSettings.from_dict(raw)
             payload = settings.to_dict()
             # Keys this build does not know are a newer build's, and dropping
@@ -1020,10 +1065,16 @@ class SettingsStore:
 
             return settings
 
-    def take_model_notice(self) -> str:
-        """The notice about retired models `load` moved, once; "" afterwards."""
-        notice, self._model_notice = self._model_notice, ""
-        return notice
+    def clear_model_notice(self) -> None:
+        """Forget the pending retired-model moves: the tray has shown them.
+
+        The moves themselves were saved by the load that found them; only the
+        announcement is pending, and it stays in the file until this call.
+        """
+        with self._lock:
+            settings = self.load()
+            if settings.pending_model_moves:
+                self.save(replace(settings, pending_model_moves=[]))
 
     def _payload_for_save(
         self,

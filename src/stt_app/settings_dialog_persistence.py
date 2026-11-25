@@ -592,7 +592,13 @@ class _PersistenceMixin:
     # unpinned. The opacity was already read back by hand in one of the two
     # save paths and not the other; one list so a third such field cannot be
     # remembered in one place and forgotten in the other.
-    _OVERLAY_OWNED_FIELDS = ("overlay_opacity_percent", "overlay_always_on_top")
+    # `pending_model_moves` is the same kind of field: `main` clears it after the
+    # tray showed the notice, and a save must neither drop nor resurrect it.
+    _OVERLAY_OWNED_FIELDS = (
+        "overlay_opacity_percent",
+        "overlay_always_on_top",
+        "pending_model_moves",
+    )
 
     def _advance_populated_settings(self, widget_settings: AppSettings) -> None:
         """Re-record the edit baseline from the values a save just read out.

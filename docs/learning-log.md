@@ -8,7 +8,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 Structurally: `config.RETIRED_LOCAL_MODEL_SUCCESSORS` maps every removed local
 model to its successor, `AppSettings.from_dict` applies it (the file is written
 back by `load`, so it happens once) and the remote-model mechanism's
-`retired_model_notice` / `take_model_notice` / "Speech model updated" tray
+`retired_model_moves` / `pending_model_moves` / "Speech model updated" tray
 notice tells the user (local and remote lines share one notice). The Parakeet Ultra support code is gone with the
 model: `prepare_onnx_inference_dir` and `_OnnxModelLayout.inference_subdir`
 existed only because the community export kept its graphs in `int8/` and

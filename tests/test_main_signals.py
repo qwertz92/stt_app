@@ -1652,7 +1652,7 @@ def test_a_moved_model_choice_is_shown_as_one_tray_message():
 
 
 def test_a_local_retirement_notice_is_shown_through_the_one_model_notice_path():
-    """Local and remote retirements share `take_model_notice` and the one
+    """Local and remote retirements share one pending-moves path and the one
     "Speech model updated" tray notice (`_show_model_notice`)."""
     shown = []
 
@@ -1671,3 +1671,61 @@ def test_a_local_retirement_notice_is_shown_through_the_one_model_notice_path():
             "Local (on this PC): base is no longer offered, your choice is now small.",
         )
     ]
+
+
+def test_the_model_notice_is_cleared_only_after_the_balloon_was_shown(monkeypatch):
+    """The pending move stays in the settings file while the tray icon is not
+    there yet, so a start closed in the meantime announces it at the next one."""
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    events = []
+    tray = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: tray.visible,
+        showMessage=lambda *args: events.append("shown"),
+    )
+
+    main_module._show_model_notice_when_ready(
+        tray, "notice", on_shown=lambda: events.append("cleared")
+    )
+    assert events == []
+
+    tray.visible = True
+    timers.pop()[1]()
+    assert events == ["shown", "cleared"]
+
+
+def test_the_pending_notice_is_written_for_the_disk_as_it_is_at_display_time(
+    monkeypatch,
+):
+    moves = [
+        {
+            "engine": "local",
+            "from": "granite-speech-4.1-2b",
+            "to": "granite-speech-5.0-2b",
+            "extra": "",
+        }
+    ]
+    settings = SimpleNamespace(
+        pending_model_moves=moves, model_dir="", offline_mode=False
+    )
+    store = SimpleNamespace(load=lambda: settings)
+    cached: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda model_dir="": list(cached),
+    )
+
+    assert "Downloading it now (~1.73 GB)" in main_module._pending_model_notice(store)
+    settings.offline_mode = True
+    assert "Offline mode is on" in main_module._pending_model_notice(store)
+    cached.append("granite-speech-5.0-2b")
+    assert main_module._pending_model_notice(store).endswith("2B.")

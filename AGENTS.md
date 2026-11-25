@@ -297,7 +297,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **Local roster changes** follow one pattern: a retired model is listed in
   `config.RETIRED_LOCAL_MODEL_SUCCESSORS`, a saved choice moves once to its
   successor (`AppSettings.from_dict`) with the shared "Speech model updated"
-  notice (`retired_model_notice`), and the retired
+  notice (`retired_model_moves`, cleared once shown), and the retired
   model's files stay on disk, unlisted (`docs/models.md`, "Reclaiming disk
   from retired models").
 - **Custom endpoint** (`custom`): base URL, free-text model, API style
