@@ -105,7 +105,7 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
         ("1", "small", "auto", "int8", "Pending"),
         ("2", "Cohere Transcribe 03-2026", "auto", "onnx-q4", "Pending"),
     ]
-    assert dialog.benchmark_plan_caption_label.text() == "2 cases will run"
+    assert dialog.benchmark_plan_caption_label.text().startswith("2 cases will run")
 
     dialog.benchmark_webgpu_device_combo.setCurrentIndex(
         dialog.benchmark_webgpu_device_combo.findData("all")
@@ -120,7 +120,7 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
         ("Cohere Transcribe 03-2026", "dml"),
         ("Cohere Transcribe 03-2026", "cpu"),
     ]
-    assert dialog.benchmark_plan_caption_label.text() == "4 cases will run"
+    assert dialog.benchmark_plan_caption_label.text().startswith("4 cases will run")
 
     dialog.benchmark_compute_type_combo.setCurrentIndex(
         dialog.benchmark_compute_type_combo.findData("float16")
@@ -138,7 +138,9 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
     app.processEvents()
 
     assert _plan(dialog) == []
-    assert dialog.benchmark_plan_caption_label.text() == "0 cases will run"
+    assert dialog.benchmark_plan_caption_label.text() == (
+        "0 cases will run. To run, choose an audio file and tick a model."
+    )
     _ = app
 
 
@@ -176,7 +178,7 @@ def test_the_german_refusal_names_the_english_only_models_that_were_selected(
 def test_a_selection_of_one_model_is_announced_in_the_singular(tmp_path):
     dialog, app = _dialog(tmp_path, ["small"])
 
-    assert dialog.benchmark_plan_caption_label.text() == "1 case will run"
+    assert dialog.benchmark_plan_caption_label.text().startswith("1 case will run")
     _ = app
 
 
@@ -748,4 +750,24 @@ def test_the_running_case_shows_how_long_it_has_been_running(monkeypatch, tmp_pa
     # The counting row did not finish either, whatever its text had become.
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
     assert dialog._benchmark_case_timer.isActive() is False
+    _ = app
+
+
+def test_the_case_caption_says_what_run_benchmark_still_needs(tmp_path):
+    dialog, app = _dialog(tmp_path, ["small"])
+    caption = dialog.benchmark_plan_caption_label
+
+    assert caption.text() == "1 case will run. To run, choose an audio file."
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    dialog.benchmark_audio_edit.setText(str(audio))
+    app.processEvents()
+
+    assert caption.text() == "1 case will run"
+    assert dialog.run_benchmark_button.isEnabled()
+    dialog.benchmark_deselect_all_button.click()
+    app.processEvents()
+
+    assert caption.text() == "0 cases will run. To run, tick a model."
+    assert not dialog.run_benchmark_button.isEnabled()
     _ = app

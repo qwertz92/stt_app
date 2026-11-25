@@ -28,12 +28,9 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
-    ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
-    AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
-    AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
+    ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
-    DEEPGRAM_NOVA_2_LANGUAGE_MODES,
     DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
@@ -2110,10 +2107,7 @@ def test_overlay_language_change_rejects_unsupported_cohere_auto():
     ("engine", "model", "offered"),
     [
         ("deepgram", "nova-3", DEEPGRAM_NOVA_3_LANGUAGE_MODES),
-        ("deepgram", "nova-2", DEEPGRAM_NOVA_2_LANGUAGE_MODES),
-        ("assemblyai", "universal-3-5-pro", ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES),
-        ("azure", "mai-transcribe-1.5", AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES),
-        ("azure", "mai-transcribe-1", AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES),
+        ("assemblyai", "assemblyai-stt-3-7", ASSEMBLYAI_STT_3_7_LANGUAGE_MODES),
         ("speechmatics", "enhanced", SPEECHMATICS_LANGUAGE_MODES),
     ],
 )
@@ -2121,8 +2115,8 @@ def test_overlay_language_list_is_the_remote_models_own(engine, model, offered):
     """A remote engine keeps its model in its own field, `model_size` is the
     local one. The list used to be asked with `model_size`, so every remote
     model with a list of its own showed -- and `set_language_mode` accepted --
-    the engine's default, wider one: Deepgram nova-2 offered 118 languages for
-    its 34, and Speechmatics Enhanced offered Auto, which only Melia 1 has."""
+    the engine's default, wider one: Deepgram offered 118 languages for
+    nova-3's 54, and Speechmatics Enhanced offered Auto, which only Melia 1 has."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = apply_engine_model_selection(
         AppSettings(engine=engine, language_mode="de", hotkey=FALLBACK_HOTKEY),

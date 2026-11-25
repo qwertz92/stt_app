@@ -27,6 +27,7 @@ from ..config import (
     AUDIO_INPUT_BUFFER_S,
     AUDIO_SAMPLE_RATE,
     DEEPGRAM_API_HOSTS,
+    DEEPGRAM_KEYTERM_TOKEN_BUDGET,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DEEPGRAM_REGION,
@@ -48,6 +49,35 @@ from .base import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _estimated_keyterm_tokens(term: str) -> int:
+    """A deliberately high token estimate for one keyterm.
+
+    Deepgram's tokenizer is not public. Every word counts one token per three
+    characters rounded up (a rare word such as "Kubernetes" is usually two to
+    four tokens, so this over-counts common words), plus one token per term for
+    the separator between terms.
+    """
+    return 1 + sum(math.ceil(len(word) / 3) for word in term.split())
+
+
+def fit_keyterms(terms: list[str]) -> tuple[list[str], int]:
+    """Return the terms that fit the token budget, and how many were left out.
+
+    Terms are taken in order; one that does not fit is skipped (an enormous
+    first term must not cost the whole list) and later, shorter ones still can.
+    """
+    kept: list[str] = []
+    used = 0
+    for term in terms:
+        cost = _estimated_keyterm_tokens(term)
+        if used + cost > DEEPGRAM_KEYTERM_TOKEN_BUDGET:
+            continue
+        used += cost
+        kept.append(term)
+    return kept, len(terms) - len(kept)
+
 
 _STREAM_SEND_SENTINEL = object()
 # What the sender's queue answers when nothing arrived for a whole interval.
@@ -198,7 +228,16 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         # Needs self._model, so this must run after it is assigned above
         # (reordered from the model assignment's original position below it).
         self.set_language_mode(language_mode)
-        self._vocabulary_terms = parse_custom_vocabulary(custom_vocabulary)
+        self._vocabulary_terms, dropped = fit_keyterms(
+            parse_custom_vocabulary(custom_vocabulary)
+        )
+        if dropped:
+            logger.warning(
+                "Deepgram takes about %d tokens of custom vocabulary per request; "
+                "%d term(s) that do not fit are not sent.",
+                DEEPGRAM_KEYTERM_TOKEN_BUDGET,
+                dropped,
+            )
         self._stream_lock = threading.Lock()
         self._stream_generation = 0
         self._stream_state = "idle"
@@ -233,22 +272,11 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             parts.append(self._stream_partial_text)
         return " ".join(p for p in parts if p).strip()
 
-    def _vocabulary_query_param_name(self) -> str:
-        """Return the biasing query param name for the selected model.
-
-        nova-3 models use the repeated ``keyterm`` parameter; nova-2 (and
-        earlier) models use the repeated ``keywords`` parameter instead.
-        """
-        return (
-            "keyterm"
-            if self._model.strip().lower().startswith("nova-3")
-            else "keywords"
-        )
-
     def _apply_vocabulary_params(self, params: dict[str, object]) -> None:
         if not self._vocabulary_terms:
             return
-        params[self._vocabulary_query_param_name()] = list(self._vocabulary_terms)
+        # nova-3's repeated `keyterm` (nova-2's `keywords` went with nova-2).
+        params["keyterm"] = list(self._vocabulary_terms)
 
     def _format_stream_error(self, error: Exception) -> str:
         detail = str(error)
@@ -493,7 +521,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         if self._language_mode == "auto":
             # The live API rejects detect_language; multilingual
             # code-switching ("multi") is the streaming equivalent on
-            # nova-2/nova-3.
+            # nova-3.
             params["language"] = "multi"
         else:
             params["language"] = self._language_mode

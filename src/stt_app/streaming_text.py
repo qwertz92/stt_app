@@ -221,6 +221,18 @@ def append_only_stream_partial_candidate(
     current_words = split_stream_words(current)
     if common_prefix_len(previous_words, current_words) == len(previous_words):
         return current
+    if not current_is_a_trailing_window and _same_words_prefix_len(
+        previous_words, current_words
+    ) == len(previous_words):
+        # The same words, only with marks or casing added: a model that
+        # attaches a comma or period to the previous word one chunk later
+        # (Nemotron), or a formatted turn (AssemblyAI). The overlap branch
+        # below kept the previous text, so the mark was dropped before the
+        # word was even inserted. No word changes here, so nothing already
+        # in the document is retyped (`committed_text` is compared as words
+        # and keeps its own spelling). Not for a rolling window: its merge
+        # and the segment floor compare exact text and must not loosen.
+        return current
 
     overlap = _suffix_prefix_overlap_len(previous_words, current_words)
     threshold = max(1, int(min_overlap_words))
@@ -507,6 +519,11 @@ def compute_stream_locked_prefix(
     if not current_words or not previous_words:
         return normalize_stream_text(committed)
 
+    # Stability stays exact: a word whose punctuation is still changing
+    # between partials is not settled yet. Measured on the same clips, the
+    # word test here committed faster-whisper words one partial earlier,
+    # which its later windows then revised (`small`: 127 words of the
+    # document wrong against its history, 112 with the exact test).
     stable_len = common_prefix_len(previous_words, current_words)
     guard = max(0, int(stable_word_guard))
     revision_window = max(0, int(revision_word_window))
@@ -515,9 +532,11 @@ def compute_stream_locked_prefix(
         return normalize_stream_text(committed)
 
     candidate_words = current_words[:locked_len]
-    if common_prefix_len(committed_words, candidate_words) < len(committed_words):
+    if _same_words_prefix_len(committed_words, candidate_words) < len(committed_words):
         return normalize_stream_text(committed)
-    return " ".join(candidate_words).strip()
+    # The committed words as they were pasted, then the candidate's: the
+    # committed text stays exactly what the document holds.
+    return " ".join(committed_words + candidate_words[len(committed_words) :]).strip()
 
 
 def append_only_stream_extension_tail(committed: str, candidate: str) -> str:
@@ -527,10 +546,31 @@ def append_only_stream_extension_tail(committed: str, candidate: str) -> str:
         return ""
     if not committed_words:
         return " ".join(candidate_words).strip()
-    prefix_len = common_prefix_len(committed_words, candidate_words)
+    prefix_len = _same_words_prefix_len(committed_words, candidate_words)
     if prefix_len < len(committed_words):
         return ""
     return " ".join(candidate_words[prefix_len:]).strip()
+
+
+def _same_words_prefix_len(left: list[str], right: list[str]) -> int:
+    """How many leading words of the two lists are the same words.
+
+    "The same" ignores case and the marks `_stream_word_key` strips, so a
+    word already pasted that a later partial or the final reads with other
+    punctuation or casing ("herzauben." then "herzauben zu") does not count
+    as a revision. With the exact test it froze live insertion for the rest
+    of the session and the finalize inserted nothing, while the overlay and
+    history showed the whole text (measured 2026-11-24: 36 of 54 words of a
+    German clip never reached the document). A different word still ends
+    the prefix: joining past a real revision re-pastes the dictation. Used
+    for "is the pasted text still the start of this one", not for "has
+    this word settled" (`compute_stream_locked_prefix` says why).
+    """
+    size = min(len(left), len(right))
+    for idx in range(size):
+        if not _stream_words_match(left[idx], right[idx]):
+            return idx
+    return size
 
 
 def append_only_stream_finalize_tail(
@@ -565,7 +605,7 @@ def _stream_words_match(left: str, right: str) -> bool:
 def _substantive_word_count(words: list[str]) -> int:
     """How many of `words` carry a word, rather than only punctuation.
 
-    `_stream_word_key` strips `.,;:!?)]}` from both ends, so "...", "!", "?!"
+    `_stream_word_key` strips `_WORD_EDGE_MARKS` from both ends, so "...", "!", "?!"
     and ":" all key to the empty string and therefore match each other. Two
     such tokens cleared a two-word overlap threshold with no lexical
     agreement at all, and the merge treats a cleared threshold as "two
@@ -580,5 +620,15 @@ def _substantive_word_count(words: list[str]) -> int:
     return sum(1 for word in words if _stream_word_key(word))
 
 
+# Marks that can stand at a word's edge without making it another word:
+# sentence marks, the ellipsis, brackets, and the quotation marks German,
+# English and French text use (escaped, since several look like a comma or
+# an apostrophe). Stripped at both edges only, never inside a word, so
+# "don't", "U.S." against "US", "3.5" and "state-of-the-art" still differ.
+_WORD_EDGE_MARKS = (
+    '.,;:!?\u2026)]}([{"\u201e\u201c\u201d\u00ab\u00bb\u201a\u2018\u2019\u00bf\u00a1'
+)
+
+
 def _stream_word_key(word: str) -> str:
-    return word.strip().strip(".,;:!?)]}").lower()
+    return word.strip().strip(_WORD_EDGE_MARKS).lower()

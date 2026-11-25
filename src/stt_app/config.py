@@ -19,6 +19,14 @@ APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 # loaded WebGPU runtime (measured 2026-10-03), and the slowest bounded step,
 # killing a Node runtime that ignores its shutdown command, about 4 s.
 QUIT_WATCHDOG_TIMEOUT_S = 15.0
+# A wake from sleep closes a kept Cohere/Granite runtime (its GPU device does
+# not survive the suspend) and loads it again in the background: the first
+# attempt waits a moment, because the GPU driver may not be back yet, and a
+# failed one is retried after a longer pause, at most this many times in all.
+# Past that the model loads at the next dictation, as it did before.
+RESUME_PRELOAD_DELAY_MS = 3_000
+RESUME_PRELOAD_RETRY_DELAY_MS = 10_000
+RESUME_PRELOAD_MAX_ATTEMPTS = 3
 
 SCHEMA_VERSION = 25
 
@@ -683,14 +691,12 @@ _NON_WHISPER_LANGUAGE_MODES = frozenset(
 WHISPER_LANGUAGE_MODES = tuple(
     value for value in VALID_LANGUAGE_MODES if value not in _NON_WHISPER_LANGUAGE_MODES
 )
-# Shared by all four OpenAI models, `gpt-transcribe` included. Its own guide
-# enumerates no list for it -- only the code *formats* it accepts ("ISO 639-1
-# codes, such as en, es, and fr", selected ISO 639-3 codes, and regional zh
-# locales) plus "The API rejects unsupported or incorrectly formatted language
-# codes" -- and points at the Whisper language list for `whisper-1`, which is
-# where this one comes from. Narrowing it for one model would need a source
-# that does not exist; a code the newer model refuses surfaces as the API's
-# own error rather than as a wrong transcript.
+# `gpt-transcribe`'s own guide enumerates no list -- only the code *formats* it
+# accepts ("ISO 639-1 codes, such as en, es, and fr", selected ISO 639-3 codes,
+# and regional zh locales) plus "The API rejects unsupported or incorrectly
+# formatted language codes" -- and points at the Whisper language list, which is
+# where this one comes from. A code the model refuses surfaces as the API's own
+# error rather than as a wrong transcript.
 OPENAI_LANGUAGE_MODES = (
     "auto",
     "de",
@@ -942,26 +948,44 @@ NEMOTRON_LANGUAGE_IDS: dict[str, int] = {
     "et": 60,
 }
 NEMOTRON_LANGUAGE_MODES = tuple(NEMOTRON_LANGUAGE_IDS)
-ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES = (
+# AssemblyAI-STT-3.7's 32 languages (https://www.assemblyai.com/llms/models.md
+# and the `language_codes` list of the streaming WebSocket spec, read
+# 2026-11-24; the codes also appear in AssemblyAI's OpenAPI spec). Universal-2
+# covers the 99 others and is the separate `universal-2` choice.
+ASSEMBLYAI_STT_3_7_LANGUAGE_MODES = (
     "auto",
     "de",
     "en",
+    "af",
     "ar",
+    "yue",
+    "ca",
     "da",
     "nl",
+    "et",
     "fi",
     "fr",
+    "gl",
     "he",
     "hi",
     "it",
     "ja",
+    "ko",
+    "zh",
+    "mr",
     "no",
+    "nn",
+    "fa",
     "pt",
+    "ro",
+    "ru",
     "es",
     "sv",
     "tr",
+    "ur",
     "vi",
-    "zh",
+    "xh",
+    "zu",
 )
 DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "auto",
@@ -1016,49 +1040,12 @@ DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "ur",
     "vi",
 )
-DEEPGRAM_NOVA_2_LANGUAGE_MODES = (
-    "auto",
-    "de",
-    "en",
-    "bg",
-    "ca",
-    "zh",
-    "cs",
-    "da",
-    "nl",
-    "et",
-    "fi",
-    "fr",
-    "el",
-    "hi",
-    "hu",
-    "id",
-    "it",
-    "ja",
-    "ko",
-    "lv",
-    "lt",
-    "ms",
-    "no",
-    "pl",
-    "pt",
-    "ro",
-    "ru",
-    "sk",
-    "es",
-    "sv",
-    "th",
-    "tr",
-    "uk",
-    "vi",
-)
 # Azure LLM Speech (MAI-Transcribe). "auto" uses the model's default
 # multilingual mode; selecting a language sends a `locales` hint.
 # Copied from the language table on Microsoft's MAI-Transcribe page (read
-# 2026-09-19, page updated 2026-09-10): 60 languages for MAI-Transcribe-2, 43
-# for MAI-Transcribe-1.5. The page no longer lists MAI-Transcribe-1, which it
-# marks as deprecated, so that list is the one this app shipped with. The
-# codes are the app's: Azure's `nb` and `fil` are `no` and `tl` here
+# 2026-09-19, page updated 2026-09-10): 60 languages for MAI-Transcribe-2, the
+# only model offered (its 1.5 and 1 predecessors are removed). The codes are
+# the app's: Azure's `nb` and `fil` are `no` and `tl` here
 # (`AZURE_LOCALE_OVERRIDES`).
 AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES = (
     "auto",
@@ -1123,120 +1110,47 @@ AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES = (
     "yue",
     "zh",
 )
-AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES = (
-    "auto",
-    "de",
-    "en",
-    "ar",
-    "as",
-    "bg",
-    "bn",
-    "ca",
-    "cs",
-    "da",
-    "el",
-    "es",
-    "et",
-    "fi",
-    "fr",
-    "gu",
-    "hi",
-    "hu",
-    "id",
-    "it",
-    "ja",
-    "kn",
-    "ko",
-    "lt",
-    "ml",
-    "mr",
-    "nl",
-    "no",
-    "or",
-    "pa",
-    "pl",
-    "pt",
-    "ro",
-    "ru",
-    "sk",
-    "sl",
-    "sv",
-    "ta",
-    "te",
-    "th",
-    "tr",
-    "uk",
-    "vi",
-    "zh",
-)
-AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES = (
-    "auto",
-    "de",
-    "en",
-    "ar",
-    "cs",
-    "da",
-    "es",
-    "fi",
-    "fr",
-    "hi",
-    "hu",
-    "id",
-    "it",
-    "ja",
-    "ko",
-    "nl",
-    "no",
-    "pl",
-    "pt",
-    "ro",
-    "ru",
-    "sv",
-    "th",
-    "tr",
-    "vi",
-)
-# The engine-level list is the default model's.
 AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES
 # App language code -> Azure locale code, where they differ.
 AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb", "tl": "fil"}
-# Alibaba Fun-ASR (DashScope Model Studio) covers 31 languages. Notably it does
-# NOT document German support; its strength is Chinese (incl. dialects) and
-# East/Southeast-Asian languages. "auto" uses multilingual mode; a specific
-# language is sent as a language_hints entry.
+# Alibaba Fun-ASR (DashScope Model Studio): the Python SDK page's `language_hints`
+# list (read 2026-11-24) names 30 codes, German (`de`) among them, and the model
+# table lists German for `fun-asr-realtime`; the earlier "no German" reading
+# (2026-09-21) is superseded. The seven codes the old list carried beyond it
+# (yue, et, ga, lv, lt, mt, sl) are no longer documented and are dropped. "auto"
+# uses multilingual mode; a specific language is a language_hints entry.
 FUNASR_LANGUAGE_MODES = (
     "auto",
-    "en",
     "zh",
-    "yue",
+    "en",
     "ja",
     "ko",
     "vi",
-    "id",
     "th",
+    "id",
     "ms",
     "tl",
-    "ar",
     "hi",
+    "ar",
+    "fr",
+    "de",
+    "es",
+    "pt",
+    "ru",
+    "it",
+    "nl",
+    "sv",
+    "da",
+    "fi",
+    "no",
+    "el",
+    "pl",
+    "cs",
+    "hu",
+    "ro",
     "bg",
     "hr",
-    "cs",
-    "da",
-    "nl",
-    "et",
-    "fi",
-    "el",
-    "hu",
-    "ga",
-    "lv",
-    "lt",
-    "mt",
-    "pl",
-    "pt",
-    "ro",
     "sk",
-    "sl",
-    "sv",
 )
 # App language code -> Fun-ASR language_hints code, where they differ.
 # Most are identical bare codes; this maps only the exceptions.
@@ -1315,25 +1229,65 @@ SPEECHMATICS_LANGUAGE_MODES = (
 SPEECHMATICS_MELIA_LANGUAGE_MODES = ("auto", *SPEECHMATICS_LANGUAGE_MODES)
 # App language code -> Speechmatics language code, where they differ.
 SPEECHMATICS_LANGUAGE_CODES: dict[str, str] = {"zh": "cmn"}
-# Mistral Voxtral Mini Transcribe 2: "English, Chinese, Hindi, Spanish,
-# Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian, and
-# Dutch" (https://mistral.ai/news/voxtral-transcribe-2/, 2026-02-04, read
-# 2026-09-27). Without `language` the model detects it.
+# The 53 languages both Voxtral 3 transcription models list for file
+# transcription (docs.mistral.ai `studio/audio/specs-and-limits/languages`,
+# read 2026-11-24; the page says a code outside the list is a 422). Without
+# `language` the model detects it.
 MISTRAL_LANGUAGE_MODES = (
     "auto",
-    "en",
-    "zh",
-    "hi",
-    "es",
     "ar",
-    "fr",
-    "pt",
-    "ru",
-    "de",
-    "ja",
-    "ko",
-    "it",
+    "bn",
+    "bg",
+    "my",
+    "ca",
+    "zh",
+    "cs",
+    "da",
     "nl",
+    "en",
+    "et",
+    "tl",
+    "fi",
+    "fr",
+    "de",
+    "el",
+    "gu",
+    "hi",
+    "hu",
+    "is",
+    "id",
+    "it",
+    "ja",
+    "kn",
+    "km",
+    "ko",
+    "lv",
+    "lt",
+    "lb",
+    "mk",
+    "ms",
+    "ml",
+    "mt",
+    "mr",
+    "no",
+    "or",
+    "fa",
+    "pl",
+    "pt",
+    "pa",
+    "ro",
+    "ru",
+    "sr",
+    "sk",
+    "sl",
+    "es",
+    "sv",
+    "ta",
+    "te",
+    "th",
+    "tr",
+    "uk",
+    "vi",
 )
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
@@ -1361,7 +1315,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # A bring-your-own endpoint: which languages work is the served model's
     # business, so every code the app knows is offered and sent as a hint.
     "custom": VALID_LANGUAGE_MODES,
-    # The default model's list; Enhanced and Standard have their own.
+    # The default model's list; Enhanced has its own.
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
 }
@@ -1381,20 +1335,13 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", FLUID_SPEECH_PRO_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
-    (
-        "assemblyai",
-        "universal-3-5-pro",
-    ): ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
+    ("assemblyai", "assemblyai-stt-3-7"): ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
-    ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
     ("azure", "mai-transcribe-2"): AZURE_MAI_TRANSCRIBE_2_LANGUAGE_MODES,
-    ("azure", "mai-transcribe-1.5"): AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
-    ("azure", "mai-transcribe-1"): AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
     ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
     ("speechmatics", "melia-1"): SPEECHMATICS_MELIA_LANGUAGE_MODES,
     ("speechmatics", "enhanced"): SPEECHMATICS_LANGUAGE_MODES,
-    ("speechmatics", "standard"): SPEECHMATICS_LANGUAGE_MODES,
 }
 STREAMING_ENGINES = (
     "local",
@@ -1449,12 +1396,11 @@ def language_modes_for_selection(
 # (or not) -- so the two cannot drift.
 #
 # Remote engines whose request carries the terms: AssemblyAI as
-# `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields
-# (`gpt-transcribe`) or as `prompt` (the three older models), Groq as
-# `prompt`, Deepgram as its repeated `keyterm` (nova-3) / `keywords` (nova-2)
-# query parameters, a custom endpoint as `prompt` (transcription API) or as a
+# `keyterms_prompt`, OpenAI as repeated `keywords[]` form fields, Groq as
+# `prompt`, Deepgram as its repeated `keyterm`
+# query parameter, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
-# entries (Enhanced and Standard), Mistral as repeated `context_bias`
+# entries (Enhanced), Mistral as repeated `context_bias`
 # fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
@@ -1483,7 +1429,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced/Standard, Mistral, and a custom endpoint"
+    "Enhanced, Mistral, and a custom endpoint"
 )
 
 
@@ -1537,32 +1483,22 @@ def parse_custom_vocabulary(raw: str) -> list[str]:
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 
-# `POST /v1/audio/transcriptions` accepts five model ids. Four are offered
-# here; `gpt-4o-transcribe-diarize` is deliberately not, because the app has
-# no speaker UI and OpenAI's guide calls it a specialized model that "isn't
-# the recommended model for ordinary file transcription".
-#
-# `gpt-transcribe` is the current one -- "Start with gpt-transcribe. This is
-# the recommended model for transcribing recorded speech in its original
-# language." The other three were notified of deprecation on 2026-08-26 and
-# OpenAI's deprecations page gives 2027-02-26 as their removal date from the
-# API, so they stay selectable and their labels carry the date. (Both pages
-# read 2026-09-21; the replacement the deprecation notice names for realtime
-# use, `gpt-live-transcribe`, is a realtime-session model and does not answer
-# on this endpoint.)
-OPENAI_MODELS = (
-    "gpt-transcribe",
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe",
-    "whisper-1",
-)
+# `gpt-transcribe` is the only OpenAI model offered: "Start with
+# gpt-transcribe. This is the recommended model for transcribing recorded
+# speech in its original language." (pages read 2026-11-24:
+# developers.openai.com/api/docs/guides/speech-to-text and /models/
+# gpt-transcribe). `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`
+# (and `gpt-4o-transcribe-diarize`, never offered: no speaker UI) are listed
+# on the deprecations page as removed from the API on 2027-02-26, and
+# none is better at anything the app uses. `gpt-4o-mini-transcribe` was the
+# cheapest, about $0.003/min against $0.0045/min, but OpenAI's pricing page no
+# longer lists it, so no figure could be read; a third less is not "far
+# cheaper" for a model that disappears in three months. Saved choices of the
+# three move to `gpt-transcribe` (`RETIRED_REMOTE_MODELS`). The model's
+# realtime sibling, `gpt-live-transcribe`, is a realtime-session model and does
+# not answer on this endpoint.
+OPENAI_MODELS = ("gpt-transcribe",)
 DEFAULT_OPENAI_MODEL = "gpt-transcribe"
-# Which models take the repeated array fields `languages[]` and `keywords[]`
-# instead of the singular `language` and `prompt`: "For gpt-transcribe,
-# languages replaces the singular language field. Don't send both fields."
-# Named as a set rather than compared against `DEFAULT_OPENAI_MODEL` so the
-# request shape does not silently follow a change of default.
-OPENAI_ARRAY_FIELD_MODELS = ("gpt-transcribe",)
 # Characters OpenAI refuses inside a `keywords[]` term: "Keep each keyword on
 # one line and don't include <, >, a carriage return, or a line feed. The API
 # rejects the entire request when it encounters one of these characters."
@@ -1570,23 +1506,92 @@ OPENAI_ARRAY_FIELD_MODELS = ("gpt-transcribe",)
 # a lone CR inside a line survives its `strip()` and would reach the request.
 OPENAI_KEYWORD_FORBIDDEN_CHARACTERS = ("<", ">", "\r", "\n")
 
-DEEPGRAM_MODELS = (
-    "nova-3",
-    "nova-2",
-)
+# nova-2 is removed (2026-11-24): Deepgram's models page still sells it "for use
+# cases with languages not yet supported by nova-3", but every language the app
+# offered for it (34) is in nova-3's list (checked against the page's tables
+# that day), and nova-3 takes custom vocabulary as `keyterm`. A saved nova-2
+# moves to nova-3 (`RETIRED_REMOTE_MODELS`). Flux (conversational, English and 10
+# languages) is a voice-agent model, not a dictation one, and is not offered.
+DEEPGRAM_MODELS = ("nova-3",)
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
+# Deepgram limits all `keyterm` values of one request to 500 tokens and answers
+# an over-limit pre-recorded request or streaming connection with an error
+# ("Keyterm limit exceeded", keyterm page read 2026-11-25). Its tokenizer is not
+# public, so the provider estimates (`deepgram_provider.fit_keyterms`) and keeps
+# the estimate under this budget: 400, a 20 % margin below the limit.
+DEEPGRAM_KEYTERM_TOKEN_BUDGET = 400
 
+# The provider names alone: the engine pickers group them under a "Cloud"
+# header (`fill_engine_combo`), so "Remote (...)" around every name repeated
+# what the header says. The local entry names where the audio stays rather
+# than two runtime names a user does not choose between here. Notices that
+# name a provider use the same labels.
+ENGINE_LABELS: dict[str, str] = {
+    "local": "Local (on this PC)",
+    "assemblyai": "AssemblyAI",
+    "groq": "Groq",
+    "openai": "OpenAI",
+    "deepgram": "Deepgram",
+    "elevenlabs": "ElevenLabs",
+    "azure": "Azure LLM Speech",
+    "funasr": "Fun-ASR / Alibaba",
+    "speechmatics": "Speechmatics",
+    "mistral": "Mistral (Voxtral)",
+    "custom": "Custom endpoint",
+}
+
+# Remote models the app no longer offers, per engine, each with the model a
+# saved choice of it moves to. The owner's rule: the app offers only a
+# vendor's newest generation, so a superseded model is removed and a saved
+# choice is moved once (`AppSettings.from_dict`; `SettingsStore.load` writes
+# the move back, so it happens once) with a tray notice at the next start. A
+# model absent from both here and the `*_MODELS` tuples is not a retired
+# choice but damage, and falls to the engine's default without a notice.
+RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
+    "openai": {
+        "whisper-1": "gpt-transcribe",
+        "gpt-4o-transcribe": "gpt-transcribe",
+        "gpt-4o-mini-transcribe": "gpt-transcribe",
+    },
+    "deepgram": {"nova-2": "nova-3"},
+    "elevenlabs": {"scribe_v2": "scribe_v3"},
+    "mistral": {"voxtral-mini-2602": "voxtral-mini-transcribe-3-0"},
+    "speechmatics": {"standard": "melia-1"},
+    "azure": {
+        "mai-transcribe-1.5": "mai-transcribe-2",
+        "mai-transcribe-1": "mai-transcribe-2",
+    },
+    "assemblyai": {
+        "universal-3-5-pro": "assemblyai-stt-3-7",
+        "universal-3-pro": "assemblyai-stt-3-7",
+    },
+}
+
+# AssemblyAI-STT-3.7 (launched 2026-11-17) replaces Universal-3.5 Pro for
+# recorded audio at the same $0.21/h and covers 32 languages instead of 18;
+# `universal-2` stays only as the cheaper choice for the other 67 of its 99
+# languages (https://www.assemblyai.com/llms/models.md, read 2026-11-24).
+# The oldest `assemblyai` SDK this code works with: the version in
+# `pyproject.toml` and `requirements-win.txt`. Older ones lack the
+# `assemblyai-stt-3-7-realtime` value of the streaming `SpeechModel` enum, so a
+# checkout whose packages were not updated after a `git pull` failed with a raw
+# validation error in the middle of a dictation
+# (`tests/test_assemblyai_stale_sdk.py` keeps this equal to the pin).
+ASSEMBLYAI_MIN_SDK_VERSION = "1.10.11"
 ASSEMBLYAI_MODELS = (
-    "universal-3-5-pro",
+    "assemblyai-stt-3-7",
     "universal-2",
 )
-DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
-# Realtime model. Universal-3.6 Pro (launched 2026-09-29) is streaming-only:
-# the batch `speech_models` list has no 3.6 id, so batch stays on 3.5 Pro.
-# Same price as 3.5 Pro realtime ($0.45/h), same parameters, 32 languages;
-# its code-switching needs no language parameter, so the UI keeps Auto only.
-ASSEMBLYAI_STREAMING_MODEL = "universal-3-6-pro"
-ASSEMBLYAI_STREAMING_MODEL_LABEL = "Universal-3.6 Pro"
+DEFAULT_ASSEMBLYAI_MODEL = "assemblyai-stt-3-7"
+# Realtime model. AssemblyAI-STT-3.7-Realtime ($0.30/h, against $0.45/h for
+# Universal-3.6 Pro) is the one AssemblyAI describes as for "live conversation
+# that ends in a transcript": notetakers, captions. Its `-agent` sibling is the
+# voice-agent model (turn-taking, $0.45/h) and is not what dictation needs.
+# 32 languages in one stream with automatic detection, so the UI keeps Auto
+# only. Pages read 2026-11-24: llms/models.md and docs/streaming/
+# select-the-speech-model.md.
+ASSEMBLYAI_STREAMING_MODEL = "assemblyai-stt-3-7-realtime"
+ASSEMBLYAI_STREAMING_MODEL_LABEL = "AssemblyAI-STT-3.7"
 
 # Data-residency regions (`assemblyai_region`, `deepgram_region`). Each
 # provider's default is its default endpoint, i.e. what every build before
@@ -1673,19 +1678,23 @@ def normalize_deepgram_region(value: object) -> str:
 # can be retrieved from the AssemblyAI dashboard.
 ASSEMBLYAI_BATCH_MAX_WAIT_S = 1800.0
 
-ELEVENLABS_MODELS = ("scribe_v2",)
-DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
+# Scribe v3 (2026-11-10) replaces Scribe v2 at the same $0.20/h: "Change
+# model_id from scribe_v2 to scribe_v3. Existing request parameters work
+# without changes. Scribe v2 remains available." The dictation request
+# (`model_id`, `file`, `language_code`) is the same for both. Pages read
+# 2026-11-24: elevenlabs.io/docs/overview/models, elevenlabs.io/pricing/api,
+# and the `model_id` of `POST /v1/speech-to-text` in api.elevenlabs.io/openapi.json.
+ELEVENLABS_MODELS = ("scribe_v3",)
+DEFAULT_ELEVENLABS_MODEL = "scribe_v3"
 
 # Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
 # These are remote, cloud-only models from the Microsoft AI (MAI) team.
-# `mai-transcribe-1` stays selectable although Microsoft marked it
-# "Deprecated on Aug 20, 2026": deprecated is not removed, and whether the
-# service still answers for it is not documented. Its label says so.
-AZURE_SPEECH_MODELS = (
-    "mai-transcribe-2",
-    "mai-transcribe-1.5",
-    "mai-transcribe-1",
-)
+# MAI-Transcribe-2 only (Microsoft's page, updated 2026-11-20, read 2026-11-24,
+# still lists 1.5 and "1: Deprecated on Aug 20, 2026"). 1.5 is older, covers 43
+# languages instead of 60 and costs $0.36/h against 2's $0.10/h, a limited-time
+# offer "until the end of the year" (microsoft.ai/news/mai-transcribe-2; no 2027
+# price is published, so revisit 1.5 if 2 ends up dearer than $0.36/h).
+AZURE_SPEECH_MODELS = ("mai-transcribe-2",)
 DEFAULT_AZURE_SPEECH_MODEL = "mai-transcribe-2"
 # What `enhancedMode.model` is sent as. Settings store the lower-case id;
 # every example on Microsoft's page writes the name this way, and whether the
@@ -1693,8 +1702,6 @@ DEFAULT_AZURE_SPEECH_MODEL = "mai-transcribe-2"
 # spelling is the one that is sent.
 AZURE_API_MODEL_NAMES: dict[str, str] = {
     "mai-transcribe-2": "MAI-Transcribe-2",
-    "mai-transcribe-1.5": "MAI-Transcribe-1.5",
-    "mai-transcribe-1": "MAI-Transcribe-1",
 }
 # REST API version for the fast-transcription `:transcribe` endpoint.
 AZURE_SPEECH_API_VERSION = "2025-10-15"
@@ -1724,7 +1731,11 @@ FUNASR_BATCH_MAX_WAIT_S = 1800.0
 # model). Melia 1 is the default because it is the one that transcribes
 # without a chosen language, which the app's default Auto needs.
 SPEECHMATICS_MELIA_MODEL = "melia-1"
-SPEECHMATICS_MODELS = (SPEECHMATICS_MELIA_MODEL, "enhanced", "standard")
+# `standard` is removed (2026-11-24): the models page (read that day) calls
+# Melia 1's accuracy "on par with the Standard model", the pricing page lists
+# Standard at $0.45/h against Melia 1's $0.24/h (batch), and Enhanced carries
+# the same custom dictionary at higher accuracy. Saved choices move to Melia 1.
+SPEECHMATICS_MODELS = (SPEECHMATICS_MELIA_MODEL, "enhanced")
 DEFAULT_SPEECHMATICS_MODEL = SPEECHMATICS_MELIA_MODEL
 # Batch hosts open to every customer
 # (https://docs.speechmatics.com/get-started/authentication, read
@@ -1738,17 +1749,9 @@ SPEECHMATICS_API_HOSTS = {
 }
 SPEECHMATICS_REGIONS = tuple(SPEECHMATICS_API_HOSTS)
 DEFAULT_SPEECHMATICS_REGION = "eu1"
-SPEECHMATICS_MELIA_REGIONS = ("eu1", "us1")
-
-
-def speechmatics_model_available_in(model: str, region: str) -> bool:
-    """Whether Speechmatics runs `model` in `region` (Melia 1: eu1 and us1)."""
-    return model != SPEECHMATICS_MELIA_MODEL or region in SPEECHMATICS_MELIA_REGIONS
-
-
-SPEECHMATICS_MELIA_UNAVAILABLE_TEXT = (
-    "Speechmatics Melia 1 runs in the EU and US regions only."
-)
+# Melia 1 runs in every region (models page, read 2026-11-24: "Melia 1 is
+# available in all regions", with the `au1` batch endpoint listed). The page
+# of 2026-09-27 said "EU and US regions only"; the refusal built on that is gone.
 # A job's total wait, as for AssemblyAI (`ASSEMBLYAI_BATCH_MAX_WAIT_S`),
 # and the pause between status requests: the GET limit is 50 per second,
 # so one per second is far inside it.
@@ -1760,12 +1763,26 @@ def normalize_speechmatics_region(value: object) -> str:
     return _known_region(value, SPEECHMATICS_REGIONS, DEFAULT_SPEECHMATICS_REGION)
 
 
-# Mistral Voxtral Mini Transcribe 2, released 2026-02-04, $0.003 per minute
-# (https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02, read
-# 2026-09-27). The dated id rather than `voxtral-mini-latest`, so the model
-# does not change under the user.
-MISTRAL_MODELS = ("voxtral-mini-2602",)
-DEFAULT_MISTRAL_MODEL = "voxtral-mini-2602"
+# Voxtral 3 (announced 2026-10-20; mistral.ai/news/voxtral-3 and the model
+# cards on docs.mistral.ai, read 2026-11-24). The dated ids, not the
+# `-latest` aliases, so the model does not change under the user. Mini is
+# $0.0035/min ($0.21/h), Small $0.0040/min ($0.24/h) and slightly more
+# accurate (Artificial Analysis, English: 2.1 % against 2.2 %). Mistral's
+# model table deprecates `voxtral-mini-2602` (Voxtral Mini Transcribe 2) with
+# retirement "05/03/2027" (day/month order not stated there) and names Voxtral
+# Mini Transcribe 3 as its alternative. `voxtral-small-2507` is the audio-chat
+# model, not a transcription one.
+# Ids (pages re-read 2026-11-25): Mini keeps its dated id, which the migration
+# table gives as its Model ID with `voxtral-mini-transcribe-3` as an alias. Small
+# uses `voxtral-small-transcribe-3`: it is the form in the file-transcription
+# page's `model` field ("`voxtral-mini-transcribe-3` or
+# `voxtral-small-transcribe-3`"; the examples themselves only use Mini)
+# and in the
+# migration table's alias column, while that table gives Small's Model ID as
+# `voxtral-small-transcribe-latest` and only the models and languages pages
+# write `voxtral-small-transcribe-3-0`, so the dated form is not confirmed.
+MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3")
+DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The
@@ -1816,18 +1833,9 @@ CUSTOM_KEY_COMMAND_LATE_TOKEN_GRACE_S = 3.0
 # 3 GB / 10 h and AssemblyAI 2.2 GB / 10 h, past any dictation, and Fun-ASR
 # streams the recording over a WebSocket.
 #
-# `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` state "2,000 max output
-# tokens" on their model pages, and a forum report shows the transcript cut
-# off silently after about 8-9 minutes of English at 2,048 output tokens, i.e.
-# about 230-255 tokens per minute. Fast speech (200 against 150 words per
-# minute) in a language that tokenizes denser than English can need 1.7 times
-# that, which reaches 2,000 tokens inside five minutes; three minutes leave a
-# margin of about 2.8 over the English rate. A part costs no more than the
-# minutes it holds, so the shorter bound only adds seams.
-OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS = 180.0
 # OpenAI takes 25 MB per file, about 13 minutes of this WAV. `gpt-transcribe`
-# and `whisper-1` state no token cap, and ten minutes also stays below the
-# 1,400 s duration cap that is reported second-hand only.
+# states no token cap, and ten minutes also stays below the 1,400 s duration
+# cap that is reported second-hand only.
 OPENAI_MAX_PART_SECONDS = 600.0
 # The speech-to-text guide: "Files can be up to 25 MB." Read as decimal
 # megabytes, the smaller of the two readings.
@@ -1893,11 +1901,6 @@ REMOTE_BATCH_API_MODE_LIMITS: dict[tuple[str, str], tuple[float, int]] = {
         CUSTOM_CHAT_MAX_REQUEST_BYTES,
     ),
 }
-# A model whose own limit is tighter than its engine's.
-REMOTE_BATCH_MODEL_MAX_PART_SECONDS: dict[tuple[str, str], float] = {
-    ("openai", "gpt-4o-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
-    ("openai", "gpt-4o-mini-transcribe"): OPENAI_TOKEN_CAPPED_MAX_PART_SECONDS,
-}
 
 
 class RemotePartLimit(NamedTuple):
@@ -1925,10 +1928,7 @@ def remote_batch_part_limit(
     )
     if api_mode_limit is not None:
         return RemotePartLimit(seconds=api_mode_limit[0], max_bytes=api_mode_limit[1])
-    model_key = (normalized_engine, str(model or "").strip())
-    seconds = REMOTE_BATCH_MODEL_MAX_PART_SECONDS.get(
-        model_key, REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)
-    )
+    seconds = REMOTE_BATCH_MAX_PART_SECONDS.get(normalized_engine)
     if seconds is None:
         return None
     return RemotePartLimit(

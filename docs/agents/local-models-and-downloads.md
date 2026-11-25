@@ -267,7 +267,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   moves once to its successor through
   `config.RETIRED_LOCAL_MODEL_SUCCESSORS` (applied in
   `AppSettings.from_dict`, which `SettingsStore.load` writes back), and the
-  tray says so once (`main._show_model_retirement_notices`).
+  one "Speech model updated" tray notice says so once
+  (`settings_store.retired_model_notice` -> `take_model_notice`, shared with
+  the remote retirements; a local and a remote line arrive in one notice).
   - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
     Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
     `medium` -> `large-v3-turbo`.

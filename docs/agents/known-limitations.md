@@ -345,12 +345,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   comes forward once the newer is resolved. A second Retry while W's retry
   runs still stops it (W's late result is kept in history), so W stays
   behind the slot until a Retry resolves it.
-- **Two Retry presses can write two history entries**: a remote provider runs
-  the stopped first retry to completion and it is kept (a finished
-  transcription is never discarded). Local engines cancel cooperatively.
-  Kept 2026-10-03 (by design): the restart is how a hung request is re-run
-  with changed settings; ignoring a second press with unchanged settings is
-  an owner decision (~1 h).
+- **A Retry with changed settings can write two history entries**: the
+  second press stops the running retry and starts one with the new request;
+  a remote provider runs the stopped one to completion and its result is kept
+  in history (a finished transcription is never discarded). Local engines
+  cancel cooperatively. By design (lead's decision for the owner, 2026-11-24):
+  the restart is how a hung request is re-run with changed settings. A second
+  press with an unchanged request is ignored since 2026-10-17
+  (`_running_retry_of_the_slot`, notice on the tray;
+  `controller-and-jobs.md`); a press after the running retry finished or
+  failed retries again. Corrected 2026-11-24: this entry still called the
+  unchanged-settings case an open owner decision.
 - **Two recordings the store never received are told apart by bytes alone**:
   with `source_recording_id` "" on both, identical audio cross-retires the
   retry slot. Needs two refused writes and byte-identical audio. Kept
@@ -542,15 +547,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   `transcribe_audio_file` holds for its run and the prune skips, about 1 h
   with tests. Kept for now: rare, and what is lost is the retranscription
   itself, which says why it failed; the audio was due for deletion anyway.
-- **A crash can be reported twice** (P4, found 2026-10-23;
-  `controller-and-jobs.md`, crash reporting). A start whose `crash.log`
-  cannot be opened (held or refused by another program) still reports how
-  the previous session ended, but writes no start line of its own, so the
-  next start finds the same last section and reports it again. Both
-  reports carry the same `session_started=<time> pid=<pid>`, so they read as
-  one session. Avoiding the repeat needs a record outside the file that
-  could not be opened (for example in `dictation.log`, which rotates);
-  about 1 h, for a second line in a rare case.
 - **A refused History write plus a failed *queued* paste still completes the
   slot** (P4, found 2026-10-23 while fixing the direct-paste case,
   `controller-and-jobs.md`, "A plain dictation completes its slot because its
@@ -568,3 +564,50 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+- **The post-resume model load can run twice for one wake, or keep a runtime
+  from before a second sleep** (P3, review of the 2026-11-24 resume load;
+  `controller-and-jobs.md`). `QtPowerResumeEventFilter` (`hotkey.py`) calls
+  `handle_system_resume` for both PBT_APMRESUMEAUTOMATIC and
+  PBT_APMRESUMESUSPEND, coalesced only within 750 ms (`main.py`). After a
+  timer or maintenance wake Windows sends RESUMESUSPEND when the user first
+  touches the PC, so the model loaded after the first event is closed and
+  loaded again, and a dictation in those seconds pays the load. And a real
+  second sleep while an attempt is loading closes nothing (the attempt holds
+  the runtime lock), so the attempt caches a runtime built before that sleep
+  (`test_a_second_resume_during_the_load_starts_no_second_load` pins it).
+  Both need a "suspend seen since" signal (PBT_APMSUSPEND, which the filter
+  does not read today); skipping a GPU reset on a signal Windows may not
+  deliver risks a stale runtime that only real hardware can show. Kept
+  2026-11-24: about 1-2 h with tests, plus a real sleep/wake check.
+- **Three P4s from the same review**, recorded only: `windows_started_since`
+  (boot time = now minus `GetTickCount64`) is wrong after a large clock
+  correction; the "already reported" check in `dictation.log` is fooled only
+  by another session with the same start second, pid and version; the
+  Settings prebuild's single-shot (`main.py`) is context-less and may build
+  the dialog during a "Wait and insert" quit.
+- **Deepgram keyterm budget for CJK text (hypothesis, 2026-11-25).** `deepgram_provider.fit_keyterms` estimates one token per three characters of a word plus one per term; Deepgram's tokenizer is not public, and Chinese, Japanese or Korean terms (no spaces, often about one token per character) may cost more than estimated, so a long CJK vocabulary could still pass the 400-token budget and reach the 500-token limit. Unmeasured; a Deepgram error would then name the keyterm limit.
+- **Streaming insertion never edits punctuation that is already in the
+  document** (2026-11-25, P4, by the append-only rule in
+  `docs/agents/streaming.md`): a mark the model adds to a word after that
+  word was inserted is missing from the document (history has it); a mark
+  the model later removes stays; a "." later changed to "?" stays "."; and
+  a lone mark token counts as the same word as another lone mark, so such a
+  revision is not noticed either. Fixing any of these means deleting text
+  in the target window, which streaming never does. Kept: measured on 11
+  real clips, Nemotron loses none of the final's 32 marks, because a mark
+  arrives one chunk after its word, before the word is inserted.
+- **Edge cases of the word comparison in streaming insertion** (2026-11-25,
+  P4, `streaming_text.py`):
+  - A word whose mark arrives one chunk late is typed about one partial
+    later than before: the new partial becomes the candidate and exact
+    stability (`compute_stream_locked_prefix`) counts the word as changed.
+    The final catches up; nothing is lost (partials `["", "und a? the",
+    "und a? the!"]` typed "und" live before, nothing now).
+  - Constructed, not seen from a real model: a mark that flickers on an
+    early word in every chunk keeps live typing at zero words until the
+    final, which then inserts everything.
+  - The wider edge marks extend the known coincidental-overlap case to the
+    ellipsis, quotes and brackets: partials `["der is is…", "is is"]` with
+    the final "is is is" type "der" and then freeze (the same input with "."
+    already did before). It needs a partial that drops the dictation's
+    head, which providers that send the whole session's text do not send.

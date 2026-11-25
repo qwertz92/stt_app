@@ -335,15 +335,34 @@ class TestAssemblyAILanguageConfig:
         config = t._build_config()
         assert config.kwargs.get("speech_models") == ["universal-2"]
 
-    def test_batch_model_uses_only_universal_3_5_when_selected(self):
+    def test_batch_model_uses_only_stt_3_7_when_selected(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(
+            api_key="key",
+            model="assemblyai-stt-3-7",
+            aai_module=fake_aai,
+        )
+        config = t._build_config()
+        assert config.kwargs.get("speech_models") == ["assemblyai-stt-3-7"]
+
+    @pytest.mark.parametrize("model", ["assemblyai-stt-3-7", "universal-2"])
+    def test_batch_asks_for_clean_written_text(self, model):
+        """STT-3.7 keeps filler words unless told not to (vendor default true)."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", model=model, aai_module=fake_aai)
+        config = t._build_config()
+        assert config.kwargs["disfluencies"] is False
+        assert config.kwargs["format_text"] is True
+
+    def test_the_retired_3_5_model_is_rejected_not_sent(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
             api_key="key",
             model="universal-3-5-pro",
             aai_module=fake_aai,
         )
-        config = t._build_config()
-        assert config.kwargs.get("speech_models") == ["universal-3-5-pro"]
+        with pytest.raises(TranscriptionError, match="assemblyai-stt-3-7"):
+            t._build_config()
 
     def test_legacy_batch_model_is_rejected(self):
         fake_aai = _make_fake_aai()
@@ -414,7 +433,7 @@ class TestAssemblyAIStreaming:
         params = client.connect_params
         assert params.sample_rate == 16000
         assert str(params.encoding) == "pcm_s16le"
-        assert str(params.speech_model) == "universal-3-6-pro"
+        assert str(params.speech_model) == "assemblyai-stt-3-7-realtime"
         assert params.language_detection is None
         assert params.format_turns is None
         t.abort_stream()

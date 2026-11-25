@@ -100,9 +100,14 @@ class TestFunAsrInit:
             "auto"
         )
 
-    def test_german_not_supported_falls_back_to_auto(self):
-        # Fun-ASR does not support German; "de" must not be accepted as a hint.
+    def test_german_is_accepted_as_a_hint(self):
+        # The vendor's language_hints list (read 2026-11-24) names `de`.
         assert FunAsrTranscriber(api_key="k", language_mode="de")._language_mode == (
+            "de"
+        )
+
+    def test_a_code_the_vendor_no_longer_lists_falls_back_to_auto(self):
+        assert FunAsrTranscriber(api_key="k", language_mode="yue")._language_mode == (
             "auto"
         )
 

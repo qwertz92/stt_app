@@ -6,7 +6,7 @@ This document explains how streaming mode is implemented in this project, how it
 
 - `Batch` mode: stable default.
 - `Streaming` mode: implemented for local provider (`faster-whisper` and
-  Nemotron 3.5), AssemblyAI (Universal-3.6 Pro v3 `StreamingClient`), and
+  Nemotron 3.5), AssemblyAI (STT-3.7-Realtime v3 `StreamingClient`), and
   Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - OpenAI and Groq are batch-only in this app. ElevenLabs offers real-time STT publicly, but the current integration is still batch-only.
@@ -106,14 +106,14 @@ Characteristics:
 
 ### AssemblyAI transcriber
 
-- `AssemblyAITranscriber` implements streaming via Universal-3.6 Pro Realtime
-  (`speech_model="universal-3-6-pro"`, `ASSEMBLYAI_STREAMING_MODEL`) in
+- `AssemblyAITranscriber` implements streaming via AssemblyAI-STT-3.7-Realtime
+  (`speech_model="assemblyai-stt-3-7-realtime"`, `ASSEMBLYAI_STREAMING_MODEL`) in
   `assemblyai.streaming.v3.StreamingClient`; the legacy v2 realtime API was
   retired by AssemblyAI.
 - `start_stream()` uses native 32-language code switching and automatic
   language detection. Formatting is built into the streaming model rather than
   enabled with the legacy `format_turns` parameter.
-- Transcription-tab vocabulary is sent through Universal-3.6 Pro
+- Transcription-tab vocabulary is sent through the streaming model's
   `keyterms_prompt` (up to 100 app terms); a multi-word phrase remains one
   keyterm.
 - `push_audio_chunk()` enqueues raw PCM16 through `client.stream()` (the SDK
@@ -179,10 +179,9 @@ streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal
 dependency lock currently provides CPU execution; DirectML is attempted when a
 compatible runtime becomes available.
 
-AssemblyAI streaming always uses Universal-3.6 Pro Realtime (batch stays on
-Universal-3.5 Pro: 3.6 is streaming-only). The batch selector
+AssemblyAI streaming always uses AssemblyAI-STT-3.7-Realtime. The batch selector
 controls only pre-recorded requests and sends exactly the selected model:
-`universal-3-5-pro` for the highest accuracy across its 18 languages or
+`assemblyai-stt-3-7` for the highest accuracy across its 32 languages or
 `universal-2` for lower-cost 99-language coverage. The app does not silently
 request a second fallback model.
 Deepgram streaming uses the selected Deepgram model.

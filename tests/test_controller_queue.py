@@ -4033,10 +4033,8 @@ def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_ei
     )
     token = _record_and_stop(controller)
     controller._on_transcription_failed("boom", request_token=token)
-    # Deepgram nova-2 offers neither the recorded Afrikaans nor the saved one.
-    controller._settings = replace(
-        controller._settings, engine="deepgram", deepgram_model="nova-2"
-    )
+    # Fun-ASR offers neither the recorded Afrikaans nor the saved one.
+    controller._settings = replace(controller._settings, engine="funasr")
     assert controller._settings.language_mode == "af"
 
     assert controller.retry_last_transcription() is True

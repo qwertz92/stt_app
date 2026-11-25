@@ -6,12 +6,13 @@ import os
 import signal
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from . import __version__
+from . import __version__, dependency_check
 from .app_icon import load_app_icon
 from .app_paths import appdata_root, resolve_recordings_dir
 from .config import (
@@ -28,6 +29,7 @@ from .config import (
 )
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
+from .gui_thread import GuiThreadReporter
 from .history_dialog import HistoryDialog
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
@@ -40,8 +42,7 @@ from .paste_target_check import PasteTargetCheck
 from .quit_dialog import QuitCoordinator
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
-from .settings_dialog_helpers import model_retirement_notice
-from .settings_store import SettingsStore, take_model_retirement_notices
+from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcriber.base import transcript_has_gap
@@ -136,17 +137,6 @@ def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
     overlay.microphone_menu_requested.connect(
         controller.refresh_overlay_microphone_options
     )
-
-
-def _show_model_retirement_notices(tray_icon) -> None:
-    """Tell the user once that a saved local model was moved to its successor.
-
-    `SettingsStore.load` rewrites the file in the same call, so the next start
-    finds the successor saved and says nothing.
-    """
-    for retired, successor in take_model_retirement_notices().items():
-        title, text = model_retirement_notice(retired, successor)
-        tray_icon.showMessage(title, text, QtWidgets.QSystemTrayIcon.Information, 15000)
 
 
 def _connect_tray_notifications(tray_icon, controller) -> None:
@@ -269,6 +259,7 @@ def run() -> int:
     unfinished_recording_store = UnfinishedRecordingStore()
     local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
+    model_notice = settings_store.take_model_notice()
     _schedule_startup_local_model_inventory_refresh(
         local_model_inventory_store,
         startup_settings.model_dir,
@@ -365,12 +356,17 @@ def run() -> int:
     tray_icon.show()
 
     _connect_tray_notifications(tray_icon, controller)
-    _show_model_retirement_notices(tray_icon)
     update_checker = _TrayUpdateChecker(
         tray_icon=tray_icon, logger=logger, parent_widget=overlay
     )
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
+    _start_dependency_check(tray_icon)
+    if model_notice:
+        QtCore.QTimer.singleShot(
+            _MODEL_NOTICE_FIRST_DELAY_MS,
+            lambda: _show_model_notice_when_ready(tray_icon, model_notice),
+        )
 
     def _show_unfinished_recordings() -> None:
         # Kept on the tray icon: the notice has no parent to keep it alive.
@@ -432,6 +428,11 @@ def run() -> int:
     if crash_log is not None:
         crash_log.mark_clean_exit()
     return exit_code
+
+
+# When the Settings dialog is built ahead of its first opening, and how long
+# that waits again while a dictation runs.
+_SETTINGS_PREBUILD_DELAY_MS = 2500
 
 
 def _create_tray_icon(
@@ -513,6 +514,14 @@ def _create_tray_icon(
 
     def prepare_settings_dialog() -> None:
         nonlocal _active_settings_dialog
+        # The build runs on the Qt thread for 2.4-3.3 s (owner's log): never
+        # while a dictation runs, whose stop press, result and paste would
+        # wait behind it. Opening Settings meanwhile still builds at once.
+        if _active_settings_dialog is None and controller.has_active_session():
+            QtCore.QTimer.singleShot(
+                _SETTINGS_PREBUILD_DELAY_MS, prepare_settings_dialog
+            )
+            return
         if _active_settings_dialog is None:
             _active_settings_dialog = create_settings_dialog()
         if not _active_settings_dialog.isVisible():
@@ -613,7 +622,7 @@ def _create_tray_icon(
     tray_icon._open_settings_dialog = open_settings_dialog
     tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
     tray_icon._quit_coordinator = quit_coordinator
-    QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
+    QtCore.QTimer.singleShot(_SETTINGS_PREBUILD_DELAY_MS, prepare_settings_dialog)
     return tray_icon
 
 
@@ -725,6 +734,110 @@ class _TrayUpdateChecker(QtCore.QObject):
                     "No newer release is available."
                 ),
             )
+
+
+# The notice waits for the tray icon: the notification icon can need up to
+# about 17 s to be accepted after a logon race (`win_tray_icon`'s add retries),
+# and a balloon sent before that is dropped with a log line, while the move it
+# announces is already saved -- so the user would never hear of it.
+_MODEL_NOTICE_FIRST_DELAY_MS = 2000
+_MODEL_NOTICE_RETRY_MS = 1000
+_MODEL_NOTICE_MAX_WAITS = 25
+# Two start notices (package update, model update) are never sent closer
+# together than this: Windows shows one balloon at a time and a second one sent
+# while the first is up replaces it. The balloon time is Windows' own
+# (`WindowsTrayIcon.showMessage` ignores `msecs`; the default `showMessage` time
+# the app asks for is 10 s), so 10 s is used.
+_START_NOTICE_SPACING_S = 10.0
+_start_notice_not_before = 0.0
+
+
+def _show_tray_notice_when_ready(
+    tray_icon, title: str, notice: str, waited: int = 0
+) -> None:
+    """Show a notice once the icon exists; retry every second until then.
+
+    After the last wait it is sent anyway (a dropped balloon is logged by the
+    tray, which is the old behaviour rather than a lost retry loop).
+    """
+    if waited < _MODEL_NOTICE_MAX_WAITS and not tray_icon.isVisible():
+        QtCore.QTimer.singleShot(
+            _MODEL_NOTICE_RETRY_MS,
+            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited + 1),
+        )
+        return
+    global _start_notice_not_before
+    wait_s = _start_notice_not_before - time.monotonic()
+    if wait_s > 0:
+        QtCore.QTimer.singleShot(
+            int(wait_s * 1000) + 50,
+            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited),
+        )
+        return
+    _start_notice_not_before = time.monotonic() + _START_NOTICE_SPACING_S
+    _show_tray_notice(tray_icon, title, notice)
+
+
+def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> None:
+    _show_tray_notice_when_ready(tray_icon, "Speech model updated", notice, waited)
+
+
+def _start_dependency_check(tray_icon) -> None:
+    """In a source checkout, tell the user once per start when the installed
+    Python packages differ from `requirements-win.txt` (see `dependency_check`).
+
+    The lookups run on a worker thread; the notice is posted back to the GUI
+    thread through a `GuiThreadReporter`, which the worker never holds a widget
+    for. A frozen build and an up-to-date checkout say nothing.
+    """
+    receiver = _PackageNoticeReceiver(tray_icon)
+    # The reporter holds its receiver weakly; the tray icon keeps it alive.
+    tray_icon._package_notice_receiver = receiver
+    reporter = GuiThreadReporter(receiver)
+
+    def work() -> None:
+        try:
+            result = dependency_check.check_checkout_packages()
+        except Exception:
+            logging.getLogger(APP_LOGGER_NAME).exception("dependency_check_failed")
+            return
+        if result is None:
+            return
+        outdated, command = result
+        reporter.post(
+            "show", dependency_check.outdated_packages_message(outdated, command)
+        )
+
+    threading.Thread(target=work, name="stt_app_dependency_check", daemon=True).start()
+
+
+class _PackageNoticeReceiver:
+    """What the dependency check's worker posts to: runs on the GUI thread."""
+
+    def __init__(self, tray_icon) -> None:
+        self._tray_icon = tray_icon
+
+    def show(self, message: str) -> None:
+        _show_tray_notice_when_ready(
+            self._tray_icon, "Update the Python packages", message
+        )
+
+
+def _show_model_notice(tray_icon, notice: str) -> None:
+    """Tell the user which retired model choice this start moved to a successor.
+
+    `SettingsStore.load` made the move and wrote it back, so this appears once.
+    """
+    _show_tray_notice(tray_icon, "Speech model updated", notice)
+
+
+def _show_tray_notice(tray_icon, title: str, notice: str) -> None:
+    tray_icon.showMessage(
+        title,
+        notice,
+        QtWidgets.QSystemTrayIcon.Information,
+        15000,
+    )
 
 
 def _schedule_startup_update_check(checker: _TrayUpdateChecker) -> None:

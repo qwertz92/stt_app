@@ -128,7 +128,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     label and on the overlay's centre line.
     `test_the_warning_words_move_nothing_in_the_header_at_9_11_and_13_5_pt`
     pins it, and fails when a word is added to the label without the
-    reservation. A shorter word ("Insert") was not needed.
+    reservation. A shorter word ("Insert") was not needed. (2026-11-24: a
+    review walk measured 540 px for "Check window", but it painted the Error
+    without `error_action`, which shows Retry beside a warning; the
+    controller passes `OVERLAY_ERROR_ACTION_NONE` for that word and the width
+    is 470 px there, measured. A state the app cannot produce is not a case.)
   - **Contrast, from painted pixels**
     (`test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it`):
     white text on `#9a4d00` 6.11:1

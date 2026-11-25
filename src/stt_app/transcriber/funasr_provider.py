@@ -170,7 +170,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         DashScope API key (Singapore/international region). Required.
     language_mode : str
         ``"auto"`` for multilingual auto-detect, or a supported language code
-        (sent as a ``language_hints`` entry). German is not supported.
+        (sent as a ``language_hints`` entry).
     model : str
         Fun-ASR realtime model. Defaults to ``fun-asr-realtime``.
     ws_url : str

@@ -661,7 +661,7 @@ def test_the_note_floor_still_fits_three_lines_of_its_own_font():
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(
-        entry=_entry(engine="assemblyai", model="universal-3-5-pro"),
+        entry=_entry(engine="assemblyai", model="assemblyai-stt-3-7"),
         audio_path=Path(__file__),
         base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
         transcribe=lambda *args, **kwargs: (True, ""),
