@@ -5489,3 +5489,48 @@ def test_shutdown_delivers_an_update_result_without_a_dialog(monkeypatch, result
     assert dialog.check_updates_button.isEnabled() is True
     assert shown == []
     _ = app
+
+
+def _funasr_dialog_with_a_saved_language_it_dropped():
+    store = _FakeSettingsStore(AppSettings(engine="funasr", language_mode="yue"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    return store, dialog
+
+
+def test_an_untouched_save_keeps_a_language_the_engine_does_not_offer():
+    # Fun-ASR dropped Cantonese (2026-11-24): the combo shows Auto for it, which
+    # must not be written back, or the language is lost for every other engine.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+    assert dialog.language_combo.currentData() == "auto"
+
+    dialog._save()
+
+    assert store.saved is None or store.saved.language_mode == "yue"
+    assert store.load().language_mode == "yue"
+    _ = app
+
+
+def test_an_engine_that_offers_the_saved_language_shows_it_again():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    _store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("assemblyai"))
+
+    assert dialog.language_combo.currentData() == "yue"
+    _ = app
+
+
+def test_a_language_the_user_picks_replaces_the_remembered_one():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.language_combo.setCurrentIndex(dialog.language_combo.findData("de"))
+    dialog._save()
+
+    assert store.saved is not None and store.saved.language_mode == "de"
+    _ = app
