@@ -18,6 +18,7 @@ from .config import (
     CLIPBOARD_RESTORE_RETRY_DELAY_S,
     CLIPBOARD_SETTLE_S,
     PASTE_MODIFIER_POLL_INTERVAL_S,
+    PASTE_MODIFIER_RECHECK_ROUNDS,
     PASTE_MODIFIER_RELEASE_TIMEOUT_S,
     PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S,
     PASTE_TARGET_RESPONSIVE_PROBE_MS,
@@ -1228,6 +1229,10 @@ class Win32ClipboardBackend:
                 return False
             time.sleep(max(0.001, poll_interval_s))
 
+    def modifiers_released(self) -> bool:
+        """Whether no modifier key is down right now: one reading, no wait."""
+        return self.wait_for_modifier_release(timeout_s=0.0)
+
     def wait_for_paste_target_ready(
         self,
         target_hwnd: int | None = None,
@@ -1696,18 +1701,17 @@ class TextInserter:
             record.marker = clipboard_marker
             self._sleep_fn(self._clipboard_settle_s)
 
-            if self._clipboard_changed_after_set(clipboard_marker, text):
-                restore_previous_state = False
-                raise ClipboardContentionError(
-                    "Clipboard changed before paste; left the current "
-                    "clipboard untouched."
-                )
+            self._raise_if_the_clipboard_changed(clipboard_marker, text)
 
             if requested_mode != "wm_paste":
                 # The last moment at which aborting still costs nothing.
                 # WM_PASTE is exempt: it addresses `target_hwnd` itself, so
-                # what happens to have the focus does not reach it.
+                # what happens to have the focus does not reach it, and a
+                # held key cannot turn a message into another shortcut.
                 self._raise_if_the_foreground_changed(foreground_at_start)
+                self._hold_the_keystroke_while_a_modifier_is_down(
+                    clipboard_marker, text, foreground_at_start
+                )
 
             if hasattr(self._backend, "send_paste_with_mode"):
                 actual_mode = self._backend.send_paste_with_mode(
@@ -1930,6 +1934,64 @@ class TextInserter:
             "The foreground window changed before the paste keystroke; "
             "nothing was pasted."
         )
+
+    def _raise_if_the_clipboard_changed(self, marker: int | None, text: str) -> None:
+        """Contention before the keystroke: the clipboard is no longer ours.
+
+        The caller's handler leaves the clipboard alone for this error.
+        """
+        if self._clipboard_changed_after_set(marker, text):
+            raise ClipboardContentionError(
+                "Clipboard changed before paste; left the current clipboard untouched."
+            )
+
+    def _hold_the_keystroke_while_a_modifier_is_down(
+        self,
+        marker: int | None,
+        text: str,
+        foreground_at_start: int | None,
+    ) -> None:
+        """Never inject Ctrl+V into a modifier the user has just pressed.
+
+        The wait at the start of the transaction ends before the clipboard
+        write, the settle sleep and the check of that write, about 25 ms
+        before the keystroke. A Ctrl+Alt pressed inside that gap -- the
+        record hotkey of the next dictation, and results arrive exactly while
+        the user starts and stops recordings -- made the target see
+        Ctrl+Alt+V, which pastes nothing, while the transaction reported a
+        paste. One reading right before the keystroke leaves a gap of
+        microseconds. A key that is down is waited for like the first time,
+        and what that wait can change is checked again: the clipboard (the
+        key was the Ctrl of a Ctrl+C) and the foreground (the Alt of an
+        Alt+Tab). Bounded by `PASTE_MODIFIER_RECHECK_ROUNDS` waits, so keys
+        pressed over and over cancel the paste instead of holding the
+        caller's thread.
+
+        Nothing has been pasted when this raises: every error is a plain,
+        retryable pre-keystroke failure.
+        """
+        for _ in range(PASTE_MODIFIER_RECHECK_ROUNDS):
+            if self._modifiers_released():
+                return
+            self._wait_for_modifier_release()
+            self._raise_if_the_clipboard_changed(marker, text)
+            self._raise_if_the_foreground_changed(foreground_at_start)
+        if not self._modifiers_released():
+            raise TextInsertionError(
+                "Paste canceled because a Ctrl, Alt, Shift, or Windows key "
+                "kept being pressed. Release the keys and retry."
+            )
+
+    def _modifiers_released(self) -> bool:
+        """One reading of the modifier keys; True when it cannot be read."""
+        poll = getattr(self._backend, "modifiers_released", None)
+        if not callable(poll):
+            return True
+        try:
+            return poll() is not False
+        except Exception:
+            # Never let modifier probing break the paste itself.
+            return True
 
     def _marker_after_write(self, written: object) -> int | None:
         """The sequence number of our own write, or the best stand-in for it.

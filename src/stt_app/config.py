@@ -2506,6 +2506,11 @@ CLIPBOARD_RESTORE_RETRY_DELAY_S = 1.0
 # the inserter waits for all physical modifiers to be released first.
 PASTE_MODIFIER_RELEASE_TIMEOUT_S = 1.5
 PASTE_MODIFIER_POLL_INTERVAL_S = 0.01
+# That wait ends before the clipboard write and the settle sleep, so the keys
+# are read once more right before the keystroke; a key pressed since then is
+# waited for again, at most this many times (the record hotkey of the next
+# dictation is one press; keys drummed beyond that cancel the paste).
+PASTE_MODIFIER_RECHECK_ROUNDS = 2
 # Before restoring the previous clipboard after a SendInput paste, wait until
 # the target window's thread answers WM_NULL again: a busy target has not
 # processed the injected Ctrl+V yet, and restoring early would make its late

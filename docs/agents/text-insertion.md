@@ -175,8 +175,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     (SendInput goes to the focus, not `target_hwnd`); a change from the
     snapshot raises retryable `TextInsertionError` and restores at once; an
     unreadable (None) foreground is no change. WM_PASTE skips it.
-  - `wait_for_modifier_release` (bounded poll) runs before injecting, or a
-    hotkey's held Ctrl/Alt turns Ctrl+V into a no-op. WM_PASTE skips it.
+  - `wait_for_modifier_release` (bounded poll) runs before the clipboard is
+    touched, or a hotkey's held Ctrl/Alt turns Ctrl+V into a no-op. WM_PASTE
+    skips it.
+  - *The modifier keys are read once more immediately before the keystroke*
+    (2026-11-25, `_hold_the_keystroke_while_a_modifier_is_down`). The first
+    wait ends before the write, the settle sleep and the check of the write,
+    about 25 ms before the keystroke. A Ctrl+Alt pressed inside that gap --
+    the record hotkey of the next dictation, and results arrive exactly
+    while recordings are started and stopped -- made the target see
+    Ctrl+Alt+V, which pastes nothing, under a transaction that logged
+    `outcome=pasted`. A key that is down is waited for again, then the
+    clipboard and the foreground are checked again (the key may have been
+    the Ctrl of a Ctrl+C or the Alt of an Alt+Tab);
+    `PASTE_MODIFIER_RECHECK_ROUNDS` (2) such waits, then a retryable
+    `TextInsertionError` ("kept being pressed"). With no key down it costs
+    one `GetAsyncKeyState` round and no sleep. WM_PASTE skips it. The
+    owner's log (2026-10-23..11-24) shows first waits of 200-400 ms because
+    a hotkey was still held when a result arrived (`press_to_handle_ms=219`
+    next to one), so keys do move around pastes; no lost paste could be
+    pinned on exactly this gap.
   - No Windows API says "the target read it". Rejected: `WM_RENDERFORMAT`
     delayed rendering (needs an owner window with a message pump, and
     clipboard history and clipboard managers consume it); a UI Automation
