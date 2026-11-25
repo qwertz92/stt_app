@@ -5,6 +5,7 @@ import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.overlay_ui as overlay_ui_module
+from stt_app import clipboard_copy
 from stt_app.config import (
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
@@ -53,7 +54,7 @@ def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch)
     """The copy button copies, shows feedback, resets, and works again."""
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     overlay = OverlayUI()
     overlay.set_state("Done", "first text")
@@ -210,7 +211,7 @@ def test_overlay_copy_button_survives_clipboard_error(monkeypatch):
         def text(self) -> str:
             return ""
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", FailingClipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", FailingClipboard().setText)
 
     overlay = OverlayUI()
     overlay.set_state("Done", "some text")
@@ -1156,7 +1157,7 @@ def test_overlay_cancel_and_retry_share_one_slot_without_resizing():
 def test_overlay_copy_uses_copy_text_override(monkeypatch):
     """An error detail may embed the transcript; Copy must yield only it."""
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
 

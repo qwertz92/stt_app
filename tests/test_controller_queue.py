@@ -25,7 +25,7 @@ from conftest import (
     FakeWindowFocusHelper,
     make_controller,
 )
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore
 from speech_fixtures import (
     after_a_pause,
     at_peak_level,
@@ -39,6 +39,7 @@ from speech_fixtures import (
 )
 
 import stt_app.main as main_module
+from stt_app import clipboard_copy
 from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE
 from stt_app.config import (
     CANARY_MODEL_SIZE,
@@ -452,7 +453,7 @@ def test_background_insert_failure_does_not_overwrite_clipboard(
             return self.value
 
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
 
     def insert_text_with_options(
         text,
@@ -1541,7 +1542,7 @@ def _fake_clipboard(monkeypatch):
             self.texts.append(text)
 
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     return clipboard
 
 
@@ -1764,7 +1765,7 @@ def test_a_joined_foreground_paste_that_fails_offers_the_joined_text(
             return self.value
 
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     controller, app, overlay, inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert", inserter=FakeTextInserter(True)
     )
@@ -2122,7 +2123,7 @@ def test_a_not_inserted_row_survives_the_next_recording_and_insert_retires_it(
         def setText(self, text):
             pass
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: FakeClipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", FakeClipboard().setText)
     _fake_clipboard(monkeypatch)
     inserter = SelectiveTextInserter()
     inserter.fail = {"transcript A."}

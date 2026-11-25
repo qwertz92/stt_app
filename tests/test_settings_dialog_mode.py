@@ -11,6 +11,7 @@ import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
+from stt_app import clipboard_copy
 from stt_app.app_paths import debug_audio_path
 from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
@@ -1038,7 +1039,7 @@ def test_settings_history_multiselect_copy_joins_selected_entries(
         ]
     )
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
@@ -4523,7 +4524,7 @@ def test_import_progress_callback_is_passed_to_controller(monkeypatch):
 def test_import_result_has_copy_button_and_resizable_result_area(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
@@ -4662,7 +4663,7 @@ def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
         def setText(self, text: str) -> None:
             copied.append(text)
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _FakeClipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _FakeClipboard().setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings(history_max_items=20)),
         secret_store=_FakeSecretStore(),

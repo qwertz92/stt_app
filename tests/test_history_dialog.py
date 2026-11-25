@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from PySide6 import QtCore, QtGui, QtTest, QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 
+from stt_app import clipboard_copy
 from stt_app.history_dialog import HistoryDialog
 from stt_app.persistence import backup_path
 from stt_app.settings_store import AppSettings, SettingsStore
@@ -53,7 +54,7 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
     settings_store.save(AppSettings(history_max_items=20))
 
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
 
     dialog = HistoryDialog(
         history_store=history_store,
@@ -139,7 +140,7 @@ def test_multiselect_copy_joins_selected_entries(monkeypatch, tmp_path):
     settings_store = SettingsStore(tmp_path / "settings.json")
     settings_store.save(AppSettings(history_max_items=20))
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
 
     dialog = HistoryDialog(
         history_store=history_store,
@@ -658,7 +659,7 @@ def test_double_click_copies_entry_to_clipboard(monkeypatch, tmp_path):
     settings_store.save(AppSettings(history_max_items=20))
 
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
 
     dialog = HistoryDialog(
         history_store=history_store,

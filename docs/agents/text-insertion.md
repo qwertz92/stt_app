@@ -327,6 +327,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     program wait. At shutdown `TextInserter.close` (after the controller's
     flush) ends the window, and `WM_RENDERALLFORMATS` writes out a
     transcript it still owes.
+- **The app never touches the clipboard through Qt from Python**
+  (2026-11-25, review P2; `clipboard_copy.copy_text`, the one function for
+  "copy this text"). Every Copy button, the tray's copy actions,
+  "Keep transcript in clipboard" and the copy-on-error fallback call it; its
+  writer is `TextInserter.copy_text`, installed once in `main.py`. Why:
+  PySide keeps the interpreter lock for the whole of `QClipboard.setText`,
+  and while a transcript is announced (entry above) that call's
+  `EmptyClipboard` sends the owner window `WM_DESTROYCLIPBOARD`, whose
+  procedure is a Python callback on another thread. Measured with
+  `scripts/diagnose_clipboard_copy_stall.py`: the Qt write returned after
+  5012 ms (the reviewer: 5004, 5006, 5017 ms; a `QClipboard.text()` in that
+  state did not return within 40 s), `TextInserter.copy_text` after 1.1 ms
+  during a live offer and 0.8 ms without one. The backend's Win32 calls
+  release the lock, so the owner thread answers.
+  - `TextInserter.copy_text` writes plain text and settles a paste whose
+    restore is still pending: the clipboard captured before that paste is
+    dropped instead of being put back, and the paste's receipt is reported
+    as it stands. Before, a copy of the pasted transcript itself (tray,
+    "Copy last transcript" right after a paste) was undone 1.5 s later: the
+    restore found its own text on the clipboard and took it for its own
+    write. A write that fails leaves the pending restore alone.
+  - `copy_text` answers False instead of raising, and a caller shows
+    "Copied" only for True (the clipboard can be held by another program).
+  - Gate: `tests/test_clipboard_copy.py` parses every module of the package
+    and fails on an attribute, name or import called `clipboard` or
+    `QClipboard`. Qt's own C++ reads (a Ctrl+V in a text field of ours) are
+    not Python-level and are covered by the own-window rule below.
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,

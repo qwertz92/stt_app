@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+from stt_app import clipboard_copy
 from stt_app.config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
     RECORDINGS_MAX_COUNT_CEILING,
@@ -1325,7 +1326,7 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
         def setText(self, text: str) -> None:
             copied.append(text)
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _Clipboard().setText)
     label = ElidingLabel()
     make_label_selectable(label)
     label.resize(200, 20)

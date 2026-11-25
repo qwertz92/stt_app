@@ -261,6 +261,62 @@ def test_a_copy_by_the_user_ends_the_receipt_as_it_stood():
     assert scheduler.pending == []
 
 
+def test_a_copy_action_of_the_app_settles_the_paste_that_still_waits():
+    """`copy_text`, the writer of every Copy button. The copied text stays:
+    the clipboard from before the paste is not put back over it, not even when
+    the copy is the pasted transcript itself (the restore read that as its own
+    write and undid the copy), and the paste's receipt is final as it stands."""
+    inserter, backend, scheduler, clock, receipts = _inserter()
+    inserter.insert_text_with_options("hello", target_hwnd=77)
+    paste_id = inserter.pending_receipt_id()
+    backend.target_fetches()
+
+    inserter.copy_text("hello")
+
+    assert backend.calls[-1] == "set:hello"
+    assert [(r[0], r[1]) for r in receipts] == [(paste_id, RECEIPT_READ)]
+    assert inserter.pending_receipt_id() is None
+    assert scheduler.pending == []
+
+    clock.advance(RECEIPT_WAIT_S)
+    inserter.flush_pending_restore()
+
+    assert "restore" not in backend.calls
+    assert backend.state == {"has_text": True, "text": "hello"}
+    assert len(receipts) == 1
+
+
+def test_a_copy_action_without_a_waiting_paste_only_writes_the_text():
+    inserter, backend, scheduler, _clock, receipts = _inserter()
+
+    inserter.copy_text("diagnostics")
+
+    assert backend.calls == ["set:diagnostics"]
+    assert receipts == []
+    assert scheduler.pending == []
+
+
+def test_a_copy_action_that_cannot_write_leaves_the_waiting_paste_alone():
+    inserter, backend, scheduler, clock, receipts = _inserter()
+    inserter.insert_text_with_options("hello", target_hwnd=77)
+    paste_id = inserter.pending_receipt_id()
+
+    def held_by_another_program(_text, exclude_from_history=False):
+        raise text_inserter.ClipboardContentionError("clipboard is in use")
+
+    backend.set_clipboard_text = held_by_another_program
+    with pytest.raises(text_inserter.ClipboardContentionError):
+        inserter.copy_text("something else")
+
+    assert receipts == []
+    assert inserter.pending_receipt_id() == paste_id
+    backend.target_fetches()
+    clock.advance(RESTORE_DELAY_S)
+    scheduler.fire_pending()
+    assert backend.calls[-1] == "restore"
+    assert [r[1] for r in receipts] == [RECEIPT_READ]
+
+
 def test_a_target_busy_to_the_end_keeps_the_transcript_and_gets_no_verdict():
     """It may still fetch the transcript, which stays for it: "unread" would
     offer a second paste of a text that can still arrive."""

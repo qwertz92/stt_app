@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import __version__, dependency_check
 from .app_icon import load_app_icon
 from .app_paths import appdata_root, resolve_recordings_dir
+from .clipboard_copy import copy_text, set_text_writer
 from .clipboard_owner import ClipboardOwner
 from .config import (
     APP_DISPLAY_NAME,
@@ -281,6 +282,9 @@ def run() -> int:
     # The transcript is announced on the clipboard and handed out by a window
     # of this process, so a paste learns whether its target fetched the text.
     text_inserter = TextInserter(backend=Win32ClipboardBackend(owner=ClipboardOwner()))
+    # Every Copy action of the app writes through the same backend
+    # (`clipboard_copy`), never through Qt.
+    set_text_writer(text_inserter.copy_text)
 
     controller = DictationController(
         settings_store=settings_store,
@@ -553,14 +557,21 @@ def _create_tray_icon(
 
     def copy_diagnostics() -> None:
         text = app_logger.diagnostics_text()
-        QtGui.QGuiApplication.clipboard().setText(text)
+        if not copy_text(text):
+            controller.show_overlay_error(
+                "Diagnostics not copied: the clipboard is in use by another program."
+            )
+            return
         controller.show_overlay_notice(
             f"Diagnostics copied to clipboard ({len(text.splitlines())} lines)."
         )
 
     def copy_last_transcript() -> None:
         if not controller.copy_last_transcript_to_clipboard():
-            controller.show_overlay_error("No transcript available to copy yet.")
+            controller.show_overlay_error(
+                "Nothing copied: there is no transcript yet, or the clipboard is "
+                "in use by another program."
+            )
             return
         controller.show_overlay_notice("Last transcript copied to clipboard.")
 

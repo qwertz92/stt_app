@@ -14,9 +14,10 @@ from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from .app_icon import load_app_icon
+from .clipboard_copy import copy_text
 from .config import (
     CANARY_MODEL_SIZE,
     DEFAULT_ENGINE,
@@ -748,9 +749,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
 
     def _copy_result(self) -> None:
         text = self._result_text.toPlainText()
-        if not text.strip():
+        if not text.strip() or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self._copy_button.setText("Copied")
         set_button_feedback_state(self._copy_button, "success")
         self._copy_feedback_timer.start()

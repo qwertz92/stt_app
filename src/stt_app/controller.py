@@ -22,6 +22,7 @@ from . import audio_devices, local_runtime_support, silero_vad
 from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
+from .clipboard_copy import copy_text
 from .clipboard_owner import RECEIPT_UNREAD
 from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
@@ -7611,7 +7612,7 @@ class DictationController(QtCore.QObject):
         # transcript is actually visible for a quick confirmation.
         self._reveal_overlay_result(is_error=False)
         if self._settings.keep_transcript_in_clipboard:
-            QtGui.QGuiApplication.clipboard().setText(text)
+            copy_text(text)
         self._mark_last_recording_completed(job, text)
         self._last_transcribe_settings = None
         self._reset_streaming_state()
@@ -9754,10 +9755,11 @@ class DictationController(QtCore.QObject):
             allow_clipboard_fallback = bool(
                 getattr(exc, "allow_clipboard_fallback", True)
             )
-            if copy_on_error and allow_clipboard_fallback:
-                QtGui.QGuiApplication.clipboard().setText(insertion_text)
+            copied = (
+                copy_on_error and allow_clipboard_fallback and copy_text(insertion_text)
+            )
             detail = str(exc)
-            if copy_on_error and allow_clipboard_fallback:
+            if copied:
                 detail = f"{detail} Transcript copied to clipboard."
             elif copy_on_error:
                 detail = (
@@ -9821,8 +9823,7 @@ class DictationController(QtCore.QObject):
     def copy_last_transcript_to_clipboard(self) -> bool:
         if not self._last_transcript.strip():
             return False
-        QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
-        return True
+        return copy_text(self._last_transcript)
 
     def repaste_last_transcript(self) -> None:
         """Insert what is still missing, else the last delivered text again.
@@ -10304,7 +10305,7 @@ class DictationController(QtCore.QObject):
             # the confirmation must not paint over "Listening".
             self._paint_after_edit(offer)
         if self._settings.keep_transcript_in_clipboard:
-            QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
+            copy_text(self._last_transcript)
         return True
 
     def on_history_entry_edited(

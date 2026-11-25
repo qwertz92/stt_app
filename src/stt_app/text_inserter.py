@@ -1718,6 +1718,35 @@ class TextInserter:
             return None
         return record.transaction_id
 
+    def copy_text(self, text: str) -> None:
+        """Put `text` on the clipboard as a copy the user asked for.
+
+        The writer behind `clipboard_copy.copy_text`: every copy this app
+        makes outside a paste comes through here, through the backend and
+        never through `QClipboard` (that module says what the Qt road cost).
+
+        A paste whose transcript still waits for its restore is settled by
+        the copy: the text is what the user wants on the clipboard now, so
+        the state captured before that paste is dropped instead of being put
+        back over it -- which is what the restore did when the copied text
+        was the pasted transcript itself, because the clipboard then still
+        read as ours -- and that paste's receipt is final as it stands.
+
+        Raises `ClipboardContentionError` when the clipboard cannot be
+        written; the pending restore is then left as it was.
+        """
+        with self._insert_lock:
+            record = self._pending_restore
+            self._backend.set_clipboard_text(text, exclude_from_history=False)
+            if record is None:
+                return
+            self._pending_restore = None
+            self._cancel_scheduled_restore(record)
+            if self._offer == record.offer:
+                self._offer = None
+            self._log_restore_outcome(record, "superseded_by_copy")
+            self._report_receipt(record)
+
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
         return self.insert_text_with_options(
             text=text,

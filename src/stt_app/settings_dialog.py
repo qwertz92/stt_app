@@ -30,6 +30,7 @@ from .benchmark_history import (
 # is kept so ``stt_app.settings_dialog.run_benchmark_cases`` stays the seam
 # tests patch.
 from .benchmark_process import run_benchmark_cases
+from .clipboard_copy import copy_text
 from .config import APP_LOGGER_NAME
 from .dialog_style import make_label_selectable
 from .last_recording_store import LastRecordingStore
@@ -1222,11 +1223,14 @@ class SettingsDialog(
 
     def _copy_diagnostics(self) -> None:
         text = self._app_logger.diagnostics_text()
-        clipboard = QtGui.QGuiApplication.clipboard()
-        clipboard.setText(text)
         # Without feedback the button looks like it did nothing.
-        line_count = len(text.splitlines())
-        self._set_bottom_status(f"Diagnostics copied ({line_count} lines)")
+        if copy_text(text):
+            line_count = len(text.splitlines())
+            self._set_bottom_status(f"Diagnostics copied ({line_count} lines)")
+        else:
+            self._set_bottom_status(
+                "Diagnostics not copied: the clipboard is in use", "#b71c1c"
+            )
         self._save_status_timer.start()
 
     def _check_for_updates(self) -> None:

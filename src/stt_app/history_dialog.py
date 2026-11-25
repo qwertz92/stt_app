@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .app_paths import resolve_recordings_dir
+from .clipboard_copy import copy_text
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .gui_thread import GuiThreadReporter
 from .history_audio import (
@@ -642,9 +643,8 @@ class HistoryDialog(QtWidgets.QDialog):
 
     def _copy_selected(self) -> None:
         text = join_recent_entries_for_clipboard(self._selected_entries())
-        if not text:
+        if not text or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self._flash_copy_feedback()
 
     def _on_item_double_clicked(self, item: QtWidgets.QTableWidgetItem) -> None:
@@ -653,9 +653,8 @@ class HistoryDialog(QtWidgets.QDialog):
         if not 0 <= row < len(self._entries):
             return
         text = self._entries[row].text
-        if not text:
+        if not text or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self._flash_copy_feedback()
 
     def _flash_copy_feedback(self) -> None:

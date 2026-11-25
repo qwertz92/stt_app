@@ -87,6 +87,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
     LibriSpeech excerpts, CC BY 4.0, attribution in the `.npz`; kept in this
     public repository by the owner's decision of 2026-10-01, test data only,
     never shipped); never read the `.npz` as text.
+  - `copied_texts`: installs a list as the writer behind
+    `clipboard_copy.copy_text`, so no Copy action of a test reaches the real
+    clipboard (the production writer is installed only in `main.run`). A
+    test reads the list, or patches `clipboard_copy._writer` with its own
+    fake's `setText`.
   The alphabetical full suite hid the last three leaks; only another file
   order showed them.
 - **`tests/conftest.py` blocks the real `create_transcriber`**: the isolated
