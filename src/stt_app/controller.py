@@ -120,6 +120,7 @@ from .model_download_progress import (
     format_model_download_progress,
 )
 from .overlay_ui import OverlayUI
+from .own_window_focus import own_window_takes_pasted_text
 from .paste_target_check import (
     VERDICT_NOT_TEXT_FIELD,
     VERDICT_UNKNOWN,
@@ -189,6 +190,13 @@ _LANGUAGE_FALLBACK_KEPT_RECORDING_MESSAGE = (
 # other source of it.
 _UNSAVED_AND_UNDELIVERED_KEPT_RECORDING_MESSAGE = (
     "The transcript was neither saved to History nor inserted; the recording was kept."
+)
+
+# A paste aimed at one of this app's own windows while its focus is in no text
+# field (`own_window_focus`): refused before the clipboard is touched.
+_OWN_WINDOW_WITHOUT_TEXT_FIELD_MESSAGE = (
+    "The focus is in a window of this app, but not in a text field, so nothing "
+    "was pasted."
 )
 
 # The stages of a local model preload. They fail, progress and finish for
@@ -9273,6 +9281,15 @@ class DictationController(QtCore.QObject):
                         "Target window focus could not be restored; transcript was "
                         "not pasted into another window."
                     )
+            if (
+                own_window_takes_pasted_text(
+                    paste_foreground or self._current_foreground_window()
+                )
+                is False
+            ):
+                # Before the clipboard is touched: nothing would be inserted,
+                # and a focused hotkey field would record Ctrl+V.
+                raise TextInsertionError(_OWN_WINDOW_WITHOUT_TEXT_FIELD_MESSAGE)
             self._text_inserter.insert_text_with_options(
                 insertion_text,
                 target_hwnd=insert_hwnd,

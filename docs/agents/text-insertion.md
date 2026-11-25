@@ -334,6 +334,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
 - **Our own popups are never a target**: `Win32WindowFocusHelper` returns
   the last foreign foreground window while our `WS_EX_TOOLWINDOW` windows
   (tray menu, overlay) are in front; Settings stays a valid target.
+- **A window of this app takes a paste only in a text field** (2026-11-25,
+  `own_window_focus.own_window_takes_pasted_text`, asked in
+  `_insert_text_at_target` before the clipboard is touched). The owner's
+  log, 2026-11-24 22:48: a dictation whose target was the Settings window
+  (`Qt6120QWindowIcon`) logged `outcome=pasted`, its target check answered
+  `unknown`, the overlay said Done, and the same text was pasted by hand
+  into another window 12 s later. For our own windows nothing has to be
+  guessed: Qt knows the widget the window gives its focus to
+  (`QWidget.find(hwnd).window().focusWidget()`, which does not depend on Qt
+  having processed the activation). An enabled, writable `QLineEdit`,
+  `QTextEdit`, `QPlainTextEdit` or spin box and an editable combo box take
+  text; everything else does not, and a `QKeySequenceEdit` never does (it
+  would record Ctrl+V as the new hotkey). "Does not" raises
+  `TextInsertionError` -- the ordinary "Not inserted" report with Insert, a
+  row and history, no clipboard write and no keystroke. A foreign window
+  answers None and nothing changes.
 - **Cancel, Retry and Insert share one fixed-size overlay slot.** A
   successful transcription whose insert failed uses
   `error_action=OVERLAY_ERROR_ACTION_INSERT` (`insert_again_requested` ->

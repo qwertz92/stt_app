@@ -144,6 +144,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
+| `own_window_focus.py` | Whether a window of this app would take a pasted transcript (only an editable text widget), asked before the clipboard is touched |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, microphone menu and opacity slider in the footer, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
