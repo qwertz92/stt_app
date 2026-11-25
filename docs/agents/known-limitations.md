@@ -213,6 +213,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   for the 3 s an unfetched one normally gets, and its receipt is taken as it
   stands at that moment and shown to nobody: a last paste that reached no
   program is neither reported nor offered again. Its text is in History.
+- **A process killed while a transcript is announced takes the text with
+  it** (2026-11-25, review P3). For the 1.5-3 s after a paste the
+  clipboard holds a promise this process answers (`clipboard_owner`), not
+  the text. A quit, an exception out of `main.run` and a normal
+  interpreter exit write the text out or restore the clipboard
+  (`TextInserter.close` on `aboutToQuit` and `atexit`). Task Manager's
+  End task, a crash in native code and the quit watchdog's forced exit
+  run neither: `CF_UNICODETEXT` is then gone, where v0.13.0 left the
+  transcript on the clipboard. The clipboard the user had before the
+  paste is lost either way, as before; the transcript is in History.
+- **Work that begins after an announced paste can delay a late reader**
+  (2026-11-25, review P3, accepted). A transcript is not announced while an
+  in-process ONNX runtime is in use (`docs/agents/text-insertion.md`, "No
+  transcript is announced while an in-process ONNX runtime is in use"),
+  but that is decided when the paste is made. A model load that starts in
+  the 1.5-3 s the announcement lives (1.0-1.9 s without the interpreter,
+  measured), Nemotron's decoding (up to 0.8 s) or the Settings dialog being
+  built on the Qt thread (0.2 s) makes a program that fetches the text in
+  that moment wait that long for its paste. The targets measured fetched
+  within 18 ms of the keystroke, before any of this can begin; a target
+  that is itself slow to react is the one exposed. Not built: replacing
+  the announcement by the plain text as soon as such work starts, because
+  it ends the receipt for that paste and no delayed paste was observed.
+  An owner window in a process of its own would remove the whole class
+  (the reviewer measured 120 ms for the Qt write with the owner in
+  another process); it was not asked for and is not built.
 - **Two WSLg instances and the read receipt (hypothesis, 2026-11-25).** A
   request from `msrdc.exe` counts as the paste's reader only when that
   process owns the target window (`CLIPBOARD_SYNC_PROGRAMS`); otherwise it

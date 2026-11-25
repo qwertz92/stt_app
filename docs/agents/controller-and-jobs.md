@@ -952,6 +952,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   `_preload_model_worker`. `_release_transcriber_runtime`'s `finally`
   returns the lock and use count; a failed reset leaves
   `_pending_transcriber_cache_reset` for the next release.
+- **A lease of an in-process ONNX runtime is also what holds back a paste's
+  read receipt** (2026-11-25; `_runtime_holds_interpreter`,
+  `_TranscriberRuntimeLease.may_hold_interpreter`,
+  `_paste_may_be_announced`). Such a lease registers itself in
+  `_interpreter_holding_leases` in its constructor -- the last statement of
+  an acquisition, so no failure path of `_acquire_transcriber_runtime` has
+  to undo it -- and leaves that list in `release()`'s `finally`, after the
+  hand-back. Why, the measurements and which runtimes count:
+  `docs/agents/text-insertion.md`, "No transcript is announced while an
+  in-process ONNX runtime is in use". A runtime that starts keeping the
+  interpreter lock for long stretches belongs in
+  `config.LOCAL_INTERPRETER_HOLDING_*_MODEL_SIZES`.
 - **Clear an owner flag before disposing** (`orphan = None` before the close
   in `_acquire_transcriber_runtime`'s shutdown branch; else a double close
   replaces `TranscriptionCanceled`).

@@ -322,6 +322,9 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
             if self._session is None:
                 self._session, self._tokenizer = self._load_model()
 
+    def is_model_loaded(self) -> bool:
+        return self._session is not None
+
     def close(self) -> None:
         # `_inference_lock` too, in the same order `transcribe_batch` takes
         # them, so the session is never dropped while a run is using it.

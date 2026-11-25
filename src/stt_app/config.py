@@ -308,6 +308,20 @@ LOCAL_ONNX_ASR_MODEL_SIZES = (
 GRANITE_CTC_MODEL_SIZE = "granite-speech-5.0-470m-turboctc"
 LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
 
+# The local runtimes that run inside the app's own process on ONNX Runtime.
+# Creating their sessions kept the interpreter lock in one piece for
+# 1.0-1.9 s, and Nemotron's decoding for up to 0.8 s (2026-11-25,
+# `scripts/diagnose_interpreter_stall.py`); faster-whisper stayed at 62 ms
+# and the Node runner is another process. While one of these loads -- the
+# second group: or decodes -- a pasted transcript is not announced for a
+# read receipt (docs/agents/text-insertion.md).
+LOCAL_INTERPRETER_HOLDING_LOAD_MODEL_SIZES = (
+    LOCAL_NEMOTRON_MODEL_SIZES
+    + LOCAL_ONNX_ASR_MODEL_SIZES
+    + LOCAL_GRANITE_CTC_MODEL_SIZES
+)
+LOCAL_INTERPRETER_HOLDING_DECODE_MODEL_SIZES = LOCAL_NEMOTRON_MODEL_SIZES
+
 LOCAL_ONNX_MODEL_SIZES = (
     LOCAL_WEBGPU_MODEL_SIZES
     + LOCAL_NEMOTRON_MODEL_SIZES

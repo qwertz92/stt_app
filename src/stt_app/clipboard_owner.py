@@ -345,7 +345,7 @@ class _Win32OwnerApi:
 
     def set_text(self, format_id: int, text: str) -> bool:
         """`SetClipboardData` with `text`; the clipboard is open already."""
-        payload = (text + "\0").encode("utf-16-le")
+        payload = clipboard_text_payload(text)
         handle = self._kernel32.GlobalAlloc(_GMEM_MOVEABLE, len(payload))
         if not handle:
             return False
@@ -366,6 +366,17 @@ class _Win32OwnerApi:
 
     def close_clipboard(self) -> None:
         self._user32.CloseClipboard()
+
+
+def clipboard_text_payload(text: str) -> bytes:
+    """`text` as a `CF_UNICODETEXT` block: UTF-16 with its terminator.
+
+    A lone surrogate goes out as its code unit, which is what the plain
+    write hands a reader (pywin32 passes the code units through). Encoded
+    strictly it raised inside the window procedure: the reader got
+    nothing while the receipt said the text had been fetched.
+    """
+    return (text + "\0").encode("utf-16-le", "surrogatepass")
 
 
 class ClipboardOwner:
@@ -434,10 +445,12 @@ class ClipboardOwner:
 
     def close(self) -> None:
         """End the thread; a transcript still unrendered is written out first
-        (`WM_RENDERALLFORMATS`, sent while the window is destroyed)."""
+        (`WM_RENDERALLFORMATS`, sent while the window is destroyed). A
+        second call finds no thread and does nothing."""
         with self._lock:
             self._closed = True
             thread, thread_id, api = self._thread, self._thread_id, self._api
+            self._thread = None
         if thread is None or api is None or not thread_id:
             return
         try:

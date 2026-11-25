@@ -48,6 +48,8 @@ from .config import (
     INSERT_TARGET_CURRENT_WINDOW,
     LANGUAGE_MODE_LABELS,
     LOCAL_GRANITE_CTC_MODEL_SIZES,
+    LOCAL_INTERPRETER_HOLDING_DECODE_MODEL_SIZES,
+    LOCAL_INTERPRETER_HOLDING_LOAD_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
@@ -520,13 +522,19 @@ class _TranscriberRuntimeLease:
         *,
         owns_shared_lock: bool,
         close_on_release: bool,
+        holds_interpreter: str = "",
     ) -> None:
         self.transcriber = transcriber
         self._controller = controller
         self._owns_shared_lock = owns_shared_lock
         self._close_on_release = close_on_release
+        # `_runtime_holds_interpreter`'s answer for this runtime: tracked
+        # from here to `release` when it is not "".
+        self._holds_interpreter = holds_interpreter
         self._release_lock = threading.Lock()
         self._released = False
+        if holds_interpreter:
+            controller._track_interpreter_holding_lease(self, live=True)
 
     def release(self) -> None:
         with self._release_lock:
@@ -594,6 +602,34 @@ class _TranscriberRuntimeLease:
                 self._controller._logger.exception(
                     "Failed to complete a transcriber runtime release"
                 )
+            if self._holds_interpreter:
+                self._controller._track_interpreter_holding_lease(self, live=False)
+
+    def may_hold_interpreter(self) -> bool:
+        """Whether this runtime may keep the interpreter lock right now:
+        always while it decodes that way, otherwise until its model is
+        loaded (a runtime that cannot say counts as not loaded)."""
+        if self._holds_interpreter == _HOLDS_INTERPRETER_TO_DECODE:
+            return True
+        is_loaded = getattr(self.transcriber, "is_model_loaded", None)
+        return not (callable(is_loaded) and is_loaded())
+
+
+_HOLDS_INTERPRETER_TO_LOAD = "load"
+_HOLDS_INTERPRETER_TO_DECODE = "decode"
+
+
+def _runtime_holds_interpreter(settings: AppSettings) -> str:
+    """When the runtime these settings select keeps the interpreter lock
+    for long stretches: "" never, while its model loads, or while it
+    decodes as well (`config.LOCAL_INTERPRETER_HOLDING_*_MODEL_SIZES`)."""
+    if settings.engine != DEFAULT_ENGINE:
+        return ""
+    if settings.model_size in LOCAL_INTERPRETER_HOLDING_DECODE_MODEL_SIZES:
+        return _HOLDS_INTERPRETER_TO_DECODE
+    if settings.model_size in LOCAL_INTERPRETER_HOLDING_LOAD_MODEL_SIZES:
+        return _HOLDS_INTERPRETER_TO_LOAD
+    return ""
 
 
 # Which provider's API key each engine reads, and therefore whose presence is
@@ -760,6 +796,9 @@ class DictationController(QtCore.QObject):
         )
         if callable(register_paste_receipt):
             register_paste_receipt(self.paste_receipt_ready.emit)
+        register_offer_gate = getattr(text_inserter, "set_offer_gate", None)
+        if callable(register_offer_gate):
+            register_offer_gate(self._paste_may_be_announced)
         self._logger = logger
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
         self._secret_store = secret_store
@@ -819,6 +858,9 @@ class DictationController(QtCore.QObject):
         self._transcriber_runtime_state_lock = threading.Lock()
         self._transcriber_runtime_in_use = threading.Event()
         self._transcriber_runtime_active_count = 0
+        # Live leases of a runtime that keeps the interpreter lock
+        # (`_paste_may_be_announced`).
+        self._interpreter_holding_leases: list[_TranscriberRuntimeLease] = []
         self._transcriber_cache_key = None
         self._transcriber_cache = None
         # Set when a settings reload happens while a lease owns the cached
@@ -4021,6 +4063,7 @@ class DictationController(QtCore.QObject):
                     transcriber,
                     owns_shared_lock=True,
                     close_on_release=close_on_release,
+                    holds_interpreter=_runtime_holds_interpreter(settings),
                 )
             except BaseException:
                 # BaseException, not Exception: this arm only undoes its own
@@ -4072,6 +4115,7 @@ class DictationController(QtCore.QObject):
                 transcriber,
                 owns_shared_lock=False,
                 close_on_release=True,
+                holds_interpreter=_runtime_holds_interpreter(settings),
             )
             orphan = None
             return lease
@@ -4090,6 +4134,32 @@ class DictationController(QtCore.QObject):
                 if incremented:
                     self._decrement_transcriber_runtime_count()
             raise
+
+    def _track_interpreter_holding_lease(
+        self, lease: _TranscriberRuntimeLease, *, live: bool
+    ) -> None:
+        with self._transcriber_runtime_state_lock:
+            leases = self._interpreter_holding_leases
+            if live:
+                leases.append(lease)
+            else:
+                self._interpreter_holding_leases = [
+                    held for held in leases if held is not lease
+                ]
+
+    def _paste_may_be_announced(self) -> bool:
+        """Whether a pasted transcript may be announced for a read receipt.
+
+        The announced text is handed out by a Python callback
+        (`clipboard_owner`), so the program that asks waits for the
+        interpreter lock. Not while a preload, a job or a stream holds a
+        runtime that may keep it (`_TranscriberRuntimeLease
+        .may_hold_interpreter`): such a paste is written plainly and has
+        no receipt (`TextInserter.set_offer_gate`).
+        """
+        with self._transcriber_runtime_state_lock:
+            leases = tuple(self._interpreter_holding_leases)
+        return not any(lease.may_hold_interpreter() for lease in leases)
 
     def _increment_transcriber_runtime_count(self) -> None:
         with self._transcriber_runtime_state_lock:

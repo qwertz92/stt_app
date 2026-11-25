@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import faulthandler
 import logging
 import os
@@ -285,6 +286,11 @@ def run() -> int:
     # Every Copy action of the app writes through the same backend
     # (`clipboard_copy`), never through Qt.
     set_text_writer(text_inserter.copy_text)
+    # An announced transcript exists only while this process answers for
+    # it. `aboutToQuit` closes the inserter (below); this covers an exit
+    # that never gets there, such as an exception out of `run`. A kill
+    # runs neither (docs/agents/known-limitations.md).
+    atexit.register(text_inserter.close)
 
     controller = DictationController(
         settings_store=settings_store,

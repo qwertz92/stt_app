@@ -326,7 +326,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     answers; a process that cannot run Python for that long makes that
     program wait. At shutdown `TextInserter.close` (after the controller's
     flush) ends the window, and `WM_RENDERALLFORMATS` writes out a
-    transcript it still owes.
+    transcript it still owes. `main` registers the same `close` with
+    `atexit`, for an exit that never reaches `aboutToQuit` (an exception
+    out of `run`); the second call is a no-op. A killed process -- the
+    quit watchdog's exit included -- runs neither, and the announced text
+    is then gone from the clipboard (known limitation).
+  - *Text.* The owner hands out `clipboard_text_payload(text)`: UTF-16
+    with `surrogatepass`, so a lone surrogate goes out as its code unit
+    like in the plain write. Encoded strictly it raised in the window
+    procedure: the reader got nothing and the receipt read `read`.
 - **The app never touches the clipboard through Qt from Python**
   (2026-11-25, review P2; `clipboard_copy.copy_text`, the one function for
   "copy this text"). Every Copy button, the tray's copy actions,
@@ -354,6 +362,66 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     and fails on an attribute, name or import called `clipboard` or
     `QClipboard`. Qt's own C++ reads (a Ctrl+V in a text field of ours) are
     not Python-level and are covered by the own-window rule below.
+- **A paste into a window of this app is written plainly, without a
+  receipt** (2026-11-25, lead's decision after the review;
+  `Win32ClipboardBackend.offer_clipboard_text`: the target window's
+  process, or a child window's, is this one). Qt reads the clipboard on
+  the Qt thread and the owner window answers from a Python callback on
+  its own thread, so a field whose key or paste handling runs through a
+  Python override (`keyPressEvent`, `event`, `insertFromMimeData`) holds
+  the interpreter lock while it waits for that answer. Measured with
+  `scripts/diagnose_own_window_paste.py`, one real Ctrl+V per field,
+  announced (before) against plain (after), time until the field showed
+  the text: QLineEdit 44 against 27 ms, QPlainTextEdit 68 against 70 ms,
+  the Settings spin box 24 against 24 ms, the double spin box 24
+  against 23 ms (one paste each, so 2 ms is noise); a QLineEdit with a
+  Python `keyPressEvent` never showed
+  it and the Qt thread stood still for 35.2 s, against 25 ms after. The
+  app has no such field today; the rule is what keeps a future one from
+  freezing it. Such a paste has no receipt (verdict unknown, as in
+  v0.13.0); the own-window check above still refuses a focus that takes
+  no text before the clipboard is touched.
+- **No transcript is announced while an in-process ONNX runtime is in
+  use** (2026-11-25, review P3; `TextInserter.set_offer_gate`,
+  `DictationController._paste_may_be_announced`,
+  `config.LOCAL_INTERPRETER_HOLDING_*_MODEL_SIZES`). The owner window hands
+  the text out from a Python callback, so a program that fetches it waits
+  as long as another thread keeps the interpreter lock in one piece. The
+  reviewer measured 2316 ms for another program's `GetClipboardData`
+  during one native call of 2.9 s. What the app's own work does, measured
+  with `scripts/diagnose_interpreter_stall.py` (a pure-Python thread
+  sleeping 1 ms; longest time between two wake-ups; 30 s of English
+  speech on the CPU; other agents' test runs were active, so the figures
+  are noisy upwards):
+
+  | Work | Longest stall |
+  | ---- | ------------- |
+  | nothing (the ticker alone) | 2 ms |
+  | faster-whisper tiny: load / transcribe | 62 ms / 18 ms |
+  | Parakeet TDT 0.6B v3 (onnx-asr): load / transcribe | 1694 ms / 10 ms |
+  | Granite 5.0 470M TurboCTC: load / transcribe | 1047 ms / 4 ms |
+  | Nemotron 3.5 INT4 (ONNX Runtime GenAI): load / transcribe | 1916 ms / 827 ms |
+  | Silero speech check: build the session | 33 ms |
+  | Settings dialog: build and show / close | 225 ms / 4 ms |
+
+  So creating an ONNX session keeps the lock (ONNX Runtime releases it in
+  `run`, not in the constructor) and Nemotron's decoding does too. Rule:
+  a runtime lease for onnx-asr, Granite CTC or Nemotron is tracked from
+  acquisition to release, whether a preload (the post-resume one
+  included), a batch job or a stream holds it. While such a lease's model
+  is not loaded yet (`is_model_loaded`; the load is lazy and may start at
+  any moment) -- and for Nemotron while the lease lives at all -- a paste
+  is the plain write with no receipt (`paste_receipt_skipped
+  reason=interpreter_busy`). A loaded Parakeet, Canary or Granite CTC
+  model decoding the next queued recording does not cost the paste of
+  the previous result its receipt. faster-whisper, the Node runner
+  (another process)
+  and the remote engines (they wait on a socket; not measured) keep the
+  receipt. Not covered, accepted: a load that *begins* in the 1.5-3 s
+  after an announced paste, and work on the Qt thread in that window
+  (opening Settings), delay a program that fetches the text late by the
+  figures above; the targets measured fetched within 18 ms of the
+  keystroke (EDIT) and a median 4-8 ms (Chrome, Edge).
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,

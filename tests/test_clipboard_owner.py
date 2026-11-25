@@ -448,6 +448,31 @@ def test_close_ends_the_thread_and_destroys_the_window():
     assert owner.start() is False, "a closed owner was started again"
 
 
+def test_a_second_close_does_not_reach_for_the_ended_thread():
+    """`main` closes on quit and again at interpreter exit."""
+    owner, api, _clock = _started()
+    owner.close()
+    posted = []
+    api.post_quit = posted.append
+
+    owner.close()
+
+    assert posted == []
+
+
+def test_a_lone_surrogate_is_handed_out_as_its_code_unit():
+    """A reader of the announced transcript gets what the plain write gave
+    it (pywin32 passes the code units through). Encoding strictly raised
+    inside the window procedure: the reader got nothing, and the receipt
+    still said it had fetched the text."""
+    lone_surrogate = chr(0xD83D)
+
+    payload = clipboard_owner.clipboard_text_payload(f"a{lone_surrogate}z")
+
+    assert payload == bytes([0x61, 0, 0x3D, 0xD8, 0x7A, 0, 0, 0])
+    assert clipboard_owner.clipboard_text_payload(chr(0xFC)) == bytes([0xFC, 0, 0, 0])
+
+
 def test_an_image_name_cannot_break_the_log_line():
     receipt = clipboard_owner.PasteReceipt(
         RECEIPT_UNKNOWN, "other_program", reader="my tool\n.exe", read_ms=5

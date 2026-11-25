@@ -10,6 +10,7 @@ fetched it, and reports that once per paste.
 from __future__ import annotations
 
 import itertools
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -160,6 +161,42 @@ def test_a_transcript_the_user_keeps_is_plain_text_without_a_receipt():
     assert "set:hello" in backend.calls and "offer:hello" not in backend.calls
     assert inserter.pending_receipt_id() is None
     assert scheduler.pending == [] and receipts == []
+
+
+def test_a_paste_is_not_announced_while_the_interpreter_may_be_held():
+    """The owner window answers a reader from a Python callback; while a
+    model loads in this process the reader would wait for it (1.0-1.9 s
+    measured). Such a paste is the plain write, without a receipt."""
+    inserter, backend, scheduler, clock, receipts = _inserter()
+    announce = [False]
+    inserter.set_offer_gate(lambda: announce[0])
+
+    inserter.insert_text_with_options("hello", target_hwnd=77)
+
+    assert "set:hello" in backend.calls and "offer:hello" not in backend.calls
+    assert inserter.pending_receipt_id() is None
+    clock.advance(RESTORE_DELAY_S)
+    scheduler.fire_pending()
+    assert backend.calls[-1] == "restore" and receipts == []
+
+    announce[0] = True
+    inserter.insert_text_with_options("again", target_hwnd=77)
+
+    assert "offer:again" in backend.calls
+    assert inserter.pending_receipt_id() is not None
+
+
+def test_a_gate_that_raises_means_a_plain_write():
+    inserter, backend, _scheduler, _clock, _receipts = _inserter()
+
+    def broken_gate():
+        raise RuntimeError("the controller is gone")
+
+    inserter.set_offer_gate(broken_gate)
+
+    inserter.insert_text_with_options("hello", target_hwnd=77)
+
+    assert "set:hello" in backend.calls and "offer:hello" not in backend.calls
 
 
 def test_a_fetched_transcript_is_restored_at_the_restore_delay_and_reported_read():
@@ -348,6 +385,22 @@ def test_shutdown_restores_at_once_and_closes_the_backend():
     assert scheduler.pending == []
 
 
+def test_a_second_close_at_interpreter_exit_does_nothing():
+    """`main` closes on `aboutToQuit` and again from `atexit`, which also
+    covers an exit that never reached the quit."""
+    inserter, backend, _scheduler, _clock, receipts = _inserter()
+    inserter.insert_text_with_options("hello", target_hwnd=77)
+    inserter.close()
+    calls = list(backend.calls)
+    backend.closed = False
+
+    inserter.close()
+
+    assert backend.calls == calls
+    assert backend.closed is False
+    assert len(receipts) == 1
+
+
 def test_a_paste_refused_before_the_keystroke_has_no_receipt():
     inserter, backend, scheduler, _clock, receipts = _inserter()
 
@@ -516,6 +569,24 @@ def test_without_an_owner_window_the_backend_writes_plain_text(monkeypatch, owne
     assert "set_text" in clipboard.calls and "announce" not in clipboard.calls
     assert backend.offer_intact(1) is False
     assert backend.paste_receipt(1) is NO_RECEIPT
+
+
+@pytest.mark.parametrize("own_window", [500, 502])
+def test_a_paste_into_a_window_of_this_app_is_written_plainly(monkeypatch, own_window):
+    """Qt reads the clipboard on the Qt thread, and a field whose key
+    handling runs through a Python override holds the interpreter lock then:
+    the owner window could not answer. The frame's process or a child
+    window's, either makes the paste our own."""
+    owner = _FakeOwner()
+    backend, clipboard = _offering_backend(monkeypatch, owner)
+    backend._user32._pid_of[own_window] = os.getpid()
+
+    marker = backend.offer_clipboard_text("transcript", 500)
+
+    assert marker == ClipboardMarker(sequence=7, offer=None)
+    assert clipboard.opened_for == [None]
+    assert "set_text" in clipboard.calls and "announce" not in clipboard.calls
+    assert owner.offers == []
 
 
 def test_a_plain_write_never_goes_through_the_owner_window(monkeypatch):

@@ -13,6 +13,7 @@ from __future__ import annotations
 import itertools
 import logging
 
+import pytest
 from conftest import FakeTextInserter
 from test_controller_paste_target_check import (
     FakePasteTargetCheck,
@@ -22,8 +23,15 @@ from test_controller_paste_target_check import (
 )
 
 from stt_app.clipboard_owner import RECEIPT_READ, RECEIPT_UNKNOWN, RECEIPT_UNREAD
-from stt_app.config import OVERLAY_ERROR_ACTION_INSERT, OVERLAY_WARNING_NOT_INSERTED
+from stt_app.config import (
+    GRANITE_CTC_MODEL_SIZE,
+    NEMOTRON_MODEL_SIZE,
+    OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_WARNING_NOT_INSERTED,
+    PARAKEET_MODEL_SIZE,
+)
 from stt_app.paste_target_check import VERDICT_NOT_TEXT_FIELD, VERDICT_TEXT_FIELD
+from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 
 EVIDENCE = "reason=test reader=- read_ms=- refused=0"
@@ -368,3 +376,95 @@ def test_the_same_words_dictated_twice_keep_the_first_ones_receipt(
     rows = _rows(overlay)
     assert len(rows) == 1 and rows[0].startswith("Not inserted")
     controller.shutdown()
+
+
+class _GatedInserter(ReceiptInserter):
+    def __init__(self):
+        super().__init__()
+        self.offer_gate = None
+
+    def set_offer_gate(self, gate):
+        self.offer_gate = gate
+
+
+@pytest.mark.parametrize(
+    ("engine", "model_size", "announced_while_leased"),
+    [
+        ("local", PARAKEET_MODEL_SIZE, False),
+        ("local", GRANITE_CTC_MODEL_SIZE, False),
+        ("local", NEMOTRON_MODEL_SIZE, False),
+        # faster-whisper kept the interpreter for 62 ms at most, the Node
+        # runner is another process and a remote engine waits on a socket.
+        ("local", "tiny", True),
+        ("local", "cohere-transcribe-03-2026", True),
+        ("groq", "tiny", True),
+    ],
+)
+def test_no_paste_is_announced_while_an_in_process_onnx_runtime_is_in_use(
+    monkeypatch, tmp_path, engine, model_size, announced_while_leased
+):
+    """Creating an ONNX session in this process kept the interpreter lock for
+    1.0-1.9 s (measured 2026-11-25): a program fetching an announced
+    transcript would wait that long for the owner window's Python callback.
+    The controller's leases say when a preload, a job or a stream may do it."""
+    inserter = _GatedInserter()
+    controller, app, _overlay, _inserter, _beeps = _make(
+        monkeypatch, tmp_path, FakePasteTargetCheck(), inserter=inserter
+    )
+    assert inserter.offer_gate() is True
+    settings = AppSettings(engine=engine, model_size=model_size)
+
+    lease = controller._acquire_transcriber_runtime(settings)
+
+    assert inserter.offer_gate() is announced_while_leased
+    lease.release()
+    lease.release()
+    assert inserter.offer_gate() is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_loaded_onnx_model_no_longer_blocks_the_announcement(monkeypatch, tmp_path):
+    """Parakeet and Granite CTC run their graphs without the lock (10 ms and
+    4 ms measured): once the model is loaded, a job that decodes while an
+    earlier result is pasted costs that paste nothing. Nemotron's decoding
+    kept the lock for up to 0.8 s."""
+    inserter = _GatedInserter()
+    controller, app, _overlay, _inserter, _beeps = _make(
+        monkeypatch, tmp_path, FakePasteTargetCheck(), inserter=inserter
+    )
+    parakeet = AppSettings(engine="local", model_size=PARAKEET_MODEL_SIZE)
+    lease = controller._acquire_transcriber_runtime(parakeet)
+    assert inserter.offer_gate() is False
+
+    lease.transcriber.is_model_loaded = lambda: True
+
+    assert inserter.offer_gate() is True
+    lease.release()
+    nemotron = AppSettings(engine="local", model_size=NEMOTRON_MODEL_SIZE)
+    lease = controller._acquire_transcriber_runtime(nemotron)
+    lease.transcriber.is_model_loaded = lambda: True
+    assert inserter.offer_gate() is False
+    lease.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_two_leases_of_an_onnx_runtime_both_have_to_end(monkeypatch, tmp_path):
+    """A stream and an overlapping batch job: the second gets a runtime of
+    its own, and the paste stays plain until both are released."""
+    inserter = _GatedInserter()
+    controller, app, _overlay, _inserter, _beeps = _make(
+        monkeypatch, tmp_path, FakePasteTargetCheck(), inserter=inserter
+    )
+    settings = AppSettings(engine="local", model_size=NEMOTRON_MODEL_SIZE)
+
+    shared = controller._acquire_transcriber_runtime(settings)
+    isolated = controller._acquire_transcriber_runtime(settings)
+    shared.release()
+
+    assert inserter.offer_gate() is False
+    isolated.release()
+    assert inserter.offer_gate() is True
+    controller.shutdown()
+    _ = app

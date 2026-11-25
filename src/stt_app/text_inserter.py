@@ -5,6 +5,7 @@ import ctypes
 import ctypes.wintypes
 import itertools
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
@@ -772,13 +773,21 @@ class Win32ClipboardBackend:
         later say whether the paste's target fetched it. `reader_hwnd` is the
         window the paste goes to. Without an owner window this is the plain
         write, and the marker carries no offer.
+
+        So it is for a paste into a window of this process. Qt then reads
+        the clipboard on the Qt thread, and the owner window answers a
+        read from a Python callback on its own thread: a text field whose
+        key handling runs through a Python override holds the interpreter
+        lock at that moment, and the Qt thread stood still for 35 s
+        (measured 2026-11-25, `scripts/diagnose_own_window_paste.py`).
         """
         owner = self._owner
-        if owner is None or not owner.start():
+        if owner is None:
             return self.set_clipboard_text(text, exclude_from_history=True)
-        return self._write_clipboard_text(
-            text, True, readers=self._reader_pids(reader_hwnd)
-        )
+        readers = self._reader_pids(reader_hwnd)
+        if os.getpid() in readers or not owner.start():
+            return self.set_clipboard_text(text, exclude_from_history=True)
+        return self._write_clipboard_text(text, True, readers=readers)
 
     def _write_clipboard_text(
         self, text: str, exclude_from_history: bool, *, readers: frozenset[int] | None
@@ -1673,6 +1682,9 @@ class TextInserter:
         # final: `(transaction id, verdict, evidence)`, on whichever thread
         # ended the paste's hold on the clipboard.
         self._receipt_handler = None
+        # Whether a transcript may be announced right now (`set_offer_gate`).
+        self._offer_gate = None
+        self._closed = False
         # The offer our last transcript write announced; None after a plain
         # write. `_clipboard_changed_after_set` asks about that write.
         self._offer: int | None = None
@@ -1709,6 +1721,31 @@ class TextInserter:
     def set_paste_receipt_handler(self, handler) -> None:
         """Who hears whether a paste's target fetched the transcript."""
         self._receipt_handler = handler
+
+    def set_offer_gate(self, gate) -> None:
+        """Who says whether a transcript may be announced right now.
+
+        The owner window hands the announced text out from a Python
+        callback, so the program that asks waits for the interpreter
+        lock. ``gate()`` answers False while this process is in a state
+        measured to hold that lock for longer than about 100 ms (the
+        controller: `_paste_may_be_announced`); the paste is then the
+        plain write, with no receipt, as before the receipt existed.
+        """
+        self._offer_gate = gate
+
+    def _may_announce(self) -> bool:
+        gate = self._offer_gate
+        if gate is None:
+            return True
+        try:
+            allowed = bool(gate())
+        except Exception:
+            _LOGGER.debug("The offer gate raised", exc_info=True)
+            allowed = False
+        if not allowed:
+            _LOGGER.info("paste_receipt_skipped reason=interpreter_busy")
+        return allowed
 
     def pending_receipt_id(self) -> int | None:
         """The transaction id the last paste's receipt will be reported
@@ -2164,11 +2201,11 @@ class TextInserter:
 
         A transcript the transaction replaces with the user's own content
         afterwards is announced where the backend can (`offer_clipboard_text`:
-        the read receipt); one the user keeps is ordinary data that outlives
-        this app.
+        the read receipt) and the process may (`set_offer_gate`); one the
+        user keeps is ordinary data that outlives this app.
         """
         offer = getattr(self._backend, "offer_clipboard_text", None)
-        if restore_clipboard and callable(offer):
+        if restore_clipboard and callable(offer) and self._may_announce():
             return offer(text, reader_hwnd)
         return self._backend.set_clipboard_text(
             text, exclude_from_history=restore_clipboard
@@ -2726,7 +2763,15 @@ class TextInserter:
             self._finish_restore(record, may_retry=False)
 
     def close(self) -> None:
-        """Shutdown: restore the clipboard now, then end the owner window."""
+        """Shutdown: restore the clipboard now, then end the owner window.
+
+        Called on `aboutToQuit` and again at interpreter exit (`main`),
+        which also covers an exit that never reached the quit; the second
+        call does nothing.
+        """
+        if self._closed:
+            return
+        self._closed = True
         try:
             self.flush_pending_restore()
         finally:
