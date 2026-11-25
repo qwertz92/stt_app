@@ -352,20 +352,22 @@ class _AudioTabMixin:
         self.recordings_max_spin.setSpecialValueText("Unlimited (0)")
         self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
         self.recordings_max_spin.setToolTip(
-            "Keep only the newest N archived recordings; 0 keeps every one. "
-            "Kept copies and untranscribed recordings are never deleted."
+            "Keep only the newest N archived recordings (recording_*.wav); 0 "
+            "keeps every one. Never deleted automatically: copies kept because "
+            "part of a recording returned no text (kept_*.wav, same folder) and "
+            "recordings not yet transcribed (unfinished recordings folder, "
+            "offered at startup). Independent of History Size: History entries "
+            "whose archived audio was removed stay, but can no longer be "
+            "retranscribed."
         )
         # D6 of 2026-11-24: the owner keeps 500 of each and could not tell
         # whether the two limits depend on each other. Corrected 2026-11-25:
-        # the count covers the archive only (kept copies left it again).
+        # the count covers the archive only (kept copies left it again). The
+        # hint stays two lines so the Audio tab fits 860x960 without a
+        # scrollbar; the folders and the History rule are in the tooltip.
         self.recordings_max_hint_label = QtWidgets.QLabel(
-            "Limits the archived recordings in the recordings folder, oldest "
-            "removed first; 0 = keep every recording. Never deleted "
-            "automatically: copies kept because part of a recording returned "
-            "no text (kept_*.wav, same folder) and recordings not yet "
-            "transcribed (unfinished recordings folder, offered at startup). "
-            "Independent of History Size: History entries whose archived audio "
-            "was removed stay, but can no longer be retranscribed."
+            "Oldest archived recordings go first; 0 = keep every recording. "
+            "Kept copies and untranscribed audio are never deleted."
         )
         self.recordings_max_hint_label.setWordWrap(True)
         self._style_field_hint_label(self.recordings_max_hint_label)

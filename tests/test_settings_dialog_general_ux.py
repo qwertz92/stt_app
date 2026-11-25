@@ -894,14 +894,16 @@ def test_recordings_retention_offers_unlimited_at_zero(
     hint = dialog.recordings_max_hint_label.text()
     assert "0 = keep every recording" in hint
     assert "0 keeps every one" in spin.toolTip()
-    # D6 of 2026-11-24, corrected 2026-11-25: it limits the archive only,
-    # names what it never deletes and where that is, and says what a History
-    # entry loses when its audio goes.
+    # D6 of 2026-11-24, corrected 2026-11-25: the hint says it limits the
+    # archive only and what it never deletes; the tooltip names where that
+    # is and what a History entry loses when its audio goes (the hint stays
+    # short enough for the Audio tab to fit without a scrollbar).
     assert "archived recordings" in hint
-    assert "Never deleted automatically" in hint
-    assert "kept_" in hint and "unfinished recordings folder" in hint
-    assert "Independent of History Size" in hint
-    assert "can no longer be retranscribed" in hint
+    assert "never deleted" in hint
+    tip = spin.toolTip()
+    assert "kept_" in tip and "unfinished recordings folder" in tip
+    assert "Independent of History Size" in tip
+    assert "can no longer be retranscribed" in tip
 
 
 def test_a_saved_unlimited_recordings_count_reloads_as_unlimited(
