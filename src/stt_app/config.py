@@ -1572,7 +1572,7 @@ RETIRED_REMOTE_MODELS: dict[str, dict[str, str]] = {
 # `assemblyai-stt-3-7-realtime` value of the streaming `SpeechModel` enum, so a
 # checkout whose packages were not updated after a `git pull` failed with a raw
 # validation error in the middle of a dictation
-# (`tests/test_assemblyai_provider.py` keeps this equal to the pin).
+# (`tests/test_assemblyai_stale_sdk.py` keeps this equal to the pin).
 ASSEMBLYAI_MIN_SDK_VERSION = "1.10.11"
 ASSEMBLYAI_MODELS = (
     "assemblyai-stt-3-7",
@@ -1772,7 +1772,8 @@ def normalize_speechmatics_region(value: object) -> str:
 # table gives as its Model ID with `voxtral-mini-transcribe-3` as an alias. Small
 # uses `voxtral-small-transcribe-3`: it is the form in the file-transcription
 # page's `model` field ("`voxtral-mini-transcribe-3` or
-# `voxtral-small-transcribe-3`"), in every request example, and in the
+# `voxtral-small-transcribe-3`"; the examples themselves only use Mini)
+# and in the
 # migration table's alias column, while that table gives Small's Model ID as
 # `voxtral-small-transcribe-latest` and only the models and languages pages
 # write `voxtral-small-transcribe-3-0`, so the dated form is not confirmed.

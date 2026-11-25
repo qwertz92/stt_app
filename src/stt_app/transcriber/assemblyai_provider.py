@@ -61,8 +61,9 @@ def sdk_version_problem() -> str | None:
     installed = installed_version("assemblyai")
     if installed is None or version_at_least(installed, ASSEMBLYAI_MIN_SDK_VERSION):
         return None
+    version_text = f"version {installed}" if installed.strip() else "an unknown version"
     return (
-        f"The installed AssemblyAI SDK is {installed}, but this version of the app "
+        f"The installed AssemblyAI SDK is {version_text}, but this version of the app "
         f"needs {ASSEMBLYAI_MIN_SDK_VERSION} or newer. Update the Python packages "
         "in the app folder with `uv sync` (a uv environment) or "
         "`pip install -r requirements-win.txt`, then restart the app."

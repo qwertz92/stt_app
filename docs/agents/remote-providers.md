@@ -261,8 +261,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   slightly more accurate), pinned rather than the `-latest` aliases.
   **Small's id was settled 2026-11-25** from the `llms/studio/audio/*` pages
   read raw: the file-transcription page's `model` field says
-  "`voxtral-mini-transcribe-3` or `voxtral-small-transcribe-3`", all its
-  request examples use the `-3` forms, and the Voxtral 3 migration table lists
+  "`voxtral-mini-transcribe-3` or `voxtral-small-transcribe-3`" (its
+  request examples only use Mini, as `voxtral-mini-transcribe-3`), and the Voxtral 3 migration table lists
   `voxtral-small-transcribe-3` as an alias of Small, while giving its Model ID
   as `voxtral-small-transcribe-latest` (and Mini's as the dated
   `voxtral-mini-transcribe-3-0`). Only the models and languages pages write

@@ -59,6 +59,16 @@ def test_the_connection_test_says_it_without_calling_the_service(stale):
     urlopen.assert_not_called()
 
 
+def test_an_empty_installed_version_is_called_unknown(monkeypatch):
+    monkeypatch.setattr(_INSTALLED, lambda _name: "")
+
+    problem = sdk_version_problem()
+
+    assert problem is not None
+    assert "an unknown version" in problem
+    assert "is ," not in problem
+
+
 def test_the_pinned_version_or_newer_is_accepted(monkeypatch):
     for version in ("1.10.11", "1.10.12", "1.11.0", "2.0.0"):
         monkeypatch.setattr(_INSTALLED, lambda _name, version=version: version)
