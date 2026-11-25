@@ -207,6 +207,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   refusing their first fetch was tried and rejected (same entry in
   `docs/agents/text-insertion.md`): it works in Edge, half in Chrome, and
   empties every text field paste in Electron.
+- **Quitting through "Wait and insert" cuts the read receipt short**
+  (2026-11-25, review, recorded only). The quit puts the clipboard back at
+  once (`TextInserter.close`), so the last paste's transcript does not stay
+  for the 3 s an unfetched one normally gets, and its receipt is taken as it
+  stands at that moment and shown to nobody: a last paste that reached no
+  program is neither reported nor offered again. Its text is in History.
+- **Two WSLg instances and the read receipt (hypothesis, 2026-11-25).** A
+  request from `msrdc.exe` counts as the paste's reader only when that
+  process owns the target window (`CLIPBOARD_SYNC_PROGRAMS`); otherwise it
+  is WSLg's clipboard sync and is refused. With two WSLg instances running
+  there are two `msrdc.exe` processes, and the one that carries the
+  clipboard into Linux may not be the one that owns the target window: a
+  paste into a Linux window of the other instance would then be refused its
+  text and reported `unread`. Not reproduced (one instance on the
+  development machine). Settle it with two distributions open, one paste
+  into a window of each, and the `paste_receipt` lines of both.
 - **A true-miss "not in a text field" row ends with the next paste**
   (2026-10-03, deliberate). Any later successful paste -- into any window
   -- drops it (`_drop_superseded_doubtful_rows`), so a paste that really
