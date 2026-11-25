@@ -1958,17 +1958,19 @@ class DictationController(QtCore.QObject):
                     # ones: Parakeet and Canary are batch-only too and fell
                     # into the branch below, which told a user who is already
                     # on the local engine to "use local".
+                    # Named as the pickers name it: the raw settings id
+                    # matched nothing on screen.
+                    name = _local_model_display_name(self._settings.model_size)
                     detail = (
                         f"Streaming is not available for the local model "
-                        f"'{self._settings.model_size}'. Switch to batch mode, "
-                        "or choose a faster-whisper or Nemotron local model "
-                        "for streaming."
+                        f"{name}. In Settings > Transcription, set Mode to "
+                        "Batch or pick a Whisper or Nemotron model."
                     )
                 else:
                     detail = (
                         "Streaming is not available for the selected provider. "
-                        "Switch to batch mode, or use local/AssemblyAI/Deepgram "
-                        "for streaming."
+                        "In Settings > Transcription, set Mode to Batch or pick "
+                        "Local, AssemblyAI or Deepgram."
                     )
                 self._refuse_recording_start(detail)
                 return
