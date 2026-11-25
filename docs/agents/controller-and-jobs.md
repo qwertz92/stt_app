@@ -41,8 +41,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
 - **Custom vocabulary** (`custom_vocabulary`): `config.parse_custom_vocabulary`
   (newline/comma/semicolon split, case-insensitive dedupe, 100-term cap).
   Wired to faster-whisper `initial_prompt` (batch + rolling streaming),
-  OpenAI/Groq `prompt`, AssemblyAI `keyterms_prompt` (batch Universal-3.5
-  Pro, streaming Universal-3.6 Pro), Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) with `doseq`.
+  OpenAI/Groq `prompt`, AssemblyAI `keyterms_prompt` (batch STT-3.7,
+  streaming STT-3.7-Realtime), Deepgram repeated `keyterm` with `doseq`.
   ElevenLabs, Azure, Fun-ASR, Nemotron, Cohere/Granite ONNX: no input.
 - **Managed audio imports snapshot bytes plus `recording_id`** before
   submitting; completion/failure are compare-and-set, so an old import cannot
@@ -230,9 +230,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   `Lang: Auto` when auto is the only mode) and provider validation. Cohere never exposes Auto. The controller asks
   it through `_offered_language_modes()` -- the active engine's own model
   (`_selected_model_name`), never `model_size`, which is the local model:
-  asked with it, every remote model with a list of its own (Deepgram nova-2 and
-  nova-3, AssemblyAI Universal 3.5 Pro, Azure MAI-Transcribe 1 and 1.5,
-  Speechmatics Enhanced and Standard) showed, and `set_language_mode` accepted,
+  asked with it, every remote model with a list of its own (as of 2026-10-17: Deepgram
+  nova-2 and nova-3, AssemblyAI, Speechmatics Enhanced and Standard; nova-2 and
+  Standard were removed on 2026-11-24) showed, and `set_language_mode` accepted,
   the engine's default list (2026-10-17;
   `test_overlay_language_list_is_the_remote_models_own`).
 - **Concurrent mode + cooperative cancel: a finished transcription is never

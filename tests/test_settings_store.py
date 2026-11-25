@@ -356,19 +356,17 @@ def test_elevenlabs_engine_is_valid(tmp_path):
 
 def test_openai_model_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
-    # At the current schema, so this pins the round trip and not the
-    # gpt-transcribe adoption, which has tests of its own below.
     settings_path.write_text(
         json.dumps(
             {
                 "schema_version": CURRENT_SCHEMA_VERSION,
-                "openai_model": "gpt-4o-transcribe",
+                "openai_model": "gpt-transcribe",
             }
         ),
         encoding="utf-8",
     )
     settings = SettingsStore(settings_path).load()
-    assert settings.openai_model == "gpt-4o-transcribe"
+    assert settings.openai_model == "gpt-transcribe"
 
 
 def test_openai_model_invalid_falls_back_to_default(tmp_path):
@@ -386,17 +384,17 @@ def test_remote_provider_models_roundtrip(tmp_path):
     settings_path.write_text(
         json.dumps(
             {
-                "deepgram_model": "nova-2",
+                "deepgram_model": "nova-3",
                 "assemblyai_model": "universal-2",
-                "elevenlabs_model": "scribe_v2",
+                "elevenlabs_model": "scribe_v3",
             }
         ),
         encoding="utf-8",
     )
     settings = SettingsStore(settings_path).load()
-    assert settings.deepgram_model == "nova-2"
+    assert settings.deepgram_model == "nova-3"
     assert settings.assemblyai_model == "universal-2"
-    assert settings.elevenlabs_model == "scribe_v2"
+    assert settings.elevenlabs_model == "scribe_v3"
 
 
 def test_removed_elevenlabs_model_falls_back_to_default(tmp_path):
@@ -423,16 +421,21 @@ def test_legacy_assemblyai_model_falls_back_to_default(tmp_path):
     assert settings.assemblyai_model == DEFAULT_ASSEMBLYAI_MODEL
 
 
-def test_universal_3_pro_migrates_to_universal_3_5_pro(tmp_path):
+@pytest.mark.parametrize("retired", ["universal-3-5-pro", "universal-3-pro"])
+def test_the_retired_universal_3_models_move_to_stt_3_7(tmp_path, retired):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"assemblyai_model": "universal-3-pro"}),
+        json.dumps({"engine": "assemblyai", "assemblyai_model": retired}),
         encoding="utf-8",
     )
+    store = SettingsStore(settings_path)
 
-    settings = SettingsStore(settings_path).load()
+    settings = store.load()
 
-    assert settings.assemblyai_model == "universal-3-5-pro"
+    assert settings.assemblyai_model == "assemblyai-stt-3-7"
+    notice = store.take_model_notice()
+    assert "AssemblyAI" in notice and retired in notice
+    assert "assemblyai-stt-3-7" in notice
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):
@@ -1039,6 +1042,32 @@ def test_deliberate_silence_gate_off_is_kept(tmp_path, monkeypatch):
     assert settings.silence_gate_enabled is False
 
 
+def test_a_schema_version_written_as_a_string_still_counts(tmp_path, monkeypatch):
+    """`_int_or_none` parses it, so a hand-edited "<current>" is the current
+    schema and not an unreadable value that would re-run the migrations (here
+    the silence-gate default flip, which would turn a deliberate "off" on)."""
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {
+            "schema_version": str(CURRENT_SCHEMA_VERSION),
+            "silence_gate_enabled": False,
+        },
+    )
+
+    assert settings.silence_gate_enabled is False
+
+
+def test_a_string_schema_version_below_a_migration_still_runs_it(tmp_path, monkeypatch):
+    settings = _load_settings_file(
+        tmp_path,
+        monkeypatch,
+        {"schema_version": "21", "silence_gate_enabled": False},
+    )
+
+    assert settings.silence_gate_enabled is True
+
+
 def _load_settings_file(tmp_path, monkeypatch, payload):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     path = tmp_path / "stt_app" / "settings.json"
@@ -1047,120 +1076,42 @@ def _load_settings_file(tmp_path, monkeypatch, payload):
     return SettingsStore(path).load()
 
 
-def test_an_azure_engine_that_was_never_configured_adopts_the_current_model(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("schema", [0, 23, CURRENT_SCHEMA_VERSION])
+@pytest.mark.parametrize("retired", ["mai-transcribe-1.5", "mai-transcribe-1"])
+@pytest.mark.parametrize("endpoint", ["", "https://res.cognitiveservices.azure.com"])
+def test_the_retired_mai_models_load_as_mai_transcribe_2(
+    tmp_path, monkeypatch, schema, retired, endpoint
 ):
-    """Every file written before MAI-Transcribe-2 existed carries the
-    previous default, so the stored value is not a choice -- and without an
-    endpoint the engine could never run, so nothing was chosen at all. Left
-    alone, setting Azure up later would silently use the older model at
-    3.6 times the price."""
+    """Whatever the schema or the endpoint, neither older model is kept."""
     settings = _load_settings_file(
         tmp_path,
         monkeypatch,
-        {"schema_version": 23, "azure_speech_model": "mai-transcribe-1.5"},
+        {
+            "schema_version": schema,
+            "azure_speech_model": retired,
+            "azure_endpoint": endpoint,
+        },
     )
 
     assert settings.azure_speech_model == "mai-transcribe-2"
 
 
-def test_a_configured_azure_engine_keeps_its_model(tmp_path, monkeypatch):
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": 23,
-            "azure_speech_model": "mai-transcribe-1.5",
-            "azure_endpoint": "https://res.cognitiveservices.azure.com",
-        },
-    )
-
-    assert settings.azure_speech_model == "mai-transcribe-1.5"
-
-
-def test_an_azure_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
-    """The adoption happens once: a model picked before the endpoint is
-    entered must not flip back on the next load."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "azure_speech_model": "mai-transcribe-1.5",
-        },
-    )
-
-    assert settings.azure_speech_model == "mai-transcribe-1.5"
-
-
-def test_an_openai_engine_that_was_never_configured_adopts_the_current_model(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("schema", [0, 24, CURRENT_SCHEMA_VERSION])
+@pytest.mark.parametrize(
+    "retired", ["gpt-4o-mini-transcribe", "gpt-4o-transcribe", "whisper-1"]
+)
+def test_the_three_retired_openai_models_load_as_gpt_transcribe(
+    tmp_path, monkeypatch, schema, retired
 ):
-    """Every file written before `gpt-transcribe` existed carries
-    `gpt-4o-mini-transcribe` for everyone, so the stored value is not a
-    choice -- and with no OpenAI key the engine could never run, so nothing
-    was chosen at all. Left alone, adding a key later would silently pick a
-    model OpenAI removes from the API on 2027-02-26."""
+    """Files written before `gpt-transcribe` existed carry `gpt-4o-mini-transcribe`
+    for everyone; whatever the schema or the key, none of the three is kept."""
     settings = _load_settings_file(
         tmp_path,
         monkeypatch,
-        {"schema_version": 24, "openai_model": "gpt-4o-mini-transcribe"},
+        {"schema_version": schema, "openai_model": retired},
     )
 
     assert settings.openai_model == "gpt-transcribe"
-
-
-def test_a_configured_openai_engine_keeps_its_model(tmp_path, monkeypatch):
-    """A stored key is this engine's equivalent of Azure's endpoint: it is
-    written on every save, so it is the evidence that the engine was set up
-    and that the model beside it was looked at."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": 24,
-            "openai_model": "gpt-4o-mini-transcribe",
-            "has_openai_key": True,
-        },
-    )
-
-    assert settings.openai_model == "gpt-4o-mini-transcribe"
-
-
-def test_an_openai_model_chosen_at_the_current_schema_is_kept(tmp_path, monkeypatch):
-    """The adoption happens once: a model picked before the key is entered
-    must not flip back on the next load."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {
-            "schema_version": CURRENT_SCHEMA_VERSION,
-            "openai_model": "whisper-1",
-        },
-    )
-
-    assert settings.openai_model == "whisper-1"
-
-
-def test_an_openai_model_in_a_file_without_a_schema_version_is_adopted(
-    tmp_path, monkeypatch
-):
-    """A missing key reads as schema 0, which is older than 25."""
-    settings = _load_settings_file(tmp_path, monkeypatch, {"openai_model": "whisper-1"})
-
-    assert settings.openai_model == "gpt-transcribe"
-
-
-def test_a_schema_version_written_as_a_string_still_counts(tmp_path, monkeypatch):
-    """`_int_or_none` parses it, so a hand-edited "25" is the current schema
-    and not an unreadable value that would re-run the migration."""
-    settings = _load_settings_file(
-        tmp_path,
-        monkeypatch,
-        {"schema_version": str(CURRENT_SCHEMA_VERSION), "openai_model": "whisper-1"},
-    )
-
-    assert settings.openai_model == "whisper-1"
 
 
 def test_an_openai_model_id_this_build_does_not_know_falls_back(tmp_path, monkeypatch):
@@ -1807,7 +1758,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         speechmatics_model="enhanced",
         speechmatics_region="us1",
         has_speechmatics_key=True,
-        mistral_model="voxtral-mini-2602",
+        mistral_model="voxtral-mini-transcribe-3-0",
         has_mistral_key=True,
     )
     store.save(saved)
@@ -1815,7 +1766,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
 
     older = AppSettings.from_dict({"schema_version": 25})
     assert (older.speechmatics_model, older.speechmatics_region) == ("melia-1", "eu1")
-    assert older.mistral_model == "voxtral-mini-2602"
+    assert older.mistral_model == "voxtral-mini-transcribe-3-0"
     assert not older.has_speechmatics_key and not older.has_mistral_key
 
     damaged = AppSettings.from_dict(
@@ -1829,7 +1780,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         "melia-1",
         "eu1",
     )
-    assert damaged.mistral_model == "voxtral-mini-2602"
+    assert damaged.mistral_model == "voxtral-mini-transcribe-3-0"
     assert (
         AppSettings.from_dict({"speechmatics_region": " AU1 "}).speechmatics_region
         == "au1"
@@ -1839,8 +1790,8 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
 @pytest.mark.parametrize(
     ("engine", "field", "model"),
     [
-        ("speechmatics", "speechmatics_model", "standard"),
-        ("mistral", "mistral_model", "voxtral-mini-2602"),
+        ("speechmatics", "speechmatics_model", "enhanced"),
+        ("mistral", "mistral_model", "voxtral-small-transcribe-3"),
     ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):
@@ -1858,3 +1809,170 @@ def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
+
+
+_RETIRED = {"openai": {"gpt-4o-transcribe": "gpt-transcribe"}}
+
+
+def _write_settings(tmp_path, values):
+    path = tmp_path / "settings.json"
+    path.write_text(json.dumps(values), encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("vocabulary", "mentioned"),
+    [("Kubernetes, Splunk", True), ("", False), ("   ", False)],
+)
+def test_standard_with_a_vocabulary_says_melia_ignores_it(
+    tmp_path, vocabulary, mentioned
+):
+    # Melia 1 has no custom dictionary and the move keeps the cheaper Melia 1,
+    # so only a user who had a vocabulary is told, and told what to pick.
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "speechmatics",
+            "speechmatics_model": "standard",
+            "custom_vocabulary": vocabulary,
+        },
+    )
+    store = SettingsStore(path)
+
+    assert store.load().speechmatics_model == "melia-1"
+
+    notice = store.take_model_notice()
+    assert "standard is no longer offered" in notice
+    assert ("does not use your custom vocabulary" in notice) is mentioned
+    assert ("Enhanced" in notice) is mentioned
+
+
+def test_a_retired_model_choice_moves_once_and_is_announced_once(tmp_path, monkeypatch):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "openai",
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+    settings = store.load()
+
+    assert settings.openai_model == "gpt-transcribe"
+    notice = store.take_model_notice()
+    assert "OpenAI" in notice
+    assert "gpt-4o-transcribe" in notice
+    assert "gpt-transcribe" in notice
+    assert store.take_model_notice() == ""
+    # The move is written back, so the next start has nothing to announce.
+    assert json.loads(path.read_text(encoding="utf-8"))["openai_model"] == (
+        "gpt-transcribe"
+    )
+    again = SettingsStore(path)
+    assert again.load().openai_model == "gpt-transcribe"
+    assert again.take_model_notice() == ""
+
+
+def test_a_retired_model_of_an_engine_in_use_by_key_is_announced(tmp_path, monkeypatch):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "has_openai_key": True,
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == "gpt-transcribe"
+    assert "OpenAI" in store.take_model_notice()
+
+
+def test_a_retired_model_of_an_unused_engine_moves_without_a_notice(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "local",
+            "openai_model": "gpt-4o-transcribe",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == "gpt-transcribe"
+    assert store.take_model_notice() == ""
+
+
+def test_a_damaged_model_id_falls_to_the_default_without_a_notice(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("stt_app.settings_store.RETIRED_REMOTE_MODELS", _RETIRED)
+    path = _write_settings(
+        tmp_path,
+        {
+            "schema_version": CURRENT_SCHEMA_VERSION,
+            "engine": "openai",
+            "openai_model": "not-a-model",
+        },
+    )
+
+    store = SettingsStore(path)
+
+    assert store.load().openai_model == DEFAULT_OPENAI_MODEL
+    assert store.take_model_notice() == ""
+
+
+def _retired_moves():
+    from stt_app.config import RETIRED_REMOTE_MODELS
+
+    return [
+        (engine, old, new)
+        for engine, moves in RETIRED_REMOTE_MODELS.items()
+        for old, new in moves.items()
+    ]
+
+
+@pytest.mark.parametrize(("engine", "old", "new"), _retired_moves())
+def test_every_retired_model_moves_to_an_offered_successor(tmp_path, engine, old, new):
+    from stt_app.config import (
+        ASSEMBLYAI_MODELS,
+        AZURE_SPEECH_MODELS,
+        DEEPGRAM_MODELS,
+        ELEVENLABS_MODELS,
+        MISTRAL_MODELS,
+        OPENAI_MODELS,
+        SPEECHMATICS_MODELS,
+    )
+    from stt_app.settings_store import _REMOTE_MODEL_FIELDS
+
+    offered = {
+        "assemblyai": ASSEMBLYAI_MODELS,
+        "azure": AZURE_SPEECH_MODELS,
+        "deepgram": DEEPGRAM_MODELS,
+        "elevenlabs": ELEVENLABS_MODELS,
+        "mistral": MISTRAL_MODELS,
+        "openai": OPENAI_MODELS,
+        "speechmatics": SPEECHMATICS_MODELS,
+    }[engine]
+    assert old not in offered
+    assert new in offered
+    field = _REMOTE_MODEL_FIELDS[engine]
+    path = _write_settings(
+        tmp_path,
+        {"schema_version": CURRENT_SCHEMA_VERSION, "engine": engine, field: old},
+    )
+    store = SettingsStore(path)
+
+    assert getattr(store.load(), field) == new
+    assert old in store.take_model_notice()

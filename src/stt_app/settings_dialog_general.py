@@ -88,22 +88,15 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "and streaming."
     ),
     "deepgram": (
-        "{name} uses the custom vocabulary as keyterm (Nova-3) or keywords "
-        "(Nova-2), in batch and streaming."
+        "{name} uses the custom vocabulary as keyterm, in batch and streaming."
     ),
-    # Two request shapes, named the way Deepgram's line names its two: the
-    # terms go out as repeated keywords for gpt-transcribe and as the request
-    # prompt for the three older models.
-    "openai": (
-        "{name} uses the custom vocabulary as keywords (gpt-transcribe) or "
-        "the request prompt (older models), batch only."
-    ),
+    "openai": "{name} uses the custom vocabulary as keywords, batch only.",
     "groq": "{name} uses the custom vocabulary as the request prompt (batch only).",
     "custom": (
         "{name} uses the custom vocabulary as the request prompt, or as a "
         "spelling instruction in the chat style (batch only)."
     ),
-    # Enhanced and Standard only; Melia 1 gets the "ignores" sentence.
+    # Enhanced only; Melia 1 gets the "ignores" sentence.
     "speechmatics": (
         "{name} uses the custom vocabulary as its additional vocabulary (batch only)."
     ),
@@ -268,6 +261,12 @@ class _GeneralTabMixin:
         self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
             self.language_combo.addItem(LANGUAGE_MODE_LABELS.get(value, value), value)
+        # A saved language the selected engine does not offer is shown as the
+        # engine's first choice (Auto) but is not the user's decision:
+        # (shown value, saved language). Any change of the combo ends it.
+        self._language_fallback: tuple[str, str] | None = None
+        self.language_combo.currentIndexChanged.connect(self._forget_language_fallback)
+        self.language_combo.activated.connect(self._forget_language_fallback)
         self.language_note_label = QtWidgets.QLabel("")
         self.language_note_label.setWordWrap(True)
         self._style_field_hint_label(self.language_note_label)
@@ -679,7 +678,7 @@ class _GeneralTabMixin:
         elif provider == "elevenlabs":
             note = (
                 "The selected model applies to batch dictation and audio imports. "
-                "Realtime Scribe exists, but is not yet wired into this app."
+                "Scribe v3 Live exists, but is not yet wired into this app."
             )
         elif provider == "azure":
             # Only the endpoint is named here; the key is the sentence every
@@ -691,8 +690,8 @@ class _GeneralTabMixin:
             )
         elif provider == "funasr":
             note = (
-                "Cloud, batch-only, with 31 languages focused on Chinese and "
-                "East/Southeast Asia, but no German. Use Azure or local for German."
+                "Cloud, batch-only, with 30 languages (German included) focused on "
+                "Chinese and East/Southeast Asia."
             )
         # Every remote engine needs a key, and the tab that holds it is no
         # longer called Remote. Inside the two reserved lines: measured, the
@@ -792,7 +791,7 @@ class _GeneralTabMixin:
 
         if engine == "assemblyai":
             return (
-                "Universal-3.5 Pro supports 18 languages at the highest accuracy. "
+                "AssemblyAI-STT-3.7 supports 32 languages at the highest accuracy. "
                 "Universal-2 is the lower-cost choice for broader coverage."
             )
 
@@ -815,17 +814,27 @@ class _GeneralTabMixin:
 
         if engine == "funasr":
             return (
-                "Fun-ASR is multilingual across 31 languages but does NOT support "
-                "German. 'Auto' auto-detects; selecting one sends a language hint."
+                "Fun-ASR is multilingual across 30 languages. 'Auto' auto-detects; "
+                "selecting one sends a language hint."
             )
 
         return ""
 
+    def _forget_language_fallback(self, *_args: object) -> None:
+        self._language_fallback = None
+
     def _update_language_availability(self, preferred_mode: str | None = None) -> None:
         supported_modes = self._language_modes_for_current_selection()
-        selected_mode = preferred_mode or str(
-            self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
-        )
+        shown_mode = str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
+        fallback = self._language_fallback
+        if preferred_mode:
+            selected_mode = preferred_mode
+        elif fallback is not None and shown_mode == fallback[0]:
+            # Still the engine's stand-in for the saved language: offer the
+            # saved one again (another engine or model may know it).
+            selected_mode = fallback[1]
+        else:
+            selected_mode = shown_mode
 
         self.language_combo.blockSignals(True)
         self.language_combo.clear()
@@ -840,6 +849,11 @@ class _GeneralTabMixin:
         )
         self._select_combo_data(self.language_combo, target_mode)
         self.language_combo.blockSignals(False)
+        self._language_fallback = (
+            None
+            if selected_mode in supported_modes
+            else (self._language_mode_shown(), selected_mode)
+        )
 
         note = self._language_constraint_note()
         default_note = (

@@ -585,3 +585,4 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   by another session with the same start second, pid and version; the
   Settings prebuild's single-shot (`main.py`) is context-less and may build
   the dialog during a "Wait and insert" quit.
+- **Deepgram keyterm budget for CJK text (hypothesis, 2026-11-25).** `deepgram_provider.fit_keyterms` estimates one token per three characters of a word plus one per term; Deepgram's tokenizer is not public, and Chinese, Japanese or Korean terms (no spaces, often about one token per character) may cost more than estimated, so a long CJK vocabulary could still pass the 400-token budget and reach the 500-token limit. Unmeasured; a Deepgram error would then name the keyterm limit.

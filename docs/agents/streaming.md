@@ -43,9 +43,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   on a ~350 ms path.
 - **AssemblyAI realtime (v3)**: never reintroduce v2 realtime or
   earlier Universal-Streaming. `assemblyai.streaming.v3.StreamingClient`,
-  model `ASSEMBLYAI_STREAMING_MODEL` (`universal-3-6-pro` since 2026-10-01:
-  streaming-only, same price and parameters as 3.5 Pro, 32 languages; batch
-  stays on `universal-3-5-pro`), optional `keyterms_prompt`, no
+  model `ASSEMBLYAI_STREAMING_MODEL` (`assemblyai-stt-3-7-realtime` since
+  2026-11-24: $0.30/h against $0.45/h for `universal-3-6-pro`, 32 languages,
+  "for notetakers and ambient transcription"; its `-agent` sibling is the
+  voice-agent model and not used; the SDK must be >= 1.10, where the
+  streaming `SpeechModel` enum knows it), optional `keyterms_prompt`, no
   `language_detection` / `format_turns`; the batch selector does not affect
   it. Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
   thread with bounded joins; the 8 s budget covers the text-bearing teardown

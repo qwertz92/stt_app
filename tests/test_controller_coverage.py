@@ -3866,13 +3866,13 @@ def test_transcribe_audio_file_marks_managed_last_recording_completed(
         settings_override=AppSettings(
             hotkey=FALLBACK_HOTKEY,
             engine="deepgram",
-            deepgram_model="nova-2",
+            deepgram_model="nova-3",
         ),
     )
 
     assert ok is True
     assert text == "import text"
-    assert last_recording_store.transcribing == [("deepgram", "nova-2", "import")]
+    assert last_recording_store.transcribing == [("deepgram", "nova-3", "import")]
     assert last_recording_store.completed == 1
     controller.shutdown()
     _ = app

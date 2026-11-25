@@ -764,14 +764,12 @@ def test_remote_model_selector_tracks_selected_provider():
 
     deepgram_idx = dialog.engine_combo.findData("deepgram")
     dialog.engine_combo.setCurrentIndex(deepgram_idx)
-    nova2_idx = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova2_idx)
 
     dialog._save()
 
     assert store.saved is not None
     assert store.saved.groq_model == "whisper-large-v3"
-    assert store.saved.deepgram_model == "nova-2"
+    assert store.saved.deepgram_model == "nova-3"
     _ = app
 
 
@@ -791,7 +789,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
 
     assert dialog.remote_model_combo.isEnabled() is False
-    assert "Universal-3.6 Pro Realtime" in dialog.remote_model_note_label.text()
+    assert "AssemblyAI-STT-3.7 Realtime" in dialog.remote_model_note_label.text()
     assert (
         "batch transcription and audio imports" in dialog.remote_model_note_label.text()
     )
@@ -1527,18 +1525,21 @@ def test_language_options_follow_the_selected_local_model():
 
 def test_deepgram_language_options_follow_selected_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="deepgram", deepgram_model="nova-3"))
+    store = _FakeSettingsStore(
+        AppSettings(engine="speechmatics", speechmatics_model="melia-1")
+    )
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_item_enabled(dialog.language_combo, "ar") is True
-    nova_2_index = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova_2_index)
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    enhanced_index = dialog.remote_model_combo.findData("enhanced")
+    dialog.remote_model_combo.setCurrentIndex(enhanced_index)
 
-    assert _combo_offers(dialog.language_combo, "ar") is False
+    # Only Melia 1 has Auto; Enhanced needs a chosen language.
+    assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "fr") is True
     _ = app
 
@@ -3644,7 +3645,7 @@ def test_import_model_selector_tracks_selected_import_engine():
         AppSettings(
             engine="local",
             model_size="medium",
-            openai_model="whisper-1",
+            openai_model="gpt-transcribe",
         )
     )
     dialog = SettingsDialog(
@@ -3662,7 +3663,7 @@ def test_import_model_selector_tracks_selected_import_engine():
     # than restated, so adding a model cannot leave this test pinning an old
     # list that still passes.
     assert _combo_data(dialog.import_model_combo) == list(OPENAI_MODELS)
-    assert dialog.import_model_combo.currentData() == "whisper-1"
+    assert dialog.import_model_combo.currentData() == "gpt-transcribe"
     _ = app
 
 
@@ -4357,16 +4358,16 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
 
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
-    whisper1_idx = dialog.import_model_combo.findData("whisper-1")
-    dialog.import_model_combo.setCurrentIndex(whisper1_idx)
+    model_idx = dialog.import_model_combo.findData("gpt-transcribe")
+    dialog.import_model_combo.setCurrentIndex(model_idx)
     settings = dialog._build_current_settings(
         engine_override="openai",
-        model_override="whisper-1",
+        model_override="gpt-transcribe",
     )
     dialog._transcribe_import_file("dummy.wav", settings)
 
     assert controller.received_engine == "openai"
-    assert controller.received_model == "whisper-1"
+    assert controller.received_model == "gpt-transcribe"
     assert dialog.engine_combo.currentData() == "local"
     assert dialog.model_combo.currentData() == "small"
     _ = app
@@ -5487,4 +5488,49 @@ def test_shutdown_delivers_an_update_result_without_a_dialog(monkeypatch, result
     assert dialog._active_update_check_thread is None
     assert dialog.check_updates_button.isEnabled() is True
     assert shown == []
+    _ = app
+
+
+def _funasr_dialog_with_a_saved_language_it_dropped():
+    store = _FakeSettingsStore(AppSettings(engine="funasr", language_mode="yue"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    return store, dialog
+
+
+def test_an_untouched_save_keeps_a_language_the_engine_does_not_offer():
+    # Fun-ASR dropped Cantonese (2026-11-24): the combo shows Auto for it, which
+    # must not be written back, or the language is lost for every other engine.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+    assert dialog.language_combo.currentData() == "auto"
+
+    dialog._save()
+
+    assert store.saved is None or store.saved.language_mode == "yue"
+    assert store.load().language_mode == "yue"
+    _ = app
+
+
+def test_an_engine_that_offers_the_saved_language_shows_it_again():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    _store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("assemblyai"))
+
+    assert dialog.language_combo.currentData() == "yue"
+    _ = app
+
+
+def test_a_language_the_user_picks_replaces_the_remembered_one():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.language_combo.setCurrentIndex(dialog.language_combo.findData("de"))
+    dialog._save()
+
+    assert store.saved is not None and store.saved.language_mode == "de"
     _ = app

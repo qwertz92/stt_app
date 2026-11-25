@@ -15,17 +15,17 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
 | Local (`faster-whisper`, Parakeet, Canary, Cohere, Granite, Nemotron) | Batch + Streaming (model-dependent) | see [models.md](models.md) | No API fee | $0 API cost (hardware/power only) |
-| AssemblyAI | Batch | Universal-3.5 Pro or Universal-2 (explicit selection; no fallback) | U3.5 Pro: $0.21/hour, U2: $0.15/hour ([pricing](https://www.assemblyai.com/pricing), checked 2026-09-21) | $0.15-$0.21/hour |
-| AssemblyAI | Streaming | Universal-3.6 Pro Realtime (streaming-only; launched 2026-09-29, 32 languages, keyterms included) | $0.45/hour (AssemblyAI SDK docs, checked 2026-10-01) | $0.45/hour |
-| OpenAI | Batch | `gpt-transcribe` (new default; replaces `gpt-4o-mini-transcribe`), `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | `gpt-transcribe`: $0.0045/min, `gpt-4o-transcribe`: $0.006/min, `gpt-4o-mini-transcribe`: $0.003/min, `whisper-1`: $0.006/min ([pricing](https://developers.openai.com/api/docs/pricing), checked 2026-09-21) | $0.27/hour, $0.36/hour, $0.18/hour, $0.36/hour |
+| AssemblyAI | Batch | AssemblyAI-STT-3.7 or Universal-2 (explicit selection; no fallback) | STT-3.7: $0.21/hour ([models page](https://www.assemblyai.com/llms/models.md), read 2026-11-24), U2: $0.15/hour ([pricing](https://www.assemblyai.com/pricing), checked 2026-09-21) | $0.15-$0.21/hour |
+| AssemblyAI | Streaming | AssemblyAI-STT-3.7-Realtime (launched 2026-11-17, 32 languages, keyterms included) | $0.30/hour ([models page](https://www.assemblyai.com/llms/models.md), read 2026-11-24; Universal-3.6 Pro was $0.45/hour) | $0.30/hour |
+| OpenAI | Batch | `gpt-transcribe` only (`gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` are removed from the app; OpenAI removes them 2027-02-26) | `gpt-transcribe`: $0.0045/min ([model page](https://developers.openai.com/api/docs/models/gpt-transcribe), read 2026-11-24); the retired `gpt-4o-mini-transcribe` was $0.003/min and `whisper-1` $0.006/min (checked 2026-09-21) | $0.27/hour |
 | Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour ([pricing](https://groq.com/pricing), checked 2026-09-21) | $0.111/hour, $0.040/hour |
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min ([pricing](https://deepgram.com/pricing), checked 2026-09-21) | $0.258/hour, $0.312/hour |
 | Deepgram | Streaming | `nova-3` | Mono: $0.0048/min, Multi: $0.0058/min — **limited-time promotional rate**; the regular, non-promotional rate shown alongside it is Mono $0.0077/min, Multi $0.0092/min (same source) | $0.288/hour, $0.348/hour (promo); $0.462/hour, $0.552/hour (regular) |
-| ElevenLabs | Batch | `scribe_v2` | $3.67 per 1,000 minutes on the [Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text) (read 2026-09-21) — consistent with the pay-as-you-go credit cost below | $0.22/hour |
-| Azure LLM Speech | Batch | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" ([announcement](https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/), 2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
+| ElevenLabs | Batch | `scribe_v3` (was `scribe_v2`) | $0.20 per hour ([pricing](https://elevenlabs.io/pricing/api), read 2026-11-24); $3.33 per 1,000 minutes on the [Artificial Analysis leaderboard](https://artificialanalysis.ai/speech-to-text/non-streaming) (read 2026-11-24) | $0.20/hour |
+| Azure LLM Speech | Batch | `mai-transcribe-2` (1.5 and 1 removed 2026-11-24) | MAI-Transcribe-2: $0.10/hour "as a limited-time offer until the end of the year" ([announcement](https://microsoft.ai/news/mai-transcribe-2-is-the-fastest-most-accurate-and-cheapest-speech-recognition-model-in-the-world/), 2026, price afterwards not announced); MAI-Transcribe-1.5: $0.36/hour | $0.10/hour (2) / $0.36/hour (1.5) |
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.000047/second, Beijing region rate — the only region this model's own pricing page lists ([fun-asr-realtime pricing](https://www.alibabacloud.com/help/en/model-studio/fun-asr-realtime), checked 2026-09-21) | ~$0.169/hour |
-| Speechmatics | Batch | `melia-1` (default), `enhanced`, `standard` | Melia 1: $0.129/hour (a pricing summary read 2026-09-27; the vendor's [pricing page](https://www.speechmatics.com/pricing) shows $0.129 without naming the model); Enhanced and Standard: not read | $0.129/hour (Melia 1) |
-| Mistral | Batch | `voxtral-mini-2602` (Voxtral Mini Transcribe 2) | $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
+| Speechmatics | Batch | `melia-1` (default), `enhanced` (`standard` removed 2026-11-24) | List rates per hour, pre-recorded, read 2026-11-24 on [speechmatics.com/pricing.md](https://www.speechmatics.com/pricing.md): Melia 1 $0.24, Enhanced $0.75, Standard $0.45 (the headline "from $0.12" is Melia with a 33 % training opt-in and a 25 % annual commitment) | $0.24/hour (Melia 1) |
+| Mistral | Batch | `voxtral-mini-transcribe-3-0` (default) or `voxtral-small-transcribe-3` (was `voxtral-mini-2602`) | Mini $0.0035/min, Small $0.0040/min ([announcement](https://mistral.ai/news/voxtral-3/), read 2026-11-24); was $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -52,9 +52,9 @@ Notes:
   Fun-ASR-realtime hourly figure as the best available estimate, not a
   confirmed Singapore-region price.
 - In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
-- ElevenLabs also offers `scribe_v2_realtime` publicly, but the current app integration remains batch-only.
+- ElevenLabs also offers `scribe_v3_live` (and the older `scribe_v2_realtime`) publicly, but the current app integration remains batch-only.
 - Azure LLM Speech (enhanced mode, backed by the MAI-Transcribe models) is a synchronous file/"fast transcription" API and is **batch-only** in this app. It is in **public preview** (no SLA). It needs both a resource key *and* a per-resource endpoint, and the resource region must support LLM Speech.
-- Fun-ASR (Alibaba) is driven over the DashScope **real-time WebSocket** API in a batch fashion (the batch file API requires an OSS public URL). Key-only (Singapore region). **No German support.**
+- Fun-ASR (Alibaba) is driven over the DashScope **real-time WebSocket** API in a batch fashion (the batch file API requires an OSS public URL). Key-only (Singapore region). German is supported per the vendor docs read 2026-11-24 (unverified live).
 
 ---
 
@@ -117,13 +117,13 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 
 | Provider | Models used in this app | Public quality signal | Interpretation |
 |----------|--------------------------|------------------------|----------------|
-| AssemblyAI | Universal-3.5 Pro / Universal-2 | AssemblyAI reports Universal-3.5 Pro as its current 18-language flagship for async and realtime, with native code switching. On Artificial Analysis (checked 2026-09-21), "AssemblyAI Universal-3 Pro" reads 3.1% WER at $3.50 per 1,000 minutes | Strong current multilingual option; validate on your own audio |
-| OpenAI | `gpt-transcribe` (new default), `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` | OpenAI reports `gpt-4o-transcribe` has lower WER than Whisper v2/v3 across FLEURS and competitive multilingual performance. On Artificial Analysis (checked 2026-09-21), "OpenAI GPT-4o Transcribe" reads 4.0% WER at $6.00 per 1,000 minutes; `gpt-transcribe` was not listed there under that name | Mid-table on the third-party leaderboard; OpenAI does not publish one global WER number per model on its own pricing page |
+| AssemblyAI | AssemblyAI-STT-3.7 / Universal-2 | AssemblyAI reports AssemblyAI-STT-3.7 (2026-11-17) as its current 32-language model for recorded audio, with native code switching. On Artificial Analysis (read 2026-11-24, English only), "AssemblyAI-STT-3.7" reads 2.5% WER at $3.50 per 1,000 minutes, "Universal-3.5 Pro" 3.0% | Strong current multilingual option; validate on your own audio |
+| OpenAI | `gpt-transcribe` (the three older ids were removed 2026-11-24) | OpenAI reports `gpt-4o-transcribe` has lower WER than Whisper v2/v3 across FLEURS and competitive multilingual performance. On Artificial Analysis (checked 2026-09-21), "OpenAI GPT-4o Transcribe" reads 4.0% WER at $6.00 per 1,000 minutes; `gpt-transcribe` was not listed there under that name | Mid-table on the third-party leaderboard; OpenAI does not publish one global WER number per model on its own pricing page |
 | Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo). On Artificial Analysis (checked 2026-09-21), "Groq Whisper Large v3 Turbo" reads 4.6% WER at $0.67 per 1,000 minutes — a different (lower) WER than Groq's own docs, evidence the two are not measured the same way | Cheapest per-hour cloud option in this app either way; useful baseline, not a single agreed number |
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup. On Artificial Analysis (checked 2026-09-21), "Deepgram Nova-3" reads 5.2% WER at $4.30 per 1,000 minutes | Good signal for Nova-3; vendor-run benchmark, corroborated within about a point by a third party |
-| ElevenLabs | `scribe_v2` | ElevenLabs positions Scribe v2 as its most accurate STT model. On Artificial Analysis (checked 2026-09-21), "Scribe v2" reads 2.2% WER at $3.67 per 1,000 minutes, ranked 4th of the models read that day | One of the strongest accuracy results among this app's cloud providers, on a third-party leaderboard as well as vendor claims |
-| Azure LLM Speech | `mai-transcribe-2`, `mai-transcribe-1.5`, `mai-transcribe-1` (deprecated) | Microsoft's announcement of MAI-Transcribe-2 (2026-09-03) says it "ranks second on the Artificial Analysis Word-Error-Rate leaderboard" (an English benchmark). Read fresh on 2026-09-21, Artificial Analysis places "MAI-Transcribe-2" 3rd at 2.0% WER / $1.67 per 1,000 minutes (behind "Fun-Realtime-ASR-preview" and "StepAudio 3 ASR", both 1.7%), and "MAI-Transcribe-1.5" further down at 2.4% WER / $6.00 per 1,000 minutes | Top-tier accuracy **and** currently the cheapest of the highly-ranked models on that leaderboard (see the price comparison in section 1). The rank moved between Microsoft's announcement and this reading, which is the "order moves" caveat in practice. This app has not measured either model itself (no Azure resource was available). Parameter count is **not disclosed** by Microsoft |
-| Fun-ASR (Alibaba) | `fun-asr-realtime` | Read fresh on 2026-09-21, Artificial Analysis places "Fun-Realtime-ASR-preview" 1st at 1.7% WER (price not listed on the leaderboard for this entry) | Best published accuracy among the app's integrated providers, but **no German**; strongest fit is Chinese (incl. dialects) and East/SE-Asian languages. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
+| ElevenLabs | `scribe_v3` | ElevenLabs positions Scribe v3 (2026-11-10) as its most accurate recorded-audio model, 27% fewer word errors than Scribe v2 on FLEURS. On Artificial Analysis (read 2026-11-24, English only), "Scribe v3" reads 1.9% WER at $3.33 per 1,000 minutes, 2nd of the models read that day; "Scribe v2" 2.2% | One of the strongest accuracy results among this app's cloud providers, on a third-party leaderboard as well as vendor claims |
+| Azure LLM Speech | `mai-transcribe-2` | Microsoft's announcement of MAI-Transcribe-2 (2026-09-03) says it "ranks second on the Artificial Analysis Word-Error-Rate leaderboard" (an English benchmark). Read fresh on 2026-09-21, Artificial Analysis places "MAI-Transcribe-2" 3rd at 2.0% WER / $1.67 per 1,000 minutes (behind "Fun-Realtime-ASR-preview" and "StepAudio 3 ASR", both 1.7%), and "MAI-Transcribe-1.5" further down at 2.4% WER / $6.00 per 1,000 minutes | Top-tier accuracy **and** currently the cheapest of the highly-ranked models on that leaderboard (see the price comparison in section 1). The rank moved between Microsoft's announcement and this reading, which is the "order moves" caveat in practice. This app has not measured either model itself (no Azure resource was available). Parameter count is **not disclosed** by Microsoft |
+| Fun-ASR (Alibaba) | `fun-asr-realtime` | Read fresh on 2026-09-21, Artificial Analysis places "Fun-Realtime-ASR-preview" 1st at 1.7% WER (price not listed on the leaderboard for this entry) | Best published accuracy among the app's integrated providers, German is listed since 2026-11-24 (unverified live); strongest fit is Chinese (incl. dialects) and East/SE-Asian languages. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 
 ### Independent benchmarks
 
@@ -185,7 +185,7 @@ Recommendation:
   will be removed from the API on **2027-02-26**, replaced by
   `gpt-transcribe` (and `gpt-live-transcribe` for realtime use) — see the
   [deprecations page](https://developers.openai.com/api/docs/deprecations).
-  The three older ids stay selectable in this app's Settings until then.
+  The three older ids were removed from this app's Settings on 2026-11-24; a saved choice moves to `gpt-transcribe`.
 - Paid usage requires prepaid credits (minimum top-up applies).
 
 ### Deepgram
@@ -206,8 +206,9 @@ Recommendation:
 - MAI-Transcribe-2 (the app's default since 2026-09-19): Microsoft's
   announcement of 2026-09-03 prices it at "$0.10 per hour as a limited-time
   offer until the end of the year"; what it costs from 2027 on is not
-  announced. MAI-Transcribe-1.5 stays at $0.36/hour, i.e. 3.6 times the
-  offer price. MAI-Transcribe-1 was deprecated by Microsoft on 2026-08-20.
+  announced. The offer is still stated on microsoft.ai on 2026-11-24. The removed
+  MAI-Transcribe-1.5 was $0.36/hour, 3.6 times the offer price; MAI-Transcribe-1
+  was deprecated by Microsoft on 2026-08-20.
 - Requires a Speech / Foundry resource in a region that supports LLM Speech
   with MAI-Transcribe -- six when read on 2026-09-19 (`centralindia`,
   `eastus`, `northeurope`, `southeastasia`, `westus`, `westus2`), of which
@@ -272,7 +273,7 @@ move.
 
 **Update 2026-10-01**: Speechmatics and Mistral were integrated anyway, on
 request, as the `speechmatics` and `mistral` engines (section 1). The
-Mistral engine uses Voxtral Mini Transcribe 2 ($0.003/min, about $3.00
+Mistral engine uses Voxtral Mini Transcribe 3 ($0.0035/min, about $3.50
 per 1,000 minutes), not the Voxtral Small figure above; Artificial
 Analysis was not re-read for either.
 

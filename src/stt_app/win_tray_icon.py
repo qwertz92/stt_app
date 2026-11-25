@@ -583,6 +583,11 @@ class WindowsTrayIcon(QtCore.QObject):
         self._visible = True
         self._add_attempt = 0
 
+    def isVisible(self) -> bool:
+        """Whether the shell has accepted the icon (what `QSystemTrayIcon` calls
+        visible); until then a balloon is dropped (`showMessage`)."""
+        return self._visible
+
     def setToolTip(self, tooltip: str) -> None:
         self._tooltip = str(tooltip or "")
         if self._visible:

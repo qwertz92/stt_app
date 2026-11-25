@@ -128,7 +128,7 @@ def test_a_picked_speechmatics_model_and_region_are_saved(tmp_path):
     dialog, store, app = _dialog(tmp_path, AppSettings(engine="speechmatics"))
     try:
         dialog.remote_model_combo.setCurrentIndex(
-            dialog.remote_model_combo.findData("standard")
+            dialog.remote_model_combo.findData("enhanced")
         )
         dialog._on_remote_model_activated(dialog.remote_model_combo.currentIndex())
         combo = dialog._provider_region_combos["speechmatics"]
@@ -139,7 +139,7 @@ def test_a_picked_speechmatics_model_and_region_are_saved(tmp_path):
         dialog._save()
 
         saved = store.load()
-        assert saved.speechmatics_model == "standard"
+        assert saved.speechmatics_model == "enhanced"
         assert saved.speechmatics_region == "au1"
         assert saved.deepgram_region == "eu"
     finally:
@@ -288,7 +288,7 @@ def _providers_tab_index(dialog: SettingsDialog) -> int:
 
 
 def test_the_vocabulary_note_follows_the_speechmatics_model(tmp_path):
-    """Melia 1 has no custom dictionary; Enhanced and Standard do. The note
+    """Melia 1 has no custom dictionary; Enhanced does. The note
     read the *local* model combo for every engine, so a remote engine whose
     models differ was described by a model it does not run."""
     dialog, _store, app = _dialog(tmp_path, AppSettings(engine="speechmatics"))

@@ -14,7 +14,6 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_SILENCE_GATE_THRESHOLD,
-    OPENAI_ARRAY_FIELD_MODELS,
     OPENAI_KEYWORD_FORBIDDEN_CHARACTERS,
     OPENAI_MODELS,
     language_modes_for_selection,
@@ -68,15 +67,11 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self._request_timeout_s = max(5, int(request_timeout_s))
-        self._uses_array_fields = self._model in OPENAI_ARRAY_FIELD_MODELS
-        terms = parse_custom_vocabulary(custom_vocabulary)
-        # Two request shapes, one setting. `gpt-transcribe` takes the terms as
-        # repeated `keywords[]` fields, which is what they are -- "Use
-        # keywords for literal terms you expect to hear" -- while the three
-        # older models have no such field and keep the comma-joined `prompt`.
-        self._prompt = "" if self._uses_array_fields else ", ".join(terms)
-        self._keywords, self._dropped_keyword_count = (
-            self._split_keywords(terms) if self._uses_array_fields else ([], 0)
+        # `gpt-transcribe` takes the terms as repeated `keywords[]` fields,
+        # which is what they are -- "Use keywords for literal terms you
+        # expect to hear".
+        self._keywords, self._dropped_keyword_count = self._split_keywords(
+            parse_custom_vocabulary(custom_vocabulary)
         )
 
     def _normalize_language_mode(self, mode: str) -> str:
@@ -128,27 +123,20 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         stated rather than assumed.
         """
         fields: list[tuple[str, str]] = [("model", self._model)]
-        if self._uses_array_fields:
-            if self._language_mode != DEFAULT_LANGUAGE_MODE:
-                # Never `language` as well: "languages replaces the singular
-                # language field. Don't send both fields."
-                fields.append(("languages[]", self._language_mode))
-            fields.extend(("keywords[]", term) for term in self._keywords)
-            if self._dropped_keyword_count:
-                # The count, never the terms: the vocabulary is the user's own
-                # text and does not belong in a log file. INFO, because
-                # nothing failed -- the request goes out with the rest.
-                logger.info(
-                    "openai_keywords_dropped count=%d model=%s "
-                    "reason=forbidden_character",
-                    self._dropped_keyword_count,
-                    self._model,
-                )
-        else:
-            if self._language_mode != DEFAULT_LANGUAGE_MODE:
-                fields.append(("language", self._language_mode))
-            if self._prompt:
-                fields.append(("prompt", self._prompt))
+        if self._language_mode != DEFAULT_LANGUAGE_MODE:
+            # Never `language` as well: "languages replaces the singular
+            # language field. Don't send both fields."
+            fields.append(("languages[]", self._language_mode))
+        fields.extend(("keywords[]", term) for term in self._keywords)
+        if self._dropped_keyword_count:
+            # The count, never the terms: the vocabulary is the user's own
+            # text and does not belong in a log file. INFO, because nothing
+            # failed -- the request goes out with the rest.
+            logger.info(
+                "openai_keywords_dropped count=%d model=%s reason=forbidden_character",
+                self._dropped_keyword_count,
+                self._model,
+            )
         fields.append(("response_format", "json"))
         return fields
 

@@ -572,10 +572,11 @@ most 30 minutes.
 1. Create a key in Mistral's console and enter it in the **Mistral** row on
    Settings -> **Providers**.
 2. On **Transcription**, set Engine to `Mistral (Voxtral)`. The model is
-   `voxtral-mini-2602` (Voxtral Mini Transcribe 2, $0.003 per minute).
-3. Language: Auto or one of 13 languages (English, Chinese, Hindi, Spanish,
-   Arabic, French, Portuguese, Russian, German, Japanese, Korean, Italian,
-   Dutch). The custom vocabulary is sent as Mistral's context bias, which
+   `voxtral-mini-transcribe-3-0` ($0.0035 per minute) or the slightly more
+   accurate `voxtral-small-transcribe-3` ($0.0040 per minute), prices read
+   2026-11-24.
+3. Language: Auto or one of Mistral's 53 transcription languages (German
+   and English included). The custom vocabulary is sent as Mistral's context bias, which
    Mistral calls optimized for English and experimental for other languages.
 
 Mistral offers no region choice for transcription: its EU host lists no
@@ -585,8 +586,7 @@ Sources, read 2026-09-27: Speechmatics'
 [models](https://docs.speechmatics.com/speech-to-text/models) and
 [authentication](https://docs.speechmatics.com/get-started/authentication)
 pages; Mistral's
-[Voxtral Mini Transcribe 2 model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02)
-and [announcement](https://mistral.ai/news/voxtral-transcribe-2/).
+[Voxtral 3 announcement](https://mistral.ai/news/voxtral-3/) (read 2026-11-24).
 
 ## Data residency regions (AssemblyAI, Deepgram, Speechmatics)
 
@@ -611,16 +611,15 @@ In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
 
 - **Deepgram** states that the EU endpoint takes the same API keys as the
   global one, and that Whisper models are not offered there (the app uses
-  Nova-3 and Nova-2 only).
+  Nova-3 only).
 - **AssemblyAI** does not say on its region pages whether a key or every
   model works on the EU hosts; if a request fails there, check the key and
   the model in AssemblyAI's dashboard for the EU region.
 - Deepgram also runs endpoints in Australia and India
   (`api.au.deepgram.com`, `api.in.deepgram.com`); the app does not offer
   them yet.
-- **Speechmatics** runs Melia 1 in the EU and US only; with Australia
-  selected, pick Enhanced or Standard, or the request is refused before
-  anything is uploaded.
+- **Speechmatics** runs Melia 1 and Enhanced in all three regions
+  (models page, read 2026-11-24).
 - **ElevenLabs** offers no region choice to the app. It was founded by
   Poles and has a Warsaw company, Eleven Labs Poland sp. z o.o., which its
   privacy policy names as the EU representative and the controller for
