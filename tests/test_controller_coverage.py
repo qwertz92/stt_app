@@ -447,7 +447,11 @@ def test_start_recording_rejects_streaming_for_a_batch_only_provider():
     controller.start_recording()
 
     assert overlay.states[-1][0] == "Error"
-    assert "selected provider" in overlay.states[-1][1]
+    detail = overlay.states[-1][1]
+    # Named as the engine picker names it, with where to change it.
+    assert "OpenAI" in detail
+    assert "selected provider" not in detail
+    assert "Settings > Transcription" in detail
     controller.shutdown()
     _ = app
 

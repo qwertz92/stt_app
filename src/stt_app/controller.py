@@ -214,6 +214,15 @@ def _local_model_display_name(model_name: str) -> str:
     return local_model_short_label(model_name)
 
 
+def _engine_display_name(engine: str) -> str:
+    """The engine's name as the engine picker spells it ("OpenAI", not
+    "openai"); the table lives with the dialog helpers, imported lazily for
+    the reason `_local_model_display_name` gives."""
+    from .settings_dialog_helpers import _ENGINE_LABELS
+
+    return _ENGINE_LABELS.get(engine, engine)
+
+
 # How much of a transcript a "Not inserted" queue row quotes, enough to tell
 # the rows apart; the whole text is in history and is what the re-paste pastes.
 _UNDELIVERED_PREVIEW_CHARS = 48
@@ -1967,10 +1976,11 @@ class DictationController(QtCore.QObject):
                         "Batch or pick a Whisper or Nemotron model."
                     )
                 else:
+                    name = _engine_display_name(self._settings.engine)
                     detail = (
-                        "Streaming is not available for the selected provider. "
-                        "In Settings > Transcription, set Mode to Batch or pick "
-                        "Local, AssemblyAI or Deepgram."
+                        f"Streaming is not available for {name}. In Settings > "
+                        "Transcription, set Mode to Batch or pick Local, "
+                        "AssemblyAI or Deepgram."
                     )
                 self._refuse_recording_start(detail)
                 return
