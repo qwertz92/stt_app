@@ -220,6 +220,11 @@ class PreviousSessionEnd:
     #: names the session, so a report repeated by a start that could not
     #: open the crash log reads as the same session.
     started: str = "unknown"
+    #: How many of `trace_lines` came before the clean-exit line. `main`
+    #: writes that line before the interpreter joins threads and tears Qt
+    #: down, with faulthandler still on, so a dump after it is a crash in
+    #: that teardown.
+    trace_lines_before_clean_exit: int = 0
 
 
 class CrashLog:
@@ -371,19 +376,23 @@ def _split_handled_exceptions(
     faulthandler on Windows dumps every exception whose code has the top bit
     set, also one that something catches a moment later (Python 3.12 has no
     option to leave those out: `faulthandler.enable` takes only `file` and
-    `all_threads`). Handled are: every Windows exception of a session that
-    quit cleanly, which survived them all; and in any session an RPC/COM
+    `all_threads`). Handled are: every Windows exception a session that quit
+    cleanly wrote before its clean-exit line, which it survived (a dump after
+    that line is a crash during teardown); and in any session an RPC/COM
     error code (0x8001xxxx, such as RPC_E_CANTCALLBACK_INPUTSYNC 0x8001010d),
     which Windows' RPC runtime raises and catches inside one COM call.
     """
     trace: list[str] = []
     handled: list[str] = []
     skipping = False
-    for line in previous.trace_lines:
+    for index, line in enumerate(previous.trace_lines):
         if line.startswith(_DUMP_HEADERS):
             name = line.removeprefix(_WINDOWS_EXCEPTION_HEADER).strip()
+            survived = (
+                previous.clean_quit and index < previous.trace_lines_before_clean_exit
+            )
             skipping = line.startswith(_WINDOWS_EXCEPTION_HEADER) and (
-                previous.clean_quit or _HANDLED_RPC_CODE.fullmatch(name) is not None
+                survived or _HANDLED_RPC_CODE.fullmatch(name) is not None
             )
             if skipping:
                 handled.append(name)
@@ -522,15 +531,21 @@ def _read_previous_session_end(path: Path) -> PreviousSessionEnd | None:
         return None
     if any(line.startswith(_CRASH_SESSION_UNWATCHED) for line in section):
         return None
+    trace_lines: list[str] = []
+    before_clean_exit = 0
+    clean_quit = False
+    for line in section:
+        if line.startswith(_CRASH_SESSION_CLEAN_EXIT) and not clean_quit:
+            clean_quit = True
+            before_clean_exit = len(trace_lines)
+        elif line.strip() and not line.startswith(_CRASH_MARKER_PREFIX):
+            trace_lines.append(line)
     return PreviousSessionEnd(
-        clean_quit=any(line.startswith(_CRASH_SESSION_CLEAN_EXIT) for line in section),
+        clean_quit=clean_quit,
         quit_started=any(line.startswith(_CRASH_QUIT_STARTED) for line in section),
-        trace_lines=tuple(
-            line
-            for line in section
-            if line.strip() and not line.startswith(_CRASH_MARKER_PREFIX)
-        ),
+        trace_lines=tuple(trace_lines),
         started=started,
+        trace_lines_before_clean_exit=before_clean_exit,
     )
 
 

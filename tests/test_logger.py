@@ -377,6 +377,42 @@ def test_a_clean_quit_after_handled_exceptions_is_reported_as_clean(
     )
 
 
+def test_a_dump_after_the_clean_mark_is_a_crash_during_teardown(
+    monkeypatch, tmp_path, _restore_exception_hooks
+):
+    """`main` writes the clean mark before the interpreter joins threads and
+    tears Qt down, with faulthandler still on: a dump after the mark is a
+    crash in that teardown, not an exception the session survived."""
+    monkeypatch.setattr(logger_module.faulthandler, "enable", lambda **kwargs: None)
+    (tmp_path / "crash.log").write_text(
+        "\n".join(
+            [
+                "=== stt_app session started 2026-11-04T23:29:53+01:00 pid=7 version=0.13.0 ===",
+                *_handled_com_exception_dump(),
+                "=== stt_app quit started 2026-11-05T23:21:57+01:00 ===",
+                "=== stt_app session ended cleanly 2026-11-05T23:21:57+01:00 ===",
+                "Windows fatal exception: access violation",
+                "",
+                "Current thread 0x000063b4 (most recent call first):",
+                '  File "threading.py", line 1590 in _shutdown',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log, records = _capturing_logger("test.crash_after_clean_mark")
+
+    logger_module.start_crash_reporting(tmp_path, log, version="1").stream.close()
+
+    (report,) = [line for line in records.lines if line.startswith("previous_session")]
+    assert records.levels[records.lines.index(report)] == logging.WARNING
+    assert report.startswith(
+        "previous_session_end clean_quit=yes quit_started=yes native_trace_lines=3 "
+        "handled_exceptions=1 "
+    )
+    assert report.splitlines()[1] == "Windows fatal exception: access violation"
+
+
 def test_a_handled_com_exception_is_no_crash_trace_of_a_session_that_did_not_quit(
     monkeypatch, tmp_path, _restore_exception_hooks
 ):
