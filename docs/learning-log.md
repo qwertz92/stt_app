@@ -3,6 +3,54 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: the read receipt's owner window needs the interpreter -- what the review found
+
+Structurally: every copy the app makes goes through one function
+(`clipboard_copy.copy_text`) and the Win32 backend; a transcript is announced
+only when its reader cannot be made to wait for Python (not for a window of
+this app, not while an in-process ONNX runtime is in use); a doubtful row is
+dropped by the paste of a later dictation instead of by any paste. Details in
+`docs/agents/text-insertion.md` and `docs/agents/known-limitations.md`.
+
+The receipt of the entry below answers a clipboard request from a Python
+callback on its own thread. The review of that change showed what this costs
+whenever another thread keeps the interpreter lock in one piece:
+
+- **A Copy button froze the app for five seconds.** `QClipboard.setText`
+  called from Python keeps the lock, and its `EmptyClipboard` sends the owner
+  window a message only the callback can answer. Reproduced: 5012 ms through
+  Qt, 1.1 ms through `TextInserter.copy_text`
+  (`scripts/diagnose_clipboard_copy_stall.py`). A test now parses the package
+  and fails on any Python-level use of the Qt clipboard.
+- **A paste into an own text field can freeze it too**, when the field's key
+  handling runs through a Python override: 35.2 s without the text arriving
+  in a probe field, 25 ms once such a paste is written plainly
+  (`scripts/diagnose_own_window_paste.py`). The app has no such field; the
+  rule keeps a future one from finding out.
+- **Creating an ONNX session keeps the lock for 1.0-1.9 s**, Nemotron's
+  decoding for up to 0.8 s; faster-whisper stayed at 62 ms
+  (`scripts/diagnose_interpreter_stall.py`, table in the area file). A paste
+  made while such a runtime is leased has no receipt.
+- **The lesson about the method.** `ctypes` and pywin32 calls release the
+  interpreter lock, PySide calls into Qt mostly do not, and a ctypes callback
+  takes it. A window procedure written in Python is therefore only as
+  responsive as the least cooperative native call in the process. The first
+  round measured the receipt from scripts whose main thread sat in ctypes
+  calls, which is the one situation where this cannot show. Measure such a
+  design inside a Qt event loop, with a second thread doing real work.
+- **A probe target must be another process.** The release check's new part H
+  pastes into an EDIT window of a child process: one in the checking process
+  would now get a plain write and prove nothing about the receipt.
+- **Heredocs through the agent's shell lose a backslash level.** A Python
+  patch fed through `python - <<'EOF'` had `\\n` turned into a newline and a
+  lone surrogate escape turned into the character, and `write_text` then
+  emptied a test file before it failed to encode. Patch scripts with escapes
+  are written as files.
+
+Also changed: the doubtful row rule (the owner's report of 2026-11-24 that the
+notice vanished with several results queued), `TextInserter.close` at
+interpreter exit, and the owner's text payload for a lone surrogate.
+
 ## 2026-11-25: "inserted" without evidence -- two causes closed, a read receipt, and what Chrome and Edge hide
 
 Structurally: a new module `clipboard_owner.py` owns the clipboard for the
