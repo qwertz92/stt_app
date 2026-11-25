@@ -507,6 +507,11 @@ def compute_stream_locked_prefix(
     if not current_words or not previous_words:
         return normalize_stream_text(committed)
 
+    # Stability stays exact: a word whose punctuation is still changing
+    # between partials is not settled yet. Measured on the same clips, the
+    # word test here committed faster-whisper words one partial earlier,
+    # which its later windows then revised (`small`: 127 words of the
+    # document wrong against its history, 112 with the exact test).
     stable_len = common_prefix_len(previous_words, current_words)
     guard = max(0, int(stable_word_guard))
     revision_window = max(0, int(revision_word_window))
@@ -515,9 +520,11 @@ def compute_stream_locked_prefix(
         return normalize_stream_text(committed)
 
     candidate_words = current_words[:locked_len]
-    if common_prefix_len(committed_words, candidate_words) < len(committed_words):
+    if _same_words_prefix_len(committed_words, candidate_words) < len(committed_words):
         return normalize_stream_text(committed)
-    return " ".join(candidate_words).strip()
+    # The committed words as they were pasted, then the candidate's: the
+    # committed text stays exactly what the document holds.
+    return " ".join(committed_words + candidate_words[len(committed_words) :]).strip()
 
 
 def append_only_stream_extension_tail(committed: str, candidate: str) -> str:
@@ -527,10 +534,31 @@ def append_only_stream_extension_tail(committed: str, candidate: str) -> str:
         return ""
     if not committed_words:
         return " ".join(candidate_words).strip()
-    prefix_len = common_prefix_len(committed_words, candidate_words)
+    prefix_len = _same_words_prefix_len(committed_words, candidate_words)
     if prefix_len < len(committed_words):
         return ""
     return " ".join(candidate_words[prefix_len:]).strip()
+
+
+def _same_words_prefix_len(left: list[str], right: list[str]) -> int:
+    """How many leading words of the two lists are the same words.
+
+    "The same" ignores case and the marks `_stream_word_key` strips, so a
+    word already pasted that a later partial or the final reads with other
+    punctuation or casing ("herzauben." then "herzauben zu") does not count
+    as a revision. With the exact test it froze live insertion for the rest
+    of the session and the finalize inserted nothing, while the overlay and
+    history showed the whole text (measured 2026-11-24: 36 of 54 words of a
+    German clip never reached the document). A different word still ends
+    the prefix: joining past a real revision re-pastes the dictation. Used
+    for "is the pasted text still the start of this one", not for "has
+    this word settled" (`compute_stream_locked_prefix` says why).
+    """
+    size = min(len(left), len(right))
+    for idx in range(size):
+        if not _stream_words_match(left[idx], right[idx]):
+            return idx
+    return size
 
 
 def append_only_stream_finalize_tail(

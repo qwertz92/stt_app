@@ -750,3 +750,62 @@ def test_retarget_tail_follows_an_edit_of_the_missing_part(
     old_whole, new_whole, tail, expected
 ):
     assert retarget_tail(old_whole, new_whole, tail) == expected
+
+
+def test_a_punctuation_or_case_revision_does_not_freeze_live_insertion():
+    """A word already in the document that later reads with other punctuation
+    or casing is still the same word.
+
+    Measured 2026-11-24 on a real German clip (faster-whisper `tiny`, rolling
+    windows): "herzauben." was pasted with the period a window boundary gave
+    it, the next windows read "herzauben zu können", and from then on the
+    exact prefix test refused every partial and the finalize -- 36 of 54
+    words reached the history and the overlay but never the document.
+    """
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    pasted = ""
+    for partial in (
+        "eins zwei drei vier. fünf sechs",
+        "eins zwei drei vier. fünf sechs",
+        # Shorter than the text before it, so no overlap can carry the old
+        # punctuation forward: the candidate is this text as it stands.
+        "eins zwei drei Vier fünf",
+        "eins zwei drei Vier fünf sechs sieben",
+        "eins zwei drei Vier fünf sechs sieben",
+    ):
+        pasted += state.apply_partial_append_only(partial).insertion
+    assert pasted == "eins zwei drei vier. fünf"
+
+    insertion, _final = state.finalize_append_only(
+        "Eins zwei drei vier fünf sechs sieben acht."
+    )
+    pasted += insertion
+
+    assert pasted == "eins zwei drei vier. fünf sechs sieben acht."
+
+
+def test_a_revised_word_still_freezes_live_insertion():
+    """The negative control: a different word in the pasted region is a real
+    revision, and joining past it re-pastes the dictation (86 words for 48,
+    `docs/agents/streaming.md`)."""
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    state.apply_partial_append_only("eins zwei drei vier fünf sechs")
+    state.apply_partial_append_only("eins zwei drei vier fünf sechs")
+    assert state.committed_text == "eins zwei drei vier"
+
+    assert (
+        state.apply_partial_append_only(
+            "eins zwo drei vier fünf sechs sieben"
+        ).insertion
+        == ""
+    )
+    insertion, _final = state.finalize_append_only(
+        "eins zwo drei vier fünf sechs sieben"
+    )
+    assert insertion == ""

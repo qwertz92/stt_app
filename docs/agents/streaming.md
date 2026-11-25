@@ -122,6 +122,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
     `committed_text` prefix** (`compute_stream_locked_prefix` then stays
     frozen): joining re-pasted the dictation on a provider revision (86
     words for 48).
+  - **"The committed prefix" means the same words, not the same spelling**
+    (2026-11-24): `compute_stream_locked_prefix`'s committed-prefix check
+    and `append_only_stream_extension_tail` (the finalize's tail) compare
+    words with `_same_words_prefix_len`, which ignores case and the marks
+    `_stream_word_key` strips; `committed_text` keeps the words as pasted.
+    Stability between two partials stays exact (`common_prefix_len`): with
+    the word test there too, faster-whisper `small` committed words one
+    partial earlier that its later windows revised (127 document word
+    errors against history instead of 112).
+    The exact test froze live insertion and emptied the finalize's tail
+    whenever a pasted word later read with other punctuation -- Nemotron
+    attaches a comma or period to the word before it one chunk later, so a
+    committed "supper" met a final "supper, which ...". Measured on 11 real
+    clips (MLS German, LibriSpeech, the owner's bench recording) at real-time
+    pace: Nemotron's document missed 102 words that history held, in 9 of 11
+    clips (document WER 34.6 % against 10.5 % for its own final text); with
+    the word test, 0 words and 10.5 %. A different word still ends the
+    prefix (test `test_a_revised_word_still_freezes_live_insertion`).
 - **Streaming finalization**: full re-transcription at stop is opt-in
   (`streaming_full_final_transcript`, default off); otherwise only the
   trailing window is merged, so stop is fast and history matches.

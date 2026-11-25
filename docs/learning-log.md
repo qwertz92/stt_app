@@ -3,6 +3,39 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-24: streaming review: the end of most Nemotron dictations never reached the document
+
+Structurally: `StreamingTextState`'s "is the pasted text still the start of
+this one" test (`compute_stream_locked_prefix`'s committed check and the
+finalize's `append_only_stream_extension_tail`) compares words, ignoring case
+and trailing marks (`_same_words_prefix_len`); stability between two partials
+stays exact. Found by measuring, not by reading: the transcribers' streaming
+APIs were fed real speech at real-time pace (100 ms blocks, 0.5 s silence
+before and 0.7 s after each clip) and the controller's live insertion was
+replayed over the recorded partials. Nemotron attaches a comma or period to
+the word before it one 560 ms chunk later, so a committed "supper" met a final
+"supper, which was to be given the next day" and the exact test returned no
+tail: the overlay and history showed the whole text, the document lacked the
+last words. 11 clips (5 MLS German test, 5 LibriSpeech test-clean, the owner's
+28.6 s bench recording with a hand-made reference), CPU, other agents' test
+runs in parallel (latencies noisy, WER not):
+
+| Model | WER document, old / new | WER history (final) | WER batch, same model | Document word errors vs history, old / new | First text after audio start | Stop to final |
+|---|---|---|---|---|---|---|
+| Nemotron 3.5 INT4 | 33.5 % / 10.5 % | 10.5 % | 10.5 % | 102 / 0 | 1.41 s | 0.16 s |
+| faster-whisper tiny | 31.7 % / 30.4 % | 23.0 % | 15.4 % | 92 / 87 | 1.68 s | 0.54 s |
+| faster-whisper base | 24.6 % / 22.0 % | 21.2 % | 12.6 % | 24 / 11 | 2.50 s | 1.18 s |
+| faster-whisper small | 44.0 % / 44.0 % | 17.5 % | 7.3 % | 112 / 112 | 4.68 s | 3.46 s |
+| faster-whisper large-v3-turbo | 26.2 % / 26.2 % | 26.2 % | 4.5 % | 0 / 0 | 6.67 s | 7.23 s |
+
+(medians for the times; WER over all words, lower-cased, marks removed). The
+faster-whisper rows' remaining gap is not this defect: their rolling windows
+revise real words inside the pasted region (a revision freezes insertion by
+design), and on this CPU `small` and `turbo` decode an 8 s window more slowly
+than 8 s, so windows stop overlapping and speech between them is lost
+(`streaming_decode_slower_than_window` in 4 of 22 runs). Using the word test for
+stability too was measured and rejected (`small` 127 instead of 112).
+
 ## 2026-11-24: streaming review: the mode filters the engine and model lists
 
 Structurally: the Mode row moved to the top of the Transcription tab's "Engine &&
