@@ -586,3 +586,28 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   Settings prebuild's single-shot (`main.py`) is context-less and may build
   the dialog during a "Wait and insert" quit.
 - **Deepgram keyterm budget for CJK text (hypothesis, 2026-11-25).** `deepgram_provider.fit_keyterms` estimates one token per three characters of a word plus one per term; Deepgram's tokenizer is not public, and Chinese, Japanese or Korean terms (no spaces, often about one token per character) may cost more than estimated, so a long CJK vocabulary could still pass the 400-token budget and reach the 500-token limit. Unmeasured; a Deepgram error would then name the keyterm limit.
+- **Streaming insertion never edits punctuation that is already in the
+  document** (2026-11-25, P4, by the append-only rule in
+  `docs/agents/streaming.md`): a mark the model adds to a word after that
+  word was inserted is missing from the document (history has it); a mark
+  the model later removes stays; a "." later changed to "?" stays "."; and
+  a lone mark token counts as the same word as another lone mark, so such a
+  revision is not noticed either. Fixing any of these means deleting text
+  in the target window, which streaming never does. Kept: measured on 11
+  real clips, Nemotron loses none of the final's 32 marks, because a mark
+  arrives one chunk after its word, before the word is inserted.
+- **Edge cases of the word comparison in streaming insertion** (2026-11-25,
+  P4, `streaming_text.py`):
+  - A word whose mark arrives one chunk late is typed about one partial
+    later than before: the new partial becomes the candidate and exact
+    stability (`compute_stream_locked_prefix`) counts the word as changed.
+    The final catches up; nothing is lost (partials `["", "und a? the",
+    "und a? the!"]` typed "und" live before, nothing now).
+  - Constructed, not seen from a real model: a mark that flickers on an
+    early word in every chunk keeps live typing at zero words until the
+    final, which then inserts everything.
+  - The wider edge marks extend the known coincidental-overlap case to the
+    ellipsis, quotes and brackets: partials `["der is is…", "is is"]` with
+    the final "is is is" type "der" and then freeze (the same input with "."
+    already did before). It needs a partial that drops the dictation's
+    head, which providers that send the whole session's text do not send.

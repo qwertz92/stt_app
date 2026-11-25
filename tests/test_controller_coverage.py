@@ -418,8 +418,12 @@ def test_start_recording_rejects_streaming_for_batch_only_local_model(
 
     assert overlay.states[-1][0] == "Error"
     detail = overlay.states[-1][1]
-    assert model_size in detail
-    assert "batch mode" in detail.lower()
+    # By the name the pickers show, not the raw settings id.
+    from stt_app.settings_dialog_helpers import local_model_short_label
+
+    assert local_model_short_label(model_size) in detail
+    assert model_size not in detail
+    assert "mode to batch" in detail.lower()
     # It must not tell a local user to "use local".
     assert "selected provider" not in detail
     controller.shutdown()
@@ -443,7 +447,11 @@ def test_start_recording_rejects_streaming_for_a_batch_only_provider():
     controller.start_recording()
 
     assert overlay.states[-1][0] == "Error"
-    assert "selected provider" in overlay.states[-1][1]
+    detail = overlay.states[-1][1]
+    # Named as the engine picker names it, with where to change it.
+    assert "OpenAI" in detail
+    assert "selected provider" not in detail
+    assert "Settings > Transcription" in detail
     controller.shutdown()
     _ = app
 
@@ -9082,6 +9090,10 @@ def test_a_refusal_with_nothing_pending_paints_only_the_refusal():
     state, detail = overlay.states[-1]
     assert state == "Error"
     assert "Streaming is not available" in detail
+    # Named as the pickers name it, and with where to change it: the raw
+    # settings id matched nothing on screen.
+    assert "Parakeet" in detail and "parakeet-tdt-0.6b-v3" not in detail
+    assert "Settings" in detail
     assert "Still not inserted" not in detail
     assert "error_action" not in overlay.state_kwargs[-1]
     controller.shutdown()

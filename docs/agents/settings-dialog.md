@@ -72,6 +72,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   limit" on both History surfaces (`HISTORY_LIMIT_LABEL`); an empty list shows
   `HISTORY_EMPTY_TEXT` through `ui_feedback.EmptyListNotice`, a label on the
   view's viewport, not a row or span the refresh logic must know about.
+- **Mode is the first row of "Engine && Mode" and filters Engine and Model**
+  (2026-11-24): in Streaming, engines and local models that cannot stream
+  are hidden (`QListView.setRowHidden`) and disabled (a hidden row is still
+  reached by the arrow keys on a closed combo), except the current
+  selection, which stays and is flagged in red in the Model row's reserved
+  note. Never flip the mode or the model to make a combination valid. The
+  Mode hint's two texts (`_MODE_HINTS`) are kept about as long so a switch
+  does not change the row height. Rule and reasons:
+  `docs/agents/streaming.md`, "In Settings the mode is chosen first".
 - **Model selection is on the Transcription tab; Models only manages.** One
   "Model" row hosts `model_selector_stack`: page 0 `model_combo` +
   `local_model_runtime_warning_label`, page 1 `remote_model_combo` /

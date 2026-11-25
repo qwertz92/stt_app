@@ -3,6 +3,76 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: streaming review, round 2: the marks a model adds one chunk late
+
+Structurally: `append_only_stream_partial_candidate` takes whole-session text
+whose words equal the previous text's as it stands, and `_stream_word_key`
+strips a wider set of edge marks (`_WORD_EDGE_MARKS`). A reviewer found what
+the WER with marks removed could not show: a partial that only added a comma
+or period failed the exact prefix test, took the overlap branch, and that
+branch kept the previous text, so the mark was dropped before its word was
+inserted. Counted on the 11 recorded clips: Nemotron's document carries 32 of
+the final's 32 marks (11 before either fix, 17 after round 1) and equals the
+final in 11 of 11 clips (2 before). An ellipsis, a quotation mark, an opening
+bracket or an inverted ? or ! at a word's edge froze insertion like a comma
+used to. A test now pins that stability between two partials stays exact; the
+streaming refusal for a remote engine names it ("OpenAI").
+
+## 2026-11-24: streaming review: the end of most Nemotron dictations never reached the document
+
+Structurally: `StreamingTextState`'s "is the pasted text still the start of
+this one" test (`compute_stream_locked_prefix`'s committed check and the
+finalize's `append_only_stream_extension_tail`) compares words, ignoring case
+and trailing marks (`_same_words_prefix_len`); stability between two partials
+stays exact. Found by measuring, not by reading: the transcribers' streaming
+APIs were fed real speech at real-time pace (100 ms blocks, 0.5 s silence
+before and 0.7 s after each clip) and the controller's live insertion was
+replayed over the recorded partials. Nemotron attaches a comma or period to
+the word before it one 560 ms chunk later, so a committed "supper" met a final
+"supper, which was to be given the next day" and the exact test returned no
+tail: the overlay and history showed the whole text, the document lacked the
+last words. 11 clips (5 MLS German test, 5 LibriSpeech test-clean, the owner's
+28.6 s bench recording with a hand-made reference), CPU, other agents' test
+runs in parallel (latencies noisy, WER not):
+
+| Model | WER document, old / new | WER history (final) | WER batch, same model | Document word errors vs history, old / new | First text after audio start | Stop to final |
+|---|---|---|---|---|---|---|
+| Nemotron 3.5 INT4 | 33.5 % / 10.5 % | 10.5 % | 10.5 % | 102 / 0 | 1.41 s | 0.16 s |
+| faster-whisper tiny | 31.7 % / 30.4 % | 23.0 % | 15.4 % | 92 / 87 | 1.68 s | 0.54 s |
+| faster-whisper base | 24.6 % / 22.0 % | 21.2 % | 12.6 % | 24 / 11 | 2.50 s | 1.18 s |
+| faster-whisper small | 44.0 % / 44.0 % | 17.5 % | 7.3 % | 112 / 112 | 4.68 s | 3.46 s |
+| faster-whisper large-v3-turbo | 26.2 % / 26.2 % | 26.2 % | 4.5 % | 0 / 0 | 6.67 s | 7.23 s |
+
+(medians for the times; WER over all words, lower-cased, marks removed). The
+faster-whisper rows' remaining gap is not this defect: their rolling windows
+revise real words inside the pasted region (a revision freezes insertion by
+design), and on this CPU `small` and `turbo` decode an 8 s window more slowly
+than 8 s, so windows stop overlapping and speech between them is lost
+(`streaming_decode_slower_than_window` in 4 of 22 runs). Using the word test for
+stability too was measured and rejected (`small` 127 instead of 112).
+
+## 2026-11-24: streaming review: the mode filters the engine and model lists
+
+Structurally: the Mode row moved to the top of the Transcription tab's "Engine &&
+Mode" group, and in Streaming the Engine and Model lists show only what can
+stream. Before, the mode followed the model: with a batch-only model (the
+default Parakeet, the owner's Cohere) the Streaming entry was greyed out and
+its reason was a tooltip, so a user who wanted streaming had to find a model
+that streams by trying them; and `_update_mode_availability` flipped Mode to
+Batch without a word whenever engine or model changed -- on opening the dialog
+too, so the next Save wrote Batch over a stored Streaming. Now Streaming is
+always selectable; engines and local models that cannot stream are hidden and
+disabled while it is selected; the Mode hint says "Only engines and models that
+can stream are listed."; a current selection that cannot stream is never
+switched but stays listed and is named in red in the Model row's reserved note.
+Measured on the owner's settings copy (offscreen, 900 px): the tab height is
+unchanged; Streaming lists 8 of 15 local models (the seven faster-whisper sizes
+and Nemotron) and 3 of 11 engines. Tests:
+`test_streaming_mode_lists_only_local_models_that_can_stream`,
+`test_streaming_mode_hides_engines_that_cannot_stream`,
+`test_a_saved_*_that_cannot_stream_is_kept_and_flagged` in
+`tests/test_settings_dialog_mode.py` (9 of them failed on the old code).
+
 ## 2026-11-24: findings from a month of the owner's log (runtime, crash log, noise)
 
 Source: `%APPDATA%\stt_app\logs`, 2026-10-25 to 2026-11-24, 6 sessions, 1067
