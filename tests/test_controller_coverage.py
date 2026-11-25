@@ -1182,6 +1182,101 @@ def test_the_preload_download_can_be_canceled_from_the_overlay(monkeypatch):
     _ = app
 
 
+_HF_OFFLINE_TEXT = (
+    "Cannot reach https://huggingface.co: offline mode is enabled; outgoing "
+    "traffic has been disabled. To disable offline mode, set 'HF_HUB_OFFLINE=0'"
+)
+
+
+def _a_preload_whose_download_and_load_both_fail(monkeypatch):
+    """No network: the preload's download fails (and is swallowed as a warning),
+    then the load fails for the same reason. Returns what the overlay was told."""
+    controller, app, overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda gen, ok, message: done.append((gen, ok, message))
+    )
+
+    def failing_download(*_a, **_k):
+        raise RuntimeError(f"Model download failed for 'x': {_HF_OFFLINE_TEXT}")
+
+    def failing_load(*_a, **_k):
+        raise OSError(_HF_OFFLINE_TEXT)
+
+    monkeypatch.setattr(controller, "_download_model_for_preload", failing_download)
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", failing_load)
+
+    controller._preload_model_worker(settings, generation, key)
+    return controller, app, overlay, settings, done
+
+
+def test_a_failed_preload_download_names_the_model_its_size_and_what_to_do(
+    monkeypatch,
+):
+    controller, app, _overlay, _settings, done = (
+        _a_preload_whose_download_and_load_both_fail(monkeypatch)
+    )
+
+    assert done[-1][1] is False
+    message = done[-1][2]
+    assert "Could not download large-v3-turbo (~1.62 GB)" in message
+    assert "Connect to the internet" in message
+    assert "Settings > Models" in message
+    assert "Settings > Transcription" in message
+    # Hugging Face's own wording and the docs path mean nothing to this user.
+    assert "HF_HUB_OFFLINE" not in message
+    assert "outgoing traffic" not in message
+    assert "docs/" not in message
+    controller.shutdown()
+    _ = app
+
+
+def test_the_first_dictation_after_a_failed_download_is_refused_with_that_text(
+    monkeypatch,
+):
+    """Nothing is recorded, so nothing can be lost; the overlay says what the
+    preload said."""
+    controller, app, overlay, _settings, done = (
+        _a_preload_whose_download_and_load_both_fail(monkeypatch)
+    )
+
+    capture_class = controller_module.AudioCapture
+    before = len(capture_class.instances)
+
+    controller.start_recording()
+
+    assert overlay.states[-1][1] == done[-1][2]
+    assert not any(c.started for c in capture_class.instances[before:])
+    controller.shutdown()
+    _ = app
+
+
+def test_a_load_failure_without_a_failed_download_keeps_its_own_text(monkeypatch):
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda gen, ok, message: done.append((gen, ok, message))
+    )
+    monkeypatch.setattr(
+        controller, "_download_model_for_preload", lambda *_a, **_k: None
+    )
+
+    def failing_load(*_a, **_k):
+        raise OSError("corrupt snapshot")
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", failing_load)
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert "could not be loaded: corrupt snapshot" in done[-1][2]
+    controller.shutdown()
+    _ = app
+
+
 def test_a_finished_preload_stops_describing_a_phase(monkeypatch):
     """`_current_preload_phase` promises "" when no preload is running.
 

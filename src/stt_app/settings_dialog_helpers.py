@@ -426,7 +426,7 @@ _START_BEEP_TONE_LABELS: dict[str, str] = {
 }
 
 
-def _approximate_size_text(model_name: str) -> str:
+def approximate_model_size_text(model_name: str) -> str:
     """The download size, taken from the one table that measures it.
 
     Never hand-written next to the name. `MODEL_ESTIMATED_SIZE_MB` is
@@ -512,7 +512,7 @@ def _build_local_model_labels() -> dict[str, str]:
     labels: dict[str, str] = {}
     for name, (display, note) in _LOCAL_MODEL_NAMES_AND_NOTES.items():
         details = ", ".join(
-            part for part in (_approximate_size_text(name), note) if part
+            part for part in (approximate_model_size_text(name), note) if part
         )
         labels[name] = f"{display} ({details})" if details else display
     labels.update(_RETIRED_MODEL_LABELS)
@@ -577,7 +577,7 @@ def model_move_notice(
             f"{ENGINE_LABELS[DEFAULT_ENGINE]}: {old} is no longer offered, "
             f"your choice is now {new}."
         )
-        size = _approximate_size_text(move["to"])
+        size = approximate_model_size_text(move["to"])
         size = f" ({size})" if size else ""
         if offline_mode and not successor_on_disk:
             line += (

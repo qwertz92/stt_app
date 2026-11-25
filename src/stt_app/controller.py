@@ -221,6 +221,39 @@ def _local_model_display_name(model_name: str) -> str:
     return local_model_short_label(model_name)
 
 
+def _preload_failure_text(
+    settings: AppSettings, exc: BaseException, download_error: RuntimeError | None
+) -> str:
+    """What the overlay shows when the selected local model could not be loaded.
+
+    A load that failed after the preload's download failed (no network, or
+    `HF_HUB_OFFLINE=1`, whose Hugging Face text -- "outgoing traffic has been
+    disabled ... set 'HF_HUB_OFFLINE=0'" -- means nothing to a user of this app)
+    is a download problem: the text names the model as the pickers do, its
+    size, and the two things the user can do. The raw detail is in the log. A
+    first dictation in this state is refused with this text and records
+    nothing; audio recorded while the download was still running goes to the
+    Retry slot like any failed job.
+    """
+    if download_error is not None:
+        from .settings_dialog_helpers import approximate_model_size_text
+
+        name = _local_model_display_name(settings.model_size)
+        size = approximate_model_size_text(settings.model_size)
+        size = f" ({size})" if size else ""
+        return (
+            f"Could not download {name}{size}; it is not on this PC yet. "
+            "Connect to the internet and open Settings > Models to download it, "
+            "or choose a model that is already on this PC under "
+            "Settings > Transcription. No fallback model was used."
+        )
+    return (
+        f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
+        "No fallback model was used. Open Settings to retry or select "
+        f"another model. See {DOC_MODELS_PATH}"
+    )
+
+
 def _engine_display_name(engine: str) -> str:
     """The engine's name as the engine picker spells it ("OpenAI", not
     "openai")."""
@@ -6269,6 +6302,7 @@ class DictationController(QtCore.QObject):
         key, so the next dictation loads at first use instead of raising it.
         """
         self._set_preload_phase(generation, _PRELOAD_PHASE_DOWNLOAD)
+        download_error: RuntimeError | None = None
         try:
             self._download_model_for_preload(settings, generation)
         except RuntimeError as exc:
@@ -6276,8 +6310,11 @@ class DictationController(QtCore.QObject):
                 self._record_model_preload_result(key, generation, None)
                 self.model_preload_done.emit(generation, False, str(exc))
                 return
-            # Download failed but cached models may still be usable.
+            # Download failed but cached models may still be usable. If the
+            # load then fails too, the user is told about the download (what
+            # they can act on), not the load's own message about a missing file.
             self._logger.warning("Model download failed: %s", exc)
+            download_error = exc
 
         if self._preload_generation_was_canceled(generation):
             self._record_model_preload_result(key, generation, None)
@@ -6377,11 +6414,7 @@ class DictationController(QtCore.QObject):
             self._logger.warning(
                 "Model preload failed for %s: %s", settings.model_size, exc
             )
-            failure = (
-                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
-                "No fallback model was used. Open Settings to retry or select "
-                f"another model. See {DOC_MODELS_PATH}"
-            )
+            failure = _preload_failure_text(settings, exc, download_error)
             self._record_model_preload_result(
                 key, generation, failure if record_failure else None
             )
@@ -6412,11 +6445,7 @@ class DictationController(QtCore.QObject):
                     "Model preload canceled.",
                 )
                 return
-            failure = (
-                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
-                "No fallback model was used. Open Settings to retry or select "
-                f"another model. See {DOC_MODELS_PATH}"
-            )
+            failure = _preload_failure_text(settings, exc, download_error)
             self._record_model_preload_result(
                 key, generation, failure if record_failure else None
             )
