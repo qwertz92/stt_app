@@ -578,3 +578,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   in the target window, which streaming never does. Kept: measured on 11
   real clips, Nemotron loses none of the final's 32 marks, because a mark
   arrives one chunk after its word, before the word is inserted.
+- **Edge cases of the word comparison in streaming insertion** (2026-11-25,
+  P4, `streaming_text.py`):
+  - A word whose mark arrives one chunk late is typed about one partial
+    later than before: the new partial becomes the candidate and exact
+    stability (`compute_stream_locked_prefix`) counts the word as changed.
+    The final catches up; nothing is lost (partials `["", "und a? the",
+    "und a? the!"]` typed "und" live before, nothing now).
+  - Constructed, not seen from a real model: a mark that flickers on an
+    early word in every chunk keeps live typing at zero words until the
+    final, which then inserts everything.
+  - The wider edge marks extend the known coincidental-overlap case to the
+    ellipsis, quotes and brackets: partials `["der is is…", "is is"]` with
+    the final "is is is" type "der" and then freeze (the same input with "."
+    already did before). It needs a partial that drops the dictation's
+    head, which providers that send the whole session's text do not send.

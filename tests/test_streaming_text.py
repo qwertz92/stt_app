@@ -919,3 +919,16 @@ def test_a_mark_inside_a_word_is_still_a_different_word(pasted, later):
     insertion, _final = state.finalize_append_only(f"eins {later} drei vier fünf")
 
     assert insertion == ""
+
+
+def test_a_quoted_window_aligns_with_the_unquoted_text():
+    """The rolling merge's seam search reads `_stream_word_key`, so quotation
+    marks no longer hide a real seam: before 2026-11-25 this window was
+    unalignable, replaced the text and lost "er sagte"."""
+    result = merge_rolling_window(
+        "er sagte hallo welt und",
+        "„hallo welt“ und dann ging er",
+    )
+
+    assert result.text == "er sagte hallo welt und dann ging er"
+    assert result.aligned is True

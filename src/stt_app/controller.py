@@ -1976,7 +1976,11 @@ class DictationController(QtCore.QObject):
                         "Batch or pick a Whisper or Nemotron model."
                     )
                 else:
-                    name = _engine_display_name(self._settings.engine)
+                    name = (
+                        "the custom endpoint"
+                        if self._settings.engine == "custom"
+                        else _engine_display_name(self._settings.engine)
+                    )
                     detail = (
                         f"Streaming is not available for {name}. In Settings > "
                         "Transcription, set Mode to Batch or pick Local, "

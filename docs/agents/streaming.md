@@ -145,8 +145,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
     whole-session text whose words equal the previous text's
     (`_same_words_prefix_len`) is taken as it stands; the overlap branch
     kept the previous text and dropped the mark before its word was
-    inserted. Not for a rolling window (`current_is_a_trailing_window`):
-    its merge and floor compare exact text. Measured by replaying the 11
+    inserted. This replacement is not used for a rolling window
+    (`current_is_a_trailing_window`); the rolling merge's seam search does
+    use `_stream_word_key`, so since 2026-11-25 it also matches across
+    quotes, brackets and the ellipsis (`„hallo welt“` aligns with `hallo
+    welt`, test `test_a_quoted_window_aligns_with_the_unquoted_text`). Measured by replaying the 11
     clips: Nemotron's document carries 32 of the final's 32 marks and equals
     the final in 11 of 11 clips (before: 11 marks and 2 clips; after the
     word-prefix fix alone: 17 and 2). The faster-whisper sizes are unchanged
