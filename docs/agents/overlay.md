@@ -426,7 +426,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
   pinned overlay covered Settings where they overlap. It stays topmost above
   OTHER applications, and it yields **only while it is pinned AND idle**
   (`_may_step_behind_own_window`: `_always_on_top`, state `Idle`, no
-  temporary reveal running). A live session or its result (Listening,
+  temporary reveal running, and nothing in it waiting for the user: no queue
+  row -- a transcription in flight or a "Not inserted" row with its
+  Insert/Dismiss button -- and no not-inserted badge, which are shown nowhere
+  else; `set_transcription_queue` and `set_not_inserted_badge` re-place the
+  overlay when the last one goes away). A live session or its result (Listening,
   "Starting", Processing, Done, Error) is the application's main feedback and
   must not vanish behind Settings while the user dictates into one of its
   fields; a temporary reveal (tray click, a recording's reveal of a floating

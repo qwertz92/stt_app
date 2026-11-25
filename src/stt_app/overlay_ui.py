@@ -1959,12 +1959,17 @@ class OverlayUI(QtWidgets.QWidget):
     def _may_step_behind_own_window(self) -> bool:
         """Only a pinned overlay that is idle yields to the application's own
         windows. A live session or its result (Listening, Processing, Done,
-        Error) is the application's main feedback and a temporary reveal is
-        something the user asked to see: both stay topmost."""
+        Error) is the application's main feedback, a temporary reveal is
+        something the user asked to see, and a queue row (a transcription in
+        flight, a "Not inserted" row with its Insert/Dismiss button) or the
+        not-inserted badge waits for the user and is shown nowhere else: all
+        stay topmost."""
         return (
             self._always_on_top
             and not self._temporary_foreground_active
             and self._state == "Idle"
+            and not self._queue_entries
+            and not self._not_inserted_badge.text()
         )
 
     def _own_window_to_stay_behind(self) -> int:
@@ -2670,6 +2675,7 @@ class OverlayUI(QtWidgets.QWidget):
             restore_vertical_scrollbar(self._queue_scroll, previous_scroll)
         self._refresh_queue_layout_geometry()
         self._refresh_size_after_queue_change()
+        self._recheck_own_window()
         # Re-assert once the layout settles. Switching between very different
         # queue sizes (or hiding a queue that had grown the window) can leave a
         # stale pending resize from the previous state, so recompute the size
@@ -2691,6 +2697,7 @@ class OverlayUI(QtWidgets.QWidget):
         badge.setToolTip(str(tooltip))
         badge.setVisible(bool(text))
         self._sync_queue_title()
+        self._recheck_own_window()
 
     def _sync_queue_title(self) -> None:
         self._queue_title_label.setText(

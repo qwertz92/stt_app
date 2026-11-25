@@ -749,6 +749,15 @@ def _no_real_focus_window(monkeypatch):
     monkeypatch.setattr(OverlayUI, "_active_own_window_handle", lambda self: None)
 
 
+def _wait_until(condition, timeout_ms: int = 3000) -> bool:
+    """Run the event loop until `condition()` holds (PySide6 has no qWaitFor)."""
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QtTest.QTest.qWait(10)
+        waited += 10
+    return bool(condition())
+
+
 def _placements(user32, overlay) -> list[int]:
     """What `SetWindowPos` was given as insert-after for this overlay, in order."""
     hwnd = int(overlay.winId())
@@ -822,6 +831,37 @@ def test_a_live_session_stays_topmost_over_an_own_window(monkeypatch):
     dialog.close()
 
 
+def test_a_waiting_row_keeps_the_idle_overlay_topmost_over_an_own_window(monkeypatch):
+    # A "Not inserted" row with its Insert/Dismiss button, a transcription in
+    # the queue and the not-inserted badge wait for the user and are shown
+    # nowhere else; behind Settings or History they would be invisible.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    undelivered = overlay_ui_module.QUEUE_ROW_KIND_UNDELIVERED
+    overlay.set_transcription_queue([(7, "Not inserted", undelivered)])
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+    overlay.set_transcription_queue([])
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    overlay.set_not_inserted_badge("1 not inserted")
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+    overlay.set_not_inserted_badge("")
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    overlay.set_transcription_queue([(8, "Transcribing", "transcription")])
+    overlay.set_not_inserted_badge("1 not inserted")
+    overlay.set_transcription_queue([])
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST, "the badge still waits"
+    overlay.set_not_inserted_badge("")
+    assert _placements(user32, overlay)[-1] == dialog_hwnd, "the last one went away"
+    overlay.hide()
+    dialog.close()
+
+
 def test_a_reveal_while_an_own_window_is_active_is_topmost(monkeypatch):
     # A reveal the user asked for (tray click, a recording's reveal) must be
     # visible; when it ends the idle pinned overlay steps behind again.
@@ -834,7 +874,7 @@ def test_a_reveal_while_an_own_window_is_active_is_topmost(monkeypatch):
     assert overlay.isVisible()
     assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
 
-    QtTest.QTest.qWait(80)
+    assert _wait_until(lambda: not overlay._temporary_foreground_active)
     assert _placements(user32, overlay)[-1] == dialog_hwnd
     overlay.hide()
     dialog.close()
@@ -846,10 +886,16 @@ def test_opening_an_own_window_after_a_reveal_ends_the_reveal(monkeypatch):
     user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
     overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
     overlay.reveal_temporarily(duration_ms=60_000)
+    # A pinned overlay's reveal is a real reveal now (it was a no-op before):
+    # it holds the topmost state and has a timer to end it.
+    assert overlay._temporary_foreground_active is True
+    assert overlay._temporary_foreground_timer.isActive()
     assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
 
     activate(dialog.windowHandle())
 
+    assert overlay._temporary_foreground_active is False
+    assert not overlay._temporary_foreground_timer.isActive()
     assert _placements(user32, overlay)[-1] == int(dialog.winId())
     overlay.hide()
     dialog.close()
@@ -867,7 +913,7 @@ def test_a_floating_overlay_reveals_and_runs_sessions_as_before(monkeypatch):
 
     overlay.reveal_temporarily(duration_ms=20)
     overlay.set_state("Listening", "x")
-    QtTest.QTest.qWait(80)
+    assert _wait_until(lambda: not overlay._temporary_foreground_active)
 
     assert set(_placements(user32, overlay)) <= {_HWND_TOPMOST, _HWND_NOTOPMOST}
     assert _placements(user32, overlay)[0] == _HWND_TOPMOST
