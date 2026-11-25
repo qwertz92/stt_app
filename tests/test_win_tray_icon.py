@@ -500,6 +500,19 @@ def test_an_explorer_restart_retries_an_icon_that_never_came_back(
     assert api.added == [(_HWND, 7, "Tip")]
 
 
+def test_is_visible_follows_whether_the_shell_accepted_the_icon(
+    instant_retries, qapp_events
+):
+    api = RefusingAddApi(refusals=1)
+    icon = _make_icon(api)
+    assert icon.isVisible() is False
+
+    icon.show()
+    qapp_events()
+
+    assert icon.isVisible() is True
+
+
 def test_a_dropped_notification_is_reported(instant_retries, caplog):
     """Silence here is indistinguishable from a transcription that never ran."""
     api = RefusingAddApi(refusals=99)

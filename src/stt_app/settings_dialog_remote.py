@@ -16,8 +16,6 @@ from .config import (
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
-    SPEECHMATICS_MELIA_UNAVAILABLE_TEXT,
-    speechmatics_model_available_in,
 )
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
@@ -343,6 +341,15 @@ class _RemoteProvidersMixin:
         save_row.addWidget(self.save_api_keys_button, 0, QtCore.Qt.AlignTop)
         save_row.addWidget(self.key_storage_status_label, 1, QtCore.Qt.AlignVCenter)
         layout.addLayout(save_row)
+        # The visible difference between this button and the dialog's own
+        # Save, which a tooltip alone did not carry.
+        save_keys_note = QtWidgets.QLabel(
+            "Save API Keys stores the keys, endpoints and regions on this tab "
+            "now. Changes on the other tabs still need Save."
+        )
+        save_keys_note.setWordWrap(True)
+        self._style_note_label(save_keys_note)
+        layout.addWidget(save_keys_note)
 
         self._refresh_provider_key_statuses()
 
@@ -495,18 +502,7 @@ class _RemoteProvidersMixin:
             "region.\n"
             + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
         )
-        if provider == "speechmatics":
-            # This sentence was a visible note under the region rows; with the
-            # rows under their providers it belongs to this combo alone.
-            tooltip += (
-                "\nMelia 1 runs in the EU and US only; pick Enhanced or "
-                "Standard on the Transcription tab for Australia."
-            )
         combo.setToolTip(tooltip)
-        # A region can make the selected model unavailable (Melia 1 in au1).
-        combo.currentIndexChanged.connect(
-            lambda _index: self._update_remote_model_note()
-        )
         self._provider_region_combos[provider] = combo
         return combo
 
@@ -846,14 +842,6 @@ class _RemoteProvidersMixin:
                 "Azure also needs its endpoint: enter it on the Providers tab, "
                 "or dictation with this engine fails."
             )
-        if engine == "speechmatics" and not speechmatics_model_available_in(
-            self._remote_model_value_for_provider(engine), self._region_shown(engine)
-        ):
-            # The transcriber refuses the pair before any upload.
-            return (
-                f"{SPEECHMATICS_MELIA_UNAVAILABLE_TEXT} Pick eu1 or us1 on the "
-                "Providers tab, or the Enhanced or Standard model."
-            )
         return None
 
     def _mark_provider_key_for_clear(self, provider: str) -> None:
@@ -906,11 +894,11 @@ class _RemoteProvidersMixin:
             if hasattr(self, "import_model_combo")
             else ""
         )
+        # Local needs no note: the language note below says the import has its
+        # own service and model. Hidden rather than blank, so no gap is left.
+        self.import_engine_note.setVisible(engine != DEFAULT_ENGINE)
         if engine == DEFAULT_ENGINE:
-            self.import_engine_note.setStyleSheet("color: #555;")
-            self.import_engine_note.setText(
-                "Local import transcription stays independent from the model selected on the Transcription tab."
-            )
+            self.import_engine_note.setText("")
             return
         credential_issue = self._import_engine_credential_issue(engine)
         if credential_issue is None:

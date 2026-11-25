@@ -4,7 +4,7 @@ Batch transcription via the ElevenLabs Speech to Text API.
 Requires: an ElevenLabs API key.
 API key stored via keyring (settings_dialog / secret_store).
 
-Supported batch model: scribe_v2.
+Supported batch model: scribe_v3.
 """
 
 from __future__ import annotations

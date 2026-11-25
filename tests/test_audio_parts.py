@@ -20,7 +20,6 @@ from stt_app.config import (
     DEFAULT_SILENCE_GATE_THRESHOLD,
     REMOTE_BATCH_MAX_PART_SECONDS,
     REMOTE_BATCH_MAX_REQUEST_BYTES,
-    REMOTE_BATCH_MODEL_MAX_PART_SECONDS,
     RemotePartLimit,
     remote_batch_part_limit,
 )
@@ -296,7 +295,7 @@ def test_a_stereo_import_over_the_cap_goes_out_as_its_mono_mix():
 def test_a_16_khz_recording_keeps_the_parts_the_seconds_bound_gives():
     """The byte cap must not move a single cut of what the app records: its
     16 kHz WAV reaches every engine's seconds bound first (next test)."""
-    limit = remote_batch_part_limit("openai", "gpt-4o-mini-transcribe")
+    limit = remote_batch_part_limit("openai", "gpt-transcribe")
     assert limit is not None
     samples = _noise(limit.seconds + 1.0)
 
@@ -313,8 +312,7 @@ def test_a_16_khz_recording_keeps_the_parts_the_seconds_bound_gives():
 
 @pytest.mark.parametrize(
     ("engine", "model"),
-    [(engine, "") for engine in REMOTE_BATCH_MAX_PART_SECONDS]
-    + list(REMOTE_BATCH_MODEL_MAX_PART_SECONDS),
+    [(engine, "") for engine in REMOTE_BATCH_MAX_PART_SECONDS],
 )
 def test_at_16_khz_the_seconds_bound_is_always_the_tighter_one(engine, model):
     limit = remote_batch_part_limit(engine, model)
@@ -327,9 +325,6 @@ def test_at_16_khz_the_seconds_bound_is_always_the_tighter_one(engine, model):
 
 def test_every_engine_with_a_seconds_bound_has_a_byte_cap():
     assert set(REMOTE_BATCH_MAX_REQUEST_BYTES) == set(REMOTE_BATCH_MAX_PART_SECONDS)
-    assert {engine for engine, _ in REMOTE_BATCH_MODEL_MAX_PART_SECONDS} <= set(
-        REMOTE_BATCH_MAX_PART_SECONDS
-    )
 
 
 # --------------------------------------------------------------------------
@@ -733,9 +728,6 @@ def test_a_file_that_is_not_a_wav_and_over_the_cap_is_logged(caplog):
         # 25 MB per file, read as the smaller decimal megabytes; 1,400 s is the
         # duration cap reported second-hand.
         ("openai", "gpt-transcribe", 25_000_000, 1400),
-        ("openai", "whisper-1", 25_000_000, 1400),
-        ("openai", "gpt-4o-transcribe", 25_000_000, 1400),
-        ("openai", "gpt-4o-mini-transcribe", 25_000_000, 1400),
         # Groq's free tier; the app cannot tell a key's tier.
         ("groq", "whisper-large-v3-turbo", 25_000_000, None),
         ("groq", "whisper-large-v3", 25_000_000, None),

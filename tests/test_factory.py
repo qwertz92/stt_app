@@ -80,7 +80,7 @@ def test_factory_openai_returns_openai_transcriber():
 def test_factory_azure_returns_azure_transcriber():
     settings = AppSettings(
         engine="azure",
-        azure_speech_model="mai-transcribe-1.5",
+        azure_speech_model="mai-transcribe-2",
         azure_endpoint="https://my-res.cognitiveservices.azure.com",
     )
 
@@ -90,11 +90,11 @@ def test_factory_azure_returns_azure_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, AzureLlmSpeechTranscriber)
-    assert t._model == "mai-transcribe-1.5"
+    assert t._model == "mai-transcribe-2"
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():
-    settings = AppSettings(engine="deepgram", deepgram_model="nova-2")
+    settings = AppSettings(engine="deepgram", deepgram_model="nova-3")
 
     class FakeSecretStore:
         def get_api_key(self, name):
@@ -102,7 +102,7 @@ def test_factory_deepgram_returns_deepgram_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, DeepgramTranscriber)
-    assert t._model == "nova-2"
+    assert t._model == "nova-3"
 
 
 def test_factory_unknown_engine_falls_back_to_local():
@@ -456,5 +456,5 @@ def test_the_mistral_model_reaches_the_provider():
     built = create_transcriber(
         AppSettings(engine="mistral", language_mode="de"), secret_store=_AnyKeyStore()
     )
-    assert built._model == "voxtral-mini-2602"
+    assert built._model == "voxtral-mini-transcribe-3-0"
     assert built._language_mode == "de"

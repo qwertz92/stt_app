@@ -22,7 +22,7 @@ dependencies = [
     "keyring==25.7.0",
     "pywin32==312; platform_system == 'Windows'",
     "comtypes==1.4.17; platform_system == 'Windows'",
-    "assemblyai==1.6.1",
+    "assemblyai==1.10.11",
     "groq==1.7.0",
     "truststore==0.10.4",
     "websocket-client==1.9.2",

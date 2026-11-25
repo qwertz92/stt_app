@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 # The inlineFieldButton rule must keep a smaller vertical box than the base
 # QPushButton rule: buttons matched to an adjacent input via
@@ -48,6 +48,43 @@ QPushButton[feedbackState="success"]:pressed:enabled {
     border-color: #4f9f59;
 }
 """
+
+
+class EmptyListNotice(QtCore.QObject):
+    """A centred note over an empty list or table, gone as soon as it has rows.
+
+    A child label of the view's viewport, so it adds no row, span or layout
+    item that the view's own refresh logic would have to know about.
+    """
+
+    def __init__(self, view: QtWidgets.QAbstractItemView, text: str) -> None:
+        super().__init__(view)
+        self._viewport = view.viewport()
+        self._label = QtWidgets.QLabel(text, self._viewport)
+        self._label.setWordWrap(True)
+        self._label.setAlignment(QtCore.Qt.AlignCenter)
+        self._label.setStyleSheet("color: #555; background: transparent;")
+        self._label.setAttribute(QtCore.Qt.WA_TransparentForMouseEvents, True)
+        self._label.hide()
+        self._viewport.installEventFilter(self)
+
+    def set_empty(self, empty: bool) -> None:
+        self._label.setVisible(empty)
+        self._place()
+
+    def _place(self) -> None:
+        margin = 16
+        self._label.setGeometry(
+            margin,
+            0,
+            max(self._viewport.width() - 2 * margin, 0),
+            self._viewport.height(),
+        )
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if obj is self._viewport and event.type() == QtCore.QEvent.Type.Resize:
+            self._place()
+        return False
 
 
 def reserve_button_width_for_texts(

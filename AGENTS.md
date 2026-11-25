@@ -99,10 +99,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary, CPU only
 - numpy + ONNX Runtime (CPU provider) + `tokenizers` for IBM Granite Speech 5.0
   470M TurboCTC (INT8, English only, batch only)
-- Remote providers: AssemblyAI (SDK batch Universal-3.5 Pro + Universal-3.6 Pro realtime),
+- Remote providers: AssemblyAI (SDK batch AssemblyAI-STT-3.7 + STT-3.7-Realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
-  Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German),
+  Fun-ASR / Alibaba (DashScope WebSocket, batch-only),
   Speechmatics (REST batch jobs, polled; EU/US/AU regions),
   Mistral Voxtral (REST, batch-only),
   Custom endpoint (any OpenAI-compatible REST API, batch-only)
@@ -136,9 +136,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
-| `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
-| `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced, Standard; region `eu1`/`us1`/`au1` |
-| `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Mini Transcribe 2); custom vocabulary as `context_bias` |
+| `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only) |
+| `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced; region `eu1`/`us1`/`au1` |
+| `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
@@ -178,6 +178,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `update_checker.py` | GitHub Releases update check and version comparison helpers |
 | `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
 | `update_installer.py` | Verified download and launch of a release installer |
+| `dependency_check.py` | A source checkout's installed packages against `requirements-win.txt` at start: one WARNING and one tray notice naming `uv sync` or `pip install -r`; installs nothing |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control, per-entry audio reveal and retranscription, recordings-folder shortcut |
 | `transcript_edit_dialog.py` | Edit one history entry's transcript |
@@ -273,22 +274,22 @@ Short forms of rules that recur across areas; the area files hold the detail.
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
   azure, funasr, speechmatics, mistral, custom
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
-- **OpenAI** model select picks `gpt-transcribe` (default) or one of the three
-  models OpenAI removes on 2027-02-26.
+- **OpenAI** offers `gpt-transcribe` only; `whisper-1`, `gpt-4o-transcribe` and
+  `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
-  secret store. Model select picks `mai-transcribe-2` (default),
-  `mai-transcribe-1.5` or the deprecated `mai-transcribe-1`. "Azure LLM
+  secret store. The only model is `mai-transcribe-2`
+  (1.5 and the deprecated 1 are retired and moved). "Azure LLM
   Speech" is the service and MAI-Transcribe the model behind it: one engine,
   not two.
 - **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
-  driven over the realtime WebSocket in batch mode. It covers 31 languages but
-  **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
+  driven over the realtime WebSocket in batch mode. It covers 30 languages,
+  German included (vendor docs read 2026-11-24; unverified live).
 - **Speechmatics** (`speechmatics`): `speechmatics_model` `melia-1`
-  (default; the only one with Auto), `enhanced`, `standard`;
-  `speechmatics_region` `eu1` (default), `us1`, `au1` (Melia 1 not in
-  `au1`).
-- **Mistral** (`mistral`): `voxtral-mini-2602`, no region choice.
+  (default; the only one with Auto), `enhanced` (`standard` is retired and
+  moves to Melia 1); `speechmatics_region` `eu1` (default), `us1`, `au1`.
+- **Mistral** (`mistral`): `voxtral-mini-transcribe-3-0` (default) or
+  `voxtral-small-transcribe-3`, no region choice.
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
   `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
   picked on the Providers tab; a label claims only what the vendor

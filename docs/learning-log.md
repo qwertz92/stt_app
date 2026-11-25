@@ -74,6 +74,179 @@ a minute.
   the procedure needed a field set only after the call; the unit tests'
   scripted Windows sent no creation message until one was added.
 
+## 2026-11-25: streaming review, round 2: the marks a model adds one chunk late
+
+Structurally: `append_only_stream_partial_candidate` takes whole-session text
+whose words equal the previous text's as it stands, and `_stream_word_key`
+strips a wider set of edge marks (`_WORD_EDGE_MARKS`). A reviewer found what
+the WER with marks removed could not show: a partial that only added a comma
+or period failed the exact prefix test, took the overlap branch, and that
+branch kept the previous text, so the mark was dropped before its word was
+inserted. Counted on the 11 recorded clips: Nemotron's document carries 32 of
+the final's 32 marks (11 before either fix, 17 after round 1) and equals the
+final in 11 of 11 clips (2 before). An ellipsis, a quotation mark, an opening
+bracket or an inverted ? or ! at a word's edge froze insertion like a comma
+used to. A test now pins that stability between two partials stays exact; the
+streaming refusal for a remote engine names it ("OpenAI").
+
+## 2026-11-24: streaming review: the end of most Nemotron dictations never reached the document
+
+Structurally: `StreamingTextState`'s "is the pasted text still the start of
+this one" test (`compute_stream_locked_prefix`'s committed check and the
+finalize's `append_only_stream_extension_tail`) compares words, ignoring case
+and trailing marks (`_same_words_prefix_len`); stability between two partials
+stays exact. Found by measuring, not by reading: the transcribers' streaming
+APIs were fed real speech at real-time pace (100 ms blocks, 0.5 s silence
+before and 0.7 s after each clip) and the controller's live insertion was
+replayed over the recorded partials. Nemotron attaches a comma or period to
+the word before it one 560 ms chunk later, so a committed "supper" met a final
+"supper, which was to be given the next day" and the exact test returned no
+tail: the overlay and history showed the whole text, the document lacked the
+last words. 11 clips (5 MLS German test, 5 LibriSpeech test-clean, the owner's
+28.6 s bench recording with a hand-made reference), CPU, other agents' test
+runs in parallel (latencies noisy, WER not):
+
+| Model | WER document, old / new | WER history (final) | WER batch, same model | Document word errors vs history, old / new | First text after audio start | Stop to final |
+|---|---|---|---|---|---|---|
+| Nemotron 3.5 INT4 | 33.5 % / 10.5 % | 10.5 % | 10.5 % | 102 / 0 | 1.41 s | 0.16 s |
+| faster-whisper tiny | 31.7 % / 30.4 % | 23.0 % | 15.4 % | 92 / 87 | 1.68 s | 0.54 s |
+| faster-whisper base | 24.6 % / 22.0 % | 21.2 % | 12.6 % | 24 / 11 | 2.50 s | 1.18 s |
+| faster-whisper small | 44.0 % / 44.0 % | 17.5 % | 7.3 % | 112 / 112 | 4.68 s | 3.46 s |
+| faster-whisper large-v3-turbo | 26.2 % / 26.2 % | 26.2 % | 4.5 % | 0 / 0 | 6.67 s | 7.23 s |
+
+(medians for the times; WER over all words, lower-cased, marks removed). The
+faster-whisper rows' remaining gap is not this defect: their rolling windows
+revise real words inside the pasted region (a revision freezes insertion by
+design), and on this CPU `small` and `turbo` decode an 8 s window more slowly
+than 8 s, so windows stop overlapping and speech between them is lost
+(`streaming_decode_slower_than_window` in 4 of 22 runs). Using the word test for
+stability too was measured and rejected (`small` 127 instead of 112).
+
+## 2026-11-24: streaming review: the mode filters the engine and model lists
+
+Structurally: the Mode row moved to the top of the Transcription tab's "Engine &&
+Mode" group, and in Streaming the Engine and Model lists show only what can
+stream. Before, the mode followed the model: with a batch-only model (the
+default Parakeet, the owner's Cohere) the Streaming entry was greyed out and
+its reason was a tooltip, so a user who wanted streaming had to find a model
+that streams by trying them; and `_update_mode_availability` flipped Mode to
+Batch without a word whenever engine or model changed -- on opening the dialog
+too, so the next Save wrote Batch over a stored Streaming. Now Streaming is
+always selectable; engines and local models that cannot stream are hidden and
+disabled while it is selected; the Mode hint says "Only engines and models that
+can stream are listed."; a current selection that cannot stream is never
+switched but stays listed and is named in red in the Model row's reserved note.
+Measured on the owner's settings copy (offscreen, 900 px): the tab height is
+unchanged; Streaming lists 8 of 15 local models (the seven faster-whisper sizes
+and Nemotron) and 3 of 11 engines. Tests:
+`test_streaming_mode_lists_only_local_models_that_can_stream`,
+`test_streaming_mode_hides_engines_that_cannot_stream`,
+`test_a_saved_*_that_cannot_stream_is_kept_and_flagged` in
+`tests/test_settings_dialog_mode.py` (9 of them failed on the old code).
+
+## 2026-11-24: findings from a month of the owner's log (runtime, crash log, noise)
+
+Source: `%APPDATA%\stt_app\logs`, 2026-10-25 to 2026-11-24, 6 sessions, 1067
+recordings, all local Cohere on WebGPU. Details in
+`docs/agents/controller-and-jobs.md`.
+- **The first dictation after every wake took 8-13 s.** 12 lines `System resume
+  detected; closing cached ONNX/WebGPU runtime`, and the next transcription took
+  7.8-13.1 s for short clips (median 0.74 s), with `init_ms` 1-2: the Node runner
+  started inside `transcribe_batch`. Nothing loaded the model again, because the
+  preload ran only at start and after a save. A resume now starts a background
+  preload after 3 s, retried twice after 10 s, never recorded as a failure (a
+  recorded failure would refuse the next dictation), never painted over a
+  session or a result. The log line gained `load_ms` so such a load no longer
+  reads as transcription time.
+- **`crash.log` showed handled exceptions as crashes.** Three dumps
+  `Windows fatal exception: code 0x8001010d` (RPC_E_CANTCALLBACK_INPUTSYNC,
+  raised and caught inside a COM call on the Qt thread) in sessions that ran on
+  for days, and one `previous_session_end clean_quit=yes` WARNING with 37 trace
+  lines. Python 3.12's faulthandler has no switch for Windows exceptions, so
+  the next start now filters: every dump of a clean session, and RPC/COM codes
+  in any session, count as `handled_exceptions`. A start that could not open
+  `crash.log` no longer makes the next one report the same session again (a
+  known limitation, removed).
+- **The three sessions that ended without any mark** were Windows going down
+  (Kernel-Power 41 and EventLog 6008 in the System log at each time), not the
+  app; the one that stopped during its quit was a restart chosen from the Start
+  menu two seconds before. The report now names a Windows start since the
+  session began (`windows_started_since`).
+- **Log noise:** `audio_device_change_output` (352 lines in 143 bursts, 3.5 % of
+  the log) moved to DEBUG; Qt's "monitorData: Unable to obtain handle for
+  monitor" around display wakes is INFO.
+- **A duplicate Retry press was already ignored.** The lead decided that a
+  second Retry with unchanged settings should be ignored while the first runs;
+  v0.13.0 does exactly that since 2026-10-17 (`_running_retry_of_the_slot`
+  compares the whole request, the notice goes to the tray, a finished or
+  failed retry can be pressed again, all pinned in
+  `tests/test_controller_queue.py`). Only the known-limitations entry was
+  stale; it now describes the remaining, intended case (a changed request
+  restarts, and a remote provider's stopped retry still lands in history).
+- **The Settings prebuild** (2.4-3.3 s on the Qt thread, 2.5 s after start) now
+  waits while a recording or its transcription runs; one session had started a
+  recording 1 s after launch, whose stop press would have waited behind it.
+
+## 2026-11-24: remote model rosters brought up to the vendors' newest generation
+
+Structurally: a generic "retired remote model" mechanism now carries every
+roster change (`config.RETIRED_REMOTE_MODELS`, `settings_store._current_remote_model`,
+`SettingsStore.take_model_notice()`, a tray notice "Speech model updated" from
+`main.py`). A saved removed id moves to its successor once, because `load()`
+already rewrites normalised settings, and the notice names the engine and both
+ids; it is shown only for the selected engine or one with a stored key. An
+unknown or damaged id still falls to the default silently. The earlier
+one-off Azure and OpenAI schema-adoption blocks were folded into it.
+
+Per provider (vendor pages and OpenAPI files were fetched raw on 2026-11-24;
+no API key was read and no authenticated request was sent, so every request
+shape below is pinned by tests against the documented shape and is **unverified
+against the live services**):
+
+- AssemblyAI: `universal-3-5-pro` -> `assemblyai-stt-3-7` (batch), realtime
+  `universal-3-6-pro` -> `assemblyai-stt-3-7-realtime`; `disfluencies=false`
+  and `format_text=true` are sent; 32 languages; SDK 1.10.11 (the first with
+  the realtime enum value).
+- ElevenLabs: `scribe_v2` -> `scribe_v3`.
+- OpenAI: `gpt-transcribe` only; whisper-1, gpt-4o-transcribe and
+  gpt-4o-mini-transcribe removed (the mini model was only a third cheaper and
+  its price is no longer published).
+- Azure: `mai-transcribe-2` only; the $0.10/h price is a promotion to the end
+  of 2026 (recorded in the docs, not coded).
+- Mistral: `voxtral-mini-2602` -> `voxtral-mini-transcribe-3-0`, plus
+  `voxtral-small-transcribe-3`; 53 languages; regional endpoints recorded,
+  no picker.
+- Speechmatics: `standard` removed (dearer, equal accuracy); Melia 1 now runs
+  in every region, so the au1 refusal is gone.
+- Fun-ASR: German is on the vendor's current `language_hints` list; the list
+  is the vendor's 30 codes (7 old ones dropped).
+- Deepgram: `nova-2` removed, nova-3 covers all its languages. Groq: nothing
+  newer is sold; unchanged.
+
+Learned: a roster change touches far more than the constant. Tests that used a
+removed model as "the model with a narrower language list" (Deepgram nova-2,
+Azure MAI 1, Speechmatics Standard) needed other examples (Speechmatics
+Enhanced for Auto, Fun-ASR for no Afrikaans). Still to do for the owner: the
+Meta "Muse Voice Transcribe" provider and the OpenRouter preset were out of
+scope.
+
+## 2026-11-24: screen-by-screen review of the settings and dialogs: small UI fixes
+
+Structurally: the History wording (count label, limit name, empty text, engine
+and model names) now lives in `history_ui_actions.py` for both History
+surfaces, and `ui_feedback.EmptyListNotice` is the one empty-state label.
+- A disabled primary button was painted blue: `QPushButton[primary="true"]` is
+  more specific than `QPushButton:disabled`, so it needs its own disabled rule
+  after it (pinned by a pixel test).
+- Facts about a model were painted in the error red; only an unavailable
+  runtime is red now.
+- The unfinished-recordings notice no longer prints two paths; they are tooltips
+  of the buttons that decide where the audio stays.
+- Not real: the overlay did not grow for "Check window". The review script
+  omitted `error_action`, which shows Retry; the app passes NONE (470 px).
+- Not done: the retranscribe dialog's reserved note band (a measured
+  reservation with many tests); needs the owner's go.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`

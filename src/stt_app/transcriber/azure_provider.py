@@ -5,8 +5,7 @@ enhanced mode enabled (`:transcribe` endpoint). This is a remote, cloud-only
 service from Microsoft Foundry; there is no local/ONNX runtime for it.
 
 The enhanced mode is backed by the Microsoft AI (MAI) team's MAI-Transcribe
-models (`mai-transcribe-2`, `mai-transcribe-1.5` and the deprecated
-`mai-transcribe-1`), which combine a speech model with an LLM for high
+model (`mai-transcribe-2`), which combines a speech model with an LLM for high
 accuracy and multilingual support.
 
 Unlike the other remote providers, Azure needs *two* pieces of configuration:
@@ -208,6 +207,11 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             "enhancedMode": {
                 "enabled": True,
                 "model": AZURE_API_MODEL_NAMES[self._model],
+                # Microsoft's MAI-Transcribe page (read 2026-11-25) documents
+                # `modelOptions.transcribeStyle` as "verbatim" (the default:
+                # fillers and false starts kept) or "clean", with an example
+                # request that nests it here. Dictation wants readable text.
+                "modelOptions": {"transcribeStyle": "clean"},
             }
         }
         if self._language_mode != DEFAULT_LANGUAGE_MODE:

@@ -570,7 +570,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
           offered language, and running an English recording that way stores
           a German *translation* as a new entry. Cohere and Granite refuse
           `auto` too, and a remote provider can lack the configured language
-          outright (Fun-ASR has no German), and each of those substituted
+          outright (a model's list may omit it), and each of those substituted
           silently.
         """
         if not hasattr(self, "_language_note"):
