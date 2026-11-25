@@ -40,6 +40,7 @@ from .config import (
     DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
+    ENGINE_LABELS,
     FALLBACK_HOTKEYS,
     HOTKEY_RECLAIM_INTERVAL_MS,
     INSERT_TARGET_CURRENT_WINDOW,
@@ -222,11 +223,8 @@ def _local_model_display_name(model_name: str) -> str:
 
 def _engine_display_name(engine: str) -> str:
     """The engine's name as the engine picker spells it ("OpenAI", not
-    "openai"); the table lives with the dialog helpers, imported lazily for
-    the reason `_local_model_display_name` gives."""
-    from .settings_dialog_helpers import _ENGINE_LABELS
-
-    return _ENGINE_LABELS.get(engine, engine)
+    "openai")."""
+    return ENGINE_LABELS.get(engine, engine)
 
 
 # How much of a transcript a "Not inserted" queue row quotes, enough to tell
