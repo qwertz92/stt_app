@@ -568,3 +568,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+- **Streaming insertion never edits punctuation that is already in the
+  document** (2026-11-25, P4, by the append-only rule in
+  `docs/agents/streaming.md`): a mark the model adds to a word after that
+  word was inserted is missing from the document (history has it); a mark
+  the model later removes stays; a "." later changed to "?" stays "."; and
+  a lone mark token counts as the same word as another lone mark, so such a
+  revision is not noticed either. Fixing any of these means deleting text
+  in the target window, which streaming never does. Kept: measured on 11
+  real clips, Nemotron loses none of the final's 32 marks, because a mark
+  arrives one chunk after its word, before the word is inserted.

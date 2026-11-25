@@ -3,6 +3,21 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: streaming review, round 2: the marks a model adds one chunk late
+
+Structurally: `append_only_stream_partial_candidate` takes whole-session text
+whose words equal the previous text's as it stands, and `_stream_word_key`
+strips a wider set of edge marks (`_WORD_EDGE_MARKS`). A reviewer found what
+the WER with marks removed could not show: a partial that only added a comma
+or period failed the exact prefix test, took the overlap branch, and that
+branch kept the previous text, so the mark was dropped before its word was
+inserted. Counted on the 11 recorded clips: Nemotron's document carries 32 of
+the final's 32 marks (11 before either fix, 17 after round 1) and equals the
+final in 11 of 11 clips (2 before). An ellipsis, a quotation mark, an opening
+bracket or an inverted ? or ! at a word's edge froze insertion like a comma
+used to. A test now pins that stability between two partials stays exact; the
+streaming refusal for a remote engine names it ("OpenAI").
+
 ## 2026-11-24: streaming review: the end of most Nemotron dictations never reached the document
 
 Structurally: `StreamingTextState`'s "is the pasted text still the start of

@@ -809,3 +809,113 @@ def test_a_revised_word_still_freezes_live_insertion():
         "eins zwo drei vier fünf sechs sieben"
     )
     assert insertion == ""
+
+
+def _replay(partials: list[str], final: str) -> str:
+    """What the document holds: every live insertion, then the finalize's."""
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    document = "".join(state.apply_partial_append_only(p).insertion for p in partials)
+    insertion, _final = state.finalize_append_only(final)
+    return document + insertion
+
+
+def test_a_mark_the_model_attaches_one_chunk_late_reaches_the_document():
+    """Nemotron appends a comma or period to the word before it with the next
+    560 ms chunk. The overlap branch of the candidate kept the previous text,
+    so "Tag" stayed without its period and the document lost the mark."""
+    base = "Heute war ein langer Tag. Wir sind früh aufgestanden, haben gefrühstückt"
+    partials = [
+        "Heute war ein",
+        "Heute war ein langer Tag",
+        "Heute war ein langer Tag. Wir sind",
+        "Heute war ein langer Tag. Wir sind früh aufgestanden",
+        base,
+        f"{base} und sind losgefahren",
+    ]
+    final = f"{base} und sind losgefahren."
+
+    assert _replay(partials, final) == final
+
+
+def test_a_formatted_turn_keeps_its_marks_for_words_not_yet_inserted():
+    """AssemblyAI replaces a turn's text with its formatted version. The marks
+    on words still waiting behind the guard reach the document; a mark on a
+    word already inserted cannot (append-only)."""
+    partials = [
+        "hello there how",
+        "Hello there, how are you",
+        "Hello there, how are you doing",
+        "Hello there, how are you doing",
+    ]
+    final = "Hello there, how are you doing today?"
+
+    assert _replay(partials, final) == final
+
+
+def test_stability_between_two_partials_stays_exact():
+    """A word whose punctuation still changes between two partials is not
+    settled. With the word test here, faster-whisper `small` committed words
+    one partial earlier that its later windows revised (measured
+    2026-11-24: 127 document word errors against history instead of 112)."""
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    state.apply_partial_append_only("eins zwei drei vier fünf.")
+    state.apply_partial_append_only("eins zwei drei vier fünf sechs")
+
+    assert state.committed_text == "eins zwei"
+
+
+@pytest.mark.parametrize(
+    ("pasted", "later"),
+    [
+        ("so", "so…"),
+        ("Haus", "„Haus“"),
+        ("Haus", "“Haus”"),
+        ("house", '"house"'),
+        ("Haus", "«Haus»"),
+        ("Haus", "\u201aHaus\u2018"),
+        ("house", "\u2018house\u2019"),
+        ("Haus", "(Haus"),
+        ("qué", "¿qué?"),
+        ("hola", "¡hola!"),
+    ],
+)
+def test_a_mark_at_a_word_edge_does_not_freeze_insertion(pasted, later):
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    for _ in range(2):
+        state.apply_partial_append_only(f"eins {pasted} drei vier")
+    assert state.committed_text == f"eins {pasted}"
+
+    insertion, _final = state.finalize_append_only(f"eins {later} drei vier fünf")
+
+    assert insertion == " drei vier fünf"
+
+
+@pytest.mark.parametrize(
+    ("pasted", "later"),
+    [
+        ("dont", "don't"),
+        ("US", "U.S."),
+        ("35", "3.5"),
+        ("stateoftheart", "state-of-the-art"),
+    ],
+)
+def test_a_mark_inside_a_word_is_still_a_different_word(pasted, later):
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    for _ in range(2):
+        state.apply_partial_append_only(f"eins {pasted} drei vier")
+
+    insertion, _final = state.finalize_append_only(f"eins {later} drei vier fünf")
+
+    assert insertion == ""

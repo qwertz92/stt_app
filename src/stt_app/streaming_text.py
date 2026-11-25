@@ -221,6 +221,18 @@ def append_only_stream_partial_candidate(
     current_words = split_stream_words(current)
     if common_prefix_len(previous_words, current_words) == len(previous_words):
         return current
+    if not current_is_a_trailing_window and _same_words_prefix_len(
+        previous_words, current_words
+    ) == len(previous_words):
+        # The same words, only with marks or casing added: a model that
+        # attaches a comma or period to the previous word one chunk later
+        # (Nemotron), or a formatted turn (AssemblyAI). The overlap branch
+        # below kept the previous text, so the mark was dropped before the
+        # word was even inserted. No word changes here, so nothing already
+        # in the document is retyped (`committed_text` is compared as words
+        # and keeps its own spelling). Not for a rolling window: its merge
+        # and the segment floor compare exact text and must not loosen.
+        return current
 
     overlap = _suffix_prefix_overlap_len(previous_words, current_words)
     threshold = max(1, int(min_overlap_words))
@@ -593,7 +605,7 @@ def _stream_words_match(left: str, right: str) -> bool:
 def _substantive_word_count(words: list[str]) -> int:
     """How many of `words` carry a word, rather than only punctuation.
 
-    `_stream_word_key` strips `.,;:!?)]}` from both ends, so "...", "!", "?!"
+    `_stream_word_key` strips `_WORD_EDGE_MARKS` from both ends, so "...", "!", "?!"
     and ":" all key to the empty string and therefore match each other. Two
     such tokens cleared a two-word overlap threshold with no lexical
     agreement at all, and the merge treats a cleared threshold as "two
@@ -608,5 +620,15 @@ def _substantive_word_count(words: list[str]) -> int:
     return sum(1 for word in words if _stream_word_key(word))
 
 
+# Marks that can stand at a word's edge without making it another word:
+# sentence marks, the ellipsis, brackets, and the quotation marks German,
+# English and French text use (escaped, since several look like a comma or
+# an apostrophe). Stripped at both edges only, never inside a word, so
+# "don't", "U.S." against "US", "3.5" and "state-of-the-art" still differ.
+_WORD_EDGE_MARKS = (
+    '.,;:!?\u2026)]}([{"\u201e\u201c\u201d\u00ab\u00bb\u201a\u2018\u2019\u00bf\u00a1'
+)
+
+
 def _stream_word_key(word: str) -> str:
-    return word.strip().strip(".,;:!?)]}").lower()
+    return word.strip().strip(_WORD_EDGE_MARKS).lower()

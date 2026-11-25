@@ -140,6 +140,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
     clips (document WER 34.6 % against 10.5 % for its own final text); with
     the word test, 0 words and 10.5 %. A different word still ends the
     prefix (test `test_a_revised_word_still_freezes_live_insertion`).
+  - **A partial that only adds marks or casing replaces the candidate**
+    (2026-11-25, review finding): in `append_only_stream_partial_candidate`,
+    whole-session text whose words equal the previous text's
+    (`_same_words_prefix_len`) is taken as it stands; the overlap branch
+    kept the previous text and dropped the mark before its word was
+    inserted. Not for a rolling window (`current_is_a_trailing_window`):
+    its merge and floor compare exact text. Measured by replaying the 11
+    clips: Nemotron's document carries 32 of the final's 32 marks and equals
+    the final in 11 of 11 clips (before: 11 marks and 2 clips; after the
+    word-prefix fix alone: 17 and 2). The faster-whisper sizes are unchanged
+    (base 81 marks against 80 in the final, small 47 of 59, turbo 29 of 29):
+    what they lose are revised words, not marks. A mark added to a word
+    already inserted stays lost: that is the append-only price.
 - **Streaming finalization**: full re-transcription at stop is opt-in
   (`streaming_full_final_transcript`, default off); otherwise only the
   trailing window is merged, so stop is fast and history matches.
@@ -154,7 +167,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   20000 synthetic German merges, lost/duplicated words: old 17/74129,
   longest 29/16712, `overlap - skip` 2/62893.
 - **Punctuation is not corroboration**: `_stream_word_key` strips
-  `.,;:!?)]}`, so marks match each other. A seam needs at least one real
+  `_WORD_EDGE_MARKS` (sentence marks, the ellipsis, brackets, the German,
+  English and French quotation marks, inverted ? and !) at both edges of a
+  word, never inside it, so marks match each other. A seam needs at least one real
   word (`_substantive_word_count` > 0) while the raw count clears the
   threshold. Do not make marks non-matching in `_stream_words_match`
   ("hallo ... welt"), nor apply the threshold to the substantive count
