@@ -1996,6 +1996,15 @@ AUDIO_CAPTURE_HEALTH_SUSPEND_S = 2.0
 # -97 dBFS throughout. The hint only paints, so a short threshold costs
 # nothing when it is wrong.
 AUDIO_NO_SIGNAL_HINT_S = 1.5
+# The same line once sound had been seen in the recording: digital silence
+# for this long after it (a dead endpoint mid-session -- the owner's appeared
+# 31-221 s after an output-device change -- or a headset's noise gate). A
+# live microphone in a pause sends room tone, 0.0006-0.0034 in the owner's
+# measurements and never below 0.0009 for a whole recording, not exact
+# zeros; 3 s is twice the start threshold, so an ordinary pause between
+# sentences on a noise-gated headset does not flash the line, and a longer
+# one gets a line that is true (no sound arrives) and only paints.
+AUDIO_NO_SIGNAL_AFTER_SOUND_S = 3.0
 # `recording_start_timing` is a warning from here on: a microphone open, or the
 # wait from the record hotkey press to the running capture, this long loses
 # the first words of anyone who starts speaking at the press.

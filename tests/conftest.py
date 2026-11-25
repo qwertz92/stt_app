@@ -450,12 +450,17 @@ class FakeCapture:
     # delivering microphone with signal unless a test says otherwise.
     silent_s: float | None = 0.0
     no_signal_s = 0.0
+    signal_seen = False
     stream_active: bool | None = None
 
     def health(self):
         from stt_app.audio_capture import CaptureHealth
 
-        return CaptureHealth(silent_s=self.silent_s, no_signal_s=self.no_signal_s)
+        return CaptureHealth(
+            silent_s=self.silent_s,
+            no_signal_s=self.no_signal_s,
+            signal_seen=self.signal_seen,
+        )
 
     def stream_is_active(self):
         return self.stream_active

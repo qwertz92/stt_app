@@ -173,12 +173,14 @@ class CaptureHealth:
 
     `silent_s`: seconds since this capture's last block, None before its
     first (the first-callback watchdog's phase). `no_signal_s`: seconds of
-    audio received while every block stayed below `AUDIO_NO_SIGNAL_LEVEL`,
-    0.0 once one rose above it.
+    audio received since the last block that rose to `AUDIO_NO_SIGNAL_LEVEL`
+    (since the start before any did): consecutive digital silence.
+    `signal_seen`: whether any block so far rose to it.
     """
 
     silent_s: float | None
     no_signal_s: float
+    signal_seen: bool
 
 
 class _CaptureTiming:
@@ -230,10 +232,12 @@ class _CaptureTiming:
         # recording, not by wall time.
         self._level_energy = [0.0] * _LEVEL_SECONDS
         self._level_frames = [0] * _LEVEL_SECONDS
-        # Whether any block so far rose to `AUDIO_NO_SIGNAL_LEVEL`: until one
-        # does, the microphone has sent digital silence only (muted, or a
-        # dead endpoint), which no quiet room produces.
+        # Whether any block so far rose to `AUDIO_NO_SIGNAL_LEVEL`, and the
+        # frames received since the last one that did: digital silence (a
+        # muted or dead endpoint, a headset's noise gate), which no quiet
+        # room produces.
         self.signal_seen = False
+        self.frames_without_signal = 0
 
     def record_block(self, now: float, frames: int, status, energy: float) -> None:
         """Account one block; `energy` is the sum of its squared samples."""
@@ -256,6 +260,9 @@ class _CaptureTiming:
         # A non-finite energy is not "no signal": the comparison is False.
         if frames > 0 and not energy < (AUDIO_NO_SIGNAL_LEVEL**2) * frames:
             self.signal_seen = True
+            self.frames_without_signal = 0
+        else:
+            self.frames_without_signal += max(0, frames)
         second = self.frames // self.sample_rate
         if second < _LEVEL_SECONDS:
             self._level_energy[second] += energy
@@ -1191,8 +1198,11 @@ class AudioCapture:
                 if timing.last_block_at is None
                 else max(0.0, _clock() - timing.last_block_at)
             )
-            no_signal_s = 0.0 if timing.signal_seen else timing.audio_s()
-        return CaptureHealth(silent_s=silent_s, no_signal_s=no_signal_s)
+            no_signal_s = timing.frames_without_signal / timing.sample_rate
+            signal_seen = timing.signal_seen
+        return CaptureHealth(
+            silent_s=silent_s, no_signal_s=no_signal_s, signal_seen=signal_seen
+        )
 
     @property
     def uses_warm_stream(self) -> bool:

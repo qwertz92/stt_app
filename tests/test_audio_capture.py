@@ -2648,7 +2648,7 @@ def test_health_reports_how_long_a_stream_has_been_silent_since_its_last_block(
     capture.stop(drain=False)
 
 
-def test_health_counts_digital_silence_until_a_block_carries_signal(monkeypatch):
+def test_health_counts_consecutive_digital_silence(monkeypatch):
     clock = _Clock()
     capture, callback = _cold_capture(monkeypatch, clock)
 
@@ -2661,10 +2661,16 @@ def test_health_counts_digital_silence_until_a_block_carries_signal(monkeypatch)
     clock.now += 0.1
     callback(_block(value=AUDIO_NO_SIGNAL_LEVEL * 2), 1600, None, None)
     assert capture.health().no_signal_s == 0.0
-    # Signal once seen stays seen: a pause after speech is not a dead microphone.
+    assert capture.health().signal_seen
+    # Exact zeros after sound (a dead endpoint after an output-device change,
+    # or a headset's noise gate) count again from the last block with signal.
     for _ in range(30):
         clock.now += 0.1
         callback(_block(value=0.0), 1600, None, None)
+    assert capture.health().no_signal_s == pytest.approx(3.0)
+    assert capture.health().signal_seen
+    clock.now += 0.1
+    callback(_block(value=AUDIO_NO_SIGNAL_LEVEL * 2), 1600, None, None)
     assert capture.health().no_signal_s == 0.0
     capture.stop(drain=False)
 

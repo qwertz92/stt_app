@@ -172,8 +172,19 @@ def _recording(monkeypatch, tmp_path, *, mode="batch", **settings):
     return controller, app, overlay, capture, clock
 
 
-def _tick(controller, clock, capture, *, silent_s=None, no_signal_s=None, step=0.5):
+def _tick(
+    controller,
+    clock,
+    capture,
+    *,
+    silent_s=None,
+    no_signal_s=None,
+    signal_seen=None,
+    step=0.5,
+):
     clock.now += step
+    if signal_seen is not None:
+        capture.signal_seen = signal_seen
     if silent_s is not None:
         capture.silent_s = silent_s
     if no_signal_s is not None:
@@ -197,7 +208,7 @@ def test_a_microphone_sending_zeros_is_shown_at_once_and_cleared_by_signal(
     state, detail = overlay.states[-1]
     assert state == "Listening"
     assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
-    assert "no signal" in detail
+    _assert_neutral_no_sound_text(detail)
     assert controller._audio_capture is capture, "the recording runs on"
 
     _tick(controller, clock, capture, no_signal_s=0.0)
@@ -220,6 +231,49 @@ def test_the_no_signal_warning_shows_in_streaming_too(monkeypatch, tmp_path):
 
     assert overlay.states[-1][0] == "Listening"
     assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+    controller.shutdown()
+    _ = app
+
+
+def _assert_neutral_no_sound_text(detail):
+    # True whatever the cause (muted, dead, or a headset's noise gate in a
+    # pause): no claim that speech is lost, no instruction to stop.
+    assert "No sound is arriving from the microphone" in detail
+    assert "not recorded" not in detail
+    assert "stop" not in detail.lower()
+
+
+def test_zeros_after_sound_are_shown_after_a_longer_run(monkeypatch, tmp_path):
+    # The owner's dead endpoints turned to exact zeros mid-session; a pause
+    # after speech is room tone on a live microphone, never seconds of zeros.
+    controller, app, overlay, capture, clock = _recording(monkeypatch, tmp_path)
+
+    _tick(controller, clock, capture, signal_seen=True, no_signal_s=2.5)
+    assert _warning(overlay) is None, "a short run after sound is a pause"
+
+    _tick(controller, clock, capture, signal_seen=True, no_signal_s=3.0)
+    assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+    _assert_neutral_no_sound_text(overlay.states[-1][1])
+
+    _tick(controller, clock, capture, signal_seen=True, no_signal_s=0.0)
+    assert _warning(overlay) is None
+    controller.stop_recording()
+    controller.shutdown()
+    _ = app
+
+
+def test_the_live_text_comes_back_when_sound_returns(monkeypatch, tmp_path):
+    controller, app, overlay, capture, clock = _recording(
+        monkeypatch, tmp_path, mode="streaming"
+    )
+    controller._stream_text_state.live_text = "hallo welt"
+
+    _tick(controller, clock, capture, signal_seen=True, no_signal_s=3.0)
+    assert _warning(overlay) == OVERLAY_WARNING_NO_SIGNAL
+
+    _tick(controller, clock, capture, signal_seen=True, no_signal_s=0.0)
+    assert _warning(overlay) is None
+    assert overlay.states[-1] == ("Listening", "Live: hallo welt")
     controller.shutdown()
     _ = app
 

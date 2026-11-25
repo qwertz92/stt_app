@@ -432,21 +432,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     `AUDIO_CAPTURE_HEALTH_SUSPEND_S` (2 s) late restarts the stall clock
     (logged `audio_capture_health_resumed`), so a dead stream after a resume
     is caught 2 s / 12 s after the resume, not at once.
-  - **Digital silence only** (owner's log, review of 2026-11-24: six
-    recordings of exact zeros, 31-221 s after an `audio_device_change_output`
-    event, one of them 21 s of speech): when every block since the start
-    stayed below `AUDIO_NO_SIGNAL_LEVEL` (0.0001 RMS, -80 dBFS) for
-    `AUDIO_NO_SIGNAL_HINT_S` (1.5 s) of audio, the same warning says "The
-    microphone delivered no signal (digital silence): it is muted,
-    disconnected or not working. What you say is not recorded ..."; the
-    recording runs on, and the first block with signal clears it ("The
-    microphone delivers audio again. Speak now."). Once seen, signal stays
-    seen: a pause after speech is not a dead microphone. Level: the dead
-    recordings measured below 0.00005 (about -97 dBFS per second, sub-LSB
-    noise the 16-bit WAV turns into zeros), the quietest live one 0.0009,
-    room tone 0.0006-0.0034. Two live recordings had a first second at
-    -96/-97 dBFS and signal in the second; the hint shows briefly there,
-    which is true and only paints.
+  - **Digital silence, at any time** (owner's log, review of 2026-11-24:
+    six recordings of exact zeros, 31-221 s after an
+    `audio_device_change_output` event, one of them 21 s of speech; one
+    rule since 2026-11-25): consecutive blocks below `AUDIO_NO_SIGNAL_LEVEL`
+    (0.0001 RMS, -80 dBFS; `CaptureHealth.no_signal_s` counts from the last
+    block that rose to it) for `AUDIO_NO_SIGNAL_HINT_S` (1.5 s) from the
+    start, or for `AUDIO_NO_SIGNAL_AFTER_SOUND_S` (3 s) once sound had been
+    seen, paint the same warning with "No sound is arriving from the
+    microphone. Check that it is not muted." The line is true whatever the
+    cause (muted, a dead endpoint, a headset whose noise gate sends exact
+    zeros in a pause), so it claims no lost speech and says nothing about
+    stopping; the recording runs on, and the first block with signal clears
+    it -- in streaming the live text comes back, otherwise "The microphone
+    delivers audio again. Speak now." Until 2026-11-25 signal once seen
+    stayed seen, so a microphone that died after the first sound was never
+    reported, and the line said "What you say is not recorded: stop ...",
+    false for a noise gate before the first word. Why 3 s after sound: a
+    live microphone in a pause sends room tone (0.0006-0.0034 in the
+    owner's measurements, never below 0.0009 for a whole recording), not
+    exact zeros; 3 s is twice the start threshold, so an ordinary pause
+    between sentences on a noise-gated headset does not flash the line, and
+    a longer one gets a line that is true and only paints. No per-block log
+    of mid-recording zero runs exists to measure this against. Level: the
+    dead recordings measured below 0.00005 (about -97 dBFS per second,
+    sub-LSB noise the 16-bit WAV turns into zeros). Two live recordings had a
+    first second at -96/-97 dBFS and signal in the second; the hint shows
+    briefly there, which is true.
   - **No reopen on no signal** (judged 2026-11-24): the owner's dead
     endpoint had no input-topology event and the default device did not
     change, so a reopen would open the same endpoint; nothing measured shows

@@ -29,6 +29,7 @@ from .config import (
     AUDIO_CAPTURE_HEALTH_SUSPEND_S,
     AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
+    AUDIO_NO_SIGNAL_AFTER_SOUND_S,
     AUDIO_NO_SIGNAL_HINT_S,
     AUDIO_NO_SIGNAL_LEVEL,
     AUDIO_SAMPLE_RATE,
@@ -177,8 +178,16 @@ _TRANSCRIPT_NOT_SAVED_REASON = (
 # it. The same clock `AudioCapture` stamps its blocks with.
 _health_clock = time.perf_counter
 
-# What a recording, or the live overlay, says when the microphone sends no
-# signal at all (`AUDIO_NO_SIGNAL_LEVEL`): a device problem, not a setting.
+# The live overlay's line while the microphone sends digital silence
+# (`AUDIO_NO_SIGNAL_LEVEL`). True whatever the cause -- muted, a dead
+# endpoint, or a headset whose noise gate sends exact zeros in a pause -- so
+# it claims no lost speech and gives no instruction to stop.
+_NO_SOUND_LIVE_TEXT = (
+    "No sound is arriving from the microphone. Check that it is not muted."
+)
+
+# What a finished recording says when the microphone sent no signal at all
+# (`AUDIO_NO_SIGNAL_LEVEL`): a device problem, not a setting.
 _NO_SIGNAL_TEXT = (
     "The microphone delivered no signal (digital silence): it is muted, "
     "disconnected or not working."
@@ -3120,11 +3129,13 @@ class DictationController(QtCore.QObject):
           the warning and loses nothing. The recording ends through the
           normal stop (`_end_stalled_recording`), so what was captured is
           transcribed and delivered like any other recording.
-        - **Digital silence only since the start** (`CaptureHealth.no_signal_s`
-          past `AUDIO_NO_SIGNAL_HINT_S`): callbacks come, every block below
-          `AUDIO_NO_SIGNAL_LEVEL` -- a muted or dead endpoint. The warning
-          says so; the recording runs on, because the user decides, and the
-          warning clears once a block carries signal.
+        - **Digital silence** (`CaptureHealth.no_signal_s`: consecutive
+          blocks below `AUDIO_NO_SIGNAL_LEVEL`) for `AUDIO_NO_SIGNAL_HINT_S`
+          from the start, or for `AUDIO_NO_SIGNAL_AFTER_SOUND_S` once sound
+          had been seen -- a muted or dead endpoint, or a noise gate in a
+          pause. The line says only that no sound arrives; the recording
+          runs on, and the line clears once a block carries signal (the live
+          text comes back in streaming).
 
         The stall clock restarts at a tick that came
         `AUDIO_CAPTURE_HEALTH_SUSPEND_S` late (system sleep, a held Qt
@@ -3184,12 +3195,17 @@ class DictationController(QtCore.QObject):
                 stream_active=stream_active,
             )
             return
-        if health.no_signal_s >= AUDIO_NO_SIGNAL_HINT_S:
+        no_signal_limit_s = (
+            AUDIO_NO_SIGNAL_AFTER_SOUND_S
+            if health.signal_seen
+            else AUDIO_NO_SIGNAL_HINT_S
+        )
+        if health.no_signal_s >= no_signal_limit_s:
             self._show_capture_warning(
                 "no_signal",
-                f"{_NO_SIGNAL_TEXT} What you say is not recorded: stop, check "
-                "the microphone and record again.",
+                _NO_SOUND_LIVE_TEXT,
                 no_signal_s=health.no_signal_s,
+                after_sound=health.signal_seen,
             )
             return
         if self._capture_warning is not None:
@@ -3197,10 +3213,24 @@ class DictationController(QtCore.QObject):
                 "audio_capture_warning_cleared kind=%s", self._capture_warning
             )
             self._capture_warning = None
+            live_text = (
+                self._current_streaming_partial_text()
+                if self._streaming_recording
+                else ""
+            )
             with self._overlay_batch():
-                self._set_listening_overlay(
-                    "The microphone delivers audio again. Speak now."
-                )
+                if live_text:
+                    # What the live partials showed before the warning; the
+                    # next partial carries on from it.
+                    if len(live_text) > STREAMING_OVERLAY_MAX_CHARS:
+                        live_text = (
+                            f"...{live_text[-STREAMING_OVERLAY_MAX_CHARS:]}".strip()
+                        )
+                    self._overlay.set_state("Listening", f"Live: {live_text}")
+                else:
+                    self._set_listening_overlay(
+                        "The microphone delivers audio again. Speak now."
+                    )
 
     def _show_capture_warning(self, kind: str, detail: str, **figures) -> None:
         """Paint the recording's "No signal" warning; logged when it starts.
