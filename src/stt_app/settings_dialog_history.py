@@ -16,8 +16,12 @@ from .config import (
 from .dialog_style import make_label_selectable
 from .history_audio import resolve_history_audio_path, reveal_path_in_file_manager
 from .history_ui_actions import (
+    HISTORY_EMPTY_TEXT,
+    HISTORY_LIMIT_LABEL,
     format_history_count_label,
+    history_engine_label,
     history_import_dialog_dir,
+    history_model_label,
     notify_history_edit,
     prompt_import_overflow,
     run_history_clear,
@@ -39,10 +43,14 @@ from .transcript_history import (
     map_recent_entry_rows,
     recent_entries_change_plan,
 )
-from .ui_feedback import restore_vertical_scrollbar, set_button_feedback_state
+from .ui_feedback import (
+    EmptyListNotice,
+    restore_vertical_scrollbar,
+    set_button_feedback_state,
+)
 
 # Space between the two labelled controls of the History tab's top row, so
-# "History Size" and "Time Zone" read as two settings rather than one.
+# "History limit" and "Time Zone" read as two settings rather than one.
 _HISTORY_CONTROL_GROUP_GAP_PX = 12
 
 
@@ -53,14 +61,6 @@ class _HistoryTabMixin:
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
-
-        history_intro = QtWidgets.QLabel(
-            "Browse recent transcripts here. Audio-file imports live on their own tab so "
-            "this view stays compact on smaller screens."
-        )
-        history_intro.setWordWrap(True)
-        self._style_note_label(history_intro)
-        layout.addWidget(history_intro)
 
         self.history_max_spin = _WheelPassthroughSpinBox()
         self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
@@ -104,7 +104,7 @@ class _HistoryTabMixin:
 
         history_controls = QtWidgets.QHBoxLayout()
         self._configure_button_row(history_controls)
-        history_controls.addWidget(QtWidgets.QLabel("History Size"))
+        history_controls.addWidget(QtWidgets.QLabel(HISTORY_LIMIT_LABEL))
         history_controls.addWidget(self.history_max_spin)
         history_controls.addSpacing(_HISTORY_CONTROL_GROUP_GAP_PX)
         history_controls.addWidget(QtWidgets.QLabel("Time Zone"))
@@ -138,6 +138,9 @@ class _HistoryTabMixin:
             activated=self._copy_selected_history,
         )
         self.history_copy_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
+        self._history_empty_notice = EmptyListNotice(
+            self.history_list, HISTORY_EMPTY_TEXT
+        )
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
         self.history_list.itemDoubleClicked.connect(
             self._on_history_item_double_clicked
@@ -417,7 +420,9 @@ class _HistoryTabMixin:
             self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
         )
         timestamp = format_history_timestamp(entry.created_at, display_timezone)
-        label = f"{timestamp} | {entry.engine}/{entry.model} | {preview}"
+        engine = history_engine_label(entry.engine)
+        model = history_model_label(entry.engine, entry.model)
+        label = f"{timestamp} | {engine}/{model} | {preview}"
         item = QtWidgets.QListWidgetItem(label)
         item.setData(QtCore.Qt.UserRole, entry)
         self._apply_compact_list_item_size(self.history_list, item)
@@ -532,6 +537,7 @@ class _HistoryTabMixin:
         scroll_value: int,
     ) -> None:
         self._update_history_count_label(total)
+        self._history_empty_notice.set_empty(not entries)
         selected_row_set = {row for row in selected_rows if 0 <= row < len(entries)}
         restored_selection = False
         for row, entry in enumerate(entries):

@@ -504,15 +504,6 @@ class _GeneralTabMixin:
 
         self._update_import_language_selector()
 
-        if engine == DEFAULT_ENGINE:
-            self.import_model_note.setText(
-                "This import uses the selected local model only for the imported file."
-            )
-            return
-        self.import_model_note.setText(
-            f"This import uses the selected {self._provider_label(engine)} model only for the imported file."
-        )
-
     @staticmethod
     def _import_language_key(engine: str, model: str) -> tuple[str, str]:
         return (str(engine or "").strip().lower(), str(model or "").strip())
@@ -1025,7 +1016,7 @@ class _GeneralTabMixin:
             style = warning_style
             text = unavailable
         elif engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
-            style = warning_style
+            style = note_style
             # The order Auto tries is no longer fixed -- a benchmark can put
             # CPU first -- and the ONNX Device row on the Models tab owns it
             # either way, so restating it here could only ever contradict it.
@@ -1057,7 +1048,7 @@ class _GeneralTabMixin:
                 "without punctuation."
             )
         elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-            style = warning_style
+            style = note_style
             text = (
                 "Streams with a fixed 560 ms ONNX chunk. Runs on the ONNX "
                 "Device set on the Models tab."

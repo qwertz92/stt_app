@@ -2011,3 +2011,132 @@ def test_the_full_final_checkbox_opens_enabled_only_where_it_acts(
     finally:
         dialog.close()
         app.processEvents()
+
+
+def test_only_an_unavailable_model_paints_its_note_in_error_red(
+    dialog: SettingsDialog,
+) -> None:
+    """A plain fact about a model (batch only, ONNX device) is not an error.
+
+    The WebGPU and Nemotron notes shared the error red with the one note that
+    reports a real problem, the runtime that cannot run here.
+    """
+    from stt_app import local_runtime_support
+    from stt_app.config import VALID_MODEL_SIZES
+
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
+    for model in VALID_MODEL_SIZES:
+        index = dialog.model_combo.findData(model)
+        if index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(index)
+        app.processEvents()
+        is_red = "#b71c1c" in dialog.local_model_runtime_warning_label.styleSheet()
+        assert is_red == bool(local_runtime_support.unavailable_reason(model)), model
+
+
+def test_the_screens_say_why_a_value_is_greyed_or_what_a_button_stores(
+    dialog: SettingsDialog,
+) -> None:
+    """Reasons are visible text, not tooltips (review of 2026-11-24)."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    app.processEvents()
+
+    # Audio tab: a tone picker sits in the same row as its checkbox, greyed
+    # while the box is off.
+    dialog.tabs.setCurrentIndex(2)
+    dialog.start_beep_checkbox.setChecked(False)
+    app.processEvents()
+    assert not dialog.start_beep_tone_combo.isEnabled()
+    assert (
+        dialog.start_beep_tone_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y()
+        - dialog.start_beep_checkbox.mapTo(dialog, QtCore.QPoint(0, 0)).y()
+    ) < dialog.start_beep_checkbox.height()
+    dialog.start_beep_checkbox.setChecked(True)
+    assert dialog.start_beep_tone_combo.isEnabled()
+    dialog.vad_checkbox.setChecked(False)
+    vad_hint = dialog.vad_threshold_spin.parentWidget().findChildren(QtWidgets.QLabel)[
+        0
+    ]
+    assert vad_hint.text() == "Used only while auto-stop is on."
+    dialog.vad_checkbox.setChecked(True)
+    assert vad_hint.text().startswith("Lower values")
+
+    # Providers tab: the difference from the dialog's own Save is on screen.
+    notes = [
+        label.text()
+        for label in dialog.findChildren(QtWidgets.QLabel)
+        if label.text().startswith("Save API Keys stores")
+    ]
+    assert notes == [
+        (
+            "Save API Keys stores the keys, endpoints and regions on this tab now. "
+            "Changes on the other tabs still need Save."
+        )
+    ]
+
+    # Import tab: the local engine needs no note of its own.
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("local")
+    )
+    app.processEvents()
+    assert not dialog.import_engine_note.isVisibleTo(dialog)
+    assert not hasattr(dialog, "import_model_note")
+
+
+def test_the_import_service_combo_stays_put_when_its_note_comes_and_goes(
+    dialog: SettingsDialog,
+) -> None:
+    """Switching Local <-> cloud shows or hides the engine note below the combo.
+
+    The tab's content used to be spread over the splitter pane, so the combo
+    under the cursor moved by the note's height (9 px measured).
+    """
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.tabs.setCurrentWidget(dialog._import_tab)
+    app.processEvents()
+
+    def combo_y() -> int:
+        return dialog.import_engine_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y()
+
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("local")
+    )
+    app.processEvents()
+    local_y = combo_y()
+    assert not dialog.import_engine_note.isVisibleTo(dialog)
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("groq")
+    )
+    app.processEvents()
+    assert dialog.import_engine_note.isVisibleTo(dialog)
+    assert combo_y() == local_y
+
+
+def test_the_audio_tab_needs_no_scrollbar_when_the_dialog_can_show_it(
+    dialog: SettingsDialog,
+) -> None:
+    """A page scrollbar for content that almost fits was the Models-tab defect.
+
+    Measured at 860x960: content 870 px against a 829 px viewport (range 41)
+    with the tone hints on their own rows; the tone pickers now sit beside their
+    checkboxes and the range is 0.
+    """
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.tabs.setCurrentIndex(2)
+    app.processEvents()
+    tab = dialog.tabs.currentWidget()
+    room = tab.viewport().height()
+    needed = tab.widget().sizeHint().height()
+    if room < needed:
+        pytest.skip(f"the window has {room} px for a page that needs {needed} px")
+    assert tab.verticalScrollBar().maximum() == 0

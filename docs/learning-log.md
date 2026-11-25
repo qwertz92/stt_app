@@ -89,6 +89,23 @@ Enhanced for Auto, Fun-ASR for no Afrikaans). Still to do for the owner: the
 Meta "Muse Voice Transcribe" provider and the OpenRouter preset were out of
 scope.
 
+## 2026-11-24: screen-by-screen review of the settings and dialogs: small UI fixes
+
+Structurally: the History wording (count label, limit name, empty text, engine
+and model names) now lives in `history_ui_actions.py` for both History
+surfaces, and `ui_feedback.EmptyListNotice` is the one empty-state label.
+- A disabled primary button was painted blue: `QPushButton[primary="true"]` is
+  more specific than `QPushButton:disabled`, so it needs its own disabled rule
+  after it (pinned by a pixel test).
+- Facts about a model were painted in the error red; only an unavailable
+  runtime is red now.
+- The unfinished-recordings notice no longer prints two paths; they are tooltips
+  of the buttons that decide where the audio stays.
+- Not real: the overlay did not grow for "Check window". The review script
+  omitted `error_action`, which shows Retry; the app passes NONE (470 px).
+- Not done: the retranscribe dialog's reserved note band (a measured
+  reservation with many tests); needs the owner's go.
+
 ## 2026-10-23: kept audio, review of the final fixes: four small findings
 
 Structurally: the archive's file-name rule moved out of `controller.py`
