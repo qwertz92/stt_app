@@ -15,7 +15,8 @@ from pathlib import Path
 
 from PySide6 import QtWidgets
 
-from .settings_dialog_helpers import _ENGINE_LABELS, local_model_short_label
+from .config import ENGINE_LABELS
+from .settings_dialog_helpers import local_model_short_label
 from .transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
@@ -34,7 +35,7 @@ _LOCAL_ENGINE = "local"
 
 def history_engine_label(engine: str) -> str:
     """The engine as the pickers name it, without the parenthetical ("Local")."""
-    label = _ENGINE_LABELS.get(engine, engine)
+    label = ENGINE_LABELS.get(engine, engine)
     return label.split(" (", 1)[0].strip() or label
 
 
