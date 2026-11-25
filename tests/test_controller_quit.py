@@ -694,8 +694,9 @@ def test_keep_last_recording_keeps_a_transcribed_unfinished_recording(
 ):
     """With "Keep last recording after successful transcription" on, a
     dictation's audio stays after its transcript; the notice's transcription
-    deleted it. It goes to the recordings folder under its own name, where
-    no retention count deletes it, and its entry points at it."""
+    deleted it. It goes to the recordings folder as a kept copy
+    (`kept_<stamp>_<id>.wav`, counted by "Keep Recordings" since 2026-11-24:
+    its transcript exists), and its entry points at it."""
     keep_dir = tmp_path / "recordings"
     controller, app, _overlay, unfinished, history = _controller(
         monkeypatch, tmp_path, save_last_wav=True, recordings_dir=str(keep_dir)
@@ -708,7 +709,7 @@ def test_keep_last_recording_keeps_a_transcribed_unfinished_recording(
 
     assert ok is True
     assert unfinished.list_recordings() == []
-    kept = keep_dir / recording.path.name
+    kept = keep_dir / recording.path.name.replace("unfinished_", "kept_", 1)
     assert kept.read_bytes() == b"RIFF-kept"
     assert history.load()[0].source_audio_path == os.path.abspath(kept)
     controller.shutdown()

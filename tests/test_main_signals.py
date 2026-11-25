@@ -1024,7 +1024,15 @@ def test_a_last_recording_already_in_history_is_completed_not_offered(
     _ = app
 
 
-def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
+def test_a_transcript_written_soon_after_the_recording_is_no_proof_it_was_transcribed(
+    tmp_path,
+):
+    """D5 of 2026-11-24: the slot is told transcribed by its recording id only.
+    The removed guess took any History entry written 0-180 s after the WAV's
+    modification time as its transcript, so a recording stopped while the
+    previous one's transcript was being written, followed by a crash, was
+    completed -- with "keep last recording" off, deleted -- although nobody
+    had transcribed it. Now it stays and the notice offers it."""
     store = LastRecordingStore(
         audio_path=tmp_path / "last_recording.wav",
         state_path=tmp_path / "last_recording.json",
@@ -1033,22 +1041,36 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     audio_mtime = 1_800_000_000
     os.utime(store.audio_path, (audio_mtime, audio_mtime))
     history = TranscriptHistoryStore(path=tmp_path / "history.json")
-    matching_time = datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat()
-    newer_time = datetime.fromtimestamp(audio_mtime + 600, UTC).isoformat()
     history.add_entry(
         TranscriptHistoryEntry(
-            text="matching legacy transcript",
-            created_at=matching_time,
+            text="the previous recording's transcript",
+            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
             engine="local",
             model="small",
             mode="batch",
+            source_recording_id="an-older-recording",
         ),
         max_items=20,
     )
+
+    assert _last_recording_already_transcribed(store, history) is False
+    assert store.audio_path.is_file()
+    assert store.has_recoverable_recording() is True
+
+
+def test_a_slot_without_a_recording_id_is_kept_whatever_history_holds(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    audio_mtime = 1_800_000_000
+    os.utime(store.audio_path, (audio_mtime, audio_mtime))
+    history = TranscriptHistoryStore(path=tmp_path / "history.json")
     history.add_entry(
         TranscriptHistoryEntry(
-            text="newer unrelated transcript",
-            created_at=newer_time,
+            text="matching legacy transcript",
+            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
             engine="local",
             model="small",
             mode="batch",
@@ -1058,14 +1080,9 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     legacy_state = SimpleNamespace(recording_id="", created_at="")
 
     assert (
-        _last_recording_already_transcribed(
-            store,
-            history,
-            state=legacy_state,
-        )
-        is True
+        _last_recording_already_transcribed(store, history, state=legacy_state) is False
     )
-    assert store.has_recoverable_recording() is False
+    assert store.has_recoverable_recording() is True
 
 
 def test_load_app_icon_uses_bundled_asset():
@@ -1335,33 +1352,6 @@ def test_a_transcript_with_a_gap_does_not_complete_its_recording_at_startup(
     assert _last_recording_already_transcribed(store, history) is True
     assert store.audio_path.is_file()
     assert store.has_recoverable_recording() is True
-
-
-def test_a_legacy_match_with_a_gap_does_not_complete_its_recording(tmp_path):
-    store = LastRecordingStore(
-        audio_path=tmp_path / "last_recording.wav",
-        state_path=tmp_path / "last_recording.json",
-    )
-    store.save_recording(b"RIFF", keep_after_success=False)
-    audio_mtime = 1_800_000_000
-    os.utime(store.audio_path, (audio_mtime, audio_mtime))
-    history = TranscriptHistoryStore(path=tmp_path / "history.json")
-    history.add_entry(
-        TranscriptHistoryEntry(
-            text="[no text returned for 0:00-0:31] rest",
-            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
-            engine="openai",
-            model="gpt-transcribe",
-            mode="batch",
-        ),
-        max_items=20,
-    )
-    legacy_state = SimpleNamespace(recording_id="", created_at="")
-
-    assert (
-        _last_recording_already_transcribed(store, history, state=legacy_state) is True
-    )
-    assert store.audio_path.is_file()
 
 
 def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):

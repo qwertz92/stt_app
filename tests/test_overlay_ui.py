@@ -17,6 +17,7 @@ from stt_app.config import (
     OVERLAY_STATE_COLORS,
     OVERLAY_WARNING_CHECK_WINDOW,
     OVERLAY_WARNING_LABELS,
+    OVERLAY_WARNING_NO_SIGNAL,
     OVERLAY_WARNING_NOT_INSERTED,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
@@ -3706,6 +3707,37 @@ def test_a_not_inserted_transcript_is_a_warning_and_a_failure_without_one_stays_
     overlay.close()
 
 
+def test_a_recording_without_signal_is_a_warning_that_keeps_recording():
+    """A microphone that sends nothing during a recording (2026-11-24): the
+    overlay says "No signal" in the warning colour, and the recording's
+    controls stay those of Listening (Stop, Cancel), so the user can stop it."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    QtWidgets.QApplication.processEvents()
+    listening = _control_state(overlay)
+
+    overlay.set_state(
+        "Listening",
+        "The microphone delivered no signal.",
+        compact=True,
+        warning=OVERLAY_WARNING_NO_SIGNAL,
+    )
+    QtWidgets.QApplication.processEvents()
+
+    assert overlay._state_label.text() == OVERLAY_WARNING_NO_SIGNAL
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Warning"]
+    assert overlay.state == "Listening"
+    assert _control_state(overlay) == listening
+    assert overlay._record_button.text() == overlay_ui_module.RECORD_BUTTON_STOP_TEXT
+
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    assert overlay._state_label.text() == "Listening"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
+    overlay.close()
+
+
 def test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it():
     """White text and the amber row labels stay readable (WCAG AA, 4.5:1) on
     the burnt-orange fill, and the not-inserted badge keeps a luminance
@@ -3766,6 +3798,7 @@ _STATE_WORD_CASES = [
             "warning": OVERLAY_WARNING_CHECK_WINDOW,
         },
     ),
+    ("Listening", {"warning": OVERLAY_WARNING_NO_SIGNAL}),
 ]
 
 

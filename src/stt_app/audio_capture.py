@@ -8,6 +8,7 @@ import time
 import wave
 from collections import deque
 from collections.abc import Callable
+from dataclasses import dataclass
 from itertools import pairwise
 from pathlib import Path
 
@@ -32,6 +33,7 @@ from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CHANNELS,
     AUDIO_INPUT_BUFFER_S,
+    AUDIO_NO_SIGNAL_LEVEL,
     AUDIO_SAMPLE_RATE,
     AUDIO_STEADY_MAX_GAP_BLOCKS,
     AUDIO_STEADY_PACE_GAPS,
@@ -165,6 +167,22 @@ def _stream_is_active(stream) -> bool | None:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class CaptureHealth:
+    """A running capture's state as `AudioCapture.health` reads it.
+
+    `silent_s`: seconds since this capture's last block, None before its
+    first (the first-callback watchdog's phase). `no_signal_s`: seconds of
+    audio received since the last block that rose to `AUDIO_NO_SIGNAL_LEVEL`
+    (since the start before any did): consecutive digital silence.
+    `signal_seen`: whether any block so far rose to it.
+    """
+
+    silent_s: float | None
+    no_signal_s: float
+    signal_seen: bool
+
+
 class _CaptureTiming:
     """How one capture's blocks arrived, against the wall clock.
 
@@ -214,6 +232,12 @@ class _CaptureTiming:
         # recording, not by wall time.
         self._level_energy = [0.0] * _LEVEL_SECONDS
         self._level_frames = [0] * _LEVEL_SECONDS
+        # Whether any block so far rose to `AUDIO_NO_SIGNAL_LEVEL`, and the
+        # frames received since the last one that did: digital silence (a
+        # muted or dead endpoint, a headset's noise gate), which no quiet
+        # room produces.
+        self.signal_seen = False
+        self.frames_without_signal = 0
 
     def record_block(self, now: float, frames: int, status, energy: float) -> None:
         """Account one block; `energy` is the sum of its squared samples."""
@@ -233,6 +257,12 @@ class _CaptureTiming:
                 self._loss_evidence += 1
         self.last_block_at = now
         self.blocks += 1
+        # A non-finite energy is not "no signal": the comparison is False.
+        if frames > 0 and not energy < (AUDIO_NO_SIGNAL_LEVEL**2) * frames:
+            self.signal_seen = True
+            self.frames_without_signal = 0
+        else:
+            self.frames_without_signal += max(0, frames)
         second = self.frames // self.sample_rate
         if second < _LEVEL_SECONDS:
             self._level_energy[second] += energy
@@ -1156,6 +1186,23 @@ class AudioCapture:
             gap_s = self._timing.warm_attach_gap_s
         block_s = self.block_size / self.sample_rate
         return gap_s is not None and gap_s <= AUDIO_STEADY_MAX_GAP_BLOCKS * block_s
+
+    def health(self) -> CaptureHealth:
+        """Whether the microphone still delivers, and whether it delivers
+        signal; read by the controller's health poll on the Qt thread (one
+        short hold of the capture's lock)."""
+        with self._lock:
+            timing = self._timing
+            silent_s = (
+                None
+                if timing.last_block_at is None
+                else max(0.0, _clock() - timing.last_block_at)
+            )
+            no_signal_s = timing.frames_without_signal / timing.sample_rate
+            signal_seen = timing.signal_seen
+        return CaptureHealth(
+            silent_s=silent_s, no_signal_s=no_signal_s, signal_seen=signal_seen
+        )
 
     @property
     def uses_warm_stream(self) -> bool:

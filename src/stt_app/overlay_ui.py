@@ -1199,18 +1199,19 @@ class OverlayUI(QtWidgets.QWidget):
         is recorded and the Listening green would invite speech too early.
         Every control still behaves as in Listening.
 
-        ``warning`` (one of ``OVERLAY_WARNING_LABELS``, on an Error only)
-        paints that Error as a warning under that word, in the warning's own
-        colour instead of the red: the transcript exists and was not, or may
-        not have been, inserted (owner's decision 2026-10-17). It is an
+        ``warning`` (one of ``OVERLAY_WARNING_LABELS``, on an Error or a
+        Listening state) paints that state as a warning under that word, in
+        the warning's own colour: an Error whose transcript exists and was
+        not, or may not have been, inserted (owner's decision 2026-10-17), or
+        a recording whose microphone sends no signal (2026-11-24). It is an
         appearance, like ``starting``: the state, its controls and its checks
-        stay those of Error.
+        stay those of Error or Listening.
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
         shown_state = "Starting" if starting and state == "Listening" else state
         colour_key = shown_state
-        if warning and state == "Error":
+        if warning and state in {"Error", "Listening"}:
             shown_state = warning
             colour_key = "Warning"
         self._state_label.setText(shown_state)

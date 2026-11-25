@@ -227,19 +227,35 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   transcript with a gap marker leaves its file in the unfinished folder,
   linked from its history entry, and nothing lists or cleans those files;
   the same holds for a transcribed unfinished recording whose move to the
-  recordings folder failed, and the `unfinished_*.wav` files "Keep last
-  recording after successful transcription" moves to the recordings folder
-  are never pruned (2026-10-09; the archive's count deletes only
-  `recording_*.wav`, and these are a few files per quit with pending work).
-  Kept: each needs a store or history failure, or is cosmetic.
-- **A crash keeps only the newest unfinished recording** (2026-10-09): the
-  quit writes every queued recording to the unfinished store, but a crash
-  or a killed process runs no `shutdown`, so only the managed last
-  recording survives, as before. A transcription the Import tab or the
-  startup notice runs when the app quits is not tracked as a job: the quit
-  window does not count it, and its file stays where it was (offered again
-  at the next start for the notice). Writing every recording to the store
-  at stop time would close the crash case; ~3 h, not asked for.
+  recordings folder failed. Kept: each needs a store or history failure, or
+  is cosmetic.
+- **Kept copies are never deleted automatically** (accepted 2026-11-25,
+  lead's decision; `persistence-and-history.md`, D3). The `kept_*.wav` files
+  in the recordings folder (a gap or fallback transcript's audio, a
+  transcribed unfinished recording with only "Keep last recording" on) and
+  the `unfinished_*.wav` ones written before 2026-11-24 are outside "Keep
+  Recordings", so they pile up until the user deletes them by hand: about
+  2 MB per minute of audio. Accepted because part of a gap's recording
+  returned no text, and counting them deleted that audio with the next
+  recording at a limit of 1. Idea for later in `docs/ROADMAP.md`: remove a
+  kept copy together with its History entry.
+- **A benchmark that re-reads an archived recording per case is not
+  protected from the prune** (unchanged old behaviour, noted 2026-11-25):
+  `_audio_file_in_use` covers `transcribe_audio_file` (Import, History's
+  Retranscribe), not the benchmark worker, so a dictation ending during a
+  benchmark over archive files can prune one before a later case reads it;
+  that case fails with a missing file.
+- **What a crash can still lose** (2026-10-09; narrowed 2026-11-24, D4):
+  every recording without a transcript is written to the unfinished store
+  when the managed slot moves on, so a crash keeps the slot plus every
+  older pending recording. Still lost to a crash or a killed process: the
+  recording being made at that moment (its audio is in memory until the
+  stop), and a pending recording whose bytes the store never received (no
+  recording id: the slot write had failed, so it was never in the slot
+  either). A transcription the Import tab or the startup notice runs when
+  the app quits is not tracked as a job: the quit window does not count it,
+  and its file stays where it was (offered again at the next start for the
+  notice).
 - **The 1418 race is survived, not closed**: pywin32 opens the clipboard with
   a NULL owner, so a clipboard manager can still close it under us; three
   reopens cost up to about 0.33 s on the Qt thread per clipboard operation,
@@ -340,8 +356,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Retry reaches the newest failed recording first, and only three are held**
   (2026-10-03): a failure pushes the slot's holder behind it
   (`_older_failed_audio`, `RETRY_OLDER_FAILURES_MAX`), the oldest of more than
-  three is dropped (`retry_failure_dropped` in the log; their audio is only in
-  memory), and the overlay and tray offer no way to pick an older one: it
+  three leaves the list (`retry_failure_dropped` in the log; since
+  2026-11-24 its audio is written to the unfinished store, and the next
+  start offers it), and the overlay and tray offer no way to pick an older one: it
   comes forward once the newer is resolved. A second Retry while W's retry
   runs still stops it (W's late result is kept in history), so W stays
   behind the slot until a Retry resolves it.
@@ -466,18 +483,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     If the session dies, the user sees "Deepgram streaming failed: WebSocket
     connection closed unexpectedly." and the audio is kept as the first entry
     of `docs/agents/streaming.md` describes.
-  - A microphone that stops delivering after its first block is not noticed
-    by the capture (the first-callback watchdog watches the first block only;
-    the device listener defers its refresh while a recording runs), so a
-    dying microphone ends a Deepgram stream only through the Deepgram sender
-    itself: it ends the stream about 33 s after the last block (it bridges a
-    gap for at most 30 s, `_STREAM_KEEPALIVE_MAX_GAP_S`, and the 11th 3 s
-    wait is the cap), independent of Deepgram, against ~10 s before the
-    KeepAlive existed, when Deepgram's own close was the detector. The user
-    reads "Deepgram streaming failed: The microphone delivered no audio for
-    more than 30 seconds, so the stream was ended." Not checked for the other
-    streaming engines (AssemblyAI, local): this entry does not claim whether
-    they notice it.
+  - A microphone that stops delivering after its first block is noticed by
+    the capture health poll since 2026-11-24 (`audio-capture.md`): the
+    overlay warns after 2 s, and the recording ends and is transcribed at
+    once when PortAudio reports the stream stopped, else after 12 s.
+    Whether an unplugged device makes PortAudio report its stream stopped
+    (the fast path) was not measured: no device was unplugged during a
+    recording here. What was said between the stall and the end is lost
+    whatever the path, and a starved callback thread that stays silent past
+    12 s ends the recording although its audio would still have come (the
+    first-callback watchdog's hard limit has the same cost). Deepgram's
+    sender still ends its stream about 33 s after the last block when the
+    capture somehow does not stop first.
 - **A source checkout's JavaScript package update** (2026-10-17,
   `transcriber/_node_packages.py`, see `local-models-and-downloads.md`):
   - A failure of npm or of what it installed waits 24 h before npm runs
@@ -532,21 +549,6 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the tree; that runner then loads the new tree, or, inside the two
     renames' milliseconds, fails to start once with "runtime failed to
     load". Not reproduced; closing it needs the old build's cooperation.
-- **Archive retention can delete the audio of a queued retranscription**
-  (P3, found 2026-10-23; `persistence-and-history.md`, the retranscription
-  entries). History's Retranscribe waits in the controller's one
-  transcription lane behind a running dictation. When that dictation ends,
-  its recording is archived and `_prune_recordings` deletes the oldest
-  `recording_<stamp>.wav` past `recordings_max_count`, without knowing that
-  a waiting retranscription is about to read that very file. The
-  retranscription then fails with a missing file, and the entries that
-  linked the recording lose their audio -- which the same prune would have
-  removed a moment later anyway. It needs the archive at its count limit
-  (the owner's holds 500), the oldest file retranscribed, and a dictation
-  ending during the wait. Fix: a set of paths in use that
-  `transcribe_audio_file` holds for its run and the prune skips, about 1 h
-  with tests. Kept for now: rare, and what is lost is the retranscription
-  itself, which says why it failed; the audio was due for deletion anyway.
 - **A refused History write plus a failed *queued* paste still completes the
   slot** (P4, found 2026-10-23 while fixing the direct-paste case,
   `controller-and-jobs.md`, "A plain dictation completes its slot because its
@@ -564,6 +566,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   that then succeeds also leaves the audio kept until the next dictation.
   Kept: the direct road, which is the common one, is fixed, and a refused
   History write is already an error state the user can see in the log only.
+- **Audio retention residuals** (2026-11-24, after D1-D5,
+  `persistence-and-history.md`):
+  - A pending recording's durable copy is written on the Qt thread at the
+    next stop (11-21 ms for 10 s to 5 min of audio, about 40 ms for one
+    10-minute recording, 206 ms for five pending at once); a disk that
+    refuses it tells the tray (again at each further unsaved recording), and
+    the audio then lives in memory and, until that same stop, the slot: a
+    crash before the transcript loses it.
+  - With the unfinished folder unwritable for a whole session, failures
+    whose write fails stay in memory (`_older_failed_audio`) past
+    `RETRY_OLDER_FAILURES_MAX`, bounded only by the session (about 2 MB per
+    minute of audio each); the tray names each one.
+  - A secured copy whose delete fails after delivery, or one of a recording
+    cancelled by a path that does not end in `_on_transcription_canceled_result`
+    (for example a job stopped by the concurrent mode "cancel" while it was
+    still queued), stays in the unfinished folder and is offered at the next
+    start: a second transcript if the user takes it. Safe side; not chased.
+  - With the silence gate off, a recording of digital silence is still sent
+    to the engine (and archived only when it has signal): the device text of
+    the gate's `no_signal` skip needs the gate on.
+  - The live "No signal" hint repaints the overlay every 500 ms while it
+    holds; in streaming a partial painted meanwhile shows until the next
+    tick, and the live text comes back when sound returns.
 - **The post-resume model load can run twice for one wake, or keep a runtime
   from before a second sleep** (P3, review of the 2026-11-24 resume load;
   `controller-and-jobs.md`). `QtPowerResumeEventFilter` (`hotkey.py`) calls
