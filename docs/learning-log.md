@@ -45,6 +45,47 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
   offered models only, so the files of the six removed models stay on disk and
   cannot be deleted from the app; `docs/models.md` lists folders and sizes.
 
+## 2026-11-25: review corrections to the retention and no-signal work
+
+Structurally: kept copies left the "Keep Recordings" count again, a secured
+copy is never released while History links it, and the live no-signal line
+counts consecutive digital silence at any time.
+
+- **P2 reproduced by the reviewer**: A secured when B was recorded, A's gap
+  transcript delivered while the recordings folder could not be written; the
+  move failed, History linked the secured file in the unfinished folder, and
+  the release after the History write unlinked it. Rule now: a secured file
+  goes only when its audio exists elsewhere or the complete text is in
+  History with no audio needed; a taken-over file leaves the registry.
+- **D3 taken back** (lead): counting `kept_*` copies deleted a gap's audio
+  with the next recording at a limit of 1. The count is the archive's alone
+  again; audio whose History write was refused goes back to the unfinished
+  store under its `unfinished_` name.
+- **Failures of the secure write and of a dropped failure's write reach the
+  tray**; a dropped failure that cannot be written stays in memory.
+- **No-signal line**: signal once seen used to stay seen, so a microphone
+  that died after the first sound was never reported, and the text told a
+  noise-gated user before the first word to stop. Now 1.5 s of zeros from
+  the start or 3 s after sound, with a line that claims nothing false.
+- **Cost figure corrected**: 11-32 ms covered 10 s to 5 min; one 10-minute
+  recording is about 40 ms and five pending ones 206 ms (reviewer).
+
+## 2026-11-25: review round 2 of the overlay and Models tab changes
+
+Structurally: the Models tab's button row moved above the list, and the overlay's "may step behind an own window" test also asks whether anything in it waits for the user.
+- **Stacking gap:** an idle pinned overlay with a queue row (a transcription in flight, a "Not inserted" row with its Insert/Dismiss button) or the not-inserted badge stepped behind Settings or History, and nothing else on screen shows those. Both now keep it topmost; `set_transcription_queue` and `set_not_inserted_badge` re-place it when the last waiting item goes away.
+- **Movement the user did not cause:** with the buttons under the list, a download's area (or a four-line error) pulled them up 25-111 px and back when it collapsed. With the buttons above the list only the list's lower edge moves. Measured before and after in idle / download / error / collapsed states at 860 x 960 (15 and 40 rows) and 1600 x 1200 (15 rows); the numbers are in `docs/agents/settings-dialog.md`.
+- **Tests that pinned nothing** were rewritten to assert what differs from the old code and were run against it: the pinned-reveal test against 669a3a7, the two Models tests against 358d55a (the fixed-height list).
+
+## 2026-11-25: review round on the overlay and Models tab changes
+
+Structurally: the overlay yields to an own window only while it is pinned and idle; the Models tab's list became the flexible part of its page.
+- **P2, test order:** `test_dropping_topmost_keeps_a_floating_overlay...` failed after `tests/test_main_signals.py` because a real `SettingsDialog` (opened by a tray test) and a fake history dialog stayed open and held the process's focus window, which the overlay now reads. `tests/test_overlay_ui.py` has an autouse fixture answering "no own window active"; both leaking tests close their windows.
+- **Rule change (lead):** a live session (Listening, Starting, Processing, Done, Error) and any temporary reveal keep the overlay topmost over own windows; only pinned and idle steps behind. A pinned overlay's reveal now runs the timer too, and opening an own window after it ends the reveal (the tray double-click must leave Settings in front).
+- **Stale reference:** a refused "behind own window" call falls back to plain topmost for that call and returns its result, so it cannot turn on the Qt window-flag fallback (permanent topmost).
+- **Models tab:** the first version fixed the list at all its rows; a download (+47 px, a long error +63 px) then scrolled the page and narrowed it by 12 px. A `QScrollArea` page never gets less than its layout's preferred height, so the list now prefers its minimum (six rows) and expands to all rows; the group is capped at its content. Arrow keys also scroll the page to the current row (they moved out of sight at 801 x 400).
+- **Recorded, not fixed:** a native file dialog from an own window leaves the overlay topmost over it (known-limitations.md).
+
 ## 2026-11-25: streaming review, round 2: the marks a model adds one chunk late
 
 Structurally: `append_only_stream_partial_candidate` takes whole-session text
@@ -59,6 +100,120 @@ final in 11 of 11 clips (2 before). An ellipsis, a quotation mark, an opening
 bracket or an inverted ? or ! at a word's edge froze insertion like a comma
 used to. A test now pins that stability between two partials stays exact; the
 streaming refusal for a remote engine names it ("OpenAI").
+
+## 2026-11-24: owner's clarification of the UI stability rules
+
+The owner clarified that "nothing may jump" was never meant strictly: the goal is
+best-practice UI/UX, preventing UNEXPECTED movement. Small shifts and movement
+the user caused are fine; stability is never bought with empty reserved space or
+forced over-engineering; when stability and usability pull apart, usability wins
+and the trade-off is named. Written as one dated entry at the top of
+`docs/agents/settings-dialog.md` and a short pointer entry in
+`docs/agents/overlay.md`; no existing rule was rewritten. The first rule measured
+against it was the Models tab's reserved download area (entry above).
+
+## 2026-11-24: overlay steps behind the application's own windows
+
+Structurally: `OverlayUI._apply_native_z_order` now places a topmost overlay directly
+behind the application's own active window (`SetWindowPos` with that window as
+`hWndInsertAfter`, no activate, no move, no size) instead of `HWND_TOPMOST`, and
+`focusWindowChanged` plus a 250 ms re-check re-place it when activation moves. Owner
+report: the pinned overlay covered Settings where they overlap.
+- **Real-window measurement** (pinned overlay, a dialog and another process's window
+  overlapping it, real z-order and `WS_EX_TOPMOST`): own dialog active -> not topmost,
+  behind the dialog; reveal while it is active -> shown, behind it; another
+  application active -> topmost, above both; dialog closed -> topmost again.
+- **The first measurement found a bug the unit tests could not**: with only the focus
+  signal the overlay stayed non-topmost after the dialog closed. The periodic
+  comparison of the live answer with the last placement fixed it (second
+  measurement above); the state is asked, never counted.
+- **Rejected:** dialogs made topmost (Settings would cover the browser the user copies
+  a key from); the overlay as the dialogs' owner (owned windows of a topmost owner
+  become topmost and lose their taskbar button); `WindowStaysOnTopHint` toggling
+  (recreates the native window).
+- **Revert:** `git revert` the commit "feat(overlay): step behind the application's own
+  active window".
+
+## 2026-11-24: Models tab group sized to its content
+
+Structurally: the "Local Models" group no longer stretches; its list is as tall
+as its rows, and the status line, progress bar and queue line take no room while
+hidden. Owner report: a scrollbar although everything would fit, and empty space
+in the group. Reproduced on a copy of his `settings.json` and
+`local_model_inventory.json` in a throwaway APPDATA at 860 x 960 (the default; he
+stores no size): content 864 px against a 829 px viewport, group 577 px with about
+100 px empty under the buttons. Cause: `Expanding` policy plus stretch 1 on the
+group and the list, and three widgets keeping their size while hidden (the
+2026-10 "nothing may move" rules). After: group 481 px, no scroll bar; at
+860 x 600 the page scrolls once instead of a five-row list scrolling inside a
+scrolling page. The owner's clarification of the same day (docs/agents/
+settings-dialog.md) replaces the rule that forced the empty space. Tests that
+encoded the old rule were rewritten to the new one (nothing above the bar moves;
+the idle group keeps no room for a download that is not running).
+- **Revert:** `git revert` the commit "fix(settings): size the Models tab's group
+  to its content".
+
+## 2026-11-24: tray single click acts at once
+
+Structurally: `main._create_tray_icon` lost its single-shot timer. A left click
+(`Trigger`) now calls `controller.bring_overlay_to_front` on the first click; only
+the `Trigger` that trails a `DoubleClick` is still dropped (for one double-click
+interval). Both tray implementations share this code, so the `QSystemTrayIcon`
+fallback is covered too.
+- **Why:** Microsoft's notification-area guidance asks a single click to show
+  something immediately and a double-click to run the default command. The 500 ms
+  wait made the icon feel unresponsive.
+- **Why it is safe:** the reveal is idempotent (`reveal_temporarily` raises and
+  restarts a timer, it does not toggle), so a double-click, which the shell sends
+  as `Trigger`, `DoubleClick`, `Trigger`, ends in one single click's state plus
+  Settings open. Keeping the overlay from covering Settings is the job of the activation
+  rule in the same-day entry "overlay steps behind the application's own windows".
+- **Tests** (`tests/test_main_signals.py`) fail on the old code: the single click
+  asserted zero calls right after the click; the double-click sequence asserted
+  zero calls in total.
+- **Revert:** `git revert` the commit "fix(tray): act on the first click of the tray
+  icon at once".
+
+## 2026-11-24: a microphone that dies or sends zeros, and audio retention
+
+Structurally: the controller got a capture health poll
+(`_on_capture_health_tick`, 500 ms, armed with the first-callback watchdog)
+reading `AudioCapture.health()`, a "No signal" warning for the Listening
+state, and a registry of recordings written to the unfinished store before
+the managed slot moves on (`_secured_recordings`); the recordings count
+now prunes `kept_*` copies with the archive and skips files a queued run
+needs; the startup slot check lost its timestamp guess.
+
+- **The owner's evidence.** His log (2026-10-25..11-24, 1067 recordings) had
+  six recordings of exact digital silence (`level=0.0000`, about -97 dBFS in
+  every logged second), all 31-221 s after an `audio_device_change_output`
+  event, four in a row on 11-02, the first 21 s long. Each was answered with
+  "lower the silence gate", which cannot help with zeros. Unproven
+  hypothesis (lead's reviewer): the default capture endpoint stays dead for
+  about a minute after an output-endpoint change. The overlay now says "No
+  signal" after 1.5 s of digital silence and the stop says the microphone
+  delivered nothing. A reopen was judged and not built: no input event fired
+  and the default did not change, so it would open the same endpoint.
+- **Thresholds measured, not chosen**: gaps between blocks never exceeded
+  358 ms in 1029 recordings (99.5 % at most 104 ms), so the 2 s / 12 s
+  limits of the first-callback watchdog serve mid-recording too; the
+  no-signal level 0.0001 sits between the dead recordings (below 0.00005)
+  and the quietest live one (0.0009; room tone 0.0006-0.0034).
+- **End, do not reopen, a stalled stream**: the stop path already persists,
+  archives, transcribes and keeps for Retry; a reopen would splice two
+  streams. `stop_recording(drain=False)`.
+- **Retention**: D1 a recording without signal is not archived; D2 the
+  count skips files Import or History's Retranscribe will read (closes the
+  2026-10-23 known limitation); D3 kept copies are `kept_*.wav` and counted;
+  D4 every pending recording is written to the unfinished store before the
+  slot is overwritten (11-32 ms per recording on the Qt thread), deleted
+  once its transcript is in History, and a failure pushed out of the Retry
+  list is written instead of dropped; D5 the startup check matches by
+  recording id only (the 0-180 s guess deleted a recording stopped while the
+  previous transcript was written, then a crash); D6 the "Keep Recordings"
+  hint says it limits audio files only.
+- Also fixed: `silence_gate_skipped` logged `silero_max_probability=unavailable`
+  whenever the level gate decided; it is `not_run`.
 
 ## 2026-11-24: streaming review: the end of most Nemotron dictations never reached the document
 

@@ -477,12 +477,9 @@ def test_tray_double_click_connected():
     assert tray.receivers(sig) > 0
 
 
-# Long next to the gap between two emits in a test (`_CLICK_GAP_MS`): a stall
-# of the machine longer than the interval between a Trigger and the
-# DoubleClick that follows it would let the overlay timer fire first and fail
-# the test for no reason (an 80 ms interval did that to a 20 ms gap), so the
-# interval is a good deal longer than any stall seen and the tests wait for
-# it once, not several times over.
+# The interval during which a Trigger after a DoubleClick is dropped. Long next to
+# the gap between two emits in a test (`_CLICK_GAP_MS`), so a stall of the
+# machine cannot let it expire between them, and the tests wait for it once.
 _DOUBLE_CLICK_INTERVAL_MS = 400
 _CLICK_GAP_MS = 20
 
@@ -548,39 +545,40 @@ def _tray_with_a_recording_settings_dialog(monkeypatch):
     return tray, controller, opened
 
 
-def test_tray_left_click_reveals_overlay(short_double_click_interval, monkeypatch):
-    """A single left click must surface the overlay (keyboard-free access) --
-    once it is certain not to be the first half of a double-click."""
+def test_tray_left_click_reveals_overlay_at_once(
+    short_double_click_interval, monkeypatch
+):
+    """A single left click surfaces the overlay (keyboard-free access) on the
+    first click, with no wait for a possible second one: the notification-area
+    guidance asks a single click to show something immediately."""
     tray, controller, _opened = _tray_with_a_recording_settings_dialog(monkeypatch)
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.Trigger)
 
-    assert controller.bring_overlay_calls == 0, "answered before the interval ran"
-    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 1
     _ = tray
 
 
-def test_a_double_click_opens_settings_and_leaves_the_overlay_alone(
+def test_a_double_click_ends_in_one_click_state_plus_open_settings(
     short_double_click_interval, monkeypatch
 ):
-    """Owner: "the overlay always comes to the front when I open the settings".
+    """The shell sends one double-click on the icon as Trigger, DoubleClick,
+    Trigger (measured 0, 93 and 94 ms with this app's own icon on Windows 11).
 
-    The shell sends one double-click on the icon as Trigger, DoubleClick,
-    Trigger (measured 0, 93 and 94 ms with this app's own icon on Windows 11),
-    and a Trigger surfaces the overlay: the first click did it before the
-    dialog opened, the trailing one right after it, over the dialog."""
+    The first Trigger surfaces the overlay as one click does; the DoubleClick
+    opens Settings; the trailing Trigger is the second click's release and must
+    not surface the overlay again, over the dialog that just opened."""
     tray, controller, opened = _tray_with_a_recording_settings_dialog(monkeypatch)
     reason = QtWidgets.QSystemTrayIcon
 
     tray.activated.emit(reason.Trigger)
+    assert controller.bring_overlay_calls == 1, "the single click acts at once"
     QtTest.QTest.qWait(_CLICK_GAP_MS)
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
 
     assert len(opened) == 1, "the double-click must still open Settings"
-    assert controller.bring_overlay_calls == 0
+    assert controller.bring_overlay_calls == 1, "no second reveal"
     _ = tray
 
 
@@ -592,13 +590,11 @@ def test_clicks_after_a_double_click_surface_the_overlay_again(
     reason = QtWidgets.QSystemTrayIcon
     tray.activated.emit(reason.DoubleClick)
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
     assert controller.bring_overlay_calls == 0
 
-    tray.activated.emit(reason.Trigger)
     _wait_past_the_double_click_interval()
     tray.activated.emit(reason.Trigger)
-    _wait_past_the_double_click_interval()
+    tray.activated.emit(reason.Trigger)
 
     assert controller.bring_overlay_calls == 2
     _ = tray
@@ -952,6 +948,7 @@ def test_history_presenter_reuses_open_dialog_and_reloads_on_refocus(
     assert instances[0].reload_calls == 3
     assert instances[0].reload_force_values == [True, False, True]
     assert len(callbacks) == 1
+    instances[0].close()
     _ = app
 
 
@@ -1024,7 +1021,15 @@ def test_a_last_recording_already_in_history_is_completed_not_offered(
     _ = app
 
 
-def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
+def test_a_transcript_written_soon_after_the_recording_is_no_proof_it_was_transcribed(
+    tmp_path,
+):
+    """D5 of 2026-11-24: the slot is told transcribed by its recording id only.
+    The removed guess took any History entry written 0-180 s after the WAV's
+    modification time as its transcript, so a recording stopped while the
+    previous one's transcript was being written, followed by a crash, was
+    completed -- with "keep last recording" off, deleted -- although nobody
+    had transcribed it. Now it stays and the notice offers it."""
     store = LastRecordingStore(
         audio_path=tmp_path / "last_recording.wav",
         state_path=tmp_path / "last_recording.json",
@@ -1033,22 +1038,36 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     audio_mtime = 1_800_000_000
     os.utime(store.audio_path, (audio_mtime, audio_mtime))
     history = TranscriptHistoryStore(path=tmp_path / "history.json")
-    matching_time = datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat()
-    newer_time = datetime.fromtimestamp(audio_mtime + 600, UTC).isoformat()
     history.add_entry(
         TranscriptHistoryEntry(
-            text="matching legacy transcript",
-            created_at=matching_time,
+            text="the previous recording's transcript",
+            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
             engine="local",
             model="small",
             mode="batch",
+            source_recording_id="an-older-recording",
         ),
         max_items=20,
     )
+
+    assert _last_recording_already_transcribed(store, history) is False
+    assert store.audio_path.is_file()
+    assert store.has_recoverable_recording() is True
+
+
+def test_a_slot_without_a_recording_id_is_kept_whatever_history_holds(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    audio_mtime = 1_800_000_000
+    os.utime(store.audio_path, (audio_mtime, audio_mtime))
+    history = TranscriptHistoryStore(path=tmp_path / "history.json")
     history.add_entry(
         TranscriptHistoryEntry(
-            text="newer unrelated transcript",
-            created_at=newer_time,
+            text="matching legacy transcript",
+            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
             engine="local",
             model="small",
             mode="batch",
@@ -1058,14 +1077,9 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     legacy_state = SimpleNamespace(recording_id="", created_at="")
 
     assert (
-        _last_recording_already_transcribed(
-            store,
-            history,
-            state=legacy_state,
-        )
-        is True
+        _last_recording_already_transcribed(store, history, state=legacy_state) is False
     )
-    assert store.has_recoverable_recording() is False
+    assert store.has_recoverable_recording() is True
 
 
 def test_load_app_icon_uses_bundled_asset():
@@ -1123,6 +1137,12 @@ def test_every_tray_activation_notes_the_foreground_first(reason):
     assert controller.note_foreground_calls == 1, (
         "the foreground was not recorded before the menu takes it"
     )
+    # A double-click opens the real, shown Settings dialog; left open it keeps
+    # the process's focus window for every later test.
+    tray._shutdown_settings_dialog()
+    for widget in app.topLevelWidgets():
+        if widget.isVisible() and isinstance(widget, QtWidgets.QDialog):
+            widget.close()
 
 
 class _OverlaySignals(QtCore.QObject):
@@ -1335,33 +1355,6 @@ def test_a_transcript_with_a_gap_does_not_complete_its_recording_at_startup(
     assert _last_recording_already_transcribed(store, history) is True
     assert store.audio_path.is_file()
     assert store.has_recoverable_recording() is True
-
-
-def test_a_legacy_match_with_a_gap_does_not_complete_its_recording(tmp_path):
-    store = LastRecordingStore(
-        audio_path=tmp_path / "last_recording.wav",
-        state_path=tmp_path / "last_recording.json",
-    )
-    store.save_recording(b"RIFF", keep_after_success=False)
-    audio_mtime = 1_800_000_000
-    os.utime(store.audio_path, (audio_mtime, audio_mtime))
-    history = TranscriptHistoryStore(path=tmp_path / "history.json")
-    history.add_entry(
-        TranscriptHistoryEntry(
-            text="[no text returned for 0:00-0:31] rest",
-            created_at=datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat(),
-            engine="openai",
-            model="gpt-transcribe",
-            mode="batch",
-        ),
-        max_items=20,
-    )
-    legacy_state = SimpleNamespace(recording_id="", created_at="")
-
-    assert (
-        _last_recording_already_transcribed(store, history, state=legacy_state) is True
-    )
-    assert store.audio_path.is_file()
 
 
 def test_quit_watchdog_arms_a_native_dump_and_exit(monkeypatch, tmp_path):

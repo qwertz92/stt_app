@@ -602,8 +602,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     The copy is made **even with "Archive every recording"**
     (final review P4-1, 2026-10-23; owner's decision to copy anyway): the
     archive's file is deleted by `_prune_recordings` after the count of newer
-    recordings, while a recordings-folder copy under another name never is, so
-    the entry links the copy and the gap's audio outlives the archive. A job
+    recordings, while a recordings-folder copy under another name never was, so
+    the entry links the copy and the gap's audio outlived the archive. Since
+    2026-11-24 the copy is named `kept_*.wav`; the count never deletes it
+    (D3 taken back 2026-11-25: part of its recording returned no text;
+    `docs/agents/persistence-and-history.md`, audio retention). A job
     **with no recording id** (the store refused its bytes, so it marks nothing
     and its audio exists only in memory) gets `uuid4().hex` for the copy, as
     the quit road's copies do: `UnfinishedRecordingStore.save` refuses an
@@ -925,7 +928,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   finished result waiting for its paste (its text is in history) and an
   aborting job (the user stopped it). One recording reached twice (a retry
   of the slot's bytes) is written once. Why: the managed last recording is
-  one slot, so a quit with a queue lost every older recording.
+  one slot, so a quit with a queue lost every older recording. The set is
+  `_recordings_without_transcript`, which the stop's securing uses too
+  (since 2026-11-24 every such recording is written when the slot moves on,
+  `_secure_recordings_without_transcript`; the quit's save skips those ids).
 - **The WebGPU runner exits on `shutdown`** (`process.exit(0)` in
   `webgpu_asr_runner.mjs`): leaving the request loop did not end Node,
   because ONNX Runtime's WebGPU device keeps its event loop alive, so every
@@ -936,8 +942,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   recording* in the recordings folder; a recoverable managed one wins. An
   archived recording is a file named by `app_paths.ARCHIVED_RECORDING_NAME_RE`,
   the rule the retention count prunes by (one definition, shared; it used to live
-  in `controller.py`). The folder also holds `unfinished_*` copies that History
-  entries link (gap and fallback transcripts, kept unfinished recordings):
+  in `controller.py`). The folder also holds copies that History entries link
+  (gap and fallback transcripts, kept unfinished recordings: `kept_*` since
+  2026-11-24, `unfinished_*` before) and untranscribed `unfinished_*` files:
   taking the newest `.wav` of any name could answer one of those instead of the
   newest dictation's archive file whenever it was newer (2026-10-23).
 - **Selected local models are strict**: transcription waits off the Qt
@@ -991,3 +998,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
   paste started before the answer (`_recording_started_since`, 2026-10-03
   review): the delayed tone would reach that recording's microphone. A
   queued paste mid-recording keeps its tone, as before the check.
+- **A microphone that stops delivering mid-recording ends the recording
+  through the normal stop** (2026-11-24, `_end_stalled_recording`, called by
+  the capture health poll, `docs/agents/audio-capture.md`):
+  `stop_recording(drain=False)` -- the stall outlasted the hard limit or
+  PortAudio reports the stream stopped, so no backlog is owed and nothing
+  waits on the Qt thread -- persists, archives, gates and submits the audio
+  captured so far like any stop (streaming: the finalize), and
+  `busy_overlay_error` sends the tray line. Every last-recording mark is the
+  stop's own, keyed by the id its persist returned.

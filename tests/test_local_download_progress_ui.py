@@ -240,43 +240,53 @@ def _open_local_tab(dialog: SettingsDialog) -> None:
     QtWidgets.QApplication.processEvents()
 
 
-def test_the_whole_download_area_moves_nothing_from_start_to_finish(
+def test_the_download_area_moves_nothing_above_it_from_start_to_finish(
     dialog: SettingsDialog,
 ) -> None:
-    """The hard rule of this project, measured rather than eyeballed.
+    """Measured rather than eyeballed.
 
-    The bar and the queue line both appear the instant a download starts.
-    Without their space retained, pressing Download pulls
-    Download/Cancel/Delete up under the cursor -- with Cancel sliding into
-    the place the pointer is already on -- and pushes them back down when the
-    download ends, shrinking the model list twice per download.
+    The bar and the queue line both appear the instant a download starts, below
+    the buttons, and take no room while hidden (no reserved empty space, owner
+    2026-11-24). What the user is pointing at -- the list and
+    Download/Cancel/Delete -- must stay where it is: the list is as tall as its
+    rows and never the part of the group that stretches. The area itself grows
+    when it fills and shrinks back when it empties, and the digits of the
+    percentage or a long queue line never resize it once shown.
     """
     _open_local_tab(dialog)
 
     watched = {
         "list": dialog.local_models_list,
-        "action label": dialog.local_models_action_label,
         "download": dialog.download_selected_models_button,
         "cancel": dialog.cancel_model_downloads_button,
         "delete": dialog.delete_selected_model_button,
+    }
+    below = {
         "bar": dialog.local_model_download_progress_bar,
         "queue line": dialog.local_model_download_queue_label,
     }
 
-    def geometry() -> dict[str, tuple[int, int]]:
+    def geometry() -> dict[str, int]:
         QtWidgets.QApplication.processEvents()
         return {
-            name: (widget.mapTo(dialog, QtCore.QPoint(0, 0)).y(), widget.height())
+            name: widget.mapTo(dialog, QtCore.QPoint(0, 0)).y()
             for name, widget in watched.items()
         }
 
+    def below_heights() -> dict[str, int]:
+        return {name: widget.height() for name, widget in below.items()}
+
     idle = geometry()
     assert geometry() == idle, "the tab had not settled before the measurement"
+    assert all(widget.isHidden() for widget in below.values())
+    box_idle = dialog.local_models_box.sizeHint().height()
 
     dialog._set_download_queue_line(["NVIDIA Parakeet TDT 0.6B v3 (+2 more)"])
     dialog.local_model_download_progress_bar.setValue(1)
     dialog._show_download_widgets(True)
-    assert geometry() == idle, "starting a download moved something"
+    assert geometry() == idle, "starting a download moved something above the bar"
+    assert dialog.local_models_box.sizeHint().height() > box_idle
+    shown = below_heights()
 
     # Every digit count the percentage passes through, and a queue line long
     # enough to elide: neither may resize its own row.
@@ -286,10 +296,14 @@ def test_the_whole_download_area_moves_nothing_from_start_to_finish(
             ["A model with a deliberately very long display name"] * percent
         )
         assert geometry() == idle, f"the area moved at {percent}%"
+        assert below_heights() == shown, f"the bar or line resized at {percent}%"
 
     dialog._show_download_widgets(False)
     dialog._set_download_queue_line([])
     assert geometry() == idle, "finishing a download moved something"
+    assert dialog.local_models_box.sizeHint().height() == box_idle, (
+        "the idle group keeps room for a download that is not running"
+    )
 
 
 def test_the_progress_bar_fits_the_percentage_it_has_to_show(

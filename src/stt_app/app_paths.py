@@ -117,12 +117,28 @@ def resolve_recordings_dir(configured: str = "") -> Path:
 
 # The name of a file "Archive every recording" wrote, `recording_<date>_<time>_
 # <six digits>.wav` (a kept unfinished recording that joins the archive takes the
-# same shape). The one definition of "an archived recording": the retention count
-# prunes only these, and "Use last recording" considers only these, because the
-# recordings folder also holds files neither may touch -- the copies of audio
-# that History entries link (`unfinished_<date>_<time>_<id>.wav`).
+# same shape). The one definition of "an archived recording": "Use last
+# recording" considers only these, because the recordings folder also holds
+# copies of audio that History entries link and untranscribed recordings the
+# startup notice's "Keep files and close" moved there
+# (`unfinished_<date>_<time>_<id>.wav`).
 ARCHIVED_RECORDING_NAME_RE = re.compile(
     r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
+    re.IGNORECASE,
+)
+# A kept copy: the audio of a transcript that History links, moved to the
+# recordings folder (a gap or language-fallback transcript, a transcribed
+# unfinished recording with only "Keep last recording" on), named
+# `kept_<date>_<time>_<id>[.<language>][_<n>].wav` since 2026-11-24. The
+# retention count never deletes it (part of a gap's recording returned no
+# text), nor an `unfinished_*` file, which may be a recording nobody
+# transcribed. A copy whose History write was refused goes back to the
+# unfinished store under its `unfinished_` name
+# (`UnfinishedRecordingStore.take_back`).
+KEPT_RECORDING_PREFIX = "kept_"
+KEPT_RECORDING_NAME_RE = re.compile(
+    r"^kept_(?P<stamp>[0-9]{8}_[0-9]{6})_(?P<rest>[A-Za-z0-9-]+"
+    r"(?:\.[A-Za-z0-9-]+)?)(?:_[0-9]+)?\.wav$",
     re.IGNORECASE,
 )
 

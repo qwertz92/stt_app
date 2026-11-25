@@ -70,6 +70,62 @@ def _emit_background_signal(
     return True
 
 
+class MinimumHeightHintListWidget(QtWidgets.QListWidget):
+    """A list whose preferred height is its minimum height.
+
+    A settings page is a `QScrollArea` whose content never gets less height
+    than its layout's preferred one (wrapped labels make the layout
+    height-for-width, and the area then uses the preferred, not the minimum,
+    height). A list that prefers all its rows would therefore push the page
+    into a scroll bar before it gives up any of them; one that prefers its
+    minimum and expands up to its maximum gives up rows first.
+    """
+
+    def sizeHint(self) -> QtCore.QSize:
+        return QtCore.QSize(super().sizeHint().width(), self.minimumHeight())
+
+
+class ContentCappedGroupBox(QtWidgets.QGroupBox):
+    """A group box that grows no taller than its content.
+
+    Its `flexible_child` prefers its minimum height but expands up to its
+    maximum; a box in a layout with spare height would take that spare height
+    into itself as empty space once the child is at its maximum. The cap is the
+    box's preferred height with the child at its maximum, kept up to date on
+    every layout request (a status line appearing changes it).
+    """
+
+    def __init__(self, title: str) -> None:
+        super().__init__(title)
+        self.flexible_child: QtWidgets.QWidget | None = None
+
+    def event(self, event: QtCore.QEvent) -> bool:
+        handled = super().event(event)
+        if event.type() in (
+            QtCore.QEvent.Type.LayoutRequest,
+            QtCore.QEvent.Type.Resize,
+            QtCore.QEvent.Type.Show,
+        ):
+            self._update_height_cap()
+        return handled
+
+    def _update_height_cap(self) -> None:
+        child = self.flexible_child
+        if child is None:
+            return
+        # At the width it has now: wrapped notes take more lines when narrow,
+        # which the plain size hint (taken at the preferred width) misses.
+        width = self.width()
+        height = (
+            self.heightForWidth(width)
+            if self.hasHeightForWidth()
+            else self.sizeHint().height()
+        )
+        cap = height - child.sizeHint().height() + child.maximumHeight()
+        if cap != self.maximumHeight():
+            self.setMaximumHeight(cap)
+
+
 class ElidingLabel(QtWidgets.QLabel):
     """A one-line label that shortens its text to fit instead of clipping it.
 
@@ -184,6 +240,22 @@ class WrappedStatusLabel(QtWidgets.QLabel):
     def setText(self, text: str) -> None:
         super().setText(text)
         self.setToolTip(text)
+
+
+class CollapsingStatusLabel(WrappedStatusLabel):
+    """A `WrappedStatusLabel` that takes no room while it has nothing to say.
+
+    For a line below the controls it reports on: its text appearing moves
+    nothing above it, so it needs no reserved space.
+    """
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self.setVisible(bool(text))
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setVisible(bool(text))
 
 
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):

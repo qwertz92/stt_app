@@ -1969,6 +1969,38 @@ AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS = 2_000
 # AUDIO_INPUT_BUFFER_S, so a burst that comes just before it still holds every
 # frame since the start.
 AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS = 12_000
+# How often a running recording's capture health is checked on the Qt thread
+# (`DictationController._on_capture_health_tick`): a stream that stopped
+# calling back mid-recording, or one that has sent only digital silence.
+# A stall uses the two limits above: past the first the overlay warns (and a
+# stream PortAudio reports stopped ends the recording), past the second the
+# recording ends and what was captured is transcribed. The owner's log
+# (1029 recordings, 2026-10..11) never had a gap between blocks above 358 ms
+# (99.5 % at most 104 ms with 100 ms blocks), so 2 s is 5.6x the worst one,
+# and a starved callback thread's burst still fits the buffer at 12 s.
+AUDIO_CAPTURE_HEALTH_POLL_MS = 500
+# A tick that comes this much later than the poll interval means the process
+# did not run (system sleep, a Qt thread held by a modal wait): the stall
+# clock restarts there, so time asleep never counts as a stalled microphone.
+AUDIO_CAPTURE_HEALTH_SUSPEND_S = 2.0
+# A recording that has delivered nothing but digital silence
+# (`AUDIO_NO_SIGNAL_LEVEL`) since it started says so on the overlay after this
+# much audio. In the owner's log (1029 recordings) all but two live ones were
+# above -78 dBFS in their first second; two had a first second at -96/-97 and
+# signal in the second (the hint shows briefly and clears, which is true:
+# the microphone sent zeros for that second); the twelve dead ones stayed at
+# -97 dBFS throughout. The hint only paints, so a short threshold costs
+# nothing when it is wrong.
+AUDIO_NO_SIGNAL_HINT_S = 1.5
+# The same line once sound had been seen in the recording: digital silence
+# for this long after it (a dead endpoint mid-session -- the owner's appeared
+# 31-221 s after an output-device change -- or a headset's noise gate). A
+# live microphone in a pause sends room tone, 0.0006-0.0034 in the owner's
+# measurements and never below 0.0009 for a whole recording, not exact
+# zeros; 3 s is twice the start threshold, so an ordinary pause between
+# sentences on a noise-gated headset does not flash the line, and a longer
+# one gets a line that is true (no sound arrives) and only paints.
+AUDIO_NO_SIGNAL_AFTER_SOUND_S = 3.0
 # `recording_start_timing` is a warning from here on: a microphone open, or the
 # wait from the record hotkey press to the running capture, this long loses
 # the first words of anyone who starts speaking at the press.
@@ -2182,6 +2214,16 @@ DEFAULT_SILENCE_GATE_THRESHOLD = 0.004
 SILENCE_GATE_THRESHOLD_MIN = 0.0005
 SILENCE_GATE_THRESHOLD_MAX = 0.1
 SILENCE_GATE_WINDOW_MS = 100
+# A recording, or every block of one so far, whose loudest 100 ms stays below
+# this RMS level holds no signal at all: a muted or dead capture endpoint, not
+# a quiet room. Measured on the owner's log (2026-10..11, 1029 recordings with
+# per-second levels, 664 with the loudest-100 ms level): ten recordings at
+# 0.0000 (below 0.00005; about -97 dBFS in every second, sub-LSB noise that
+# the 16-bit WAV turns into zeros), six of them right after an output-endpoint
+# change; the next quietest recording measured 0.0009, and the silence gate's
+# 26 silent room recordings measured 0.0006-0.0034. 0.0001 (-80 dBFS) is 9x
+# below the quietest live microphone and twice the highest dead one.
+AUDIO_NO_SIGNAL_LEVEL = 0.0001
 
 # A speech check beside the two energy gates: the Silero VAD v6 graph that
 # faster-whisper ships (`silero_vad.py` says where and why). It scores every
@@ -2397,7 +2439,14 @@ OVERLAY_ERROR_ACTION_NONE = "none"
 # twice).
 OVERLAY_WARNING_NOT_INSERTED = "Not inserted"
 OVERLAY_WARNING_CHECK_WINDOW = "Check window"
-OVERLAY_WARNING_LABELS = (OVERLAY_WARNING_NOT_INSERTED, OVERLAY_WARNING_CHECK_WINDOW)
+# A recording whose microphone sends nothing (no blocks for seconds) or only
+# digital silence: painted over Listening, which it stays (2026-11-24).
+OVERLAY_WARNING_NO_SIGNAL = "No signal"
+OVERLAY_WARNING_LABELS = (
+    OVERLAY_WARNING_NOT_INSERTED,
+    OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_NO_SIGNAL,
+)
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100
 DEFAULT_OVERLAY_OPACITY_PERCENT = OVERLAY_OPACITY_MAX_PERCENT
