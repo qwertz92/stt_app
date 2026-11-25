@@ -6,6 +6,7 @@ import os
 import signal
 import sys
 import threading
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -729,6 +730,13 @@ class _TrayUpdateChecker(QtCore.QObject):
 _MODEL_NOTICE_FIRST_DELAY_MS = 2000
 _MODEL_NOTICE_RETRY_MS = 1000
 _MODEL_NOTICE_MAX_WAITS = 25
+# Two start notices (package update, model update) are never sent closer
+# together than this: Windows shows one balloon at a time and a second one sent
+# while the first is up replaces it. The balloon time is Windows' own
+# (`WindowsTrayIcon.showMessage` ignores `msecs`; the default `showMessage` time
+# the app asks for is 10 s), so 10 s is used.
+_START_NOTICE_SPACING_S = 10.0
+_start_notice_not_before = 0.0
 
 
 def _show_tray_notice_when_ready(
@@ -745,6 +753,15 @@ def _show_tray_notice_when_ready(
             lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited + 1),
         )
         return
+    global _start_notice_not_before
+    wait_s = _start_notice_not_before - time.monotonic()
+    if wait_s > 0:
+        QtCore.QTimer.singleShot(
+            int(wait_s * 1000) + 50,
+            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited),
+        )
+        return
+    _start_notice_not_before = time.monotonic() + _START_NOTICE_SPACING_S
     _show_tray_notice(tray_icon, title, notice)
 
 

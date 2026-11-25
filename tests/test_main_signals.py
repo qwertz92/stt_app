@@ -1486,6 +1486,48 @@ def test_an_up_to_date_checkout_shows_no_package_notice(monkeypatch):
     assert shown == []
 
 
+@pytest.fixture(autouse=True)
+def _fresh_start_notice_clock(monkeypatch):
+    monkeypatch.setattr(main_module, "_start_notice_not_before", 0.0)
+
+
+def test_two_start_notices_are_never_sent_closer_than_the_spacing(monkeypatch):
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True, showMessage=lambda *args: shown.append(args[:2])
+    )
+
+    main_module._show_tray_notice_when_ready(tray, "Update the Python packages", "a")
+    main_module._show_model_notice_when_ready(tray, "b")
+
+    # Same tick: the first goes out, the second is held for the spacing.
+    assert shown == [("Update the Python packages", "a")]
+    assert len(timers) == 1
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+
+    callback()  # fired too early (clock unchanged): held again, not sent
+    assert len(shown) == 1 and len(timers) == 1
+    timers.pop()
+
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+    assert shown[-1] == ("Speech model updated", "b")
+    assert timers == []
+
+
 def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
     """The tray drops a balloon sent before the shell accepted the icon, and the
     move the notice announces is already saved, so it must be held back."""
