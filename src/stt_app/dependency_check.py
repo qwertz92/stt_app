@@ -62,22 +62,23 @@ def checkout_root() -> Path | None:
 def read_pins(path: Path) -> dict[str, str]:
     """`name==version` lines of a requirements file, extras and markers dropped."""
     pins: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         match = _PIN.match(line)
         if match:
             pins[match["name"]] = match["version"]
     return pins
 
 
-def _same_version(installed: str, pinned: str) -> bool:
+def _is_older(installed: str, pinned: str) -> bool:
+    """`installed < pinned`; a version that cannot be parsed is not "older"."""
     try:
         from packaging.version import InvalidVersion, Version
     except ImportError:  # pragma: no cover - packaging ships with pip and uv
-        return installed == pinned
+        return False
     try:
-        return Version(installed) == Version(pinned)
+        return Version(installed) < Version(pinned)
     except InvalidVersion:
-        return installed == pinned
+        return False
 
 
 def version_at_least(installed: str, minimum: str) -> bool:
@@ -103,20 +104,34 @@ def find_outdated(
     pins: dict[str, str],
     version_of: Callable[[str], str | None] = installed_version,
 ) -> list[Outdated]:
-    """The pins whose installed version differs, in the file's order."""
+    """The pins that are missing or installed OLDER than pinned, in file order.
+
+    A newer installed version is not reported (the suggested command would
+    downgrade it); it is only logged at DEBUG.
+    """
     outdated: list[Outdated] = []
     for name, pinned in pins.items():
         installed = version_of(name)
-        if installed is None or not _same_version(installed, pinned):
+        if installed is None or _is_older(installed, pinned):
             outdated.append(Outdated(name, installed, pinned))
+        elif installed != pinned:
+            logger.debug(
+                "package_differs_from_pin name=%s installed=%s pinned=%s",
+                name,
+                installed,
+                pinned,
+            )
     return outdated
 
 
-def update_command(root: Path, prefix: str | None = None) -> str:
+def update_command(
+    root: Path, prefix: str | None = None, executable: str | None = None
+) -> str:
     """The command that fits this checkout.
 
     `uv sync` when its `.venv` is the environment running the app and `uv.lock`
-    exists; otherwise a plain `pip install -r requirements-win.txt`.
+    exists; otherwise pip of the interpreter that is running the app (a bare
+    `pip` may belong to another Python on PATH).
     """
     environment = Path(prefix or sys.prefix)
     try:
@@ -125,7 +140,9 @@ def update_command(root: Path, prefix: str | None = None) -> str:
         )
     except OSError:
         uv_managed = False
-    return "uv sync" if uv_managed else f"pip install -r {REQUIREMENTS_FILE}"
+    if uv_managed:
+        return "uv sync"
+    return f'"{executable or sys.executable}" -m pip install -r {REQUIREMENTS_FILE}'
 
 
 def outdated_packages_message(outdated: list[Outdated], command: str) -> str:

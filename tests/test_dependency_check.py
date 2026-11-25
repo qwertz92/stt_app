@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 import pytest
 
 from stt_app import dependency_check as dc
@@ -38,18 +40,57 @@ def test_only_the_pins_that_differ_are_reported_in_file_order():
     assert "not installed" in outdated[1].describe()
 
 
+def test_a_newer_installed_version_is_not_reported_and_neither_is_garbage(caplog):
+    installed = {"new": "2.0", "same": "1.0", "odd": "not-a-version", "old": "0.9"}
+
+    with caplog.at_level("DEBUG", logger=dc.logger.name):
+        outdated = dc.find_outdated(
+            {"new": "1.0", "same": "1.0.0", "odd": "1.0", "old": "1.0"},
+            installed.get,
+        )
+
+    assert [item.name for item in outdated] == ["old"]
+    assert any("package_differs_from_pin name=new" in r.message for r in caplog.records)
+
+
+def test_a_byte_order_mark_does_not_drop_the_first_pin(tmp_path):
+    path = tmp_path / "requirements-win.txt"
+    path.write_bytes(b"\xef\xbb\xbfPySide6==6.12.0\nsounddevice==0.5.6\n")
+
+    assert dc.read_pins(path) == {"PySide6": "6.12.0", "sounddevice": "0.5.6"}
+
+
 def test_the_command_is_uv_sync_for_the_uv_environment_only(tmp_path):
     (tmp_path / ".venv").mkdir()
     (tmp_path / "uv.lock").write_text("", encoding="utf-8")
 
     assert dc.update_command(tmp_path, prefix=str(tmp_path / ".venv")) == "uv sync"
-    assert dc.update_command(tmp_path, prefix=str(tmp_path / "elsewhere")) == (
-        "pip install -r requirements-win.txt"
+    # Not the checkout's own environment: the pip of the running interpreter,
+    # never a bare `pip` that may belong to another Python on PATH.
+    pip = '"C:\\Python312\\python.exe" -m pip install -r requirements-win.txt'
+    assert (
+        dc.update_command(
+            tmp_path,
+            prefix=str(tmp_path / "elsewhere"),
+            executable="C:\\Python312\\python.exe",
+        )
+        == pip
     )
     (tmp_path / "uv.lock").unlink()
-    assert dc.update_command(tmp_path, prefix=str(tmp_path / ".venv")) == (
-        "pip install -r requirements-win.txt"
+    assert (
+        dc.update_command(
+            tmp_path,
+            prefix=str(tmp_path / ".venv"),
+            executable="C:\\Python312\\python.exe",
+        )
+        == pip
     )
+
+
+def test_the_default_command_names_the_running_interpreter(tmp_path):
+    command = dc.update_command(tmp_path, prefix=str(tmp_path / "elsewhere"))
+
+    assert command.startswith(f'"{sys.executable}" -m pip install -r ')
 
 
 def test_the_message_names_the_packages_and_the_command():
@@ -89,7 +130,7 @@ def test_an_outdated_checkout_logs_one_warning_and_returns_the_command(
     assert result is not None
     outdated, command = result
     assert outdated == stale
-    assert command in {"uv sync", "pip install -r requirements-win.txt"}
+    assert command == "uv sync" or "-m pip install -r requirements-win.txt" in command
     warnings = [r for r in caplog.records if "python_packages_out_of_date" in r.message]
     assert len(warnings) == 1
     assert "assemblyai (installed 0.0.1, pinned 9)" in warnings[0].message
