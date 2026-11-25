@@ -63,14 +63,18 @@ def _estimated_keyterm_tokens(term: str) -> int:
 
 
 def fit_keyterms(terms: list[str]) -> tuple[list[str], int]:
-    """Return the leading terms whose estimated tokens fit the budget, and how
-    many were dropped from the end of the list."""
+    """Return the terms that fit the token budget, and how many were left out.
+
+    Terms are taken in order; one that does not fit is skipped (an enormous
+    first term must not cost the whole list) and later, shorter ones still can.
+    """
     kept: list[str] = []
     used = 0
     for term in terms:
-        used += _estimated_keyterm_tokens(term)
-        if used > DEEPGRAM_KEYTERM_TOKEN_BUDGET:
-            break
+        cost = _estimated_keyterm_tokens(term)
+        if used + cost > DEEPGRAM_KEYTERM_TOKEN_BUDGET:
+            continue
+        used += cost
         kept.append(term)
     return kept, len(terms) - len(kept)
 
@@ -230,7 +234,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         if dropped:
             logger.warning(
                 "Deepgram takes about %d tokens of custom vocabulary per request; "
-                "%d term(s) from the end of the list are not sent.",
+                "%d term(s) that do not fit are not sent.",
                 DEEPGRAM_KEYTERM_TOKEN_BUDGET,
                 dropped,
             )

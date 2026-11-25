@@ -249,6 +249,12 @@ class TestDeepgramTranscribeBatch:
         assert dropped == 20
         assert deepgram_provider.fit_keyterms(terms[:10]) == (terms[:10], 0)
 
+    def test_an_enormous_first_term_does_not_cost_the_whole_list(self):
+        short = [f"Term{index}" for index in range(10)]
+        kept, dropped = deepgram_provider.fit_keyterms(["x" * 3000, *short])
+        assert kept == short
+        assert dropped == 1
+
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_batch_request_stays_under_the_keyterm_limit_and_logs_once(
         self, mock_urlopen, caplog
