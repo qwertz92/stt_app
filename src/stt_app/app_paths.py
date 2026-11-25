@@ -129,24 +129,18 @@ ARCHIVED_RECORDING_NAME_RE = re.compile(
 # A kept copy: the audio of a transcript that History links, moved to the
 # recordings folder (a gap or language-fallback transcript, a transcribed
 # unfinished recording with only "Keep last recording" on), named
-# `kept_<date>_<time>_<id>[.<language>][_<n>].wav` since 2026-11-24. Its
-# transcript exists, so the retention count prunes it with the archive's
-# files (`is_retained_recording_name`). An `unfinished_*` file in that folder
-# is never pruned: it may be a recording nobody transcribed.
+# `kept_<date>_<time>_<id>[.<language>][_<n>].wav` since 2026-11-24. The
+# retention count never deletes it (part of a gap's recording returned no
+# text), nor an `unfinished_*` file, which may be a recording nobody
+# transcribed. A copy whose History write was refused goes back to the
+# unfinished store under its `unfinished_` name
+# (`UnfinishedRecordingStore.take_back`).
 KEPT_RECORDING_PREFIX = "kept_"
 KEPT_RECORDING_NAME_RE = re.compile(
-    r"^kept_[0-9]{8}_[0-9]{6}_[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)?(?:_[0-9]+)?\.wav$",
+    r"^kept_(?P<stamp>[0-9]{8}_[0-9]{6})_(?P<rest>[A-Za-z0-9-]+"
+    r"(?:\.[A-Za-z0-9-]+)?)(?:_[0-9]+)?\.wav$",
     re.IGNORECASE,
 )
-
-
-def is_retained_recording_name(name: str) -> bool:
-    """Whether "Keep Recordings" counts and prunes a file of this name: an
-    archived recording or a kept copy (`_prune_recordings`)."""
-    return bool(
-        ARCHIVED_RECORDING_NAME_RE.fullmatch(name)
-        or KEPT_RECORDING_NAME_RE.fullmatch(name)
-    )
 
 
 def transcript_history_path() -> Path:

@@ -3,6 +3,31 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-25: review corrections to the retention and no-signal work
+
+Structurally: kept copies left the "Keep Recordings" count again, a secured
+copy is never released while History links it, and the live no-signal line
+counts consecutive digital silence at any time.
+
+- **P2 reproduced by the reviewer**: A secured when B was recorded, A's gap
+  transcript delivered while the recordings folder could not be written; the
+  move failed, History linked the secured file in the unfinished folder, and
+  the release after the History write unlinked it. Rule now: a secured file
+  goes only when its audio exists elsewhere or the complete text is in
+  History with no audio needed; a taken-over file leaves the registry.
+- **D3 taken back** (lead): counting `kept_*` copies deleted a gap's audio
+  with the next recording at a limit of 1. The count is the archive's alone
+  again; audio whose History write was refused goes back to the unfinished
+  store under its `unfinished_` name.
+- **Failures of the secure write and of a dropped failure's write reach the
+  tray**; a dropped failure that cannot be written stays in memory.
+- **No-signal line**: signal once seen used to stay seen, so a microphone
+  that died after the first sound was never reported, and the text told a
+  noise-gated user before the first word to stop. Now 1.5 s of zeros from
+  the start or 3 s after sound, with a line that claims nothing false.
+- **Cost figure corrected**: 11-32 ms covered 10 s to 5 min; one 10-minute
+  recording is about 40 ms and five pending ones 206 ms (reviewer).
+
 ## 2026-11-24: a microphone that dies or sends zeros, and audio retention
 
 Structurally: the controller got a capture health poll

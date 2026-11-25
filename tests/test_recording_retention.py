@@ -207,31 +207,34 @@ def test_a_queued_retranscription_keeps_its_archived_file(monkeypatch, tmp_path)
     _ = app
 
 
-def test_kept_copies_count_toward_keep_recordings_and_unfinished_files_never(
-    monkeypatch, tmp_path
-):
+def test_keep_recordings_prunes_only_archived_recordings(monkeypatch, tmp_path):
+    # D3 taken back (lead, 2026-11-25): a kept copy is the audio of a
+    # transcript with a gap or in a fallback language, so part of it was never
+    # transcribed; with the limit at 1 the next recording deleted it.
     controller, app, _unfinished = _controller(monkeypatch, tmp_path)
     folder = tmp_path / "recordings"
-    old_kept, untranscribed, archived, new_kept = _files(
+    old_kept, untranscribed, old_archived, new_kept, new_archived = _files(
         folder,
         [
             ("kept_20261101_090000_rec-a.de.wav", 0),
             ("unfinished_20261101_093000_rec-b.wav", 1),
             ("recording_20261101_100000_000000.wav", 2),
             ("kept_20261101_110000_rec-c.wav", 3),
+            ("recording_20261101_120000_000000.wav", 4),
         ],
     )
 
-    controller._prune_recordings(str(folder), 2)
+    controller._prune_recordings(str(folder), 1)
 
-    assert not old_kept.exists(), "the oldest of the three counted files"
-    assert archived.exists() and new_kept.exists()
+    assert not old_archived.exists(), "the archive's own files are counted"
+    assert new_archived.exists()
+    assert old_kept.exists() and new_kept.exists(), "kept copies are never pruned"
     assert untranscribed.exists(), "may be a recording nobody transcribed"
     controller.shutdown()
     _ = app
 
 
-def test_a_kept_copy_is_named_so_the_count_finds_it(monkeypatch, tmp_path):
+def test_a_kept_copy_is_named_kept(monkeypatch, tmp_path):
     from datetime import datetime
 
     controller, app, _unfinished = _controller(monkeypatch, tmp_path)
@@ -314,5 +317,145 @@ def test_a_failure_pushed_out_of_the_retry_list_is_written_not_lost(
         )
 
     assert [item.recording_id for item in unfinished.list_recordings()] == ["rec-0"]
+    controller.shutdown()
+    _ = app
+
+
+_GAP_TEXT = "erster teil [no text returned for 0:16-0:31] dritter teil"
+
+
+def test_a_gap_copy_whose_move_failed_is_never_released(monkeypatch, tmp_path):
+    # The reviewer's sequence (2026-11-25): A is secured when B is recorded;
+    # A delivers a gap transcript while the recordings folder cannot be
+    # written (a disconnected drive, a full folder). The secured file is
+    # what History links then, and it was deleted right after the write.
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+    assert len(unfinished.list_recordings()) == 1
+    blocker = tmp_path / "not-a-folder"
+    blocker.write_bytes(b"x")
+    monkeypatch.setattr(controller, "_resolve_recordings_dir", lambda: str(blocker))
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+
+    [entry] = controller._history_store.load()
+    linked = Path(entry.source_audio_path)
+    assert linked.is_file(), "History links the only audio of the gap"
+    assert linked.read_bytes() == audio_a
+    controller.shutdown()
+    _ = app
+
+
+def test_a_moved_gap_copy_leaves_no_secured_duplicate(monkeypatch, tmp_path):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+
+    [entry] = controller._history_store.load()
+    linked = Path(entry.source_audio_path)
+    assert linked.parent == tmp_path / "recordings"
+    assert linked.read_bytes() == audio_a
+    assert unfinished.list_recordings() == [], "the secured file was moved, once"
+    controller.shutdown()
+    _ = app
+
+
+def test_audio_whose_history_write_was_refused_stays_an_unfinished_recording(
+    monkeypatch, tmp_path
+):
+    # The slot moved on, so the copy is the only audio, and its transcript is
+    # not in History: it is a recording the startup notice must offer, not a
+    # kept copy of a transcript.
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    recording_a = controller._jobs[token_a].source_recording_id
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("history is read-only")
+
+    monkeypatch.setattr(controller._history_store, "add_entry", _refuse)
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+
+    [offered] = unfinished.list_recordings()
+    assert offered.recording_id == recording_a
+    assert offered.path.read_bytes() == audio_a
+    folder = tmp_path / "recordings"
+    assert not folder.exists() or not any(folder.iterdir())
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_secure_write_tells_the_tray(monkeypatch, tmp_path):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    tray = []
+    controller.busy_overlay_error.connect(tray.append)
+    token_a = _record(controller, _SPEECH_LIKE)
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("folder not writable")
+
+    monkeypatch.setattr(unfinished, "save", _refuse)
+
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+
+    assert len(tray) == 1, tray
+    assert str(unfinished.directory) in tray[0]
+    assert token_a in controller._request_audio_by_token, "still in memory"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_dropped_failure_that_cannot_be_written_stays_for_retry_and_tells_the_tray(
+    monkeypatch, tmp_path
+):
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    tray = []
+    controller.busy_overlay_error.connect(tray.append)
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("folder not writable")
+
+    monkeypatch.setattr(unfinished, "save", _refuse)
+    held = RETRY_OLDER_FAILURES_MAX + 1
+    for index in range(held + 1):
+        controller._hold_failed_audio_for_retry(
+            wav_bytes(room_tone(0.5, rms=0.05, seed=index)), f"rec-{index}"
+        )
+
+    held_ids = [recording_id for _wav, recording_id in controller._older_failed_audio]
+    assert "rec-0" in held_ids, "not written, so not dropped from memory"
+    assert len(tray) == 1, tray
+    assert str(unfinished.directory) in tray[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_gap_transcript_whose_copy_failed_keeps_the_secured_file(
+    monkeypatch, tmp_path
+):
+    # The slot moved on to B, and A's gap copy could not be made: the secured
+    # file is the only audio of the stretch the gap names.
+    controller, app, unfinished = _controller(monkeypatch, tmp_path)
+    audio_a = wav_bytes(room_tone(1.0, rms=0.05, seed=1))
+    token_a = _record(controller, audio_a)
+    _record(controller, wav_bytes(room_tone(1.0, rms=0.05, seed=2)))
+    [secured] = unfinished.list_recordings()
+
+    def _refuse(*_args, **_kwargs):
+        raise OSError("folder not readable")
+
+    monkeypatch.setattr(unfinished, "find", _refuse)
+
+    controller._on_transcription_ready(_GAP_TEXT, request_token=token_a)
+
+    assert secured.path.read_bytes() == audio_a
     controller.shutdown()
     _ = app

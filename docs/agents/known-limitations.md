@@ -227,13 +227,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   transcript with a gap marker leaves its file in the unfinished folder,
   linked from its history entry, and nothing lists or cleans those files;
   the same holds for a transcribed unfinished recording whose move to the
-  recordings folder failed. The copies "Keep last recording after
-  successful transcription" moves to the recordings folder are `kept_*.wav`
-  since 2026-11-24 and counted by "Keep Recordings" (D3,
-  `persistence-and-history.md`); the ones moved there before are named
-  `unfinished_*.wav` and are never pruned, because that name also marks
-  untranscribed files. Kept: each needs a store or history failure, or is
-  cosmetic.
+  recordings folder failed. Kept: each needs a store or history failure, or
+  is cosmetic.
+- **Kept copies are never deleted automatically** (accepted 2026-11-25,
+  lead's decision; `persistence-and-history.md`, D3). The `kept_*.wav` files
+  in the recordings folder (a gap or fallback transcript's audio, a
+  transcribed unfinished recording with only "Keep last recording" on) and
+  the `unfinished_*.wav` ones written before 2026-11-24 are outside "Keep
+  Recordings", so they pile up until the user deletes them by hand: about
+  2 MB per minute of audio. Accepted because part of a gap's recording
+  returned no text, and counting them deleted that audio with the next
+  recording at a limit of 1. Idea for later in `docs/ROADMAP.md`: remove a
+  kept copy together with its History entry.
+- **A benchmark that re-reads an archived recording per case is not
+  protected from the prune** (unchanged old behaviour, noted 2026-11-25):
+  `_audio_file_in_use` covers `transcribe_audio_file` (Import, History's
+  Retranscribe), not the benchmark worker, so a dictation ending during a
+  benchmark over archive files can prune one before a later case reads it;
+  that case fails with a missing file.
 - **What a crash can still lose** (2026-10-09; narrowed 2026-11-24, D4):
   every recording without a transcript is written to the unfinished store
   when the managed slot moves on, so a crash keeps the slot plus every
@@ -562,8 +573,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **Audio retention residuals** (2026-11-24, after D1-D5,
   `persistence-and-history.md`):
   - A pending recording's durable copy is written on the Qt thread at the
-    next stop (11-32 ms measured); a disk that refuses it is only logged,
-    and the audio then lives in memory and, until that same stop, the slot.
+    next stop (11-21 ms for 10 s to 5 min of audio, about 40 ms for one
+    10-minute recording, 206 ms for five pending at once); a disk that
+    refuses it tells the tray once, and the audio then lives in memory and,
+    until that same stop, the slot: a crash before the transcript loses it.
   - A secured copy whose delete fails after delivery, or one of a recording
     cancelled by a path that does not end in `_on_transcription_canceled_result`
     (for example a job stopped by the concurrent mode "cancel" while it was
@@ -573,4 +586,5 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     to the engine (and archived only when it has signal): the device text of
     the gate's `no_signal` skip needs the gate on.
   - The live "No signal" hint repaints the overlay every 500 ms while it
-    holds; in streaming it replaces the live text until the next partial.
+    holds; in streaming a partial painted meanwhile shows until the next
+    tick, and the live text comes back when sound returns.

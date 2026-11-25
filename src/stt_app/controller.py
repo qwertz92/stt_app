@@ -19,7 +19,7 @@ from uuid import uuid4
 from PySide6 import QtCore, QtGui
 
 from . import audio_devices, local_runtime_support, silero_vad
-from .app_paths import is_retained_recording_name, resolve_recordings_dir
+from .app_paths import ARCHIVED_RECORDING_NAME_RE, resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import CHANGE_OUTPUT, AudioDeviceChangeListener
 from .config import (
@@ -1378,10 +1378,12 @@ class DictationController(QtCore.QObject):
         deletes a file once its transcript is in History. A recording without
         an id (the store refused its bytes) is not written here: it never was
         in the slot, and the quit still keeps it under a fresh id. A write
-        that fails is logged and leaves the audio where it was (memory and,
-        for the slot's own recording, the slot until this persist)."""
+        that fails leaves the audio where it was (memory and, for the slot's
+        own recording, the slot until this persist) and tells the tray once:
+        a crash before the transcript loses it."""
         started = time.perf_counter()
         written = 0
+        failed = 0
         for (
             wav_bytes,
             recording_id,
@@ -1396,6 +1398,15 @@ class DictationController(QtCore.QObject):
             if path is not None:
                 self._secured_recordings[recording_id] = path
                 written += 1
+            else:
+                failed += 1
+        if failed:
+            self.busy_overlay_error.emit(
+                f"{failed} recording(s) still waiting for a transcript could "
+                f"not be saved to {self._unfinished_recording_store.directory} "
+                "(see the log). They stay in memory until transcribed; a crash "
+                "before then loses them."
+            )
         if written:
             self._logger.info(
                 "recordings_secured count=%d elapsed_ms=%.1f dir=%s",
@@ -1433,16 +1444,26 @@ class DictationController(QtCore.QObject):
         return path
 
     def _release_secured_recording(
-        self, recording_id: str, *, still_needed_for_retry: bool = False
+        self,
+        recording_id: str,
+        *,
+        still_needed_for_retry: bool = False,
+        linked_path: str = "",
     ) -> None:
         """Delete the unfinished-store copy `_secure_recordings_without_transcript`
-        wrote for this recording: its transcript is in History, or the user
-        cancelled it. Kept while a failure of the same recording waits for
-        Retry (`still_needed_for_retry`). A copy that a gap or fallback
-        transcript moved to the recordings folder is gone from this path, and
-        the delete finds nothing."""
+        wrote for this recording: its complete transcript is in History with
+        no audio linked, or the user cancelled it. Kept while a failure of the
+        same recording waits for Retry (`still_needed_for_retry`), and never
+        deleted when it is the file History links (`linked_path`). A copy a
+        gap or fallback transcript took over left this registry when it was
+        taken (`_keep_audio_in_recordings_folder`), moved or not."""
         path = self._secured_recordings.get(recording_id) if recording_id else None
         if path is None or still_needed_for_retry:
+            return
+        if linked_path and os.path.normcase(os.path.abspath(path)) == os.path.normcase(
+            os.path.abspath(linked_path)
+        ):
+            del self._secured_recordings[recording_id]
             return
         del self._secured_recordings[recording_id]
         try:
@@ -1671,9 +1692,9 @@ class DictationController(QtCore.QObject):
         the archive's name, counts as its newest file and the retention
         count applies (`_prune_recordings`); with only "Keep last recording
         after successful transcription" it goes to the recordings folder as a
-        kept copy (`kept_...`, counted by "Keep Recordings" since 2026-11-24;
-        it was never pruned before) -- the managed last recording is one slot that holds the newest dictation and must not be
-        overwritten by an older recording. A move that fails leaves the file
+        kept copy (`kept_...`, which "Keep Recordings" never deletes) -- the
+        managed last recording is one slot that holds the newest dictation and
+        must not be overwritten by an older recording. A move that fails leaves the file
         where it was and answers that path (logged): the entry points at it,
         and the next start deletes no file an entry points at. Nothing after
         a successful move may stop the history write (the notice no longer
@@ -4190,15 +4211,18 @@ class DictationController(QtCore.QObject):
         return needed
 
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
-        """Keep the newest `keep_count` retained recordings in `directory`.
+        """Keep the newest `keep_count` archived recordings in `directory`.
 
-        Retained: the archive's `recording_*.wav` and the kept copies
-        (`kept_*.wav`, the audio of a transcript History links), counted
-        together and oldest first (D3 of 2026-11-24: one rule bounds the
-        folder; kept copies used to pile up). A file a queued or running
+        Only the archive's own `recording_*.wav` files are counted and
+        deleted, oldest first. Kept copies (`kept_*.wav`: the audio of a
+        transcript with a gap or in a fallback language, which History links)
+        and `unfinished_*` files are never touched: part of a kept copy was
+        never transcribed, and an unfinished file may be a recording nobody
+        transcribed (lead's decision 2026-11-25, taking back D3 of
+        2026-11-24, which counted kept copies: with the limit at 1 the next
+        recording deleted a gap's audio). A file a queued or running
         transcription still needs is skipped and stays counted, so the next
-        oldest goes instead (`_audio_paths_still_needed`). `unfinished_*`
-        files are never touched: one may be a recording nobody transcribed.
+        oldest goes instead (`_audio_paths_still_needed`).
         """
         keep = int(keep_count or RECORDINGS_MAX_COUNT_UNLIMITED)
         if keep <= RECORDINGS_MAX_COUNT_UNLIMITED:
@@ -4213,7 +4237,7 @@ class DictationController(QtCore.QObject):
         needed = self._audio_paths_still_needed()
         aged = []
         for name in names:
-            if not is_retained_recording_name(name):
+            if not ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
                 continue
             path = os.path.join(directory, name)
             try:
@@ -4808,8 +4832,9 @@ class DictationController(QtCore.QObject):
         recording and moved there as a kept copy (`kept_...`), the way
         `_retain_unfinished_audio` keeps one. It is made even when "Archive
         every recording" already linked the archive's file (owner's decision
-        2026-10-23); since 2026-11-24 "Keep Recordings" counts kept copies
-        with the archive's files, so both age out by the same count. `job.source_audio_path` carries the copy into
+        2026-10-23); "Keep Recordings" never deletes a kept copy, because part
+        of its recording returned no text. `job.source_audio_path` carries the
+        copy into
         every History write of the delivery, and History's Retranscribe takes
         a language. A job with no recording id -- the store refused its bytes
         -- gets one of its own, as the quit road's copies do, because the
@@ -4858,11 +4883,22 @@ class DictationController(QtCore.QObject):
             job.history_refused = entry is None
             if entry is None and job.audio_copied:
                 self._settle_the_audio_copy_of_an_unsaved_transcript(job)
-            if entry is not None:
-                # The transcript is in History: the durable copy written when
-                # the slot moved on is no longer the only way back to it. A
-                # refused write keeps the copy (the text is only in memory).
-                self._release_secured_recording(job.source_recording_id)
+            needs_audio = (
+                bool(job.language_fallback_from or transcript_has_gap(entry.text))
+                if entry is not None
+                else True
+            )
+            if entry is not None and not needs_audio and not job.audio_copied:
+                # The complete transcript is in History and needs no audio:
+                # the durable copy written when the slot moved on is no
+                # longer the only way back to it. Kept otherwise: a refused
+                # write (the text is only in memory), a gap or fallback
+                # transcript whose copy could not be made (the secured file
+                # may be its only audio), and a copy History links, which
+                # left the registry when it was taken.
+                self._release_secured_recording(
+                    job.source_recording_id, linked_path=entry.source_audio_path
+                )
         self._announce_language_fallback(job, entry)
 
     def _settle_the_audio_copy_of_an_unsaved_transcript(
@@ -4874,17 +4910,17 @@ class DictationController(QtCore.QObject):
         of the copy depends on the store's answer to that mark
         (`_drop_unlinked_audio_copy`)."""
         marked = self._mark_last_recording_failed(job, _TRANSCRIPT_NOT_SAVED_REASON)
-        if self._drop_unlinked_audio_copy(
+        job.source_audio_path = self._drop_unlinked_audio_copy(
             job.source_audio_path, slot_keeps_audio=marked
-        ):
-            job.audio_copied = False
-            job.source_audio_path = ""
+        )
+        job.audio_copied = bool(job.source_audio_path)
 
     def _drop_unlinked_audio_copy(
         self, copy_path: str, *, slot_keeps_audio: bool
-    ) -> bool:
+    ) -> str:
         """What to do with a copy of a transcript's audio that no History entry
-        links, because its write was refused. True when the copy was deleted.
+        links, because its write was refused. Where the copy is now, "" when
+        it was deleted.
 
         Nothing in the app leads to such a file and it waits for the recordings
         count, so it would stay as an unknown file (and a later import of the same
@@ -4893,14 +4929,27 @@ class DictationController(QtCore.QObject):
         the copy is deleted, as `_return_unfinished_audio` undoes the copy of
         the unfinished-recordings road. Where it does not -- a newer
         recording replaced it in the slot, or the job has no recording id --
-        the copy is the only audio left and stays, its path in the log."""
+        the copy is the only audio left and stays, its path in the log -- as
+        an unfinished recording (`UnfinishedRecordingStore.take_back`), which
+        the next start offers: its transcript is in no History entry, so it
+        is no kept copy (lead's decision 2026-11-25)."""
         if not slot_keeps_audio:
+            try:
+                copy_path = os.path.abspath(
+                    self._unfinished_recording_store.take_back(Path(copy_path))
+                )
+            except OSError:
+                self._logger.exception(
+                    "Failed to return a recording copy to the unfinished "
+                    "recordings folder. path=%s",
+                    copy_path,
+                )
             self._logger.warning(
                 "The only copy of a recording whose transcript could not be "
                 "saved to History is kept. path=%s",
                 copy_path,
             )
-            return False
+            return copy_path
         try:
             Path(copy_path).unlink(missing_ok=True)
         except OSError:
@@ -4909,9 +4958,9 @@ class DictationController(QtCore.QObject):
                 "not be saved to History. path=%s",
                 copy_path,
             )
-            return False
+            return copy_path
         self._logger.info("transcript_audio_copy_dropped path=%s", copy_path)
-        return True
+        return ""
 
     def _announce_language_fallback(
         self, job: _TranscriptionJob | None, entry: TranscriptHistoryEntry | None
@@ -4979,11 +5028,14 @@ class DictationController(QtCore.QObject):
         """Where this recording's audio now lives, "" when it could not be kept.
 
         Saved as an unfinished recording and moved to the recordings folder as
-        a kept copy (`kept_...`), which "Keep Recordings" counts with the
-        archive's files (`_prune_recordings`). The file's language
-        tag is `language_mode`, else the language the recording was made in. A
-        move that fails leaves the file in the unfinished recordings folder
-        and answers that path (logged): the next start offers it there.
+        a kept copy (`kept_...`), which "Keep Recordings" never deletes. The
+        file's language tag is `language_mode`, else the language the
+        recording was made in. A move that fails leaves the file in the
+        unfinished recordings folder and answers that path (logged): History
+        links it there. Either way the file leaves `_secured_recordings`, so
+        the release after the History write never deletes it (review
+        2026-11-25: a failed move under a secured copy unlinked the only
+        audio of a gap).
 
         Never raises, whatever the store or the folder does: it runs inside the
         delivery of a finished transcript, before its History entry is written,
@@ -5011,6 +5063,8 @@ class DictationController(QtCore.QObject):
                 recording_id,
             )
             return ""
+        if recording is not None:
+            self._secured_recordings.pop(recording_id, None)
         if recording is None:
             self._logger.warning(
                 "The saved audio of a transcript could not be found again, so "
@@ -5116,18 +5170,29 @@ class DictationController(QtCore.QObject):
         older = [entry for entry in self._older_failed_audio if entry != held]
         if replaced[0] and replaced != held:
             older.append(replaced)
+        unsaved = []
         while len(older) > RETRY_OLDER_FAILURES_MAX:
             dropped = older.pop(0)
             kept_at = self._keep_dropped_failure(*dropped)
+            if not kept_at:
+                # Not written: dropping it from memory would lose it, so it
+                # stays held past the limit, and the tray says why.
+                unsaved.append(dropped)
             self._logger.warning(
                 "retry_failure_dropped bytes=%d recording_id=%s kept=%s: more "
                 "than %d failed recordings are waiting for Retry",
                 len(dropped[0]),
                 dropped[1] or "n/a",
-                kept_at or "no",
+                kept_at or "no, held in memory",
                 RETRY_OLDER_FAILURES_MAX + 1,
             )
-        self._older_failed_audio = older
+        if unsaved:
+            self.busy_overlay_error.emit(
+                f"{len(unsaved)} failed recording(s) could not be saved to "
+                f"{self._unfinished_recording_store.directory} (see the log). "
+                "They stay in memory for Retry; a crash before then loses them."
+            )
+        self._older_failed_audio = unsaved + older
         self._last_failed_wav_bytes, self._last_failed_recording_id = held
 
     def _keep_dropped_failure(self, wav_bytes: bytes, recording_id: str) -> str:

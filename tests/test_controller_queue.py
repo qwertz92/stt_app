@@ -4243,20 +4243,16 @@ def test_a_refused_history_write_leaves_a_fallback_retrys_audio_to_the_managed_r
     _ = app
 
 
-@pytest.mark.parametrize(
-    ("move_fails", "folder"),
-    [(False, "recordings folder"), (True, "unfinished recordings folder")],
-    ids=["moved", "move-failed"],
-)
+@pytest.mark.parametrize("move_fails", [False, True], ids=["moved", "move-failed"])
 def test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_hold(
-    monkeypatch, tmp_path, caplog, move_fails, folder
+    monkeypatch, tmp_path, caplog, move_fails
 ):
     """The retry finished behind a newer dictation, whose recording replaced the
     retried one in the managed slot, and History refused the entry: the copy is
-    the only audio left, so it stays. The notice names the folder it sits in --
-    the unfinished recordings folder when its move to the recordings folder
-    failed too -- and the log names the file. The newer dictation's recording
-    is not relabeled."""
+    the only audio left, so it stays -- in the unfinished recordings folder,
+    moved there or back there, because its transcript is in no History entry
+    and the next start must offer it (2026-11-25) -- and the log names the
+    file. The newer dictation's recording is not relabeled."""
     caplog.set_level(logging.WARNING)
     controller, app, tray, history, audio, recordings = (
         _a_retry_under_canary_that_finished(
@@ -4272,15 +4268,14 @@ def test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_ho
 
     assert history.load() == []
     [kept] = _files_kept_anywhere(controller, recordings)
-    assert kept.parent == (
-        controller._unfinished_recording_store.directory if move_fails else recordings
-    )
+    assert kept.parent == controller._unfinished_recording_store.directory
+    assert kept.name.startswith("unfinished_")
     assert kept.read_bytes() == audio
     assert str(kept) in caplog.text, "the log names the only copy of the audio"
     assert tray == [
         _FALLBACK_NOTICE
-        + f"The audio is kept in the {folder}, but its transcript could "
-        "not be saved to History (see the log)."
+        + "The audio is kept in the unfinished recordings folder, but its "
+        "transcript could not be saved to History (see the log)."
     ]
     newer = controller._jobs[controller._active_request_token]
     state = controller._last_recording_store.load()
@@ -4297,8 +4292,9 @@ def test_a_refused_history_write_and_a_refused_copy_keep_the_secured_audio(
     written and History refused the entry too. Until 2026-11-24 no audio of
     the retry was kept anywhere; now the newer dictation's stop wrote the
     retry's recording to the unfinished store before it took the slot (D4),
-    and the delivery takes that copy over into the recordings folder, so the
-    notice says where the audio is instead of saying it is lost."""
+    and the delivery takes that copy over; History refused the entry, so it
+    stays an unfinished recording the next start offers, and the notice says
+    where it is instead of saying it is lost."""
 
     def _refuse(*_args, **_kwargs):
         raise OSError("disk full")
@@ -4319,12 +4315,12 @@ def test_a_refused_history_write_and_a_refused_copy_keep_the_secured_audio(
 
     assert history.load() == []
     [kept] = _files_kept_anywhere(controller, recordings)
-    assert kept.parent == recordings
+    assert kept.parent == controller._unfinished_recording_store.directory
     assert kept.read_bytes() == audio
     assert tray == [
         _FALLBACK_NOTICE
-        + "The audio is kept in the recordings folder, but its transcript could "
-        "not be saved to History (see the log)."
+        + "The audio is kept in the unfinished recordings folder, but its "
+        "transcript could not be saved to History (see the log)."
     ]
     controller.shutdown()
     _ = app
@@ -4610,11 +4606,11 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
     monkeypatch, tmp_path
 ):
     """With "Archive every recording" the audio is also in the archive, and
-    the entry still links a copy of its own (owner's decision 2026-10-23).
-    Since 2026-11-24 (D3) that copy is a `kept_*` file which "Keep Recordings"
-    counts with the archive's files, oldest first: one rule bounds the
-    folder. (The fake capture writes no archive file, so the pruning is
-    exercised on archive-named files made here.)"""
+    the entry still links a copy of its own (owner's decision 2026-10-23), a
+    `kept_*` file that "Keep Recordings" never counts or prunes: part of the
+    recording returned no text (lead's decision 2026-11-25). (The fake capture
+    writes no archive file, so the pruning is exercised on archive-named
+    files made here.)"""
     controller, app, history, audio, recordings = (
         _a_dictation_whose_transcript_has_a_gap(
             monkeypatch, tmp_path, save_all_recordings=True, recordings_max_count=1
@@ -4632,15 +4628,15 @@ def test_a_gap_transcript_whose_audio_is_archived_still_keeps_its_own_copy(
         archived.write_bytes(b"x")
         os.utime(archived, (1_800_000_100 + index, 1_800_000_100 + index))
 
-    controller._prune_recordings(str(recordings), 3)
+    controller._prune_recordings(str(recordings), 2)
 
-    assert not kept.exists(), "the oldest counted file goes first"
+    assert kept.exists(), "a kept copy is never pruned"
     archived = [
         path
         for path in recordings.iterdir()
         if ARCHIVED_RECORDING_NAME_RE.fullmatch(path.name)
     ]
-    assert len(archived) == 3
+    assert len(archived) == 2
     assert controller._last_recording_store.load() is None, "completed as usual"
     controller.shutdown()
     _ = app
@@ -4718,9 +4714,10 @@ def test_a_refused_history_write_keeps_a_gap_copy_the_slot_cannot_hold(
 ):
     """The older dictation finishes behind a newer one (the background road),
     whose recording replaced it in the managed slot, and History refuses the
-    entry: the copy is the only audio of the gap, so it stays, and the log
-    names the file -- a gap raises no notice of its own. The newer recording
-    is not relabeled."""
+    entry: the copy is the only audio of the gap, so it stays -- as an
+    unfinished recording the next start offers, not as a kept copy, because
+    its transcript is in no History entry -- and the log names the file. The
+    newer recording is not relabeled."""
     caplog.set_level(logging.WARNING)
     recordings = tmp_path / "recordings"
     controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
@@ -4739,7 +4736,8 @@ def test_a_refused_history_write_keeps_a_gap_copy_the_slot_cannot_hold(
 
     assert history.load() == []
     [kept] = _files_kept_anywhere(controller, recordings)
-    assert kept.parent == recordings and kept.read_bytes() == audio
+    assert kept.parent == controller._unfinished_recording_store.directory
+    assert kept.name.startswith("unfinished_") and kept.read_bytes() == audio
     assert str(kept) in caplog.text, "the log names the only copy of the audio"
     state = controller._last_recording_store.load()
     assert state is not None

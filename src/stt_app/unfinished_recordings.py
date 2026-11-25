@@ -22,7 +22,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .app_paths import KEPT_RECORDING_PREFIX, unfinished_recordings_dir
+from .app_paths import (
+    KEPT_RECORDING_NAME_RE,
+    KEPT_RECORDING_PREFIX,
+    unfinished_recordings_dir,
+)
 from .persistence import atomic_write_bytes
 
 _STAMP_FORMAT = "%Y%m%d_%H%M%S"
@@ -151,11 +155,11 @@ class UnfinishedRecordingStore:
         """Move one kept recording out of the store, never over another file.
 
         `as_kept_copy` names it `kept_...` instead of `unfinished_...`: the
-        audio of a transcript History links, which the recordings count may
-        prune (`app_paths.KEPT_RECORDING_NAME_RE`). Without it the name stays,
-        and no count ever deletes the file -- for a recording nobody
-        transcribed. Returns where it went. Raises `OSError` when the move
-        fails; the file then stays where it was.
+        audio of a transcript History links
+        (`app_paths.KEPT_RECORDING_NAME_RE`). Without it the name stays -- for
+        a recording nobody transcribed. No retention count deletes either.
+        Returns where it went. Raises `OSError` when the move fails; the file
+        then stays where it was.
         """
         directory = Path(directory)
         directory.mkdir(parents=True, exist_ok=True)
@@ -168,6 +172,26 @@ class UnfinishedRecordingStore:
             counter += 1
             target = directory / f"{stem}_{counter}.wav"
         return Path(shutil.move(str(recording.path), str(target)))
+
+    def take_back(self, path: Path) -> Path:
+        """Return a kept copy (`kept_<stamp>_<id>[.<language>][_<n>].wav`)
+        to this store as `unfinished_<stamp>_<id>[.<language>].wav`, so that
+        the next start offers it: its transcript reached no History entry.
+
+        A file of another name, or one already in this store, stays where it
+        is and its path is answered. Raises `OSError` when the move fails and
+        `FileExistsError` when the store already holds that name; the file
+        then stays where it was.
+        """
+        path = Path(path)
+        match = KEPT_RECORDING_NAME_RE.fullmatch(path.name)
+        if match is None or path.parent == self.directory:
+            return path
+        self.directory.mkdir(parents=True, exist_ok=True)
+        target = self.directory / f"unfinished_{match['stamp']}_{match['rest']}.wav"
+        if target.exists():
+            raise FileExistsError(str(target))
+        return Path(shutil.move(str(path), str(target)))
 
 
 def _describe(path: Path, match: re.Match[str]) -> UnfinishedRecording:

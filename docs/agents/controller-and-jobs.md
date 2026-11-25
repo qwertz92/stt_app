@@ -604,9 +604,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     archive's file is deleted by `_prune_recordings` after the count of newer
     recordings, while a recordings-folder copy under another name never was, so
     the entry links the copy and the gap's audio outlived the archive. Since
-    2026-11-24 (D3) the copy is a `kept_*.wav` that the same count prunes,
-    oldest first, so it ages out like the archive's files
-    (`docs/agents/persistence-and-history.md`, audio retention). A job
+    2026-11-24 the copy is named `kept_*.wav`; the count never deletes it
+    (D3 taken back 2026-11-25: part of its recording returned no text;
+    `docs/agents/persistence-and-history.md`, audio retention). A job
     **with no recording id** (the store refused its bytes, so it marks nothing
     and its audio exists only in memory) gets `uuid4().hex` for the copy, as
     the quit road's copies do: `UnfinishedRecordingStore.save` refuses an
