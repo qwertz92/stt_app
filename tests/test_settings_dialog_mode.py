@@ -18,7 +18,13 @@ from stt_app.benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
-from stt_app.config import CANARY_MODEL_SIZE, LOCAL_BATCH_ONLY_MODELS, OPENAI_MODELS
+from stt_app.config import (
+    CANARY_MODEL_SIZE,
+    LOCAL_BATCH_ONLY_MODELS,
+    NEMOTRON_MODEL_SIZE,
+    OPENAI_MODELS,
+    supports_streaming,
+)
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.persistence import backup_path
@@ -304,24 +310,26 @@ def _send_wheel_event(widget: QtWidgets.QWidget) -> None:
     QtWidgets.QApplication.sendEvent(widget, event)
 
 
-def test_streaming_mode_is_selectable_and_persisted():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    # A faster-whisper size explicitly: the default local model is the
-    # batch-only Parakeet, whose streaming entry is correctly disabled.
-    store = _FakeSettingsStore(AppSettings(mode="batch", model_size="small"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
+def _dialog_for(settings: AppSettings, store=None) -> SettingsDialog:
+    return SettingsDialog(
+        settings_store=store or _FakeSettingsStore(settings),
+        secret_store=_FakeSecretStore("groq", "openai", "assemblyai", "deepgram"),
         app_logger=_FakeLogger(),
     )
 
-    index = dialog.mode_combo.findData("streaming")
-    assert index >= 0
-    item = dialog.mode_combo.model().item(index)
-    assert item is not None
-    assert item.isEnabled() is True
 
-    dialog.mode_combo.setCurrentIndex(index)
+def _engine_row_hidden(dialog: SettingsDialog, engine: str) -> bool:
+    index = dialog.engine_combo.findData(engine)
+    assert index >= 0, f"{engine!r} is not in the engine combo at all"
+    return bool(dialog.engine_combo.view().isRowHidden(index))
+
+
+def test_streaming_mode_is_selectable_and_persisted():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(mode="batch", model_size="small"))
+    dialog = _dialog_for(store.load(), store)
+
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
     dialog._save()
 
     assert store.saved is not None
@@ -329,126 +337,147 @@ def test_streaming_mode_is_selectable_and_persisted():
     _ = app
 
 
-def test_streaming_disabled_for_non_streaming_engine():
-    """Streaming mode item is disabled when engine does not support it."""
+@pytest.mark.parametrize(
+    ("engine", "model_size"),
+    [
+        ("groq", "small"),
+        ("openai", "small"),
+        ("local", "parakeet-tdt-0.6b-v3"),
+        ("local", "cohere-transcribe-03-2026"),
+    ],
+)
+def test_streaming_stays_selectable_whatever_engine_and_model(engine, model_size):
+    """Mode is chosen first and filters the engine and model lists; a greyed-out
+    Streaming entry with its reason in a tooltip was a dead end for a user on a
+    batch-only model (owner's request 2026-11-24)."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="groq", mode="batch"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
+    dialog = _dialog_for(AppSettings(engine=engine, model_size=model_size))
 
-    streaming_idx = dialog.mode_combo.findData("streaming")
-    assert streaming_idx >= 0
-    item = dialog.mode_combo.model().item(streaming_idx)
-    assert item is not None
-    assert item.isEnabled() is False
+    assert _combo_item_enabled(dialog.mode_combo, "streaming") is True
     _ = app
 
 
-def test_streaming_enabled_for_assemblyai():
-    """Streaming mode item is enabled for AssemblyAI engine."""
+def test_streaming_mode_lists_only_local_models_that_can_stream():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="assemblyai", mode="batch"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
+    dialog = _dialog_for(AppSettings(engine="local", mode="batch", model_size="small"))
+    every_model = [
+        value for value in _combo_data(dialog.model_combo) if value != "None"
+    ]
+    assert set(LOCAL_BATCH_ONLY_MODELS) <= set(every_model)
 
-    streaming_idx = dialog.mode_combo.findData("streaming")
-    assert streaming_idx >= 0
-    item = dialog.mode_combo.model().item(streaming_idx)
-    assert item is not None
-    assert item.isEnabled() is True
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
+
+    offered = [value for value in _combo_data(dialog.model_combo) if value != "None"]
+    assert offered == [
+        value for value in every_model if supports_streaming("local", value)
+    ]
+    assert NEMOTRON_MODEL_SIZE in offered
+    assert dialog.model_combo.currentData() == "small"
+    note = dialog.mode_hint_label.text()
+    assert "Only engines and models that can stream are listed" in note
+
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("batch"))
+
+    assert [v for v in _combo_data(dialog.model_combo) if v != "None"] == every_model
+    _ = app
+
+
+def test_streaming_mode_hides_engines_that_cannot_stream():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine="local", mode="batch", model_size="small"))
+    assert _engine_row_hidden(dialog, "groq") is False
+
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
+
+    for engine in ("local", "assemblyai", "deepgram"):
+        assert _engine_row_hidden(dialog, engine) is False, engine
+        assert _combo_item_enabled(dialog.engine_combo, engine) is True, engine
+    for engine in ("groq", "openai", "elevenlabs", "azure", "custom"):
+        assert _engine_row_hidden(dialog, engine) is True, engine
+        # Disabled as well: a hidden row is still reached by the arrow keys
+        # and the wheel on a closed combo, a disabled one is skipped.
+        assert _combo_item_enabled(dialog.engine_combo, engine) is False, engine
+
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("batch"))
+
+    assert _engine_row_hidden(dialog, "groq") is False
+    assert _combo_item_enabled(dialog.engine_combo, "groq") is True
+    _ = app
+
+
+def test_a_saved_local_combination_that_cannot_stream_is_kept_and_flagged():
+    """Never switched silently: the old dialog flipped Mode to Batch on open,
+    and the next Save wrote that over the stored choice."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    stored = AppSettings(
+        engine="local", mode="streaming", model_size="cohere-transcribe-03-2026"
+    )
+    store = _FakeSettingsStore(stored)
+    dialog = _dialog_for(stored, store)
+
+    assert dialog.mode_combo.currentData() == "streaming"
+    assert dialog.model_combo.currentData() == "cohere-transcribe-03-2026"
+    warning = dialog.local_model_runtime_warning_label.text()
+    assert "cannot stream" in warning
+    assert local_model_short_label("cohere-transcribe-03-2026") in warning
+    assert "b71c1c" in dialog.local_model_runtime_warning_label.styleSheet()
+    # The kept selection is the one batch-only entry still listed.
+    offered = set(_combo_data(dialog.model_combo))
+    assert offered & set(LOCAL_BATCH_ONLY_MODELS) == {"cohere-transcribe-03-2026"}
+
+    dialog._save()
+    assert store.saved is None or store.saved.mode == "streaming"
+
+    dialog.model_combo.setCurrentIndex(dialog.model_combo.findData(NEMOTRON_MODEL_SIZE))
+    assert "cannot stream" not in dialog.local_model_runtime_warning_label.text()
+    assert "cohere-transcribe-03-2026" not in _combo_data(dialog.model_combo)
+    _ = app
+
+
+def test_a_saved_remote_engine_that_cannot_stream_is_kept_and_flagged():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine="groq", mode="streaming"))
+
+    assert dialog.mode_combo.currentData() == "streaming"
+    assert dialog.engine_combo.currentData() == "groq"
+    assert _engine_row_hidden(dialog, "groq") is False
+    note = dialog.remote_model_note_label.text()
+    assert "cannot stream" in note
+    assert "b71c1c" in dialog.remote_model_note_label.styleSheet()
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
+
+    assert "cannot stream" not in dialog.remote_model_note_label.text()
+    assert _engine_row_hidden(dialog, "groq") is True
     _ = app
 
 
 def test_remote_streaming_ignores_batch_only_local_model_selection():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(
+    dialog = _dialog_for(
         AppSettings(
             engine="deepgram",
             mode="streaming",
             model_size="cohere-transcribe-03-2026",
         )
     )
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
 
-    streaming_idx = dialog.mode_combo.findData("streaming")
-    item = dialog.mode_combo.model().item(streaming_idx)
-
-    assert item is not None
-    assert item.isEnabled() is True
     assert dialog.mode_combo.currentData() == "streaming"
+    assert "cannot stream" not in dialog.remote_model_note_label.text()
     _ = app
 
 
-def test_streaming_disabled_for_openai():
-    """Streaming mode item is disabled for OpenAI engine."""
+def test_switching_to_an_engine_that_cannot_stream_keeps_the_mode_and_says_why():
+    """It used to flip Mode to Batch without a word."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="openai", mode="batch"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    streaming_idx = dialog.mode_combo.findData("streaming")
-    assert streaming_idx >= 0
-    item = dialog.mode_combo.model().item(streaming_idx)
-    assert item is not None
-    assert item.isEnabled() is False
-    _ = app
-
-
-def test_streaming_enabled_for_deepgram():
-    """Streaming mode item is enabled for Deepgram engine."""
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="deepgram", mode="batch"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    streaming_idx = dialog.mode_combo.findData("streaming")
-    assert streaming_idx >= 0
-    item = dialog.mode_combo.model().item(streaming_idx)
-    assert item is not None
-    assert item.isEnabled() is True
-    _ = app
-
-
-def test_switching_to_non_streaming_engine_resets_mode_to_batch():
-    """Changing to a non-streaming engine auto-switches mode from streaming to batch."""
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    # Start with local + streaming (valid combo).
-    # A faster-whisper size explicitly: the default local model is the
-    # batch-only Parakeet, so local+streaming would not be a valid combo.
-    store = _FakeSettingsStore(
+    dialog = _dialog_for(
         AppSettings(engine="local", mode="streaming", model_size="small")
     )
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
 
-    # Mode should be streaming initially.
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
+
     assert dialog.mode_combo.currentData() == "streaming"
-
-    # Switch engine to groq (no streaming support).
-    groq_idx = dialog.engine_combo.findData("groq")
-    dialog.engine_combo.setCurrentIndex(groq_idx)
-
-    # Mode should have auto-switched to batch.
-    assert dialog.mode_combo.currentData() == "batch"
+    assert "cannot stream" in dialog.remote_model_note_label.text()
     _ = app
 
 
@@ -541,7 +570,7 @@ def test_local_webgpu_model_is_batch_only_and_points_at_the_device_row():
     store = _FakeSettingsStore(
         AppSettings(
             engine="local",
-            mode="streaming",
+            mode="batch",
             model_size="cohere-transcribe-03-2026",
             language_mode="auto",
             keep_onnx_model_loaded=False,
@@ -553,9 +582,10 @@ def test_local_webgpu_model_is_batch_only_and_points_at_the_device_row():
         app_logger=_FakeLogger(),
     )
 
+    # A stored Streaming with this model is kept and flagged instead
+    # (`test_a_saved_local_combination_that_cannot_stream_is_kept_and_flagged`).
     assert dialog.model_combo.currentData() == "cohere-transcribe-03-2026"
     assert dialog.mode_combo.currentData() == "batch"
-    assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
     assert dialog.language_combo.currentData() == "de"
     assert dialog.language_combo.isEnabled() is True
     assert _combo_offers(dialog.language_combo, "auto") is False
@@ -580,36 +610,6 @@ def test_local_webgpu_model_is_batch_only_and_points_at_the_device_row():
 # Over the constant, not a hand-picked subset: naming three of the five left
 # both Granite models untested, and a model added to `LOCAL_BATCH_ONLY_MODELS`
 # later would inherit no coverage at all.
-@pytest.mark.parametrize("model_size", LOCAL_BATCH_ONLY_MODELS)
-def test_the_disabled_streaming_tooltip_names_the_model(model_size):
-    """The tooltip must not claim a runtime the model does not use.
-
-    Parakeet and Canary are batch-only through the pure-Python onnx-asr
-    runtime, but the tooltip said "the selected ONNX/WebGPU local model" for
-    them, and the alternative branch would have told a local user to use
-    "local". It also quoted the raw settings value while the combo displays a
-    label, so the name in the tooltip did not match the one on screen.
-    """
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    dialog = SettingsDialog(
-        settings_store=_FakeSettingsStore(
-            AppSettings(engine="local", mode="batch", model_size=model_size)
-        ),
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
-    index = dialog.mode_combo.findData("streaming")
-    tooltip = dialog.mode_combo.model().item(index).toolTip()
-    short = local_model_short_label(model_size)
-    assert short in tooltip
-    # The recognisable name, not the raw id and not the full combo entry.
-    assert "(~" not in tooltip and "[Q4]" not in tooltip and "[INT8]" not in tooltip
-    assert "ONNX/WebGPU" not in tooltip
-    _ = app
-
-
 def test_local_model_labels_show_onnx_precision_tags():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
@@ -764,14 +764,12 @@ def test_remote_model_selector_tracks_selected_provider():
 
     deepgram_idx = dialog.engine_combo.findData("deepgram")
     dialog.engine_combo.setCurrentIndex(deepgram_idx)
-    nova2_idx = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova2_idx)
 
     dialog._save()
 
     assert store.saved is not None
     assert store.saved.groq_model == "whisper-large-v3"
-    assert store.saved.deepgram_model == "nova-2"
+    assert store.saved.deepgram_model == "nova-3"
     _ = app
 
 
@@ -791,7 +789,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
 
     assert dialog.remote_model_combo.isEnabled() is False
-    assert "Universal-3.6 Pro Realtime" in dialog.remote_model_note_label.text()
+    assert "AssemblyAI-STT-3.7 Realtime" in dialog.remote_model_note_label.text()
     assert (
         "batch transcription and audio imports" in dialog.remote_model_note_label.text()
     )
@@ -942,7 +940,7 @@ def test_settings_history_list_formats_utc_display_timezone(tmp_path):
     assert (
         dialog.history_list.item(0)
         .text()
-        .startswith("2026-06-24 16:45:00 UTC | local/small")
+        .startswith("2026-06-24 16:45:00 UTC | Local/small")
     )
     _ = app
 
@@ -1320,7 +1318,7 @@ def test_settings_history_tab_has_export_import_clear_buttons_and_count_label(
     assert dialog.history_import_button.text() == "Import..."
     assert dialog.history_clear_button.text() == "Clear history"
     assert dialog.history_count_label.text() == (
-        "Stored: 2 entries (limit 1; showing latest 1)"
+        "2 entries stored (limit 1); showing only the latest"
     )
     _ = app
 
@@ -1527,18 +1525,21 @@ def test_language_options_follow_the_selected_local_model():
 
 def test_deepgram_language_options_follow_selected_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(engine="deepgram", deepgram_model="nova-3"))
+    store = _FakeSettingsStore(
+        AppSettings(engine="speechmatics", speechmatics_model="melia-1")
+    )
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_item_enabled(dialog.language_combo, "ar") is True
-    nova_2_index = dialog.remote_model_combo.findData("nova-2")
-    dialog.remote_model_combo.setCurrentIndex(nova_2_index)
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    enhanced_index = dialog.remote_model_combo.findData("enhanced")
+    dialog.remote_model_combo.setCurrentIndex(enhanced_index)
 
-    assert _combo_offers(dialog.language_combo, "ar") is False
+    # Only Melia 1 has Auto; Enhanced needs a chosen language.
+    assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "fr") is True
     _ = app
 
@@ -3644,7 +3645,7 @@ def test_import_model_selector_tracks_selected_import_engine():
         AppSettings(
             engine="local",
             model_size="medium",
-            openai_model="whisper-1",
+            openai_model="gpt-transcribe",
         )
     )
     dialog = SettingsDialog(
@@ -3662,7 +3663,7 @@ def test_import_model_selector_tracks_selected_import_engine():
     # than restated, so adding a model cannot leave this test pinning an old
     # list that still passes.
     assert _combo_data(dialog.import_model_combo) == list(OPENAI_MODELS)
-    assert dialog.import_model_combo.currentData() == "whisper-1"
+    assert dialog.import_model_combo.currentData() == "gpt-transcribe"
     _ = app
 
 
@@ -4357,16 +4358,16 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
 
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
-    whisper1_idx = dialog.import_model_combo.findData("whisper-1")
-    dialog.import_model_combo.setCurrentIndex(whisper1_idx)
+    model_idx = dialog.import_model_combo.findData("gpt-transcribe")
+    dialog.import_model_combo.setCurrentIndex(model_idx)
     settings = dialog._build_current_settings(
         engine_override="openai",
-        model_override="whisper-1",
+        model_override="gpt-transcribe",
     )
     dialog._transcribe_import_file("dummy.wav", settings)
 
     assert controller.received_engine == "openai"
-    assert controller.received_model == "whisper-1"
+    assert controller.received_model == "gpt-transcribe"
     assert dialog.engine_combo.currentData() == "local"
     assert dialog.model_combo.currentData() == "small"
     _ = app
@@ -5487,4 +5488,49 @@ def test_shutdown_delivers_an_update_result_without_a_dialog(monkeypatch, result
     assert dialog._active_update_check_thread is None
     assert dialog.check_updates_button.isEnabled() is True
     assert shown == []
+    _ = app
+
+
+def _funasr_dialog_with_a_saved_language_it_dropped():
+    store = _FakeSettingsStore(AppSettings(engine="funasr", language_mode="yue"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    return store, dialog
+
+
+def test_an_untouched_save_keeps_a_language_the_engine_does_not_offer():
+    # Fun-ASR dropped Cantonese (2026-11-24): the combo shows Auto for it, which
+    # must not be written back, or the language is lost for every other engine.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+    assert dialog.language_combo.currentData() == "auto"
+
+    dialog._save()
+
+    assert store.saved is None or store.saved.language_mode == "yue"
+    assert store.load().language_mode == "yue"
+    _ = app
+
+
+def test_an_engine_that_offers_the_saved_language_shows_it_again():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    _store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("assemblyai"))
+
+    assert dialog.language_combo.currentData() == "yue"
+    _ = app
+
+
+def test_a_language_the_user_picks_replaces_the_remembered_one():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store, dialog = _funasr_dialog_with_a_saved_language_it_dropped()
+
+    dialog.language_combo.setCurrentIndex(dialog.language_combo.findData("de"))
+    dialog._save()
+
+    assert store.saved is not None and store.saved.language_mode == "de"
     _ = app

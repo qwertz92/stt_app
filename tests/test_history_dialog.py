@@ -583,9 +583,7 @@ def test_increasing_limit_updates_label_without_rebuilding_table(tmp_path):
     dialog._max_items_spin.setValue(3)
 
     assert settings_store.load().history_max_items == 3
-    assert dialog._history_count_label.text() == (
-        "Stored: 2 entries (limit 3; showing all stored entries)"
-    )
+    assert dialog._history_count_label.text() == ("2 entries stored (limit 3)")
     assert dialog._table.rowCount() == 2
     _ = app
 
@@ -946,3 +944,30 @@ def test_a_clear_is_refused_while_only_the_primary_cannot_be_read(
     assert history_store.count() == 2
     assert not sorted(tmp_path.glob("*.corrupt.*"))
     _ = app
+
+
+def test_an_empty_history_says_so_and_a_filled_one_does_not(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings())
+    dialog = HistoryDialog(history_store=history_store, settings_store=settings_store)
+    dialog.show()
+    app.processEvents()
+
+    notice = dialog._empty_notice._label
+    assert notice.isVisible()
+    assert notice.text().startswith("No transcripts yet.")
+    viewport = dialog._table.viewport()
+    assert notice.geometry().center().x() == pytest.approx(
+        viewport.rect().center().x(), abs=2
+    )
+
+    history_store.save([_entry("alpha")])
+    dialog.reload(force=True)
+    app.processEvents()
+
+    assert not notice.isVisible()
+    # The pickers' names, not the stored ids.
+    assert dialog._table.item(0, 1).text() == "Local"
+    dialog.close()

@@ -425,15 +425,13 @@ def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_
 def test_an_unfinished_recording_names_the_language_that_ran_not_a_stale_selection(
     monkeypatch, tmp_path
 ):
-    """The saved selection is not offered by the engine either (Deepgram
-    nova-2 has no Afrikaans): the provider's own normalization runs Auto, so
+    """The saved selection is not offered by the engine either (Fun-ASR
+    has no Afrikaans): the provider's own normalization runs Auto, so
     that is what is requested and what the startup notice names."""
     controller, app, _overlay, unfinished, _history = _controller(
         monkeypatch, tmp_path, language_mode="af"
     )
-    controller._settings = replace(
-        controller._settings, engine="deepgram", deepgram_model="nova-2"
-    )
+    controller._settings = replace(controller._settings, engine="funasr")
     controller._executor = _DoneExecutor()
     seen = []
 

@@ -1,13 +1,16 @@
-"""Call the real AssemblyAI and Groq services through the app's transcribers.
+"""Call every real remote speech service that has a key, through the app's transcribers.
 
 WHAT IT CHECKS
 For every clip given on the command line:
 
-  * AssemblyAI batch: upload, poll, transcript,
-  * Groq batch: the same through a different SDK,
-  * AssemblyAI streaming: the clip is pushed at real-time pace (100 ms of
-    audio every 100 ms, exactly as the microphone delivers it), partials are
-    counted, and `stop_stream()` has to return the final text.
+  * one batch request for EVERY remote engine the app offers (AssemblyAI,
+    Groq, OpenAI, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR,
+    Speechmatics, Mistral and the custom endpoint), each with the engine's
+    default model and through the app's own transcriber,
+  * one streaming session for each engine that has streaming (AssemblyAI and
+    Deepgram): the clip is pushed at real-time pace (100 ms of audio every
+    100 ms, exactly as the microphone delivers it), partials are counted, and
+    `stop_stream()` has to return the final text.
 
 and then, once and always last:
 
@@ -16,8 +19,13 @@ and then, once and always last:
     would measure the flag rather than the service -- which is why it is the
     last case and why the script ends after it.
 
-A provider with no key in the Windows credential manager is SKIPPED, not
-failed.
+An engine with no key in the Windows credential manager is SKIPPED, not
+failed; so is Azure without an endpoint and the custom endpoint without a base
+URL. `--engine NAME` (repeatable) limits a run to the named engines.
+
+A model not offered as a default (Mistral Small, AssemblyAI Universal-2, the
+Enhanced Speechmatics model, ...) is not called; pick it in Settings and add
+its own run if it matters.
 
 WHY A FAKE CANNOT REPLACE IT
 The repository's provider tests run against fake SDK objects. They prove the
@@ -30,14 +38,23 @@ failures that only show up on the user's machine, with the user's key, after
 a release.
 
 WHAT IT TOUCHES
-* The network, and the user's paid quota at both providers. Roughly one
-  request per clip per provider plus one realtime session per clip.
+* The network, and the user's paid quota at every provider that has a key.
+  Roughly one request per clip per engine plus one realtime session per clip
+  for AssemblyAI and for Deepgram.
 * The API keys: read by the app's own `KeyringSecretStore` from the Windows
   credential manager and handed straight to `create_transcriber`. They are
   never printed, never logged and never written to the report.
+* The user's real `settings.json`, READ-ONLY and only for the non-secret
+  routing fields in `_release_check_provider_plan.REAL_SETTINGS_FIELDS`: the
+  AssemblyAI, Deepgram and Speechmatics regions, the Azure endpoint and the
+  custom endpoint with its model and API style. A check against another host
+  than the one the user's keys work on would prove nothing, and the Azure
+  endpoint and the custom base URL exist nowhere else. The file is read
+  before the redirect below, nothing is written to it, and the custom key
+  command is not read (it would run a command).
 * Nothing else. `APPDATA` and `LOCALAPPDATA` point at a throwaway folder
-  under %TEMP% before the first `stt_app` import, so the real settings,
-  history and recordings are unreachable.
+  under %TEMP% before the first `stt_app` import, so the real history and
+  recordings are unreachable.
 
 CLIPS AND LANGUAGES
 `--clip` is required and repeatable, because the repository's own
@@ -60,6 +77,7 @@ COMMAND LINE
     .venv\\Scripts\\python.exe scripts\\release_check_providers.py \\
         --clip C:\\clips\\de_sample.wav:de \\
         --clip C:\\clips\\en_sample.wav:en \\
+        --engine mistral --engine deepgram \\
         --report out.json
 """
 
@@ -67,6 +85,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
 import sys
 import threading
@@ -78,17 +97,32 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import _release_check_common as common
+import _release_check_provider_plan as plan
 
+# The real APPDATA, before the redirect below replaces it: the saved routing
+# settings are read from there (read-only).
+REAL_APPDATA = os.environ.get("APPDATA")
 SANDBOX = common.make_sandbox("stt_release_providers_")
 common.redirect_this_process_to(SANDBOX)
 common.add_src_to_sys_path()
 
+from stt_app.config import (  # noqa: E402
+    APP_NAME,
+    DEFAULT_ENGINE,
+    LEGACY_APP_NAME,
+    STREAMING_ENGINES,
+    VALID_ENGINES,
+)
 from stt_app.secret_store import KeyringSecretStore  # noqa: E402
 from stt_app.settings_store import AppSettings  # noqa: E402
 from stt_app.transcriber import base as transcriber_base  # noqa: E402
 from stt_app.transcriber.factory import create_transcriber  # noqa: E402
 
-PROVIDERS = ("assemblyai", "groq")
+# Every remote engine, in the app's own order; the local one needs no key.
+PROVIDERS = tuple(engine for engine in VALID_ENGINES if engine != DEFAULT_ENGINE)
+STREAMING_PROVIDERS = tuple(
+    engine for engine in STREAMING_ENGINES if engine != DEFAULT_ENGINE
+)
 LANGUAGE_TOKEN = re.compile(r"(?:auto|[A-Za-z]{2}(?:-[A-Za-z]{2})?)\Z")
 PREVIEW_CHARS = 60
 
@@ -147,8 +181,17 @@ def pcm16_mono_16k(path: Path) -> bytes:
         return handle.readframes(handle.getnframes())
 
 
-def settings_for(engine: str, language: str) -> AppSettings:
-    return replace(AppSettings(), engine=engine, language_mode=language, mode="batch")
+def settings_for(
+    engine: str, language: str, routing: dict[str, str] | None = None
+) -> AppSettings:
+    """The app's defaults, plus the user's saved regions and endpoints."""
+    return replace(
+        AppSettings(),
+        **(routing or {}),
+        engine=engine,
+        language_mode=language,
+        mode="batch",
+    )
 
 
 def close_quietly(transcriber, case: dict[str, object]) -> None:
@@ -170,7 +213,12 @@ def preview(text: str) -> str:
 
 
 def batch_case(
-    checks: common.Checks, engine: str, language: str, clip: Path, store
+    checks: common.Checks,
+    engine: str,
+    language: str,
+    clip: Path,
+    store,
+    routing: dict[str, str],
 ) -> dict[str, object]:
     name = f"{engine}.batch.{clip.name}.{language}"
     case: dict[str, object] = {
@@ -180,7 +228,9 @@ def batch_case(
         "clip": clip.name,
         **wav_info(clip),
     }
-    transcriber = create_transcriber(settings_for(engine, language), secret_store=store)
+    transcriber = create_transcriber(
+        settings_for(engine, language, routing), secret_store=store
+    )
     started = time.perf_counter()
     text = ""
     try:
@@ -206,17 +256,22 @@ def batch_case(
 
 
 def streaming_case(
-    checks: common.Checks, language: str, clip: Path, store
+    checks: common.Checks,
+    engine: str,
+    language: str,
+    clip: Path,
+    store,
+    routing: dict[str, str],
 ) -> dict[str, object]:
-    name = f"assemblyai.streaming.{clip.name}.{language}"
+    name = f"{engine}.streaming.{clip.name}.{language}"
     case: dict[str, object] = {
-        "engine": "assemblyai",
+        "engine": engine,
         "mode": "streaming",
         "language": language,
         "clip": clip.name,
         **wav_info(clip),
     }
-    settings = replace(settings_for("assemblyai", language), mode="streaming")
+    settings = replace(settings_for(engine, language, routing), mode="streaming")
     transcriber = create_transcriber(settings, secret_store=store)
     partials: list[tuple[float, str]] = []
     errors: list[str] = []
@@ -273,7 +328,9 @@ def streaming_case(
     return case
 
 
-def shutdown_case(checks: common.Checks, clip: Path, store) -> dict[str, object]:
+def shutdown_case(
+    checks: common.Checks, clip: Path, store, routing: dict[str, str]
+) -> dict[str, object]:
     """A quit during the AssemblyAI batch poll must end the wait quickly.
 
     This has to be the last case of the run: the flag it sets is process-wide
@@ -283,7 +340,7 @@ def shutdown_case(checks: common.Checks, clip: Path, store) -> dict[str, object]
     name = "assemblyai.quit_during_the_batch_poll"
     case: dict[str, object] = {"engine": "assemblyai", "scenario": name}
     transcriber = create_transcriber(
-        settings_for("assemblyai", "auto"), secret_store=store
+        settings_for("assemblyai", "auto", routing), secret_store=store
     )
     outcome: dict[str, object] = {}
 
@@ -337,9 +394,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Language for clips that name none of their own (default: auto).",
     )
     parser.add_argument(
+        "--engine",
+        action="append",
+        metavar="NAME",
+        help=(
+            "Limit the run to this engine; repeat for more "
+            f"({', '.join(PROVIDERS)}). Default: every engine."
+        ),
+    )
+    parser.add_argument(
         "--no-streaming",
         action="store_true",
-        help="Leave out the AssemblyAI realtime case, which runs in real time.",
+        help="Leave out the realtime cases (AssemblyAI, Deepgram), which run in real time.",
     )
     common.add_report_argument(parser)
     return parser
@@ -357,46 +423,60 @@ def main() -> int:
     checks.details["clips"] = [f"{path} ({language})" for path, language in clips]
     sys.stdout.write(f"sandbox: {SANDBOX}\n")
 
+    try:
+        engines = plan.select_engines(args.engine, PROVIDERS)
+    except ValueError as exc:
+        raise common.MissingPrerequisite(str(exc)) from exc
+
+    routing = plan.real_settings_fields(REAL_APPDATA, (APP_NAME, LEGACY_APP_NAME))
+    # Which fields were found, never their values: an endpoint can name a
+    # private resource.
+    checks.details["saved_routing_fields_used"] = sorted(routing)
     store = KeyringSecretStore()
-    available = {provider: store.has_api_key(provider) for provider in PROVIDERS}
+    available = {engine: store.has_api_key(engine) for engine in PROVIDERS}
     checks.details["providers_with_a_key"] = available
     cases: list[dict[str, object]] = []
     checks.details["cases"] = cases
 
-    def missing(provider: str) -> str:
-        return (
-            f"no {provider} key in the Windows credential manager; "
-            "store one in Settings > Remote"
-        )
+    def skip_for(engine: str) -> str | None:
+        if engine not in engines:
+            return "not selected with --engine"
+        return plan.skip_reason(engine, available[engine], routing)
 
     for clip, language in clips:
         for engine in PROVIDERS:
             name = f"{engine}.batch.{clip.name}.{language}"
-            if not available[engine]:
-                checks.skipped(name, missing(engine))
+            reason = skip_for(engine)
+            if reason:
+                checks.skipped(name, reason)
                 continue
             try:
-                cases.append(batch_case(checks, engine, language, clip, store))
+                cases.append(batch_case(checks, engine, language, clip, store, routing))
             except Exception as exc:
                 checks.crashed(name, exc)
-        name = f"assemblyai.streaming.{clip.name}.{language}"
-        if args.no_streaming:
-            checks.skipped(name, "--no-streaming was given")
-        elif not available["assemblyai"]:
-            checks.skipped(name, missing("assemblyai"))
-        else:
+        for engine in STREAMING_PROVIDERS:
+            name = f"{engine}.streaming.{clip.name}.{language}"
+            reason = (
+                "--no-streaming was given" if args.no_streaming else skip_for(engine)
+            )
+            if reason:
+                checks.skipped(name, reason)
+                continue
             try:
-                cases.append(streaming_case(checks, language, clip, store))
+                cases.append(
+                    streaming_case(checks, engine, language, clip, store, routing)
+                )
             except Exception as exc:
                 checks.crashed(name, exc)
 
     # Always last: the flag this sets is process-wide and never cleared.
     shutdown_name = "assemblyai.quit_during_the_batch_poll"
-    if not available["assemblyai"]:
-        checks.skipped(shutdown_name, missing("assemblyai"))
+    reason = skip_for("assemblyai")
+    if reason:
+        checks.skipped(shutdown_name, reason)
     else:
         try:
-            cases.append(shutdown_case(checks, clips[0][0], store))
+            cases.append(shutdown_case(checks, clips[0][0], store, routing))
         except Exception as exc:
             checks.crashed(shutdown_name, exc)
 

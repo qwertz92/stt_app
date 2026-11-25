@@ -65,7 +65,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/audio-capture.md` 
     refreshes only for `eCapture` (the callback's `flow`); an endpoint
     added, removed or changing state is looked up (`GetDevice`, then
     `IMMEndpoint::GetDataFlow`). An `eRender` one, and a new default output,
-    is reported as kind `output` (logged `audio_device_change_output
+    is reported as kind `output` (logged at DEBUG `audio_device_change_output
     event=... endpoint=...` for the former). A monitor, HDMI/DisplayPort
     audio, a dock or headphones used to close the idle warm microphone for
     nothing: 114-190 ms not running and 246-323 ms without a block per

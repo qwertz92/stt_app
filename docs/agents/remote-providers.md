@@ -9,9 +9,48 @@ history are in `docs/learning-log.md` and git history.
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.md` (original AGENTS.md: `df2642a`).
 
-- **AssemblyAI batch model**: send `speech_models`; `universal-3-5-pro` goes
-  alone, never with a silent `universal-2` fallback. Legacy
-  `universal-3-pro`/`best`/`nano` migrate to the default and are hidden.
+- **A vendor's superseded model is removed, and a saved choice of it is moved
+  once with a notice (2026-11-24, owner's rule).** The app offers a vendor's
+  newest generation only; an older model stays only for a reason written in
+  this file (clearly better at something, or far cheaper). The map is
+  `config.RETIRED_REMOTE_MODELS` (engine -> retired id -> successor).
+  `AppSettings.from_dict` applies it through `_current_remote_model`;
+  `SettingsStore.load` rewrites the file in the same call, so the move happens
+  once, and `take_model_notice` hands `main` one tray message ("Speech model
+  updated") for the engines the user uses (the selected one, or one with a
+  stored key: a file written before an engine existed carries its default for
+  everyone). An id that is neither current nor in the map is damage and falls
+  to the default without a notice. A history row keeps the model id it was made
+  with.
+- **AssemblyAI models (2026-11-24, pages read that day: `llms/models.md`,
+  `docs/openapi.json`, `docs/streaming/api-spec/streaming-websocket.md`,
+  `docs/streaming/select-the-speech-model.md`).** Batch: send `speech_models`;
+  `assemblyai-stt-3-7` ($0.21/h, 32 languages, same price as the deprecated
+  `universal-3-5-pro`) goes alone, never with a silent `universal-2`
+  fallback. `universal-3-5-pro` and `universal-3-pro` (deprecated by
+  AssemblyAI 2026-11-17; accounts whose default is one of them move to
+  STT-3.7 on 2026-12-08, while a `universal-2` default is not upgraded:
+  STT-3.7 migration guide, read 2026-11-25) move to it, and `best`/`nano` fall to it silently.
+  `universal-2` stays only as the cheaper choice for languages outside the 32.
+  - **Always send `disfluencies=false` and `format_text=true`.** STT-3.7
+    defaults `disfluencies` to true (the OpenAPI text: "Defaults to true when
+    `speech_models` includes `assemblyai-stt-3-7`"), which would put "um" and
+    false starts into dictated text; Universal-2 defaults to false. Sent for
+    both so no vendor default decides.
+  - **Language**: `language_code` (a pinned language) or `language_detection`
+    stays; `language_codes` replaces `language_detection_options.
+    expected_languages` only, which the app never sent. The 32 codes of
+    `ASSEMBLYAI_STT_3_7_LANGUAGE_MODES` are the streaming spec's accepted list;
+    AssemblyAI's OpenAPI spec also carries `yue`, `nn`, `xh`, `zu`.
+  - **Streaming**: `assemblyai-stt-3-7-realtime` ($0.30/h), not the `-agent`
+    voice-agent model ($0.45/h) and not `universal-3-6-pro`, which AssemblyAI
+    keeps supported as the previous generation. Same endpoint and message
+    protocol; the streaming spec has no `disfluencies` parameter, and the
+    prompting page says the transcription instruction is built in, so whether
+    filler words appear in streamed text is **unverified** (no key).
+  - **SDK 1.10.11** (was 1.6.1): the streaming `speech_model` is an enum, and
+    1.6.1 has no `assemblyai-stt-3-7-realtime` member, so `StreamingParameters`
+    would refuse it. 1.10.11 (2026-11-17) has no advisory on OSV on 2026-11-24.
 - **No remote batch wait may be unbounded; the AssemblyAI poll fetches a status
   and never calls something that waits.** `Transcript.wait_for_completion` is
   an unbounded loop and `Transcript.get_by_id` (SDK 0.64.33) calls it (still
@@ -98,19 +137,37 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
   proxy while the SDK worked. `format_ssl_error_message` is the shared text
   (names `SSL_CERT_FILE` too).
-- **ElevenLabs**: `scribe_v2` only; `scribe_v1` (removed 2026-07-09) migrates
-  and is never sent.
-- **Azure LLM Speech roster = Microsoft's table; an unconfigured Azure engine
-  moves to the default once (schema 24, 2026-09-19).** One engine (no MAI API
-  outside Azure): `mai-transcribe-2` (default, 60 languages),
-  `mai-transcribe-1.5` (43), `mai-transcribe-1` (selectable, "Deprecated on
-  Aug 20, 2026", labelled).
+- **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
+  like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
+  models page says "Change model_id from scribe_v2 to scribe_v3. Existing
+  request parameters work without changes", and the OpenAPI `model_id`
+  examples list `scribe_v3`). `scribe_v2` (still sold) is removed by the
+  newest-generation rule: nothing in it is better or cheaper. A saved
+  `scribe_v2` moves to v3 with a notice; `scribe_v1` (removed 2026-07-09)
+  falls to the default and is never sent. `scribe_v3_live` (realtime,
+  $0.22/h) is not built. **Not verified live**: no key, so the v3 batch answer
+  is read as v2's (`text`).
+- **Azure LLM Speech offers `mai-transcribe-2` only (2026-11-24; Microsoft's
+  MAI-Transcribe page, updated 2026-11-20, and microsoft.ai/news/
+  mai-transcribe-2, read that day).** One engine (no MAI API outside Azure).
+  The page still lists `MAI-Transcribe-1.5` and "`MAI-Transcribe-1`:
+  Deprecated on Aug 20, 2026"; both are removed from the app (older, fewer
+  languages, 1.5 at $0.36/h) and a saved choice moves to MAI-2 with a notice.
+  **The $0.10/h price is a promotion**: "priced at $0.10 per hour as a
+  limited-time offer until the end of the year" (2026); no 2027 price is
+  published, so MAI-2 may end up dearer. Re-judge 1.5 ($0.36/h) when Microsoft
+  names it. The request is `enhancedMode.enabled`, `enhancedMode.model`,
+  api-version 2025-10-15 on the page, plus `enhancedMode.modelOptions.
+  transcribeStyle = "clean"` (added 2026-11-25): the page documents it for
+  MAI-Transcribe-2 with values "verbatim" (default, "including filler words
+  and false starts") and "clean" ("removes fillers"), and its example request
+  nests it exactly there. Pinned by `tests/test_azure_provider.py`.
+  **Untested against the live service** (no key): whether the service
+  accepts it on every resource and what "clean" does to the text is open.
   - Settings store the lower-case id; `AZURE_API_MODEL_NAMES` holds the
     documented spelling that is sent (e.g. `MAI-Transcribe-2`).
   - Languages follow that table via `AZURE_LOCALE_OVERRIDES` (`no` -> `nb`,
     `tl` -> `fil`); a test compares the *sent* codes per model both ways.
-  - Schema 24: a pre-24 file without `azure_endpoint` adopts the default;
-    with one it keeps its model (MAI-2 is $0.10/h vs $0.36/h).
   - **Socket timeout = 120 s + the recording's duration** (2026-10-03). The
     request is synchronous and Microsoft documents only "faster than
     real-time" (fast-transcription page, read 2026-10-03; no figure, no
@@ -120,21 +177,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     Mistral instead shortens its parts to fit a fixed 300 s.
   - **Not verified live** (`docs/azure-llm-speech.md` says so). No phrase
     list is sent, so custom vocabulary stays unwired.
-- **OpenAI: `gpt-transcribe` is the default and the only model with a
-  different request shape (schema 25, 2026-09-21).** Offered with
-  `whisper-1`, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe` (removed from the
-  API 2027-02-26, labelled); not `gpt-4o-transcribe-diarize` (no speaker UI)
-  or realtime-only `gpt-live-transcribe`.
-  - **Branch on `OPENAI_ARRAY_FIELD_MODELS`**: `gpt-transcribe` sends
-    `languages[]=<code>` (never also `language`) and one `keywords[]` per
-    term; older models send `language` + comma-joined `prompt` (pinned by a
-    multipart-parsing test).
+- **OpenAI: `gpt-transcribe` is the only model (2026-11-24; pages read that
+  day: guides/speech-to-text, models/gpt-transcribe, deprecations).**
+  `whisper-1`, `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` (and
+  `gpt-4o-transcribe-diarize`, removed 2027-04-01) are on OpenAI's deprecations
+  page with removal on 2027-02-26 and replacement "gpt-live-transcribe or
+  gpt-transcribe". They are removed from the app now and a saved choice moves
+  to `gpt-transcribe` with a notice. The only one with a price argument was
+  `gpt-4o-mini-transcribe`: $0.003/min ($0.18/h, read 2026-09-21) against
+  $0.0045/min ($0.27/h), a third less, not "far cheaper", and the pricing page
+  no longer lists it, so nothing to cite. Re-add it only if OpenAI republishes
+  a price and the removal date moves. `gpt-live-transcribe` is a realtime
+  session model and does not answer on this endpoint.
+  - **One request shape**: `languages[]=<code>` (never also `language`) and one
+    `keywords[]` per term. The comma-joined `prompt` branch and the 180 s
+    token-cap part limit of the two `gpt-4o` models are gone with them.
   - **Drop terms containing `<`, `>`, CR or LF** (one rejects the whole
     request); log the count once at INFO, never the terms.
     `parse_custom_vocabulary` does not split on CR.
-  - All four models use the engine's language list.
-  - Schema 25 = schema 24 with `has_openai_key` for the endpoint (pre-25
-    files carry `gpt-4o-mini-transcribe`).
+  - The language list is the engine's (OpenAI's guide enumerates only code
+    formats). The schema-25 adoption (an OpenAI file without a key took the
+    default) is gone: every retired id moves, with or without a key.
   - **Not verified live** (no OpenAI key).
 - **Soniox was not added (2026-09-21)**: a new provider must be both more
   accurate and cheaper than what is offered (MAI-Transcribe-2 and ElevenLabs
@@ -159,20 +222,29 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Melia 1 is the default model** because the app's default language is
     Auto: Melia "does not support the `auto` option", so Auto is sent as
     `"language": "multi"` and a chosen language as `language_hints`. Enhanced
-    ("the highest accuracy") and Standard offer no Auto, because automatic
+    ("the highest accuracy") offers no Auto, because automatic
     identification needs "at least 60 seconds of speech" and rejects the job
     otherwise; a stored Auto reaching them is sent as `de`, as the Cohere
     runtime does. `zh` is sent as `cmn`; the bilingual packs (`tl` is one),
     `eo`, `ia` and `ug` are not offered.
-  - **The custom vocabulary is per model**: Enhanced and Standard send it as
+  - **The custom vocabulary is per model**: Enhanced sends it as
     `additional_vocab` `{"content": term}` entries; Melia's custom dictionary
     is "Not yet.", so `config.CUSTOM_VOCABULARY_EXCLUDED_MODELS` makes
     `supports_custom_vocabulary` answer False for it, the factory does not
     hand the terms over, and the controller identity ignores them there.
   - **Region** `speechmatics_region`: `eu1` (default), `us1`, `au1`, read
     through `config.normalize_speechmatics_region`; the enterprise-only
-    `eu2`/`us2` are not offered. Melia in `au1` is refused at construction
-    ("EU and US regions only"), before an upload that could only be rejected.
+    `eu2`/`us2` are not offered. Melia 1 runs in every region (models page, read
+    2026-11-24: "Melia 1 is available in all regions", `au1` batch endpoint
+    listed; the page of 2026-09-27 said EU and US only), so the refusal at
+    construction and its dialog warning are gone. **Unverified live**.
+  - **`standard` is removed (2026-11-24; models and pricing pages read that
+    day).** Melia 1's accuracy is "on par with the Standard model", batch
+    list price is $0.24/h against $0.45/h, and Enhanced ($0.75/h) has the same
+    features as Standard at higher accuracy. A saved `standard` moves to Melia
+    1 with a notice; its custom dictionary does not carry over (Melia has
+    none), so move to Enhanced if that mattered. Judgement call: Speechmatics
+    still sells Standard ("for throughput"), it is not deprecated.
     A slot of the runtime identity through `_ENGINE_REGION_FIELDS`.
   - **Parts**: at most 1800 s and 999,000,000 bytes per job ("less than 1 GB";
     no duration limit is stated), so one job stays well inside the wait
@@ -183,10 +255,32 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
 - **Mistral is one synchronous request (`mistral_provider.py`, 2026-10-01).**
   `POST https://api.mistral.ai/v1/audio/transcriptions`, multipart `model`,
   `file`, optional `language`, repeated `context_bias`; the answer's `text`.
-  Model `voxtral-mini-2602` (Voxtral Mini Transcribe 2, released 2026-02-04,
-  $0.003/min), pinned rather than `voxtral-mini-latest`. Rules:
-  - **13 languages** (Mistral's announcement), plus Auto (no `language`
-    field); any other code is sent as Auto.
+  Models (2026-11-24; read: mistral.ai/news/voxtral-3, docs.mistral.ai models
+  page and `llms/studio/audio/*` pages): `voxtral-mini-transcribe-3-0`
+  (default, $0.0035/min) and `voxtral-small-transcribe-3` ($0.0040/min,
+  slightly more accurate), pinned rather than the `-latest` aliases.
+  **Small's id was settled 2026-11-25** from the `llms/studio/audio/*` pages
+  read raw: the file-transcription page's `model` field says
+  "`voxtral-mini-transcribe-3` or `voxtral-small-transcribe-3`" (its
+  request examples only use Mini, as `voxtral-mini-transcribe-3`), and the Voxtral 3 migration table lists
+  `voxtral-small-transcribe-3` as an alias of Small, while giving its Model ID
+  as `voxtral-small-transcribe-latest` (and Mini's as the dated
+  `voxtral-mini-transcribe-3-0`). Only the models and languages pages write
+  `voxtral-small-transcribe-3-0`; the API reference page still shows the old
+  `voxtral-mini-latest`/`-2507` ids (stale). So Small is sent as
+  `voxtral-small-transcribe-3`, and Mini keeps the dated id because the
+  migration page documents both forms as valid for it. **Unverified live**:
+  whether the service accepts each id was not tested.
+  `voxtral-mini-2602` is deprecated (retirement "05/03/2027", day/month order
+  not stated) and moves to Mini 3 with a notice; its migration table lists
+  Mini 3 as the replacement. Same route and fields; the Voxtral 3 migration
+  page lists no change to `context_bias` ("No" breaking change; entries may
+  now be phrases, "no fixed number", but a request over the 65,536-token
+  window shared with the audio is a 400) or to `text`; word timestamps are
+  gone, which this app never asked for. Rules:
+  - **53 languages** (the languages page for both models), plus Auto (no
+    `language` field); a code outside it is a 422, so any other code is sent
+    as Auto.
   - **The custom vocabulary is `context_bias`**, one repeated field per term
     (up to 100, the app's cap as well; "optimized for English ... experimental"
     for other languages). Repeated fields, not `context_bias[]` and not a
@@ -201,18 +295,23 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     without a string `text`, or a body that is not JSON. `"text": ""` is a
     valid empty answer. One reader for both providers asked for JSON,
     `_http_utils.transcript_from_json`, with `is_markup_page` (below).
-  - **No region**: `api.eu.mistral.ai` lists no audio route, and of the global
-    endpoint "Mistral does not commit to a specific inference location"
-    (regional-inference page, read 2026-09-27).
+  - **No region (yet)**: Mistral now documents regional endpoints
+    (`api.eu.mistral.ai`, `api.us.mistral.ai`, +10 % price, "Available models
+    vary by region", read 2026-11-24) and the Voxtral 3 announcement says it
+    is "hosted through our European, US, and global endpoints"; the global one
+    still "does not commit to a specific inference location". Whether the EU
+    host answers `/v1/audio/transcriptions` is unverified (no key, and no
+    model list was read), so no region picker is built; it is a candidate.
   - **Parts**: 1800 s and 500,000,000 bytes ("60 minutes", "500 MB"), with a
     300 s socket timeout for the synchronous request.
   - **Not verified live**: no Mistral key exists here.
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
-  16 kHz WAV); `gpt-4o-transcribe`/`gpt-4o-mini-transcribe` (2,000 output
-  tokens) truncate silently. `config.remote_batch_part_limit(engine, model)`
-  is the single answer (engine seconds + byte cap, tighter per-model seconds,
-  180 s for the token-capped two; vendor figures beside the constants).
+  16 kHz WAV). `config.remote_batch_part_limit(engine, model, api_mode)`
+  is the single answer (engine seconds + byte cap, the custom endpoint's chat
+  style tighter; vendor figures beside the constants; `model` is unused since
+  the two token-capped OpenAI models went, on 2026-11-24, and kept so that no
+  caller changes).
   `transcriber/_audio_parts.transcribe_in_parts` wraps the provider's own
   single-request method.
   - **Within both limits the recording goes out untouched** (same object,
@@ -318,7 +417,41 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     key; the AssemblyAI key was not used). Deepgram's page names the REST
     host only; `wss://api.eu.deepgram.com/v1/listen` is derived from it.
     AssemblyAI's pages say nothing about key or model availability in the EU,
-    so whether Universal-3.6 Pro streams there is open.
+    so whether STT-3.7-Realtime streams there is open; the streaming
+    data-zone page (read 2026-11-24) lists `streaming.eu.assemblyai.com`
+    without a per-model note.
+- **Fun-ASR host: something to watch (2026-11-25).** Alibaba's WebSocket guide
+  now lists the Singapore endpoint as
+  `wss://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference`
+  (a workspace-specific host, `{WorkspaceId}` being the user's own Workspace
+  ID) and says to migrate from `dashscope-intl.aliyuncs.com` to it, without
+  announcing a retirement of the old host. `FUNASR_WS_URL_INTL` still uses
+  `dashscope-intl.aliyuncs.com`; changing it would need a new setting for the
+  Workspace ID, so nothing was changed. If Fun-ASR requests start failing to
+  connect, this is the first thing to check. **Unverified live.**
+- **Deepgram offers `nova-3` only; Groq is unchanged (2026-11-24).**
+  Deepgram's models page (read that day) still sells `nova-2` "for use cases
+  with languages not yet supported by nova-3", but all 34 languages the app
+  offered for nova-2 are in nova-3's list (compared against the page's
+  tables), so nova-2 is removed and a saved choice moves to nova-3 with a
+  notice. That also drops the `keywords` vocabulary parameter nova-2 needed;
+  nova-3's `keyterm` is the only path. Nova-2's filler-word identification is
+  not used by the app. Flux (`flux-general-en`, `flux-general-multi` with ten
+  languages) is a conversational voice-agent model and not offered. Groq's
+  speech-to-text page and deprecations page (read that day) list only
+  `whisper-large-v3` and `whisper-large-v3-turbo` as current (the `-en`
+  variants were retired 2025-08-23), which is what the app offers.
+  - **Deepgram keyterm limit (2026-11-25, keyterm page).** "Key Terms are
+    limited to 500 tokens per request"; an over-limit pre-recorded request
+    or streaming connection returns "Keyterm limit exceeded". The app's
+    100-term cap is not a token cap, so `deepgram_provider.fit_keyterms`
+    keeps the leading terms whose estimate fits `DEEPGRAM_KEYTERM_TOKEN_BUDGET`
+    (400, a 20 % margin) and drops the rest from the end, with one warning in
+    the log per transcriber. Deepgram's tokenizer is not public; the estimate
+    is one token per term plus one per three characters of each word, which
+    over-counts common words. With 12-letter terms that keeps 80 of 100.
+    The page also advises 20 to 50 terms in practice. **Unverified live**:
+    the real tokenizer may count differently.
 - **Deepgram streaming holds its socket open with a KeepAlive while no audio
   goes out (2026-10-17).** Since 2026-10-10 a starved machine may hand the
   capture's audio over up to 12 s late, so the socket is open and silent for

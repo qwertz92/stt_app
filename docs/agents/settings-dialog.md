@@ -54,7 +54,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   off** (VAD threshold, start and completion tone): `toggled` -> `setEnabled`,
   synced once at build (`setChecked(False)` emits nothing). **The
   silence-gate threshold is not linked**: streaming reads it with the gate
-  off.
+  off. The reason is on screen (2026-11-24): the VAD hint turns into "Used
+  only while auto-stop is on."; each tone picker sits beside its checkbox, so a
+  greyed picker explains itself and the tab needs no scrollbar at 860x960 or
+  801 wide (scroll range 41 and 71 px with the hints on their own rows, 0 now).
+- **Notes say facts in the neutral grey, problems in red** (2026-11-24): the
+  Transcription tab's model note is red only for the `unavailable_reason`
+  branch; "Batch mode only ..." (WebGPU) and the Nemotron chunk note are
+  information. The Providers tab says in visible text what "Save API Keys"
+  stores (keys, endpoints, regions of that tab) and that the other tabs still
+  need Save. The Import Audio tab says once, under Language, that service,
+  model and language apply to the imported file only; the local engine note
+  is hidden, and the tab's content is top-aligned so the note's coming
+  and going moves only what lies below it. The benchmark case caption names what Run Benchmark still waits
+  for ("choose an audio file", "tick a model").
+- **One name for the history limit, one empty state** (2026-11-24): "History
+  limit" on both History surfaces (`HISTORY_LIMIT_LABEL`); an empty list shows
+  `HISTORY_EMPTY_TEXT` through `ui_feedback.EmptyListNotice`, a label on the
+  view's viewport, not a row or span the refresh logic must know about.
+- **Mode is the first row of "Engine && Mode" and filters Engine and Model**
+  (2026-11-24): in Streaming, engines and local models that cannot stream
+  are hidden (`QListView.setRowHidden`) and disabled (a hidden row is still
+  reached by the arrow keys on a closed combo), except the current
+  selection, which stays and is flagged in red in the Model row's reserved
+  note. Never flip the mode or the model to make a combination valid. The
+  Mode hint's two texts (`_MODE_HINTS`) are kept about as long so a switch
+  does not change the row height. Rule and reasons:
+  `docs/agents/streaming.md`, "In Settings the mode is chosen first".
 - **Model selection is on the Transcription tab; Models only manages.** One
   "Model" row hosts `model_selector_stack`: page 0 `model_combo` +
   `local_model_runtime_warning_label`, page 1 `remote_model_combo` /
@@ -152,6 +178,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   delivery must start and show nothing: `_request_local_model_scan` and
   `_start_local_model_download` refuse after `_shutdown_started`, and
   `_on_update_check_finished` shows no modal then.
+  - It is built ahead, `main._SETTINGS_PREBUILD_DELAY_MS` (2.5 s) after the
+    tray, on the Qt thread: `build_ui` took 2.4-3.3 s in the owner's log
+    (0.9 s once), during which a hotkey press, a finished transcription and
+    its paste wait. Since 2026-11-24 the prebuild waits, 2.5 s at a time,
+    while `controller.has_active_session()` (a recording or its foreground
+    transcription); opening Settings meanwhile still builds at once. Not
+    done: building the tabs over several event-loop turns, which would
+    remove the window entirely (~3-4 h, every tab mixin's build order).
 - **No settings-dialog stylesheet sets `font-size`** (ignores Windows' "Text
   size"); hints use `settings_dialog_helpers.hint_font()` (0.92 of the app
   font).
@@ -241,8 +275,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   has applied the box. The Test button differs on purpose: a test runs now,
   against the store's present state. For the custom endpoint a key command counts, as
   `CustomEndpointTranscriber` requires one of the two), then Azure's
-  endpoint, then Speechmatics Melia 1 outside eu1/us1
-  (`config.speechmatics_model_available_in`, the transcriber's own check). `_update_remote_model_note` shows it in red in place of the
+  endpoint (Speechmatics Melia 1 had a region rule until 2026-11-24, now
+  removed). `_update_remote_model_note` shows it in red in place of the
   model note, inside the same two reserved lines, so nothing moves; it is
   re-run on an engine/mode/model change, every key-row refresh of the
   selected engine, a region change, and edits of the Azure endpoint, base

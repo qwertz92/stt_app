@@ -24,14 +24,12 @@ from ..config import (
     SPEECHMATICS_BATCH_MAX_WAIT_S,
     SPEECHMATICS_LANGUAGE_CODES,
     SPEECHMATICS_MELIA_MODEL,
-    SPEECHMATICS_MELIA_UNAVAILABLE_TEXT,
     SPEECHMATICS_MODELS,
     SPEECHMATICS_POLL_INTERVAL_S,
     language_modes_for_selection,
     normalize_speechmatics_region,
     parse_custom_vocabulary,
     remote_batch_part_limit,
-    speechmatics_model_available_in,
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
@@ -61,7 +59,7 @@ _TERMINAL_STATUSES = ("done", "rejected", "deleted", "expired")
 # key is refused, or the job is gone ("404 ... status of `expired`", "410
 # Gone: File Expired / File deleted from the storage").
 _FINAL_HTTP_CODES = (401, 403, 404, 410)
-# Enhanced and Standard need a chosen language (`SPEECHMATICS_LANGUAGE_MODES`
+# Enhanced needs a chosen language (`SPEECHMATICS_LANGUAGE_MODES`
 # has no Auto). A stored Auto reaching them -- a settings file written while
 # Melia or another engine was selected -- is sent as German, the app's
 # primary language, as the Cohere runtime does.
@@ -96,17 +94,10 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
         )
         self._region = normalize_speechmatics_region(region)
-        if not speechmatics_model_available_in(self._model, self._region):
-            # "Melia 1 is available for Batch transcription in the EU and US
-            # regions only": the job could only be rejected after the upload.
-            raise TranscriptionError(
-                f"{SPEECHMATICS_MELIA_UNAVAILABLE_TEXT} Choose the eu1 or us1 "
-                "region, or the Enhanced or Standard model."
-            )
         self._base_url = f"https://{SPEECHMATICS_API_HOSTS[self._region]}/v2"
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
-        # Sent by Enhanced and Standard only (`_job_config`); Melia's custom
+        # Sent by Enhanced only (`_job_config`); Melia's custom
         # dictionary is "Not yet.", and the factory does not hand it the terms.
         self._vocabulary = parse_custom_vocabulary(custom_vocabulary)
         self._silence_gate_threshold = float(silence_gate_threshold)
@@ -128,7 +119,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
 
         Melia: `"language": "multi"` with an optional `language_hints` list --
         the page's own example is `{"model": "melia-1", "language": "multi",
-        "language_hints": ["en", "ar"]}`. Enhanced and Standard: the language
+        "language_hints": ["en", "ar"]}`. Enhanced: the language
         code, plus `additional_vocab` entries for the custom vocabulary (up to
         20,000 items; the app sends at most 100).
         """

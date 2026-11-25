@@ -87,6 +87,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   spin boxes disable keyboard tracking (no trim prompt at an intermediate
   `3`). Re-clicking History re-presents the dialog with `reload(force=True)`,
   keeping selection and scroll; never a second dialog.
+- **History texts exist once, in `history_ui_actions.py`** (2026-11-24): the
+  count label ("1 entry stored (limit 3000)", singular and plural right), the
+  limit's name, the empty-state text and the engine/model names the lists show
+  (`history_engine_label`, `history_model_label`: the pickers' names, not the
+  stored ids; the stored entry keeps its ids).
 - **History export/import/clear exists once, in `history_ui_actions.py`**,
   for both views (incl. "import only free slots" vs "import all and set
   unlimited"). The Settings tab persists a switch to unlimited at once (via

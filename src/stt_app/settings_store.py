@@ -73,6 +73,7 @@ from .config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEVICE_AWARE_LOCAL_MODELS,
     ELEVENLABS_MODELS,
+    ENGINE_LABELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
@@ -84,9 +85,11 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    RETIRED_REMOTE_MODELS,
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
+    SPEECHMATICS_MELIA_MODEL,
     SPEECHMATICS_MODELS,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
@@ -128,8 +131,6 @@ logger = logging.getLogger(__name__)
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
 _SILENCE_GATE_DEFAULT_SCHEMA_VERSION = 22
-_AZURE_MODEL_DEFAULT_SCHEMA_VERSION = 24
-_OPENAI_MODEL_DEFAULT_SCHEMA_VERSION = 25
 _LEGACY_DEFAULT_HISTORY_MAX_ITEMS = 20
 
 DEFAULTS = {
@@ -229,6 +230,59 @@ def _text_setting(value: Any) -> str:
     Python repr as an endpoint or a command line.
     """
     return value.strip() if isinstance(value, str) else ""
+
+
+def _current_remote_model(
+    engine: str, stored: str, valid: tuple[str, ...], default: str
+) -> str:
+    """The model a stored choice stands for today.
+
+    A model the app retired moves to its successor
+    (`config.RETIRED_REMOTE_MODELS`); any other value this build does not
+    offer is damage and becomes the engine's default.
+    """
+    stored = RETIRED_REMOTE_MODELS.get(engine, {}).get(stored, stored)
+    return stored if stored in valid else default
+
+
+def retired_model_notice(raw: dict[str, Any]) -> str:
+    """One line per retired model a saved choice moves away from; "" if none.
+
+    Only for an engine the user uses: the selected one, or one with a stored
+    key. A file written before the engine existed carries its default for
+    everyone (`openai_model` once did), and telling a user about a provider
+    they never set up is noise. Reads the file's own values, before
+    `AppSettings.from_dict` replaces them.
+    """
+    lines: list[str] = []
+    selected = str(raw.get("engine", DEFAULT_ENGINE)).lower()
+    for engine, retired in RETIRED_REMOTE_MODELS.items():
+        stored = raw.get(_REMOTE_MODEL_FIELDS[engine])
+        successor = retired.get(stored.strip()) if isinstance(stored, str) else None
+        if successor is None:
+            continue
+        if selected != engine and not parse_json_bool(raw.get(f"has_{engine}_key")):
+            continue
+        line = (
+            f"{ENGINE_LABELS[engine]}: {stored.strip()} is no longer offered, "
+            f"your choice is now {successor}."
+        )
+        vocabulary = raw.get("custom_vocabulary")
+        if (
+            engine == "speechmatics"
+            and successor == SPEECHMATICS_MELIA_MODEL
+            and isinstance(vocabulary, str)
+            and vocabulary.strip()
+        ):
+            # Melia 1 has no custom dictionary; the move stays on Melia 1
+            # because Enhanced costs three times as much (nothing is raised
+            # without the user's say), so the notice names the difference.
+            line += (
+                " Melia 1 does not use your custom vocabulary; "
+                "Speechmatics Enhanced does (pick it in Settings)."
+            )
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _exact_int_or_none(value: Any) -> int | None:
@@ -458,67 +512,54 @@ class AppSettings:
         groq_model = str(merged.get("groq_model", DEFAULT_GROQ_MODEL))
         if groq_model not in GROQ_MODELS:
             groq_model = DEFAULT_GROQ_MODEL
-        openai_model = str(merged.get("openai_model", DEFAULT_OPENAI_MODEL))
-        if openai_model not in OPENAI_MODELS:
-            openai_model = DEFAULT_OPENAI_MODEL
-        # Read here rather than only at the bottom: the OpenAI migration below
-        # is keyed on it, and parsing the same field twice would let the two
-        # readings drift.
-        has_openai_key = parse_json_bool(merged.get("has_openai_key"))
-        if (
-            raw_schema_version < _OPENAI_MODEL_DEFAULT_SCHEMA_VERSION
-            and not has_openai_key
-        ):
-            # Same rule as the Azure one below, with the key flag in the
-            # endpoint's place: every file written before `gpt-transcribe`
-            # existed carries `gpt-4o-mini-transcribe` for everyone, so the
-            # stored value is not a choice -- and without a stored OpenAI key
-            # the engine could never run, so nothing was chosen. Adopt the
-            # current default once; a file that shows OpenAI was configured,
-            # and every file saved from now on, keeps its model. It matters
-            # because the three older ids are removed from the API on
-            # 2027-02-26: left alone, adding a key later would pick a model
-            # with an expiry date.
-            openai_model = DEFAULT_OPENAI_MODEL
-        deepgram_model = str(merged.get("deepgram_model", DEFAULT_DEEPGRAM_MODEL))
-        if deepgram_model not in DEEPGRAM_MODELS:
-            deepgram_model = DEFAULT_DEEPGRAM_MODEL
-        assemblyai_model = str(merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL))
-        if (
-            assemblyai_model == "universal-3-pro"
-            or assemblyai_model not in ASSEMBLYAI_MODELS
-        ):
-            assemblyai_model = DEFAULT_ASSEMBLYAI_MODEL
-        elevenlabs_model = str(merged.get("elevenlabs_model", DEFAULT_ELEVENLABS_MODEL))
-        if elevenlabs_model not in ELEVENLABS_MODELS:
-            elevenlabs_model = DEFAULT_ELEVENLABS_MODEL
-        azure_speech_model = str(
-            merged.get("azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL)
+        openai_model = _current_remote_model(
+            "openai",
+            str(merged.get("openai_model", DEFAULT_OPENAI_MODEL)),
+            OPENAI_MODELS,
+            DEFAULT_OPENAI_MODEL,
         )
-        if azure_speech_model not in AZURE_SPEECH_MODELS:
-            azure_speech_model = DEFAULT_AZURE_SPEECH_MODEL
+        deepgram_model = _current_remote_model(
+            "deepgram",
+            str(merged.get("deepgram_model", DEFAULT_DEEPGRAM_MODEL)),
+            DEEPGRAM_MODELS,
+            DEFAULT_DEEPGRAM_MODEL,
+        )
+        assemblyai_model = _current_remote_model(
+            "assemblyai",
+            str(merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL)),
+            ASSEMBLYAI_MODELS,
+            DEFAULT_ASSEMBLYAI_MODEL,
+        )
+        elevenlabs_model = _current_remote_model(
+            "elevenlabs",
+            str(merged.get("elevenlabs_model", DEFAULT_ELEVENLABS_MODEL)),
+            ELEVENLABS_MODELS,
+            DEFAULT_ELEVENLABS_MODEL,
+        )
+        azure_speech_model = _current_remote_model(
+            "azure",
+            str(merged.get("azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL)),
+            AZURE_SPEECH_MODELS,
+            DEFAULT_AZURE_SPEECH_MODEL,
+        )
         azure_endpoint = str(
             merged.get("azure_endpoint", DEFAULT_AZURE_ENDPOINT)
         ).strip()
-        if (
-            raw_schema_version < _AZURE_MODEL_DEFAULT_SCHEMA_VERSION
-            and not azure_endpoint
-        ):
-            # Every file written before MAI-Transcribe-2 existed carries the
-            # previous default for everyone, so the stored model is not a
-            # choice -- and without an endpoint the engine could never run,
-            # so nothing was chosen. Adopt the current default once; a file
-            # with an endpoint, or one saved from now on, keeps its model.
-            azure_speech_model = DEFAULT_AZURE_SPEECH_MODEL
         funasr_model = str(merged.get("funasr_model", DEFAULT_FUNASR_MODEL))
         if funasr_model not in FUNASR_MODELS:
             funasr_model = DEFAULT_FUNASR_MODEL
-        speechmatics_model = _text_setting(merged.get("speechmatics_model"))
-        if speechmatics_model not in SPEECHMATICS_MODELS:
-            speechmatics_model = DEFAULT_SPEECHMATICS_MODEL
-        mistral_model = _text_setting(merged.get("mistral_model"))
-        if mistral_model not in MISTRAL_MODELS:
-            mistral_model = DEFAULT_MISTRAL_MODEL
+        speechmatics_model = _current_remote_model(
+            "speechmatics",
+            _text_setting(merged.get("speechmatics_model")),
+            SPEECHMATICS_MODELS,
+            DEFAULT_SPEECHMATICS_MODEL,
+        )
+        mistral_model = _current_remote_model(
+            "mistral",
+            _text_setting(merged.get("mistral_model")),
+            MISTRAL_MODELS,
+            DEFAULT_MISTRAL_MODEL,
+        )
         custom_api_mode = (
             str(merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)).strip().lower()
         )
@@ -754,7 +795,7 @@ class AppSettings:
             ),
             overlay_corner=overlay_corner,
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
-            has_openai_key=has_openai_key,
+            has_openai_key=parse_json_bool(merged.get("has_openai_key")),
             has_deepgram_key=parse_json_bool(merged.get("has_deepgram_key")),
             has_assemblyai_key=parse_json_bool(merged.get("has_assemblyai_key")),
             has_groq_key=parse_json_bool(merged.get("has_groq_key")),
@@ -860,6 +901,10 @@ class SettingsStore:
         # the overlay pin button and the opacity slider all do -- writes them
         # back instead of deleting a newer build's settings.
         self._unknown_keys: dict[str, object] = {}
+        # Set by a `load` that moved a retired model choice; shown once at
+        # the next start (`take_model_notice`). The same load rewrites the
+        # file, so a later start finds nothing to move.
+        self._model_notice = ""
 
     @property
     def path(self) -> Path:
@@ -907,6 +952,7 @@ class SettingsStore:
 
             raw = dict(payload)
 
+            self._model_notice = retired_model_notice(raw) or self._model_notice
             settings = AppSettings.from_dict(raw)
             payload = settings.to_dict()
             # Keys this build does not know are a newer build's, and dropping
@@ -942,6 +988,11 @@ class SettingsStore:
                     )
 
             return settings
+
+    def take_model_notice(self) -> str:
+        """The notice about retired models `load` moved, once; "" afterwards."""
+        notice, self._model_notice = self._model_notice, ""
+        return notice
 
     def _payload_for_save(
         self,

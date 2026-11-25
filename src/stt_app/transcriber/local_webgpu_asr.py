@@ -1129,6 +1129,12 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self._runtime_fallback_details: list[str] = []
         self._cpu_fallback_restarts = 0
         self.runtime_warning = ""
+        # Milliseconds spent in runner starts that reached "ready" (spawn plus
+        # model load), summed. The controller reads it around a transcription,
+        # so a load inside it -- after a wake closed the kept runtime, or with
+        # "Keep ONNX model loaded" off -- is logged as load time and not as
+        # transcription time (a CPU-fallback restart adds its second start).
+        self.runtime_start_ms_total = 0
 
     @property
     def runtime_device(self) -> str:
@@ -1403,6 +1409,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 )
 
     def _start_process(self) -> None:
+        started_at = time.monotonic()
         snapshot = self._ensure_snapshot()
         node_path = self._node_executable()
         runner = self._runner_file()
@@ -1443,6 +1450,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             ready.get("gpuAvailable"),
             ready.get("fallbackErrors"),
         )
+        self.runtime_start_ms_total += round((time.monotonic() - started_at) * 1000)
         self._emit_progress(self.runtime_status_text())
 
     def _spawn_runner(

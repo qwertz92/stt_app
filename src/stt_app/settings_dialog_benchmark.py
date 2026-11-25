@@ -1369,7 +1369,7 @@ class _BenchmarkMixin:
         audio_layout.addWidget(self.benchmark_audio_status_label)
         audio_help = QtWidgets.QLabel(
             "Use a representative sample. The benchmark measures model speed and runtime factor on this file. "
-            "Cohere and Granite require WAV input in the Node runtime."
+            "The Cohere and Granite models can only read WAV files."
         )
         audio_help.setWordWrap(True)
         self._style_note_label(audio_help)
@@ -1784,10 +1784,27 @@ class _BenchmarkMixin:
                 item = QtWidgets.QTableWidgetItem(value)
                 item.setToolTip(value)
                 table.setItem(row, column, item)
-        count = len(planned)
-        self.benchmark_plan_caption_label.setText(
-            "1 case will run" if count == 1 else f"{count} cases will run"
-        )
+        self._benchmark_plan_count = len(planned)
+        self._refresh_benchmark_plan_caption()
+
+    def _refresh_benchmark_plan_caption(self) -> None:
+        """The case count, plus what Run Benchmark is still waiting for.
+
+        The Run button is greyed without a word of its own, so the line above
+        the case list says what is missing.
+        """
+        count = getattr(self, "_benchmark_plan_count", 0)
+        text = "1 case will run" if count == 1 else f"{count} cases will run"
+        if self._active_benchmark_thread is None:
+            audio_path = self._benchmark_audio_path()
+            missing = []
+            if not (audio_path and Path(audio_path).is_file()):
+                missing.append("choose an audio file")
+            if not self._selected_benchmark_model_names():
+                missing.append("tick a model")
+            if missing:
+                text = f"{text}. To run, {' and '.join(missing)}."
+        self.benchmark_plan_caption_label.setText(text)
 
     def _mark_benchmark_plan_case(self, index: int, status: str) -> None:
         """The single writer of one case's Status cell; `index` is 1-based."""
@@ -2201,6 +2218,7 @@ class _BenchmarkMixin:
         self.benchmark_warmup_checkbox.setEnabled(not busy)
         self.benchmark_vad_checkbox.setEnabled(not busy)
         self.run_benchmark_button.setEnabled((not busy) and has_audio and has_models)
+        self._refresh_benchmark_plan_caption()
         self.cancel_benchmark_button.setEnabled(
             busy
             and self._benchmark_cancel_event is not None

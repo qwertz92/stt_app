@@ -263,7 +263,10 @@ if sys.platform == "win32":
                         known[device_id] = flow
                     if flow == _E_RENDER:
                         if self._logger is not None:
-                            self._logger.info(
+                            # DEBUG: a monitor or headset produced 352 of
+                            # these in 143 bursts in a month (3.5 % of the
+                            # log), and an output change starts nothing.
+                            self._logger.debug(
                                 "audio_device_change_output event=%s endpoint=%s",
                                 event,
                                 device_id,

@@ -641,6 +641,12 @@ class _PersistenceMixin:
         if override:
             return str(override)
         combo = self._language_mode_shown()
+        fallback = self._language_fallback
+        if fallback is not None and combo == fallback[0]:
+            # The combo shows the engine's stand-in for a saved language it
+            # does not offer (Fun-ASR dropped yue, for one); writing the
+            # stand-in back would lose the language for every other engine.
+            return fallback[1]
         snapshot = str(getattr(self._populated_settings, "language_mode", "") or "")
         if snapshot and combo == snapshot:
             return self._stored_language_mode() or combo
