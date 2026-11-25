@@ -1432,6 +1432,67 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert quits == [True]
 
 
+def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
+    """The tray drops a balloon sent before the shell accepted the icon, and the
+    move the notice announces is already saved, so it must be held back."""
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: tray.visible,
+        showMessage=lambda *args: shown.append(args),
+    )
+
+    main_module._show_model_notice_when_ready(tray, "notice")
+    assert shown == []
+    assert len(timers) == 1
+
+    # Still not registered after a retry: held back again, not sent.
+    timers.pop()[1]()
+    assert shown == []
+    assert len(timers) == 1
+
+    tray.visible = True
+    timers.pop()[1]()
+    assert len(shown) == 1 and shown[0][1] == "notice"
+    assert timers == []
+
+
+def test_the_model_notice_is_sent_after_the_last_wait_even_without_an_icon(
+    monkeypatch,
+):
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    shown = []
+    tray = SimpleNamespace(
+        isVisible=lambda: False, showMessage=lambda *args: shown.append(args)
+    )
+
+    main_module._show_model_notice_when_ready(
+        tray, "notice", waited=main_module._MODEL_NOTICE_MAX_WAITS
+    )
+
+    assert len(shown) == 1
+    assert timers == []
+
+
 def test_a_moved_model_choice_is_shown_as_one_tray_message():
     shown = []
     tray = SimpleNamespace(showMessage=lambda *args: shown.append(args))

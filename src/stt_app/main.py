@@ -361,7 +361,8 @@ def run() -> int:
     _schedule_startup_update_check(update_checker)
     if model_notice:
         QtCore.QTimer.singleShot(
-            2000, lambda: _show_model_notice(tray_icon, model_notice)
+            _MODEL_NOTICE_FIRST_DELAY_MS,
+            lambda: _show_model_notice_when_ready(tray_icon, model_notice),
         )
 
     def _show_unfinished_recordings() -> None:
@@ -717,6 +718,30 @@ class _TrayUpdateChecker(QtCore.QObject):
                     "No newer release is available."
                 ),
             )
+
+
+# The notice waits for the tray icon: the notification icon can need up to
+# about 17 s to be accepted after a logon race (`win_tray_icon`'s add retries),
+# and a balloon sent before that is dropped with a log line, while the move it
+# announces is already saved -- so the user would never hear of it.
+_MODEL_NOTICE_FIRST_DELAY_MS = 2000
+_MODEL_NOTICE_RETRY_MS = 1000
+_MODEL_NOTICE_MAX_WAITS = 25
+
+
+def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> None:
+    """Show the notice once the icon exists; retry every second until then.
+
+    After the last wait it is sent anyway (a dropped balloon is logged by the
+    tray, which is the old behaviour rather than a lost retry loop).
+    """
+    if waited < _MODEL_NOTICE_MAX_WAITS and not tray_icon.isVisible():
+        QtCore.QTimer.singleShot(
+            _MODEL_NOTICE_RETRY_MS,
+            lambda: _show_model_notice_when_ready(tray_icon, notice, waited + 1),
+        )
+        return
+    _show_model_notice(tray_icon, notice)
 
 
 def _show_model_notice(tray_icon, notice: str) -> None:
