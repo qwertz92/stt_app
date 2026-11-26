@@ -284,9 +284,12 @@ class _TranscriptionJob:
     target_handle: int | None
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
-    # `DictationController._paste_serial` when the job was submitted: how
-    # many pastes had gone out by then. A doubtful paste's row survives the
-    # paste of a dictation recorded before it (`_note_paste_went_out`).
+    # `DictationController._paste_serial` when the job's recording started
+    # (a retry: when it was submitted): how many pastes had gone out by
+    # then. A doubtful paste's row survives the paste of a dictation that
+    # began before it (`_note_paste_went_out`). Not the submission, which
+    # comes at the stop: a recording that was running when the doubt arose
+    # would then count as later.
     recorded_after_paste: int = 0
     source_recording_id: str = ""
     # `DictationController._credentials_generation` when the job was
@@ -951,6 +954,9 @@ class DictationController(QtCore.QObject):
         # The newest dictation a paste delivered so far, as the
         # `_paste_serial` it was recorded after (`_note_paste_went_out`).
         self._newest_pasted_dictation = 0
+        # `_paste_serial` when the recording in progress started; None
+        # without one (`_register_transcription_job`).
+        self._recording_started_after_paste: int | None = None
         # `(state, detail)` of the informational offer the painter wrote last,
         # None once a plain status or a failure replaced it. The preload
         # progress poll compares it with what the overlay shows, to tell
@@ -2123,6 +2129,9 @@ class DictationController(QtCore.QObject):
             # Qt can settle pending stylesheet/layout work while events drain.
             self._overlay.ensure_compact_size()
 
+            # Taken here, not at the stop where the job is submitted
+            # (`_TranscriptionJob.recorded_after_paste`).
+            self._recording_started_after_paste = self._paste_serial
             self._target_window_handle = start_target_handle
             self._target_focus_signature = start_target_signature
             if start_target_handle:
@@ -3922,6 +3931,7 @@ class DictationController(QtCore.QObject):
         self._streaming_recording = False
         self._target_window_handle = None
         self._target_focus_signature = None
+        self._recording_started_after_paste = None
         self._stream_waits_for_paste_pace = False
         if keep_session_text:
             finalize = self._pending_streaming_job()
@@ -4984,7 +4994,11 @@ class DictationController(QtCore.QObject):
             settings=replace(settings),
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
-            recorded_after_paste=self._paste_serial,
+            recorded_after_paste=(
+                self._paste_serial
+                if is_retry or self._recording_started_after_paste is None
+                else self._recording_started_after_paste
+            ),
             source_recording_id=source_recording_id,
             credentials_generation=self._credentials_generation,
             language_fallback_from=language_fallback_from,

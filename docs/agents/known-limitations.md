@@ -251,7 +251,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   into a window of each, and the `paste_receipt` lines of both.
 - **A true-miss "not in a text field" row ends with the paste of the next
   dictation** (2026-10-03, deliberate; narrowed 2026-11-25). A paste of a
-  dictation recorded after the doubtful paste went out -- into any window
+  dictation whose recording started after the doubtful paste went out --
+  into any window
   -- and every re-paste, Insert or live streaming insert drops the row
   (`_drop_superseded_doubtful_rows`), so a paste that really missed is no
   longer listed or reachable by F10 once the user dictated again.

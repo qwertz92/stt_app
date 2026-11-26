@@ -666,12 +666,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   re-paste whose rows are gone now says so on the overlay or tray
   (2026-10-03 second review); a verdict arriving after the paste of a
   later dictation lists no row and goes to the tray. *Later*
-  (2026-11-25, lead's decision): the pasted dictation was recorded after
-  the doubtful paste went out (`_TranscriptionJob.recorded_after_paste`
+  (2026-11-25, lead's decision): the pasted dictation's recording started
+  after the doubtful paste went out (`_TranscriptionJob.recorded_after_paste`
   against the row's `doubt_serial`, both counts of `_paste_serial`; a
   joined paste counts as its newest job), or the paste is made now (a
-  re-paste, an Insert, live streaming text). A result that was already
-  recorded when the doubt arose supersedes nothing: with several results
+  re-paste, an Insert, live streaming text). The count is taken when
+  the recording starts, not when its job is submitted at the stop: a
+  recording that was running while the doubt arose began before it, and
+  the overlay showed Listening, so the report was most likely not seen
+  (second review, 2026-11-25; a Retry has no recording of its own and
+  counts from its submission). A result that was already recorded when
+  the doubt arose supersedes nothing: with several results
   queued the next paste went out within a second and took the row with
   it, or kept it from being listed at all (the owner, 2026-11-24: "the
   not-inserted notice vanished when several results were queued").

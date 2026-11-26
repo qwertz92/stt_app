@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: a queued job counts from its recording's start, not from its submission
+
+Second review of the doubtful-row rule (the 2026-11-25 entry below).
+`_TranscriptionJob.recorded_after_paste` was read from `_paste_serial` in
+`_register_transcription_job`, and a job is registered at the stop.
+Reproduced in immediate-insert mode: record A and stop, start B, A is pasted
+and reported as "not in a text field" (row listed), stop B, B is pasted --
+the row was gone, although B's dictation began before the report and the
+overlay showed Listening at that moment. The serial is now taken in
+`start_recording`, next to the target window, and carried to the job; a
+Retry has no recording of its own and still counts from its submission.
+Lesson: "when was this dictated" has two candidate moments, and the one the
+code reads most conveniently (the submission) is the wrong one whenever a
+recording overlaps a delivery.
+`test_one_doubtful_paste_among_queued_results_in_every_completion_order`
+walks 180 cases: 3 and 4 queued results, every completion order, the doubt
+on the first, second or third paste, both delivery modes.
+
 ## 2026-11-25: the read receipt's owner window needs the interpreter -- what the review found
 
 Structurally: every copy the app makes goes through one function

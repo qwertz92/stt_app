@@ -217,7 +217,9 @@ def test_a_queued_paste_that_missed_stays_listed_after_the_next_one_landed(
     monkeypatch, tmp_path
 ):
     """The owner's second symptom. In 0.13.0 the next paste dropped the
-    doubtful row of the one that missed, and nothing showed it any more."""
+    doubtful row of the one that missed, and nothing showed it any more. B
+    was being recorded when A's paste went out, so its paste supersedes
+    nothing, and the receipt turns the doubtful row into the failed one."""
     check = FakePasteTargetCheck()
     controller, app, overlay, inserter, _beeps, tray = _make_with_receipts(
         monkeypatch, tmp_path, check, immediate_insert=True
@@ -225,7 +227,9 @@ def test_a_queued_paste_that_missed_stays_listed_after_the_next_one_landed(
     _queue_two(controller, "transcript A", "transcript B")
     check.answer(VERDICT_NOT_TEXT_FIELD)
     assert [call[0] for call in inserter.calls] == ["transcript A", "transcript B"]
-    assert _rows(overlay) == [], "0.13.0: the next paste drops the doubtful row"
+    rows = _rows(overlay)
+    assert len(rows) == 1 and rows[0].startswith("Not in a text field")
+    assert len(tray) == 1 and "does not look like a text field" in tray[0]
     tray.clear()
 
     # The second paste replaced A's transcript on the clipboard, unfetched.
@@ -234,9 +238,8 @@ def test_a_queued_paste_that_missed_stays_listed_after_the_next_one_landed(
     rows = _rows(overlay)
     assert len(rows) == 1 and rows[0].startswith("Not inserted")
     assert '"transcript A"' in rows[0]
-    assert len(tray) == 1
-    assert "no window took the text from the clipboard" in tray[0]
-    assert "1 transcript is waiting to be inserted" in tray[0]
+    # The user has this paste's report already.
+    assert tray == []
     # The live recording keeps the overlay.
     assert overlay.states[-1][0] == "Listening"
 
@@ -248,6 +251,31 @@ def test_a_queued_paste_that_missed_stays_listed_after_the_next_one_landed(
     )
 
     assert len(_rows(overlay)) == 1, "a later paste dropped the failed row"
+    controller.shutdown()
+
+
+def test_a_queued_paste_no_window_fetched_is_reported_although_its_caret_looked_right(
+    monkeypatch, tmp_path
+):
+    """The receipt alone: the target check saw a text field, the next paste
+    went out, and A's transcript left the clipboard unfetched."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps, tray = _make_with_receipts(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    _queue_two(controller, "transcript A", "transcript B")
+    check.answer(VERDICT_TEXT_FIELD)
+    assert _rows(overlay) == []
+    tray.clear()
+
+    inserter.settle(app, 101, RECEIPT_UNREAD)
+
+    rows = _rows(overlay)
+    assert len(rows) == 1 and rows[0].startswith("Not inserted")
+    assert '"transcript A"' in rows[0]
+    assert len(tray) == 1
+    assert "no window took the text from the clipboard" in tray[0]
+    assert "1 transcript is waiting to be inserted" in tray[0]
     controller.shutdown()
 
 
