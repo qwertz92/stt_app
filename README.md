@@ -12,7 +12,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), Meta (Muse Voice), Soniox, OpenRouter (one key for about 30 speech models), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
-- **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI and Deepgram streaming are experimental)
+- **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI, Deepgram and Soniox streaming are experimental)
 
 ## Requirements
 
@@ -203,6 +203,7 @@ uv run python -m pytest
 | Meta Muse Voice Transcribe (batch) | New, not yet verified against the live service |
 | OpenRouter transcription models (batch) | New, not yet verified against the live service |
 | Soniox stt-async-v6 (batch; US, EU, Japan or India region) | New, not yet verified against the live service |
+| Soniox streaming (stt-rt-v6) | Experimental, not yet verified against the live service |
 | Custom OpenAI-compatible endpoint (batch) | Stable (not verified against every server) |
 
 ## License

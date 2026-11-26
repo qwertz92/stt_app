@@ -681,6 +681,68 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     a content type, the part limit, German quality).
   - **Revert**: remove `soniox` from `VALID_ENGINES` and the entries beside the
     `SONIOX_*` constants; a saved `engine: "soniox"` falls to local.
+- **Soniox streaming is a WebSocket session (`soniox_stream.py`, 2026-11-26;
+  `soniox` is in `STREAMING_ENGINES`, so its mode label stays "Streaming
+  (Experimental)").** Pages read 2026-11-26:
+  `https://docs.soniox.com/api-reference/stt/websocket-api.mdx`,
+  `.../authentication/websocket-authentication.mdx`,
+  `.../stt/rt/connection-keepalive.mdx`. **Unverified live, no key**: no
+  connection was ever opened, the protocol below is the documentation's.
+  - **Endpoint and key**: `wss://stt-rt.soniox.com/transcribe-websocket`
+    (`stt-rt.eu.`, `stt-rt.jp.`, `stt-rt.in.` for the region, `SONIOX_REALTIME_HOSTS`).
+    The key goes in the `Authorization: Bearer <key>` header of the handshake;
+    the `api_key` field of the start message is deprecated (refused after
+    2027-01-15) and is never sent, so the key is in no URL and no frame.
+  - **Start message** (first text frame, sent on open): `model` `stt-rt-v6`
+    (`SONIOX_REALTIME_MODEL`, always, whatever `soniox_model` says: the async
+    model is not a realtime model), `audio_format` `pcm_s16le`, `sample_rate`
+    16000, `num_channels` 1, and as in batch `language_hints` with
+    `language_hints_strict` for a chosen language and `context.terms` for the
+    custom vocabulary. The capture's blocks are raw PCM16 mono 16 kHz, so no
+    conversion happens.
+  - **Audio** goes as binary frames (at most 2,097,144 bytes each; a larger
+    chunk is split). `push_audio_chunk` never blocks the PortAudio callback
+    (`put_nowait`; a full queue fails the stream, only the controller's
+    preconnect flush passes `block_timeout_s`). One sender thread writes audio
+    and keepalive frames, so they never interleave.
+  - **Text**: each message is `{"tokens": [{"text", "is_final"}, ...]}`. A
+    final token arrives once and is kept; the non-final tokens of a message are
+    the whole provisional tail and replace the previous tail. The callback gets
+    finals plus tail, so the text only grows as words are confirmed (the
+    controller's append-only insertion locks what it needs). `<end>` and `<fin>`
+    are never text. A message with neither tokens nor an error changes nothing.
+  - **Keepalive**: "If no message arrives within 20 s the stream ends with a 408
+    `request_timeout`", and any client message resets it, so the sender writes
+    `{"type": "keepalive"}` after 5 s without audio (a handshake stall or the
+    stop's backlog wait). The vendor bills the full stream duration, so a bridged
+    gap costs its length; past `AUDIO_INPUT_BUFFER_S + 10` seconds without audio
+    the microphone is dead and the stream ends with a message naming that.
+  - **Stop**: drain the sender, send the empty text frame, wait up to 10 s for
+    `{"finished": true}` (a socket that closes ends the wait too), close. The text
+    received so far is always returned; a missing `finished` is logged, not
+    raised. An error before any text raises with the vendor's sentence; an
+    error after text returns the text (a finished transcription is never
+    discarded).
+  - **Errors** are a message with `error_code`, `error_type`, `error_message`,
+    after which the server closes: 401/403 say the key is invalid or from a
+    project in another region (naming the host), 402 says the balance or budget
+    is used up, the rest quote the vendor's sentence with its type and code
+    (408 `request_timeout`, 413 `max_duration_reached`, 429, 503). All go to the
+    controller's error callback once, key scrubbed (plain and JSON-escaped); a
+    certificate failure gets the shared guidance; a close that nobody asked
+    for is reported as "closed unexpectedly".
+  - **Sessions are objects**: `SonioxStreamSession` is one session and the
+    transcriber holds the current one, so a callback of an earlier session
+    cannot touch a later one. A stop or abort during the handshake closes the
+    socket and makes `start_stream` raise "stopped while connecting"; nothing
+    stays open.
+  - **Price** $0.12/hour of stream (pricing page of the research, read
+    2026-11-26), against $0.10/hour async.
+  - **Tests**: `tests/test_soniox_streaming.py` (a fake `websocket` module as
+    for Deepgram) and the socket-path cases of `tests/test_sdk_key_scrub.py`.
+  - **Unverified live**: the shape of real token messages, that `<end>` never
+    appears without an endpoint request, the real close behaviour after the
+    end-of-stream frame, how fast `finished` arrives, German quality.
 - **OpenRouter is an engine of its own on the custom endpoint's code
   (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
   own entry and key, so "Custom endpoint" stays free for something else).**

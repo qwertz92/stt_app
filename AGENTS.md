@@ -115,7 +115,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Speechmatics (REST batch jobs, polled; EU/US/AU regions),
   Mistral Voxtral (REST, batch-only),
   Meta Muse Voice Transcribe (REST, batch-only),
-  Soniox (REST batch jobs, polled; US/EU/JP/IN regions),
+  Soniox (REST batch jobs, polled, and a realtime WebSocket; US/EU/JP/IN regions),
   OpenRouter transcription endpoint (REST, batch-only),
   Custom endpoint (any OpenAI-compatible REST API, batch-only)
 - keyring for secret storage
@@ -153,6 +153,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/meta_provider.py` | Batch via Meta's `/v1/asr/transcribe` (Muse Voice Transcribe): a JSON `request` part (`languageBias`, `keywords`) and a WAV `audio` part; imports converted to 16 kHz mono |
 | `transcriber/openrouter_provider.py` | Batch via OpenRouter's `/audio/transcriptions`: `CustomEndpointTranscriber` with a fixed base URL, transcription style only, its own key, model list from `/models?output_modalities=transcription`, key check through `GET /key` |
+| `transcriber/soniox_stream.py` | One Soniox realtime session: WebSocket with the key in the handshake header, a start message, a sender thread (audio, keepalive), final tokens kept and the provisional tail replaced, bounded wait for `finished` at stop |
 | `transcriber/soniox_provider.py` | Batch via Soniox's async API: upload a file, create a transcription, poll, fetch the text, then delete both; custom vocabulary as `context.terms`; region `us`/`eu`/`jp`/`in` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
@@ -280,7 +281,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 1. Global hotkey toggles recording.
 2. Overlay: `Idle → Listening → Processing → Done/Error`.
 3. Batch mode: recorded WAV transcribed on stop.
-4. Streaming mode (local, AssemblyAI, Deepgram): live chunks with partial text
+4. Streaming mode (local, AssemblyAI, Deepgram, Soniox): live chunks with partial text
    and append-only stable insertion. Nemotron local streaming is cache-aware;
    faster-whisper local streaming uses rolling windows.
 5. Text inserted at caret via clipboard-safe paste; clipboard restored.
@@ -289,7 +290,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
   azure, funasr, speechmatics, mistral, meta, openrouter, soniox, custom
-- **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
+- **STREAMING_ENGINES**: local, assemblyai, deepgram, soniox (others are batch-only)
 - **OpenAI** offers `gpt-transcribe` only; `whisper-1`, `gpt-4o-transcribe` and
   `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.

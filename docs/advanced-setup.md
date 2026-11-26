@@ -629,10 +629,12 @@ free for another service. **Test** asks OpenRouter whether the key is valid.
 
 **Soniox**
 
-Batch-only for now and not yet run against the live service (no key was
+Batch and streaming, neither yet run against the live service (no key was
 available while building it). Soniox's async API is a job: the app uploads the
 recording, asks for a transcription, polls until it is done, reads the text and
 then deletes the transcription and the uploaded file on Soniox's side.
+Streaming mode opens a WebSocket instead and always uses `stt-rt-v6`
+($0.12 per hour of stream, billed for the stream's whole duration).
 
 1. Create an API key in the Soniox Console (console.soniox.com) and enter it in
    the **Soniox** row on Settings -> **Providers**. The selector beside the key

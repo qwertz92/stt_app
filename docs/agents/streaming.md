@@ -88,6 +88,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   the reasons, and why the sender and not a timer).
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
+- **Soniox streaming** (2026-11-26, `transcriber/soniox_stream.py`; protocol,
+  URLs and what is unverified: `docs/agents/remote-providers.md`): one
+  `SonioxStreamSession` object per session, so a callback of an earlier
+  session cannot touch a later one; the session is published before the
+  handshake so a stop or an abort during it closes the socket and makes
+  `start_stream` raise. Final tokens arrive once and are kept, the
+  non-final tokens of each message replace the provisional tail, so the
+  text handed to the controller only grows when words are confirmed
+  (append-only insertion is the controller's, as for Deepgram).
+  `push_audio_chunk` is `put_nowait` on the PortAudio callback; the one
+  sender thread writes audio and `{"type": "keepalive"}` (after 5 s of
+  silence on the queue, because 20 s without a message ends the stream
+  with a 408), and gives up after `AUDIO_INPUT_BUFFER_S + 10` s without
+  audio with a message naming the microphone. A stop drains the sender,
+  sends the empty text frame and waits at most 10 s for `finished`; the
+  text received is returned either way.
 - **Streaming availability**: `config.supports_streaming()` is the single
   source. Every local model in `LOCAL_BATCH_ONLY_MODELS` (Cohere, Granite
   ONNX/WebGPU, Parakeet, Canary, Granite CTC) is batch-only; Nemotron and
@@ -363,5 +379,6 @@ Rule (2026-11-26): the Settings mode picker and the docs call streaming
 most Nemotron dictations never reached the document") Nemotron's streaming
 document WER is 10.5 % against 10.5 % in its own batch mode, while
 faster-whisper's rolling window gives 22.0 to 44.0 % (tiny 30.4, base 22.0,
-small 44.0, turbo 26.2) against 4.5 to 15.4 % in batch. AssemblyAI and Deepgram
-streaming were not measured, so they keep the label until someone does.
+small 44.0, turbo 26.2) against 4.5 to 15.4 % in batch. AssemblyAI, Deepgram and
+Soniox streaming were not measured (Soniox's was never even run against the
+live service), so they keep the label until someone does.

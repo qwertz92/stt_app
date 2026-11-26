@@ -11,18 +11,24 @@ deleted after 30 days"), so the transcription and the file are deleted
 afterwards (`DELETE`, 204). Every request carries `Authorization: Bearer
 <key>`. Read on the vendor's pages and OpenAPI schema on 2026-11-26;
 `docs/agents/remote-providers.md` lists each URL.
+
+Streaming is a WebSocket session (`soniox_stream.py`); this class holds the
+current one and builds its start message.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
 
 from ..config import (
+    AUDIO_CHANNELS,
+    AUDIO_SAMPLE_RATE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_SILENCE_GATE_THRESHOLD,
@@ -33,6 +39,8 @@ from ..config import (
     SONIOX_CONTEXT_MAX_CHARS,
     SONIOX_MODELS,
     SONIOX_POLL_INTERVAL_S,
+    SONIOX_REALTIME_HOSTS,
+    SONIOX_REALTIME_MODEL,
     language_modes_for_selection,
     normalize_soniox_region,
     parse_custom_vocabulary,
@@ -57,8 +65,10 @@ from .base import (
     ITranscriber,
     ProgressReporter,
     StreamingCallback,
+    StreamingErrorCallback,
     TranscriptionError,
 )
+from .soniox_stream import SonioxStreamSession
 
 logger = logging.getLogger(__name__)
 
@@ -127,6 +137,8 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
         self._request_timeout_s = max(5, int(request_timeout_s))
         self._poll_interval_s = max(0.0, float(poll_interval_s))
         self._max_wait_s = max(0.0, float(max_wait_s))
+        self._stream_lock = threading.Lock()
+        self._stream_session: SonioxStreamSession | None = None
 
     def _normalize_language_mode(self, mode: str) -> str:
         normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
@@ -146,14 +158,22 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
         model "rely more on language hints": choosing German in the app means
         German. Auto sends neither. The custom vocabulary is `context.terms`.
         """
-        payload: dict[str, Any] = {"model": self._model, "file_id": file_id}
+        return {
+            "model": self._model,
+            "file_id": file_id,
+            **self._hints_and_context(),
+        }
+
+    def _hints_and_context(self) -> dict[str, Any]:
+        """The language hints and context terms of a batch or realtime request."""
+        fields: dict[str, Any] = {}
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
-            payload["language_hints"] = [self._language_mode]
-            payload["language_hints_strict"] = True
+            fields["language_hints"] = [self._language_mode]
+            fields["language_hints_strict"] = True
         terms = fit_terms(self._vocabulary)
         if terms:
-            payload["context"] = {"terms": terms}
-        return payload
+            fields["context"] = {"terms": terms}
+        return fields
 
     def _request(
         self,
@@ -456,25 +476,86 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
             return True, "Connection OK — API key is valid."
         return False, "Unexpected response from the Soniox API."
 
-    def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
-        raise NotImplementedError(
-            "Soniox streaming is not implemented in this project. "
-            "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
+    def _get_websocket_module(self):
+        try:
+            import websocket  # type: ignore
+        except ImportError as exc:
+            raise TranscriptionError(
+                "Soniox streaming requires 'websocket-client'. "
+                "Install it with: pip install websocket-client"
+            ) from exc
+        return websocket
+
+    def _start_message(self) -> str:
+        """The first frame of a realtime session.
+
+        Always the realtime model (`stt-rt-v6`): the async model is not one.
+        The key is in the handshake header, never here (the `api_key` field is
+        deprecated). Language and vocabulary are those of the batch request.
+        """
+        message: dict[str, Any] = {
+            "model": SONIOX_REALTIME_MODEL,
+            "audio_format": "pcm_s16le",
+            "sample_rate": AUDIO_SAMPLE_RATE,
+            "num_channels": AUDIO_CHANNELS,
+        }
+        message.update(self._hints_and_context())
+        return json.dumps(message)
+
+    def start_stream(
+        self,
+        on_partial: StreamingCallback | None = None,
+        on_error: StreamingErrorCallback | None = None,
+    ) -> None:
+        websocket = self._get_websocket_module()
+        host = SONIOX_REALTIME_HOSTS[self._region]
+        session = SonioxStreamSession(
+            websocket=websocket,
+            url=f"wss://{host}/transcribe-websocket",
+            host=host,
+            api_key=self._api_key,
+            scrub=self._scrub,
+            start_message=self._start_message(),
+            on_partial=on_partial,
+            on_error=on_error,
         )
+        with self._stream_lock:
+            if self._stream_session is not None:
+                raise TranscriptionError("Streaming session already active.")
+            # Published before the handshake so a stop or an abort during it
+            # reaches this session instead of finding nothing.
+            self._stream_session = session
+        try:
+            session.connect()
+        except BaseException:
+            with self._stream_lock:
+                if self._stream_session is session:
+                    self._stream_session = None
+            raise
 
     def push_audio_chunk(
         self, chunk: bytes, *, block_timeout_s: float | None = None
     ) -> None:
-        raise NotImplementedError(
-            "Soniox streaming is not implemented in this project."
-        )
+        session = self._stream_session
+        if session is None:
+            raise TranscriptionError("Streaming session is not active.")
+        session.push(chunk, block_timeout_s)
 
     def stop_stream(self) -> str:
-        raise NotImplementedError(
-            "Soniox streaming is not implemented in this project."
-        )
+        with self._stream_lock:
+            session = self._stream_session
+        if session is None:
+            raise TranscriptionError("Streaming session is not active.")
+        try:
+            return session.stop()
+        finally:
+            with self._stream_lock:
+                if self._stream_session is session:
+                    self._stream_session = None
 
     def abort_stream(self) -> None:
-        raise NotImplementedError(
-            "Soniox streaming is not implemented in this project."
-        )
+        with self._stream_lock:
+            session = self._stream_session
+            self._stream_session = None
+        if session is not None:
+            session.abort()

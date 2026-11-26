@@ -7,8 +7,8 @@ For every clip given on the command line:
     Groq, OpenAI, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR,
     Speechmatics, Mistral, Meta, OpenRouter, Soniox and the custom endpoint), each with the
     engine's default model and through the app's own transcriber,
-  * one streaming session for each engine that has streaming (AssemblyAI and
-    Deepgram): the clip is pushed at real-time pace (100 ms of audio every
+  * one streaming session for each engine that has streaming (AssemblyAI,
+    Deepgram and Soniox): the clip is pushed at real-time pace (100 ms of audio every
     100 ms, exactly as the microphone delivers it), partials are counted, and
     `stop_stream()` has to return the final text.
 

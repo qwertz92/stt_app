@@ -1485,6 +1485,7 @@ STREAMING_ENGINES = (
     "local",
     "assemblyai",
     "deepgram",
+    "soniox",
 )  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
@@ -1506,7 +1507,7 @@ def streaming_is_experimental(engine: str, model_size: str = "") -> bool:
 
     Only local streaming with Nemotron is not: measured on 2026-11-25 it
     reaches its batch mode's word error rate, while faster-whisper's rolling
-    window and the two cloud streaming engines (not measured) stay
+    window and the three cloud streaming engines (not measured) stay
     experimental (docs/agents/streaming.md).
     """
     normalized_engine = str(engine or "").strip().lower()

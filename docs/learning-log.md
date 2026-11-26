@@ -3,11 +3,12 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
-## 2026-11-26: Soniox as the `soniox` engine (batch first)
+## 2026-11-26: Soniox as the `soniox` engine (batch, then realtime)
 
 Structurally: a new cloud engine, `soniox`, built to Soniox's own documentation and OpenAPI schema
 (`https://docs.soniox.com/openapi.yaml`, read that day), not to the research of 2026-11-24. Batch
-is committed first and stands alone; realtime streaming is a separate commit.
+is committed first and stands alone; realtime streaming (`soniox_stream.py`) is a separate
+commit.
 
 - **Where the documentation and the research differed**: the research said `stt-async-v6`,
   `stt-rt-v6`, about $0.10 and $0.12 per hour, 60+ languages. All four held (the pricing page
@@ -29,6 +30,13 @@ is committed first and stands alone; realtime streaming is a separate commit.
   (measured numbers in `docs/agents/settings-dialog.md`); every region picker (AssemblyAI,
   Deepgram, Speechmatics, Soniox) therefore sits inside its provider's row beside the key
   field, which won the height back with 62 px to spare.
+- **Realtime**: the key goes in the handshake header (the start message's `api_key` field is
+  deprecated). Final tokens arrive once and the non-final ones are the whole provisional tail,
+  replaced by each message, so the live text is finals plus tail. `{"type": "keepalive"}`
+  every 5 s of silence on the queue, because 20 s without a message ends the stream and the
+  vendor bills the stream's whole duration. Never run against the live service; the tests use
+  a fake `websocket` module, and the key-scrub test for the socket path failed when the
+  scrubbing was removed from the error text (checked by hand once).
 
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 

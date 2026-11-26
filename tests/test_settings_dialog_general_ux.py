@@ -830,7 +830,7 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
     assert needed + chrome <= design_height, (needed, chrome, design_height)
 
 
-@pytest.mark.parametrize("engine", ["meta", "openrouter", "soniox"])
+@pytest.mark.parametrize("engine", ["meta", "openrouter"])
 def test_a_batch_only_new_engine_offers_no_streaming_and_its_own_languages(
     dialog: SettingsDialog, engine: str
 ) -> None:

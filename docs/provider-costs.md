@@ -28,7 +28,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Mistral | Batch | `voxtral-mini-transcribe-3-0` (default) or `voxtral-small-transcribe-3` (was `voxtral-mini-2602`) | Mini $0.0035/min, Small $0.0040/min ([announcement](https://mistral.ai/news/voxtral-3/), read 2026-11-24); was $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
 | Meta | Batch | `muse-voice-transcribe-1.0` | "$0.18 per hour" of audio, billed per whole second; failed requests and 429s are not billed; batch and streaming cost the same ([speech-to-text docs](https://dev.meta.ai/docs/speech-to-text), read 2026-11-26) | $0.18/hour |
 | OpenRouter | Batch | Any model of its public transcription list (30 on 2026-11-26), default `openai/gpt-transcribe` | Priced per model, per second of audio for most ([model list](https://openrouter.ai/api/v1/models?output_modalities=transcription), read 2026-11-26; the price fields use different units across models, so the app shows none). OpenRouter adds no markup on its own key; a bring-your-own-key setup carries a 5 % fee after an allowance (privacy/BYOK pages, research of 2026-11-24, not re-read) | varies by model; `openai/gpt-transcribe` $0.27/hour |
-| Soniox | Batch | `stt-async-v6` (streaming, once built: `stt-rt-v6`) | "$0.10/hour for async (file uploads)" and "$0.12/hour for real-time (streaming)", also quoted as token rates; no minimum spend ([pricing](https://soniox.com/pricing), read 2026-11-26) | $0.10/hour |
+| Soniox | Batch, streaming | `stt-async-v6` (streaming: `stt-rt-v6`) | "$0.10/hour for async (file uploads)" and "$0.12/hour for real-time (streaming)", also quoted as token rates; no minimum spend ([pricing](https://soniox.com/pricing), read 2026-11-26) | $0.10/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -261,7 +261,7 @@ implemented as a remote engine.
 |-----------|----------------------|-----------------|-------------------|----------------|
 | Cohere hosted Transcribe API | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Local/offline usage is covered by the integrated ONNX model, not by the hosted API | Hosted provider not integrated |
 | Alibaba Fun-ASR — **local** weights | Open weights Apache-2.0 on HF/ModelScope | n/a (self-hosted) | 7.7B (too big) or 0.8B nano (no ONNX export, different runtime) | Local path not integrated; the **hosted** Fun-ASR is integrated as a remote engine. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
-| Soniox API | Hosted, key-based, publicly documented | Read on Artificial Analysis (checked 2026-09-21): "Soniox v5 Async" at 3.8% WER / $1.66 per 1,000 minutes | Not local; would be a new remote engine | Not integrated — see the note below |
+| Soniox API | Hosted, key-based, publicly documented | Read on Artificial Analysis (checked 2026-09-21): "Soniox v5 Async" at 3.8% WER / $1.66 per 1,000 minutes | Not local | Integrated 2026-11-26 as the `soniox` engine (batch and streaming, v6 models); the figures here are for v5 and were not re-read |
 | Mistral Voxtral API (Voxtral Small) | Hosted, key-based. Voxtral Small/Mini also ship as open weights (Apache 2.0), but no ONNX or CTranslate2 export was found this session, so they would need a new local runtime, not the app's existing ones | Read on Artificial Analysis (checked 2026-09-21): "Voxtral Small" at 2.8% WER / $4.00 per 1,000 minutes | Open weights exist but no ONNX path; not a drop-in for this app's local runtimes | Not integrated — see the note below |
 
 **Why Soniox and Voxtral were not added as remote providers now**: on the
@@ -282,6 +282,11 @@ request, as the `speechmatics` and `mistral` engines (section 1). The
 Mistral engine uses Voxtral Mini Transcribe 3 ($0.0035/min, about $3.50
 per 1,000 minutes), not the Voxtral Small figure above; Artificial
 Analysis was not re-read for either.
+
+**Update 2026-11-26**: Soniox was integrated on request as the `soniox`
+engine, with `stt-async-v6` for batch and `stt-rt-v6` for streaming. The
+accuracy and price figures in this section are those of v5 and were not
+re-read; the current price is the one in section 1.
 
 Recommendation:
 

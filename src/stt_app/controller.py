@@ -2389,7 +2389,7 @@ class DictationController(QtCore.QObject):
                     detail = (
                         f"Streaming is not available for {name}. In Settings > "
                         "Transcription, set Mode to Batch or pick Local, "
-                        "AssemblyAI or Deepgram."
+                        "AssemblyAI, Deepgram or Soniox."
                     )
                 self._refuse_recording_start(detail)
                 return
