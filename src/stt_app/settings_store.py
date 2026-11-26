@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import math
 from dataclasses import asdict, dataclass, field, replace
@@ -323,9 +324,15 @@ def _pending_model_moves(raw: dict[str, Any]) -> list[dict[str, str]]:
     """The moves still waiting to be announced: those the file already holds
     (an earlier start moved them and was closed before the tray showed them)
     followed by the ones this load found. Damage is dropped, repeats merged."""
+    return _valid_moves([*_stored_moves(raw), *retired_model_moves(raw)])
+
+
+def _stored_moves(raw: dict[str, Any]) -> list[Any]:
     stored = raw.get("pending_model_moves")
-    candidates = list(stored) if isinstance(stored, list) else []
-    candidates.extend(retired_model_moves(raw))
+    return list(stored) if isinstance(stored, list) else []
+
+
+def _valid_moves(candidates: list[Any]) -> list[dict[str, str]]:
     moves: list[dict[str, str]] = []
     for candidate in candidates:
         if not isinstance(candidate, dict):
@@ -1057,7 +1064,7 @@ class SettingsStore:
                 # window, for settings it had just read. A migration that
                 # cannot be written simply runs again next time.
                 try:
-                    self.save(settings, extra=unknown)
+                    self._write(settings, unknown)
                 except OSError:
                     _LOGGER.exception(
                         "Could not rewrite %s after normalising it", self.path
@@ -1065,16 +1072,38 @@ class SettingsStore:
 
             return settings
 
-    def clear_model_notice(self) -> None:
-        """Forget the pending retired-model moves: the tray has shown them.
+    def clear_model_notice(self, moves: list[dict[str, str]] | None = None) -> None:
+        """Forget pending retired-model moves: the tray has shown them.
 
-        The moves themselves were saved by the load that found them; only the
-        announcement is pending, and it stays in the file until this call.
+        `moves` names the ones shown (all of them when omitted); the others stay
+        pending, which is how a notice shown in two balloons is cleared half by
+        half. The moves themselves were saved by the load that found them; only
+        the announcement is pending, and it stays in the file until this call.
+        It runs from a timer callback, so a file that cannot be written is
+        logged and the notice stays pending for the next start.
         """
+        shown = {(m["engine"], m["from"], m["to"]) for m in moves or []}
         with self._lock:
-            settings = self.load()
-            if settings.pending_model_moves:
-                self.save(replace(settings, pending_model_moves=[]))
+            try:
+                settings = self.load()
+                if not settings.pending_model_moves:
+                    return
+                left = (
+                    [
+                        m
+                        for m in settings.pending_model_moves
+                        if (m["engine"], m["from"], m["to"]) not in shown
+                    ]
+                    if moves is not None
+                    else []
+                )
+                self._write(replace(settings, pending_model_moves=left), None)
+            except OSError:
+                _LOGGER.warning(
+                    "Could not clear the pending model notice in %s; it stays pending",
+                    self.path,
+                    exc_info=True,
+                )
 
     def _payload_for_save(
         self,
@@ -1117,6 +1146,27 @@ class SettingsStore:
         settings: AppSettings,
         *,
         extra: dict[str, object] | None = None,
+    ) -> None:
+        """Write `settings`, except for the pending retired-model moves.
+
+        Those belong to the file: a load adds them and `clear_model_notice`
+        removes them. Every other caller holds a copy that is older than that
+        (the controller's own, written by the overlay's Lang menu, opacity
+        slider, pin button and microphone menu), and writing its list back
+        either brought a shown notice back or dropped one not yet shown.
+        """
+        with self._lock:
+            try:
+                with self._path.open(encoding="utf-8") as handle:
+                    stored = _valid_moves(_stored_moves(json.load(handle)))
+            except (OSError, ValueError, AttributeError):
+                stored = []
+            self._write(replace(settings, pending_model_moves=stored), extra)
+
+    def _write(
+        self,
+        settings: AppSettings,
+        extra: dict[str, object] | None,
     ) -> None:
         with self._lock:
             # Before anything is written: a `settings.json` that is there and
