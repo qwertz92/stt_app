@@ -1177,6 +1177,7 @@ class DictationController(QtCore.QObject):
         self.reload_settings(re_register_hotkey=True)
         if self._settings.engine == DEFAULT_ENGINE:
             self._start_local_model_preload()
+            self._start_retirement_download()
         else:
             self._preload_progress_timer.stop()
             self._preload_target_model = None
@@ -6557,6 +6558,42 @@ class DictationController(QtCore.QObject):
         failure = self._model_preload_failure(settings)
         if failure is not None:
             raise TranscriptionError(failure)
+
+    def _start_retirement_download(self) -> concurrent.futures.Future | None:
+        """Fetch the successor of a retired model the start just moved the user to.
+
+        The start-up notice says the successor "is downloading now", so it has to
+        be: a Node/ONNX model is not preloaded while "Keep ONNX model loaded" is
+        off, and without this the download would only start inside the first
+        dictation. Only the download runs, never a load, whatever that setting
+        says, and through the same single slot as every other download (a model
+        already on disk, offline mode and a runtime this PC cannot run all end it
+        at once). A failure is logged; the first dictation then reports it.
+        """
+        settings = replace(self._settings)
+        if settings.engine != DEFAULT_ENGINE or settings.offline_mode:
+            return None
+        if not any(
+            move["engine"] == DEFAULT_ENGINE and move["to"] == settings.model_size
+            for move in settings.pending_model_moves
+        ):
+            return None
+
+        def work() -> None:
+            try:
+                self._download_model_for_preload(settings)
+            except RuntimeError as exc:
+                self._logger.warning(
+                    "Download of the moved-to model %s failed: %s",
+                    settings.model_size,
+                    exc,
+                )
+
+        try:
+            return self._preload_executor.submit(work)
+        except RuntimeError:
+            self._logger.warning("Download of the moved-to model was not scheduled")
+            return None
 
     def _start_local_model_preload(self, *, after_resume: bool = False) -> None:
         """Load the selected local model in the background.

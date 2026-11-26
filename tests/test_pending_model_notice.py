@@ -166,3 +166,97 @@ def test_clearing_named_moves_leaves_the_others_pending(tmp_path, which):
     else:
         store.clear_model_notice()
         assert _pending(path) == []
+
+
+# ---------------------------------------------------------------------------
+# The notice says the successor "is downloading now": it has to be.
+
+
+def _a_moved_granite_user(tmp_path, monkeypatch, **fields):
+    import stt_app.controller as controller_module
+
+    path = tmp_path / "settings.json"
+    _write(
+        path,
+        engine="local",
+        model_size="granite-speech-4.1-2b",
+        keep_onnx_model_loaded=False,
+        model_dir=str(tmp_path / "models"),
+        **fields,
+    )
+    started: list[tuple] = []
+
+    def fake_start(model_name, model_dir=""):
+        started.append((model_name, model_dir))
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(controller_module, "start_model_download_process", fake_start)
+    controller, app = _controller(SettingsStore(path))
+    controller.reload_settings(re_register_hotkey=False)
+    return controller, app, started
+
+
+def test_a_moved_user_with_keep_onnx_off_gets_the_successor_downloaded(
+    tmp_path, monkeypatch
+):
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+
+    future = controller._start_retirement_download()
+
+    assert future is not None
+    future.result(timeout=30)
+    assert started == [("granite-speech-5.0-2b", str(tmp_path / "models"))]
+    controller.shutdown()
+    _ = app
+
+
+def test_initialize_starts_the_retirement_download(tmp_path, monkeypatch):
+    controller, app, _started = _a_moved_granite_user(tmp_path, monkeypatch)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        controller, "_start_retirement_download", lambda: calls.append("download")
+    )
+
+    controller.initialize()
+
+    assert calls == ["download"]
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"offline_mode": True},
+        {"engine": "openai"},
+        {"model_size": "small"},
+    ],
+    ids=["offline mode", "another engine", "another model selected"],
+)
+def test_no_download_starts_when_the_notice_would_not_promise_one(
+    tmp_path, monkeypatch, fields
+):
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    controller._settings = replace(controller._settings, **fields)
+
+    assert controller._start_retirement_download() is None
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_successor_already_on_disk_is_not_downloaded_again(tmp_path, monkeypatch):
+    import stt_app.transcriber.local_faster_whisper as whisper_module
+
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        whisper_module, "find_cached_models", lambda _dir="": ["granite-speech-5.0-2b"]
+    )
+
+    future = controller._start_retirement_download()
+
+    assert future is not None
+    future.result(timeout=30)
+    assert started == []
+    controller.shutdown()
+    _ = app
