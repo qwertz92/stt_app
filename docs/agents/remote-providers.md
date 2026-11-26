@@ -222,6 +222,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   handshake the server aborted, a protocol mismatch) now gets the proxy
   guidance too, which is the right first suggestion behind a TLS-intercepting
   proxy and a harmless one otherwise.
+- **A refusal of `open_request` during a poll names the job** (2026-11-26):
+  `speechmatics_provider._job_request` appends "Job id ..." to the
+  `TranscriptionError` that `open_request` raises for a refused redirect or an
+  unsendable header, as `_job_poll` requires of every poll error; the status
+  and transcript fetches had let it through without the id.
 - **A Meta key check that cannot reach Meta says that, not "transcription
   failed"** (2026-11-26): the check is a one-second upload, and a timeout or a
   refused connection surfaced as "Meta (Muse Voice) transcription failed:

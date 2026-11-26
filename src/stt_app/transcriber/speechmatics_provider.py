@@ -152,6 +152,18 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             request, timeout=self._request_timeout_s, provider_name=_PROVIDER
         )
 
+    def _job_request(self, url: str, job_id: str):
+        """`_request` for a job that exists.
+
+        `open_request` refuses a redirect or an unsendable header with a
+        `TranscriptionError` of its own; the job is already running, so that
+        error names it like every other poll error (`_job_poll`).
+        """
+        try:
+            return self._request(url)
+        except TranscriptionError as exc:
+            raise TranscriptionError(f"{exc} Job id {job_id}.") from exc
+
     def _format_error(self, exc: Exception) -> str:
         if _is_ssl_error(exc):
             return format_ssl_error_message(_PROVIDER)
@@ -239,7 +251,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         """One status request. A `TranscriptionError` ends the poll at once;
         anything else raised here is a failed fetch the poll retries."""
         try:
-            with self._request(f"{self._base_url}/jobs/{job_id}") as resp:
+            with self._job_request(f"{self._base_url}/jobs/{job_id}", job_id) as resp:
                 answer = json.loads(resp.read().decode("utf-8", errors="replace"))
         except urllib.error.HTTPError as exc:
             if exc.code in _FINAL_HTTP_CODES:
@@ -256,8 +268,8 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
 
     def _fetch_transcript(self, job_id: str) -> str:
         try:
-            with self._request(
-                f"{self._base_url}/jobs/{job_id}/transcript?format=txt"
+            with self._job_request(
+                f"{self._base_url}/jobs/{job_id}/transcript?format=txt", job_id
             ) as resp:
                 payload = resp.read()
         except urllib.error.HTTPError as exc:

@@ -272,6 +272,25 @@ class TestSpeechmaticsErrors:
         with pytest.raises(TranscriptionError, match=_JOB_ID):
             _transcriber().transcribe_batch(wav_seconds(1.0))
 
+    @pytest.mark.parametrize("step", ["status", "transcript"])
+    def test_a_refused_redirect_after_the_submit_names_the_job(self, service, step):
+        """`open_request` refuses a redirect with a `TranscriptionError` of its
+        own; the job is already running, so the user needs its id like in every
+        other poll error."""
+        refusal = TranscriptionError(
+            "Speechmatics: the server redirected (HTTP 302) to another origin, "
+            "https://login.example/x; the API key is not sent there."
+        )
+        if step == "status":
+            service.status_errors = [refusal]
+        else:
+            service.transcript_errors = [refusal]
+        with pytest.raises(TranscriptionError) as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        message = str(caught.value)
+        assert "redirected (HTTP 302)" in message
+        assert message.endswith(f"Job id {_JOB_ID}.")
+
     def test_a_job_that_never_finishes_is_bounded(self, service):
         service.statuses = ["running"]
         with pytest.raises(TranscriptionError, match="did not finish") as caught:
