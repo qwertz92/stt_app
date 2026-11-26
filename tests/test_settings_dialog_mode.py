@@ -556,15 +556,15 @@ def test_local_distil_model_limits_language_to_auto_and_english():
 
 
 def test_the_english_only_note_names_the_selected_model():
-    """There are two English-only local models now, and the note hard-coded
-    the name of the first one -- so selecting the other was answered with a
-    sentence about a model the user had not chosen."""
+    """The note names the model that is selected, not a hard-coded one: it
+    was written when two local models were English-only and answered the
+    second with a sentence about the first."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(
             engine="local",
             mode="batch",
-            model_size="granite-speech-5.0-470m-turboctc",
+            model_size="distil-large-v3.5",
             language_mode="de",
         )
     )
@@ -577,12 +577,11 @@ def test_the_english_only_note_names_the_selected_model():
     note = dialog.language_note_label.text()
     assert _combo_data(dialog.language_combo) == ["auto", "en"]
     assert "English-only model" in note
-    assert "IBM Granite Speech 5.0 470M" in note
-    assert "distil" not in note.lower()
-    # The name as the combo shows it, not the settings id and not the whole
-    # entry with its size and runtime parenthetical.
-    assert "granite-speech-5.0-470m-turboctc" not in note
-    assert "552" not in note
+    assert "distil-large-v3.5" in note
+    assert "Granite" not in note
+    # Not the whole combo entry with its size and runtime parenthetical.
+    assert "1,516" not in note
+    assert "1.52 GB" not in note
     _ = app
 
 
@@ -3717,7 +3716,7 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
     }
 
     assert rows["granite-speech-5.0-470m-turboctc"].endswith(
-        " - Downloaded, English only, ONNX Runtime INT8 CTC, CPU, batch only"
+        " - Downloaded, ONNX Runtime INT8 CTC, CPU, batch only"
     )
     # One rule for every ONNX runtime: the two onnx-asr rows used to end at
     # "Not downloaded", as if they could stream like the Whisper sizes.

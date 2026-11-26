@@ -1133,12 +1133,10 @@ class _GeneralTabMixin:
             )
         elif engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
             style = note_style
-            # The casing and the missing punctuation are what the CTC head
-            # writes, not a setting -- say so here rather than let it look
-            # like a defect after the first dictation.
             text = (
-                "Batch mode only, CPU. English only; writes lowercase text "
-                "without punctuation."
+                "Batch mode only, CPU. Detects English, French, German, "
+                "Spanish, Portuguese, Italian or Japanese itself; no "
+                "language selection needed."
             )
         elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             style = note_style

@@ -44,7 +44,7 @@ LANGUAGE
 faster-whisper then detects it, Parakeet ignores it, and Cohere falls back to
 German because it has no auto mode at all. Name the clip's real language when
 you know it; the numbers are then comparable with the benchmark history. An
-English-only model (the Granite CTC graph) is refused for any language but
+English-only model (distil-large-v3.5) is refused for any language but
 English, so with another language it runs in a pass of its own on `auto`:
 that proves its frozen runtime, though its text is then no transcript.
 

@@ -577,10 +577,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   (`LOCAL_MODEL_RUNTIME` `granite-ctc`), owning its `InferenceSession`:
   `input_features` float32 `[1, frames, 320]` -> `logits`
   `[1, frames // 4, 16384]`, numpy log-mel, greedy CTC (blank 0),
-  `tokenizers` BPE decode; no new dependency. Weights
-  `qwertz92/granite-speech-5.0-470m-turboctc-onnx` rev `e6e3b4d`, nine files,
-  552,442,697 bytes (`snapshot_download(dry_run=True)`); `onnx/model_int8.onnx`
-  only (`onnx/*.onnx` would add fp32 and fp16).
+  `tokenizers` decode; no new dependency. Since 2026-11-25 the multilingual
+  revision (IBM `91dcb06`, 2026-10-21; en, fr, de, es, pt, it, ja; punctuated,
+  capitalised, language detected by the model): weights
+  `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx`
+  (our own INT8 export, `onnx/model_int8.onnx` 551,294,349 bytes, sha256
+  `373123d8...1110f`; IBM publishes no ONNX of it). The English-only export
+  `qwertz92/granite-speech-5.0-470m-turboctc-onnx` rev `e6e3b4d` (nine files,
+  552,442,697 bytes) is no longer downloaded; its folder stays on disk,
+  unlisted. `onnx/model_int8.onnx` only (`onnx/*.onnx` would add fp32 and fp16
+  if a repository held them).
   - No GPU path: DirectML saves 0.10-0.18 s per 29.4 s clip over INT8 CPU
     for a 1-2 GB download and a raw-graph Node runtime. Not built.
   - The extractor is a numpy port of `GraniteSpeech5FeatureExtractor` (which
@@ -592,10 +598,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     garbage.
   - Passes of at most `_MAX_PASS_SECONDS` (180 s), cut at the quietest 20 ms
     frame of each window's last 15 s (one pass of 563 s peaked at 2.39 GB).
-  - Lower case without punctuation is the model; do not post-process.
-  - English only, no language input: `LOCAL_ENGLISH_ONLY_MODELS` gives
-    `("auto", "en")`; code that assumed `distil-large-v3.5` was the only one
-    reads the set.
+  - Punctuated and capitalised output is the model; do not post-process.
+  - No language input: Auto only (`MODEL_LANGUAGE_MODES`), so a saved
+    language of an earlier build is not offered and falls back to Auto.
+    `<|nospeech|>` (id 1) is a special token the decode skips: silence is an
+    empty string. Blank is id 0 (`<unk>`).
+  - Measured 2026-11-25 (25 + 25 FLEURS clips): INT8 de 4.27 / en 4.14, fp32
+    de 3.46 / en 4.70, RTF 0.023 against 0.068; shipped English-only INT8 en
+    5.83.
   - Cancel reuses `_RunAbortHandle` / `_CancelWatchdog` from `local_onnx_asr`
     with its own `RunOptions`, checked before load, between passes and
     mid-run (0.46 s). The load itself (tokenizer, `InferenceSession`, ~1.4 s)

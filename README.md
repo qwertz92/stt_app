@@ -97,9 +97,10 @@ Speech Pro measured German 3.3 % and English 3.6 % against its 6.5 % and
 4.9 % at about three times the processing time (2026-11-25 test,
 `docs/models.md`).
 **Granite Speech 5.0 470M TurboCTC** runs on ONNX Runtime on the CPU with no
-Node.js either; it is the fastest local model on English (RTF 0.014 on a
-Ryzen 5 7600X) and the smallest non-Whisper download, but it is English only
-and writes lower case without punctuation or apostrophes.
+Node.js either; it is the fastest local model (RTF 0.023 on a Ryzen 5 7600X)
+and the smallest non-Whisper download, and it writes punctuated text in seven
+languages (English, French, German, Spanish, Portuguese, Italian, Japanese),
+detecting the language itself.
 **Nemotron 3.5** is the only local true-streaming
 model. **Whisper models** (CTranslate2) need no extra setup, run on the CPU, and
 also support streaming.
@@ -115,7 +116,7 @@ also support streaming.
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
-| English only, fastest, plain lower-case text is acceptable | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
+| Fastest, seven languages, punctuated | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
 measured a mean real-time factor of 0.043 on a Ryzen 5 7600X, against 0.154 for

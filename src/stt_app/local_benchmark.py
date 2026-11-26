@@ -414,7 +414,7 @@ def _run_onnx_case(
             "translates instead of transcribing."
         )
     # Parakeet ignores the language and only offers "auto"; the Granite CTC
-    # graph is English-only and offers "auto" for the same reason.
+    # graph detects the language itself and offers "auto" for the same reason.
     default_language = (
         "auto"
         if model_name in LOCAL_NEMOTRON_MODEL_SIZES
@@ -446,8 +446,8 @@ def _run_onnx_case(
             model_dir=model_dir,
         )
     elif model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
-        # Also CPU-only, and English-only: it normalizes any language to its
-        # single supported mode itself, exactly as Parakeet does.
+        # Also CPU-only, and with no language input: it normalizes any
+        # language to its single supported mode itself, as Parakeet does.
         transcriber = LocalGraniteCtcTranscriber(
             model_size=model_name,
             language_mode=language_mode,
@@ -792,9 +792,9 @@ def run_benchmark_cases(
                 language or "auto"
             ).lower() not in {"auto", "en"}:
                 # The Run Benchmark window refuses this before the run; the
-                # CLI and every other caller arrive here. The Granite CTC
-                # graph takes no language input, so it decoded English and
-                # the run was stored under the language that was asked for.
+                # CLI and every other caller arrive here. A model that
+                # decodes English whatever was spoken would otherwise be stored
+                # under the language that was asked for.
                 raise ValueError(
                     f"{model_name} transcribes English only, so it was not "
                     f"run with the language '{language}'. Use Auto or English."

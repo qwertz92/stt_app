@@ -107,7 +107,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary and FluidVoice's
   Fluid Speech Pro, CPU only
 - numpy + ONNX Runtime (CPU provider) + `tokenizers` for IBM Granite Speech 5.0
-  470M TurboCTC (INT8, English only, batch only)
+  470M TurboCTC (INT8, multilingual, batch only)
 - Remote providers: AssemblyAI (SDK batch AssemblyAI-STT-3.7 + STT-3.7-Realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
@@ -136,7 +136,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_onnx_asr.py` | Batch-only NeMo-family models (Parakeet TDT, Fluid Speech Pro, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate`; also home of the WAV reader, the abort handle and `resolve_or_download_onnx_model`, which the Granite CTC runtime shares |
-| `transcriber/local_granite_ctc.py` | Batch-only IBM Granite Speech 5.0 470M TurboCTC: numpy log-mel features, the INT8 CTC graph on ONNX Runtime's CPU provider, greedy CTC and `tokenizers` decode; English only, passes of at most 180 s, mid-run cancel via `RunOptions.terminate` |
+| `transcriber/local_granite_ctc.py` | Batch-only IBM Granite Speech 5.0 470M TurboCTC: numpy log-mel features, the INT8 CTC graph on ONNX Runtime's CPU provider, greedy CTC and `tokenizers` decode; seven languages detected by the model (Auto only), passes of at most 180 s, mid-run cancel via `RunOptions.terminate` |
 | `transcriber/_pcm_audio.py` | Linear resampling (Nemotron, Granite CTC), the quiet-point splitter (Granite CTC passes, remote batch parts) and the 16-bit mono WAV encoder |
 | `transcriber/_audio_parts.py` | Sends a remote batch recording past its engine's limit (`config.remote_batch_part_limit`) as consecutive WAV parts through the provider's own single-request code (OpenAI, Groq, Azure) |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |

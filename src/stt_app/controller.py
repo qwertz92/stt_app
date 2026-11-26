@@ -11533,8 +11533,7 @@ class DictationController(QtCore.QObject):
         (`transcribe_unfinished_recording`). A language the engine does not
         offer is never passed on: the provider's own normalization would
         substitute one -- for Canary the first language of its list, so the
-        audio is translated, for Cohere German, for Granite CTC (English
-        only) an English decoding of whatever was spoken -- and a wrong
+        audio is translated, for Cohere German -- and a wrong
         transcript in History is worse than the language the user selected
         for this engine, which is what stays. Logged, once per decision.
         """

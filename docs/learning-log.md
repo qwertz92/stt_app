@@ -309,6 +309,18 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
   difference inside the noise), Whisper `small` (German 6.10, English
   5.64; the one Whisper that streams on a CPU-only laptop) and the three large
   Whisper models.
+- **Multilingual TurboCTC (code ready, hosted file pending).** IBM's 2026-10-21
+  revision (`91dcb06`) covers en, fr, de, es, pt, it and ja with punctuation;
+  IBM publishes no ONNX of it, so the owner's export scripts were rerun on it
+  (INT8 551,294,349 bytes). On the same 25 + 25 clips: INT8 de 4.27 / en 4.14,
+  fp32 3.46 / 4.70, the shipped English-only INT8 en 5.83, RTF 0.023. The
+  app's extractor, greedy CTC and `tokenizers` decode needed no change (the
+  `<|nospeech|>` token, id 1, is special and decodes to nothing); what changed
+  is metadata: Auto only, no longer in `LOCAL_ENGLISH_ONLY_MODELS`, labels, and
+  `MODEL_REPO_MAP` pointing at the new repository
+  `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx`. Until that
+  repository exists the model cannot be downloaded; after the upload its
+  commit goes into `_GRANITE_CTC_INT8_LAYOUT.revision`.
 - **Lesson: a model's own prompt belongs to its generation.** The 4.x
   instruction ("transcribe the speech into a written format") made Granite 5.0 2B
   answer German clips in English (German WER 15.0). IBM's punctuation

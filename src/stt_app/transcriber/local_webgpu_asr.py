@@ -306,10 +306,11 @@ _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     required_files=_NEMOTRON_INT4_REQUIRED_FILES,
 )
 
-# Granite Speech 5.0 TurboCTC. Its repository ships all three precisions of one
-# single-file graph -- `onnx/model.onnx` (1.76 GiB), `onnx/model_fp16.onnx` and
-# `onnx/model_int8.onnx` -- so the file is named exactly rather than matched
-# with `onnx/*.onnx`, which would fetch 3.2 GiB for a 552 MB model.
+# Granite Speech 5.0 TurboCTC (multilingual). The graph is one file,
+# `onnx/model_int8.onnx` (551 MB). The earlier English-only export repository
+# also held `onnx/model.onnx` (1.76 GiB) and `onnx/model_fp16.onnx`, so the file
+# is still named exactly rather than matched with `onnx/*.onnx`, which would
+# fetch 3.2 GiB for a 552 MB model if a repository ever carried all three.
 _GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
     name="granite_ctc_int8",
     precision="int8",

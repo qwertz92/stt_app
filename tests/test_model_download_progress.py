@@ -321,7 +321,7 @@ def test_the_baseline_counts_the_flat_layout_without_its_partials(tmp_path):
     percentage through the per-file bar's `initial=`, so counting them here
     would count them twice.
     """
-    destination = tmp_path / "granite-speech-5.0-470m-turboctc-onnx"
+    destination = tmp_path / "granite-speech-5.0-470m-turboctc-multilingual-onnx"
     _write(destination / "config.json", 1_148)
     _write(destination / "onnx" / "model_int8.onnx", 4_000_000)
     _write(
@@ -658,7 +658,7 @@ def test_download_webgpu_model_snapshot_counts_the_files_already_on_disk(
 
     from stt_app.transcriber import local_webgpu_asr
 
-    destination = tmp_path / "granite-speech-5.0-470m-turboctc-onnx"
+    destination = tmp_path / "granite-speech-5.0-470m-turboctc-multilingual-onnx"
     _write(destination / "onnx" / "model_int8.onnx", 4_000_000)
     monkeypatch.setattr(
         huggingface_hub,
