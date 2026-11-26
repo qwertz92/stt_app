@@ -153,7 +153,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
-| `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
+| `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard; reports each restoring paste's read receipt once |
+| `clipboard_owner.py` | Message-only clipboard owner window on its own thread: the transcript is announced (delayed rendering) and the request for it is the paste's read receipt (`read` / `unread` / `unknown`); refuses clipboard sync programs that are not the target |
+| `clipboard_copy.py` | `copy_text`: the one way the app copies text outside a paste (Copy buttons, tray, copy-on-error); written through the clipboard backend, never through `QClipboard` from Python (a test scans the package for it) |
+| `own_window_focus.py` | Whether a window of this app would take a pasted transcript (only an editable text widget), asked before the clipboard is touched |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, microphone menu and opacity slider in the footer, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |

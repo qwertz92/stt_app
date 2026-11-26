@@ -43,7 +43,6 @@ from .settings_dialog_helpers import (
     _CONCURRENT_MODE_UI_CHOICES,
     _INLINE_FIELD_BUTTON_SPACING_PX,
     _INSERT_TARGET_LABELS,
-    _MODE_LABELS,
     _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
@@ -58,6 +57,7 @@ from .settings_dialog_helpers import (
     local_model_label,
     local_model_precision_label,
     local_model_short_label,
+    mode_label,
     model_choices_for_engine,
     onnx_device_label,
     onnx_device_order_text,
@@ -210,8 +210,10 @@ class _GeneralTabMixin:
         # reason was only a tooltip, and a silent flip to Batch when the
         # engine or model changed (owner's request 2026-11-24).
         self.mode_combo = _WheelPassthroughComboBox()
+        # Built with the longer Streaming label (no selection yet counts as
+        # experimental); `_update_mode_labels` shortens it for Nemotron.
         for value in VALID_MODES:
-            self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)
+            self.mode_combo.addItem(mode_label(value, ""), value)
         self.mode_combo.setToolTip(
             "Streaming inserts only stable append-only text while speaking and "
             "suspends live insertion on focus change. Batch remains the recommended default."
@@ -786,10 +788,14 @@ class _GeneralTabMixin:
             model = self._remote_model_value_for_provider(engine)
 
         if engine == "assemblyai" and mode == "streaming":
-            return (
-                "AssemblyAI streaming always uses automatic language detection "
-                "(language is fixed to Auto)."
-            )
+            fallback = self._language_fallback
+            if fallback is not None:
+                return (
+                    f"AssemblyAI streaming does not offer "
+                    f"{LANGUAGE_MODE_LABELS.get(fallback[1], fallback[1])}; it "
+                    "streams in Auto. The saved choice is kept."
+                )
+            return ""
 
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
             # Named from the selection: there is more than one English-only
@@ -1303,6 +1309,7 @@ class _GeneralTabMixin:
         is never switched silently: it stays and is flagged in red.
         """
         self._update_mode_hint()
+        self._update_mode_labels()
         streaming = self._streaming_mode_selected()
         current_engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         view = self.engine_combo.view()
@@ -1337,6 +1344,16 @@ class _GeneralTabMixin:
             ]
             if sorted(shown) != sorted(wanted):
                 self._refresh_model_combo()
+
+    def _update_mode_labels(self) -> None:
+        """Say "Experimental" only while the current selection is.
+
+        Only the text changes; the stored value stays "streaming".
+        """
+        engine, model_name = self._pending_engine_selection()
+        for index in range(self.mode_combo.count()):
+            value = str(self.mode_combo.itemData(index))
+            self.mode_combo.setItemText(index, mode_label(value, engine, model_name))
 
     def _update_mode_hint(self) -> None:
         if not hasattr(self, "mode_hint_label"):

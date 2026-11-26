@@ -175,16 +175,253 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     (SendInput goes to the focus, not `target_hwnd`); a change from the
     snapshot raises retryable `TextInsertionError` and restores at once; an
     unreadable (None) foreground is no change. WM_PASTE skips it.
-  - `wait_for_modifier_release` (bounded poll) runs before injecting, or a
-    hotkey's held Ctrl/Alt turns Ctrl+V into a no-op. WM_PASTE skips it.
-  - No Windows API says "the target read it". Rejected: `WM_RENDERFORMAT`
-    delayed rendering (needs an owner window with a message pump, and
-    clipboard history and clipboard managers consume it); a UI Automation
-    read-back (heavy and per application); an owner window without a pump
-    (blocks every other program's `EmptyClipboard`).
+  - `wait_for_modifier_release` (bounded poll) runs before the clipboard is
+    touched, or a hotkey's held Ctrl/Alt turns Ctrl+V into a no-op. WM_PASTE
+    skips it.
+  - *The modifier keys are read once more immediately before the keystroke*
+    (2026-11-25, `_hold_the_keystroke_while_a_modifier_is_down`). The first
+    wait ends before the write, the settle sleep and the check of the write,
+    about 25 ms before the keystroke. A Ctrl+Alt pressed inside that gap --
+    the record hotkey of the next dictation, and results arrive exactly
+    while recordings are started and stopped -- made the target see
+    Ctrl+Alt+V, which pastes nothing, under a transaction that logged
+    `outcome=pasted`. A key that is down is waited for again, then the
+    clipboard and the foreground are checked again (the key may have been
+    the Ctrl of a Ctrl+C or the Alt of an Alt+Tab);
+    `PASTE_MODIFIER_RECHECK_ROUNDS` (2) such waits, then a retryable
+    `TextInsertionError` ("kept being pressed"). With no key down it costs
+    one `GetAsyncKeyState` round and no sleep. WM_PASTE skips it. The
+    owner's log (2026-10-24..11-24) shows first waits of 200-400 ms because
+    a hotkey was still held when a result arrived (`press_to_handle_ms=219`
+    next to one), so keys do move around pastes; no lost paste could be
+    pinned on exactly this gap.
+  - No Windows API says "the target inserted it". What exists is the read
+    receipt below ("A restoring paste has a read receipt"): it proves that
+    nobody fetched the transcript, never that an element took it. Rejected:
+    a UI Automation read-back (heavy and per application); an owner window
+    without a pump (blocks every other program's `EmptyClipboard`).
     `keep_transcript_in_clipboard` skips the restore. The target check
     below answers a narrower question afterwards: whether the focus showed
     a caret.
+- **A restoring paste has a read receipt** (2026-11-25,
+  `clipboard_owner.ClipboardOwner`, wired in `main.py`; a `TextInserter()`
+  or `Win32ClipboardBackend()` without an owner writes plain data as before,
+  which the test doubles and the release checks get).
+  - *Mechanism.* `offer_clipboard_text` opens the clipboard for the owner's
+    message-only window, empties it and sets `CF_UNICODETEXT` with a NULL
+    handle (delayed rendering); the Win+V exclusion formats are data as
+    before. Windows sends that window `WM_RENDERFORMAT` when a program calls
+    `GetClipboardData`; the procedure answers with the transcript and
+    records the time and the reader (`GetOpenClipboardWindow` -> pid ->
+    image name). The window has a thread of its own because the request is
+    a *sent* message: the reader blocks until the procedure returns, and a
+    WM_PASTE sent from the Qt thread would wait for a request that thread
+    cannot answer. `self._api` is set before `CreateWindowEx` (Windows calls
+    the procedure from inside it; answered with an exception, the first real
+    window was never created), and every window registers a class of its own
+    (a class keeps the procedure it was registered with).
+  - *Verdicts* (`PasteReceipt`): `unread` -- nobody fetched it; `read` --
+    the first fetch came after the keystroke from a process of the paste's
+    window (its own pid and its child windows'); `unknown` -- anything
+    else: fetched before the keystroke, by another or an unidentifiable
+    program, by this app's own read (`own_read`), or the transcript stays
+    on the clipboard (`transcript_stays`). Once served the data is ordinary
+    clipboard content and later reads are invisible. **Only `unread` changes
+    what the user is told.**
+  - *What it proves, measured 2026-11-25 with the shipped `TextInserter` on
+    real windows* (scratch probes, not in the repository). EDIT window: 19
+    of 20 pastes `read reason=target` a median 5 ms after the keystroke
+    (max 8) and landed; the twentieth did not land and read `unread`. Edge
+    and Chrome, page focused: textarea (20 + 20) and contenteditable
+    (10 + 10) all landed, every receipt `unknown
+    reason=unidentified_reader`, fetched a median 4-8 ms after the
+    keystroke (max 42) -- Chromium opens the clipboard without naming a
+    window, so its reader has no pid. Focus on a button and on the page
+    body (6 + 6 each; the page saw every paste event): nothing was inserted
+    and the text was fetched all the same, a median 4-5 ms after the
+    keystroke (max 15). A page whose main thread was busy for 2.2 s:
+    fetched 2-5 ms after the keystroke, and the field received the *old*
+    clipboard text after the 1.5 s restore (Edge with the receipt and
+    without; Chrome with it, the run ended before the plain one). So in
+    Chrome and Edge something fetches the text on every Ctrl+V whatever has
+    the focus, and the read that feeds the paste comes later, unseen.
+    *Electron is different* (a throwaway VS Code instance, Electron 43.8.9 /
+    Chromium 150, a textarea, a contenteditable and a button added to its
+    workbench page): textarea 8 of 8 and contenteditable 5 of 5 landed with
+    one fetch 7-39 ms after the keystroke (once 200 ms, right after the
+    window came to the front); focus on the button and on the page body
+    (5 + 5, the page saw every paste event): **no request at all**, so the
+    receipt reads `unread`; a page busy for 2.2 s fetched the text after
+    2.04 s and the field received the *transcript*, because the unfetched
+    transcript waited (next item). Consequences: `read` and `unknown` never
+    claim "inserted" and never overrule the target check; in an Electron
+    window a paste that reached no text field is `unread` and reported; in
+    Chrome and Edge the receipt catches only a keystroke that reached nobody
+    (`docs/agents/known-limitations.md`). No false alarm: every one of the
+    114 landed pastes had a fetch (19 EDIT, 60 + 22 browser, 13 Electron).
+    The Claude desktop app is an Electron app and was not driven itself
+    (it is the owner's running app); its `paste_receipt` lines will show
+    whether it behaves like the VS Code window.
+  - *Refusing the browser's first fetch was tried and is not shipped*
+    (2026-11-25, scratch code). Edge: with the first request after the
+    keystroke refused, 13 of 13 pastes landed through a second request 2-26
+    ms later, button and body (5 + 5) raised no second request, and the busy
+    page fetched after 2.06 s and received the transcript. Chrome: 13 of 13
+    landed, but with the focus on the body a second request came 220-267 ms
+    later all the same and the busy page still received the old text.
+    Electron: the textarea received nothing in 8 of 8, because its one
+    request is the paste itself (the contenteditable asked a second time
+    within a millisecond and landed 5 of 5). A rule that helps one browser,
+    half-helps another and breaks text fields in every Electron app is not
+    one to ship. Why Chrome and Edge make the extra request was not
+    established.
+  - *`unread` is evidence, not a guess*: the transcript left the clipboard
+    without any program having fetched it, so it is in no window, whatever
+    the reason (focus on an element that takes no paste, a swallowed chord,
+    an elevated window that never got the keystroke). The controller makes
+    it a failed paste (below, "An unread receipt is a failed paste").
+  - *An unfetched transcript waits.* When the restore is due
+    (`CLIPBOARD_RESTORE_DELAY_S`, 1.5 s) and the receipt is still `unread`,
+    the restore is put off until `PASTE_READ_RECEIPT_WAIT_S` (3 s) after the
+    keystroke (`clipboard_restore outcome=unread_rescheduled`), and
+    `paste_pace_remaining_s` lasts as long, so a queued paste does not
+    replace a transcript whose reader is still to come. Not while the offer
+    is no longer intact (the user copied something else). A target still
+    busy at `CLIPBOARD_RESTORE_MAX_WAIT_S` keeps the transcript as before;
+    its receipt is then `unknown reason=transcript_stays` and the offer is
+    released.
+  - *An announced transcript is never read back.* The pre-keystroke check,
+    the take-over and the restore check ask `offer_intact` instead: the
+    owner window still owns the clipboard and has had no
+    `WM_DESTROYCLIPBOARD`. A read would be served by our own window and use
+    the receipt up. Once that fails, what is there is someone else's and is
+    read like any content.
+  - *Clipboard sync programs are refused* (`CLIPBOARD_SYNC_PROGRAMS`:
+    `msrdc.exe`). WSLg's `msrdc.exe` asked for the text 1-3 ms after every
+    write on the owner's PC, before any keystroke; served, every receipt
+    read "before the keystroke". A refused request leaves the format
+    unrendered and the next reader is asked again (measured: the refused
+    reader got no data, the next one all of it; `msrdc.exe` did not ask
+    again within 4 s). Not refused while it is the paste's target (a Linux
+    GUI window), and not for a released offer. Windows' own clipboard
+    history did not ask within 3 s with the exclusion formats set. Any other
+    manager that fetches first makes the receipt `unknown`: no evidence,
+    never a false alarm.
+  - *One report per paste* (`set_paste_receipt_handler`, `paste_receipt
+    id= verdict= reason= reader= read_ms= refused= after_ms=`, never text):
+    when the restore ran or found the clipboard changed, when the next paste
+    replaced the transcript (asked after that paste's own write; an ended
+    offer keeps its receipt, `_OFFERS_KEPT`), when the transcript stays, and
+    at the shutdown flush. "Keep transcript in clipboard" writes plain data
+    and has no receipt: that text must outlive the app. A WM_PASTE's offer
+    is served but not reported.
+  - *Cost* (measured): the announced write a median 1.29 ms against 1.16 ms
+    plain (n=40); `offer_intact` 0.02 ms; `insert_text_with_options` a
+    median 31 ms either way (EDIT, n=20). The target's fetch waits for the
+    owner thread to get the interpreter: the text was in the EDIT a median
+    12.7 ms after the keystroke with the receipt against 3.5 ms without (max
+    18 against 4 ms).
+  - *Risk taken.* While a transcript is announced (1.5-3 s per paste) any
+    program that pastes waits in `GetClipboardData` until the owner thread
+    answers; a process that cannot run Python for that long makes that
+    program wait. At shutdown `TextInserter.close` (after the controller's
+    flush) ends the window, and `WM_RENDERALLFORMATS` writes out a
+    transcript it still owes. `main` registers the same `close` with
+    `atexit`, for an exit that never reaches `aboutToQuit` (an exception
+    out of `run`); the second call is a no-op. A killed process -- the
+    quit watchdog's exit included -- runs neither, and the announced text
+    is then gone from the clipboard (known limitation).
+  - *Text.* The owner hands out `clipboard_text_payload(text)`: UTF-16
+    with `surrogatepass`, so a lone surrogate goes out as its code unit
+    like in the plain write. Encoded strictly it raised in the window
+    procedure: the reader got nothing and the receipt read `read`.
+- **The app never touches the clipboard through Qt from Python**
+  (2026-11-25, review P2; `clipboard_copy.copy_text`, the one function for
+  "copy this text"). Every Copy button, the tray's copy actions,
+  "Keep transcript in clipboard" and the copy-on-error fallback call it; its
+  writer is `TextInserter.copy_text`, installed once in `main.py`. Why:
+  PySide keeps the interpreter lock for the whole of `QClipboard.setText`,
+  and while a transcript is announced (entry above) that call's
+  `EmptyClipboard` sends the owner window `WM_DESTROYCLIPBOARD`, whose
+  procedure is a Python callback on another thread. Measured with
+  `scripts/diagnose_clipboard_copy_stall.py`: the Qt write returned after
+  5012 ms (the reviewer: 5004, 5006, 5017 ms; a `QClipboard.text()` in that
+  state did not return within 40 s), `TextInserter.copy_text` after 1.1 ms
+  during a live offer and 0.8 ms without one. The backend's Win32 calls
+  release the lock, so the owner thread answers.
+  - `TextInserter.copy_text` writes plain text and settles a paste whose
+    restore is still pending: the clipboard captured before that paste is
+    dropped instead of being put back, and the paste's receipt is reported
+    as it stands. Before, a copy of the pasted transcript itself (tray,
+    "Copy last transcript" right after a paste) was undone 1.5 s later: the
+    restore found its own text on the clipboard and took it for its own
+    write. A write that fails leaves the pending restore alone.
+  - `copy_text` answers False instead of raising, and a caller shows
+    "Copied" only for True (the clipboard can be held by another program).
+  - Gate: `tests/test_clipboard_copy.py` parses every module of the package
+    and fails on an attribute, name or import called `clipboard` or
+    `QClipboard`. Qt's own C++ reads (a Ctrl+V in a text field of ours) are
+    not Python-level and are covered by the own-window rule below.
+- **A paste into a window of this app is written plainly, without a
+  receipt** (2026-11-25, lead's decision after the review;
+  `Win32ClipboardBackend.offer_clipboard_text`: the target window's
+  process, or a child window's, is this one). Qt reads the clipboard on
+  the Qt thread and the owner window answers from a Python callback on
+  its own thread, so a field whose key or paste handling runs through a
+  Python override (`keyPressEvent`, `event`, `insertFromMimeData`) holds
+  the interpreter lock while it waits for that answer. Measured with
+  `scripts/diagnose_own_window_paste.py`, one real Ctrl+V per field,
+  announced (before) against plain (after), time until the field showed
+  the text: QLineEdit 44 against 27 ms, QPlainTextEdit 68 against 70 ms,
+  the Settings spin box 24 against 24 ms, the double spin box 24
+  against 23 ms (one paste each, so 2 ms is noise); a QLineEdit with a
+  Python `keyPressEvent` never showed
+  it and the Qt thread stood still for 35.2 s, against 25 ms after. The
+  app has no such field today; the rule is what keeps a future one from
+  freezing it. Such a paste has no receipt (verdict unknown, as in
+  v0.13.0); the own-window check above still refuses a focus that takes
+  no text before the clipboard is touched.
+- **No transcript is announced while an in-process ONNX runtime is in
+  use** (2026-11-25, review P3; `TextInserter.set_offer_gate`,
+  `DictationController._paste_may_be_announced`,
+  `config.LOCAL_INTERPRETER_HOLDING_*_MODEL_SIZES`). The owner window hands
+  the text out from a Python callback, so a program that fetches it waits
+  as long as another thread keeps the interpreter lock in one piece. The
+  reviewer measured 2316 ms for another program's `GetClipboardData`
+  during one native call of 2.9 s. What the app's own work does, measured
+  with `scripts/diagnose_interpreter_stall.py` (a pure-Python thread
+  sleeping 1 ms; longest time between two wake-ups; 30 s of English
+  speech on the CPU; other agents' test runs were active, so the figures
+  are noisy upwards):
+
+  | Work | Longest stall |
+  | ---- | ------------- |
+  | nothing (the ticker alone) | 2 ms |
+  | faster-whisper tiny: load / transcribe | 62 ms / 18 ms |
+  | Parakeet TDT 0.6B v3 (onnx-asr): load / transcribe | 1694 ms / 10 ms |
+  | Granite 5.0 470M TurboCTC: load / transcribe | 1047 ms / 4 ms |
+  | Nemotron 3.5 INT4 (ONNX Runtime GenAI): load / transcribe | 1916 ms / 827 ms |
+  | Silero speech check: build the session | 33 ms |
+  | Settings dialog: build and show / close | 225 ms / 4 ms |
+
+  So creating an ONNX session keeps the lock (ONNX Runtime releases it in
+  `run`, not in the constructor) and Nemotron's decoding does too. Rule:
+  a runtime lease for onnx-asr, Granite CTC or Nemotron is tracked from
+  acquisition to release, whether a preload (the post-resume one
+  included), a batch job or a stream holds it. While such a lease's model
+  is not loaded yet (`is_model_loaded`; the load is lazy and may start at
+  any moment) -- and for Nemotron while the lease lives at all -- a paste
+  is the plain write with no receipt (`paste_receipt_skipped
+  reason=interpreter_busy`). A loaded Parakeet, Canary or Granite CTC
+  model decoding the next queued recording does not cost the paste of
+  the previous result its receipt. faster-whisper, the Node runner
+  (another process)
+  and the remote engines (they wait on a socket; not measured) keep the
+  receipt. Not covered, accepted: a load that *begins* in the 1.5-3 s
+  after an announced paste, and work on the Qt thread in that window
+  (opening Settings), delay a program that fetches the text late by the
+  figures above; the targets measured fetched within 18 ms of the
+  keystroke (EDIT) and a median 4-8 ms (Chrome, Edge).
 - **The clipboard is put back with every format it held** (F12;
   `Win32ClipboardBackend.capture_clipboard_state` /
   `restore_clipboard_state`). `ClipboardState.formats` = `(format id,
@@ -316,6 +553,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
 - **Our own popups are never a target**: `Win32WindowFocusHelper` returns
   the last foreign foreground window while our `WS_EX_TOOLWINDOW` windows
   (tray menu, overlay) are in front; Settings stays a valid target.
+- **A window of this app takes a paste only in a text field** (2026-11-25,
+  `own_window_focus.own_window_takes_pasted_text`, asked in
+  `_insert_text_at_target` before the clipboard is touched). The owner's
+  log, 2026-11-24 22:48: a dictation whose target was the Settings window
+  (`Qt6120QWindowIcon`) logged `outcome=pasted`, its target check answered
+  `unknown`, the overlay said Done, and the same text was pasted by hand
+  into another window 12 s later. For our own windows nothing has to be
+  guessed: Qt knows the widget the window gives its focus to
+  (`QWidget.find(hwnd).window().focusWidget()`, which does not depend on Qt
+  having processed the activation). An enabled, writable `QLineEdit`,
+  `QTextEdit`, `QPlainTextEdit` or spin box and an editable combo box take
+  text; everything else does not, and a `QKeySequenceEdit` never does (it
+  would record Ctrl+V as the new hotkey). "Does not" raises
+  `TextInsertionError` -- the ordinary "Not inserted" report with Insert, a
+  row and history, no clipboard write and no keystroke. A foreign window
+  answers None and nothing changes.
 - **Cancel, Retry and Insert share one fixed-size overlay slot.** A
   successful transcription whose insert failed uses
   `error_action=OVERLAY_ERROR_ACTION_INSERT` (`insert_again_requested` ->
@@ -401,17 +654,34 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   doubtful insert is shown briefly and stops being listed once a re-paste
   inserted exactly it); if that paste is doubtful again, it gets a new row.
   F10 (`_repaste_rows`) joins only the failed rows; a doubtful row is pasted
-  only when no failed row waits, and the next paste whose keystroke goes out
-  (any `_insert_text_at_target` that succeeded or may have landed,
-  `_paste_serial`) drops it (`_drop_superseded_doubtful_rows`; a keystroke
+  only when no failed row waits, and the paste of a later dictation whose
+  keystroke goes out (any `_insert_text_at_target` that succeeded or may
+  have landed; "later" as defined below) drops it
+  (`_drop_superseded_doubtful_rows`; a keystroke
   that went out and a cleanup that failed supersedes it as much as a clean
   paste, 2026-10-03, else F10 pasted the stale text next to it; the rows
   that paste is built from stay, `keep_rows`) -- except a row a paced re-paste
   (`_pending_repaste`) names, which the queued paste the pace lets go first
   used to drop, so the F10 pasted nothing and said nothing; a paced
   re-paste whose rows are gone now says so on the overlay or tray
-  (2026-10-03 second review); a verdict arriving after a later paste
-  lists no row and goes to the tray. Why: a false verdict leaves a row for
+  (2026-10-03 second review); a verdict arriving after the paste of a
+  later dictation lists no row and goes to the tray. *Later*
+  (2026-11-25, lead's decision): the pasted dictation's recording started
+  after the doubtful paste went out (`_TranscriptionJob.recorded_after_paste`
+  against the row's `doubt_serial`, both counts of `_paste_serial`; a
+  joined paste counts as its newest job), or the paste is made now (a
+  re-paste, an Insert, live streaming text). The count is taken when
+  the recording starts, not when its job is submitted at the stop: a
+  recording that was running while the doubt arose began before it, and
+  the overlay showed Listening, so the report was most likely not seen
+  (second review, 2026-11-25; a Retry has no recording of its own and
+  counts from its submission). A result that was already recorded when
+  the doubt arose supersedes nothing: with several results
+  queued the next paste went out within a second and took the row with
+  it, or kept it from being listed at all (the owner, 2026-11-24: "the
+  not-inserted notice vanished when several results were queued").
+  Several doubtful rows can therefore wait, and F10 pastes them joined in
+  order when no failed row waits. Why a later dictation still drops them: a false verdict leaves a row for
   text that landed, and F10 joined it to the next failed paste, pasting the
   landed text again (2026-10-03 review); a window that always reads
   doubtful would also collect a row per dictation. A later "text field"
@@ -467,6 +737,36 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
     `text_field ... msaa_caret=visible width=1 rechecks=0` in 2-4 ms (18 ms
     first), its button `not_text_field ... msaa_caret=invisible width=0
     rechecks=2` in about 360 ms.
+- **An unread receipt is a failed paste** (2026-11-25). `_paste_check`
+  records the inserter's transaction id (`_PasteCheck.receipt_id`,
+  `TextInserter.pending_receipt_id`); the paste stays in `_paste_checks`
+  after the target check answered (`caret_verdict`), or without any check,
+  until `paste_receipt_ready` reaches `_on_paste_receipt`. That connection
+  is queued even on the Qt thread: the receipt of a paste the next one
+  replaced is emitted inside that next paste's call. `unread` ->
+  `_report_paste_never_fetched`: a *failed* row, not a doubtful one, so it
+  stays listed whatever is pasted afterwards and the re-paste joins it;
+  the overlay shows it with Insert while it still shows that paste's own
+  Done, otherwise (and for every queued paste) the tray carries it; and it
+  is reported even when a later paste went out first. Its keystroke went
+  out and it is offered again all the same: a paste whose keystroke may
+  have gone out is never re-offered because its text may be in the
+  document, and a transcript nobody fetched is in none. Nothing pastes it
+  by itself; the row waits for Insert or the re-paste hotkey. A row the
+  target check had already listed for the same paste becomes that failed
+  row without a second report. `read` and `unknown` change nothing (see the
+  receipt entry: a fetched transcript says nothing about the element). A
+  re-paste drops waiting receipts of the same text
+  (`_drop_receipts_of_repeated_text`): the user is dealing with it. The
+  same words dictated again into the same window drop an earlier target
+  check only while it still runs (`caret_verdict is None`); an entry that
+  waits for its receipt alone stays, because that receipt is about the
+  earlier paste's own clipboard write. The
+  completion tone keeps its timing (it follows the target check), so an
+  `unread` report can come up to 3 s after a tone. `quit_pending_work`
+  counts only running target checks as `paste_settling`; the pace covers
+  the receipt wait. Streaming live inserts and the finalize tail get a
+  `paste_receipt` log line and no report.
 - **The overlay's Insert pastes the text that failed** (a streaming
   finalize's tail past `committed_text`, not all of `_last_transcript`).
   `_insert_action_text` is written by both paths that paint the Insert action

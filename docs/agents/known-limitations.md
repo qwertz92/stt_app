@@ -158,7 +158,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   -- a Win32 button, a Qt or Java window, a terminal that draws its own
   cursor -- is "unknown" and still reported as inserted: "no caret" there
   does not mean "no text field" (Windows Terminal answers exactly that while
-  its prompt takes the paste). Inside Chromium a page that edits through
+  its prompt takes the paste). Since 2026-11-25 such a paste is reported as
+  not inserted when no program fetched the transcript (the read receipt),
+  and a window of this app is asked before the paste; an application that
+  fetches the text and then discards it is still "inserted". Inside
+  Chromium a page that edits through
   EditContext without reporting selection bounds may read as "not a text
   field" (two of four runs of a bare EditContext div did, 2026-10-03), so
   its pastes are reported as doubtful; real editors report bounds (the
@@ -172,21 +176,102 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   foreground `Chrome_WidgetWin_1` window, most likely the Claude desktop
   app, focus location unknown; its pastes would then be reported as
   doubtful. Unmeasured until the owner runs `scripts/diagnose_paste_target.py`
-  in the apps he dictates into. Kept 2026-10-03 (owner measurement needed):
+  in the apps he dictates into. 2026-11-25, from the owner's log instead:
+  of 1040 pastes between 2026-10-24 and 2026-11-24, 1018 went to
+  `Chrome_WidgetWin_1` windows (those still open belonged to `claude.exe`)
+  and three checks in all read "not a text field", so the Claude desktop
+  app's prompt is not such a window. Kept 2026-10-03 (owner measurement needed):
   widening the check beyond Chromium needs per-application evidence (UI
   Automation was rejected, Windows Terminal answers wrongly); ~2-3 h per
   application family once the data exists.
-- **A true-miss "not in a text field" row ends with the next paste**
-  (2026-10-03, deliberate). Any later successful paste -- into any window
-  -- drops it (`_drop_superseded_doubtful_rows`), so a paste that really
-  missed is no longer listed or reachable by F10 once the user dictated
-  elsewhere. Accepted because the report was shown when it was made
-  (overlay with Insert, or the tray) and the text stays in history.
-  Rejected alternative: dropping only on a later paste into the same
-  window. An always-doubtful window (an Electron prompt may be one) would
-  still collect a row per dictation whenever the user also works in a
-  second window, and F10 would be left choosing among stale rows whose
-  verdicts may all be false. Kept 2026-10-03 (the owner's rule).
+- **The read receipt is blind inside Chrome and Edge, not inside Electron**
+  (2026-11-25, measured; `docs/agents/text-insertion.md`, "A restoring
+  paste has a read receipt"). In Chrome and Edge something fetches the
+  clipboard text a few milliseconds after every Ctrl+V (a median 4-8 ms),
+  with the focus on a text field, a button or the page body alike, and
+  names no window when it opens the clipboard. So a paste onto a non-text
+  element of a web page in those browsers still reads "fetched by an
+  unidentified program" and is reported as Done unless the caret check
+  calls it doubtful, and the later read that feeds the paste cannot be
+  seen. There the receipt reports only a keystroke that reached nobody. An
+  Electron window (a throwaway VS Code, Electron 43.8.9) made no request
+  with the focus on a button or the page body (5 + 5), so such a paste is
+  `unread` and reported, and one request for a paste that landed (13 of
+  13). The Claude desktop app is an Electron app but was not driven itself
+  (it is the owner's running app): its `paste_receipt` lines of real use
+  show which kind it is (`verdict=unread` for a paste that reached
+  nothing; `reason=unidentified_reader` with a `read_ms` that follows the
+  window's load for one that landed). An Electron page whose own paste
+  handler reads the clipboard for any element would fetch without
+  inserting; none was measured. Closing the gap in the browsers by
+  refusing their first fetch was tried and rejected (same entry in
+  `docs/agents/text-insertion.md`): it works in Edge, half in Chrome, and
+  empties every text field paste in Electron.
+- **Quitting through "Wait and insert" cuts the read receipt short**
+  (2026-11-25, review, recorded only). The quit puts the clipboard back at
+  once (`TextInserter.close`), so the last paste's transcript does not stay
+  for the 3 s an unfetched one normally gets, and its receipt is taken as it
+  stands at that moment and shown to nobody: a last paste that reached no
+  program is neither reported nor offered again. Its text is in History.
+- **A process killed while a transcript is announced takes the text with
+  it** (2026-11-25, review P3). For the 1.5-3 s after a paste the
+  clipboard holds a promise this process answers (`clipboard_owner`), not
+  the text. A quit, an exception out of `main.run` and a normal
+  interpreter exit write the text out or restore the clipboard
+  (`TextInserter.close` on `aboutToQuit` and `atexit`). Task Manager's
+  End task, a crash in native code and the quit watchdog's forced exit
+  run neither: `CF_UNICODETEXT` is then gone, where v0.13.0 left the
+  transcript on the clipboard. The clipboard the user had before the
+  paste is lost either way, as before; the transcript is in History.
+- **Work that begins after an announced paste can delay a late reader**
+  (2026-11-25, review P3, accepted). A transcript is not announced while an
+  in-process ONNX runtime is in use (`docs/agents/text-insertion.md`, "No
+  transcript is announced while an in-process ONNX runtime is in use"),
+  but that is decided when the paste is made. A model load that starts in
+  the 1.5-3 s the announcement lives (1.0-1.9 s without the interpreter,
+  measured), Nemotron's decoding (up to 0.8 s) or the Settings dialog being
+  built on the Qt thread (0.2 s) makes a program that fetches the text in
+  that moment wait that long for its paste. The targets measured fetched
+  within 18 ms of the keystroke, before any of this can begin; a target
+  that is itself slow to react is the one exposed. Not built: replacing
+  the announcement by the plain text as soon as such work starts, because
+  it ends the receipt for that paste and no delayed paste was observed.
+  An owner window in a process of its own would remove the whole class
+  (the reviewer measured 120 ms for the Qt write with the owner in
+  another process); it was not asked for and is not built.
+- **Two WSLg instances and the read receipt (hypothesis, 2026-11-25).** A
+  request from `msrdc.exe` counts as the paste's reader only when that
+  process owns the target window (`CLIPBOARD_SYNC_PROGRAMS`); otherwise it
+  is WSLg's clipboard sync and is refused. With two WSLg instances running
+  there are two `msrdc.exe` processes, and the one that carries the
+  clipboard into Linux may not be the one that owns the target window: a
+  paste into a Linux window of the other instance would then be refused its
+  text and reported `unread`. Not reproduced (one instance on the
+  development machine). Settle it with two distributions open, one paste
+  into a window of each, and the `paste_receipt` lines of both.
+- **A true-miss "not in a text field" row ends with the paste of the next
+  dictation** (2026-10-03, deliberate; narrowed 2026-11-25). A paste of a
+  dictation whose recording started after the doubtful paste went out --
+  into any window
+  -- and every re-paste, Insert or live streaming insert drops the row
+  (`_drop_superseded_doubtful_rows`), so a paste that really missed is no
+  longer listed or reachable by F10 once the user dictated again.
+  Accepted because the report was shown when it was made (overlay with
+  Insert, or the tray) and the text stays in history. Since 2026-11-25
+  (lead's decision) results that were already recorded when the doubt
+  arose no longer drop it: the owner reported on 2026-11-24 that the
+  notice vanished when several results were queued, and the paste of the
+  next queued result is not something he did after seeing it. Rejected
+  again: keeping the row until dismissed. The reason given in 2026-10-03
+  -- a window that always reads doubtful (an Electron prompt may be one)
+  would collect a row per dictation -- carries less weight than it did:
+  his log of 2026-10-24..11-24 has three doubtful verdicts in 1040
+  pastes. But each of those rows may be a false alarm whose text is in
+  the document, and F10 pastes doubtful rows when no failed row waits, so
+  stale ones would be pasted a second time long after. A paste with an
+  `unread` receipt is a failed row and stays whatever the caret said,
+  which covers a miss in an Electron window; in Chrome and Edge the
+  receipt cannot confirm a miss (entry above).
 - **A hung paste target holds the check's one worker**: the MSAA call is a
   cross-process `WM_GETOBJECT`; while it waits, later pastes are not
   checked (refused at once, "unknown") and the completion tone of the
@@ -263,7 +348,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   read), so about 1.3 s before it reports contention. Kept 2026-10-03 (by
   design): an owner window would close it but blocks every other program's
   `EmptyClipboard` without a message pump (rejected in
-  `docs/agents/text-insertion.md`).
+  `docs/agents/text-insertion.md`). 2026-11-25: the transcript write of a
+  restoring paste now opens the clipboard for the owner window of the read
+  receipt, which has a pump; the capture, the restore and the plain write
+  still open it for nobody. Whether the owner-window open ends 1418 for
+  that write was not measured.
 - **A close lost between the text write and the Win+V exclusion formats
   publishes the transcript without them**: a clipboard manager that closes
   our open right after `SetClipboardText` sees the clipboard with the text
@@ -350,9 +439,25 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
 - **The readiness probe cannot see a browser renderer's delay**: for
   `Chrome_RenderWidgetHostHWND` the `WM_NULL` round trip answers for the UI
   thread, not the renderer. `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) bounds it;
-  `keep_transcript_in_clipboard` closes it. Not measured on a live browser.
-  Kept 2026-10-03: no API says a renderer read the clipboard (rejected
-  alternatives in `docs/agents/text-insertion.md`).
+  `keep_transcript_in_clipboard` closes it. Measured 2026-11-25 on Edge
+  and Chrome with a page whose main thread was busy for 2.2 s when the
+  keystroke arrived: the textarea received the *previous* clipboard text
+  after the 1.5 s restore -- the transcript was reported as inserted and
+  something else was pasted, or nothing where the previous clipboard held
+  no text. In those two browsers the read receipt does not see it (their
+  early fetch comes within milliseconds; entry above). In an Electron
+  window it does, and closes the case up to `PASTE_READ_RECEIPT_WAIT_S`
+  (3 s): the same busy page in a throwaway VS Code fetched the text 2.04 s
+  after the keystroke and received the *transcript*, because a transcript
+  nobody has fetched is not replaced at 1.5 s. A renderer late by more than
+  3 s still gets the old clipboard, and the paste is then reported as not
+  inserted. The owner's log has pastes into the Claude desktop app whose
+  caret check took 754 ms instead of the usual 28 ms, or found the caret
+  only at its third reading, followed by a hand-made re-paste seconds
+  later; a renderer late by more than 1.5 s was not observed directly.
+  Open for Chrome and Edge: a longer restore delay (costs the pace between
+  queued pastes), or "Keep transcript in clipboard". Kept 2026-10-03: no
+  API says a renderer read the clipboard.
 - **Retry reaches the newest failed recording first, and only three are held**
   (2026-10-03): a failure pushes the slot's holder behind it
   (`_older_failed_audio`, `RETRY_OLDER_FAILURES_MAX`), the oldest of more than
@@ -645,3 +750,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the final "is is is" type "der" and then freeze (the same input with "."
     already did before). It needs a partial that drops the dictation's
     head, which providers that send the whole session's text do not send.
+- **The retranscribe dialog reserves an empty band for its status line**
+  (accepted 2026-11-26, cosmetic, `retranscribe_dialog.py`). Under the two
+  text panes the dialog keeps one fixed-height line for "Transcribing...",
+  "Done" and errors, and that line is empty until a run starts, so the user
+  sees a blank strip above the buttons: measured 16 px for the label, 24 px
+  with the 8 px layout spacing (100 % scaling, Segoe UI). It stays because the
+  line is reserved on purpose so the buttons do not move when a run starts
+  (`_status_label` is fixed-height); showing it on demand means moving the
+  widgets below it and updating the layout tests that pin them, estimated at
+  about 150 lines with many tests, for a dialog that is open for seconds.

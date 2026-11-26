@@ -220,6 +220,25 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         aai.settings.api_key = self._api_key
         aai.settings.base_url = ASSEMBLYAI_API_BASE_URLS[self._region]
 
+    def _stream_language_codes(self) -> list[str] | None:
+        """The chosen language as the realtime model's `language_codes` steering.
+
+        Auto sends nothing: the model code-switches across its 32 languages by
+        itself. A language the realtime model does not accept (a batch choice
+        for Universal-2) is logged and streamed as Auto; the Settings dialog
+        names that fallback.
+        """
+        mode = self._language_mode
+        if mode == "auto":
+            return None
+        if mode in language_modes_for_selection("assemblyai", "", "streaming"):
+            return [mode]
+        logger.warning(
+            "AssemblyAI streaming does not accept language %r; streaming in Auto.",
+            mode,
+        )
+        return None
+
     def _build_config(self):
         """Build a TranscriptionConfig for the current language mode."""
         aai = self._get_aai()
@@ -659,6 +678,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 # ignored by the service.
                 # The shared vocabulary parser already caps the input at 100.
                 stream_kwargs["keyterms_prompt"] = self._word_boost
+            language_codes = self._stream_language_codes()
+            if language_codes:
+                stream_kwargs["language_codes"] = language_codes
             client.connect(StreamingParameters(**stream_kwargs))
         except Exception as exc:
             with self._stream_lock:

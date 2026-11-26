@@ -7,8 +7,9 @@ import weakref
 from pathlib import Path
 
 import pytest
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
+from stt_app import clipboard_copy
 from stt_app import history_dialog as history_dialog_module
 from stt_app.history_dialog import HistoryDialog
 from stt_app.retranscribe_dialog import RetranscribeDialog
@@ -142,18 +143,7 @@ def test_ctrl_c_copies_every_selected_transcript(monkeypatch, tmp_path):
     """Ctrl+C must match "Copy selected", not yield only the current cell."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     copied: list[str] = []
-    monkeypatch.setattr(
-        QtGui.QGuiApplication,
-        "clipboard",
-        lambda: type(
-            "C",
-            (),
-            {
-                "setText": staticmethod(copied.append),
-                "text": staticmethod(lambda: ""),
-            },
-        )(),
-    )
+    monkeypatch.setattr(clipboard_copy, "_writer", copied.append)
     dialog = _make_dialog(
         tmp_path,
         [_entry(text="one"), _entry(text="two"), _entry(text="three")],

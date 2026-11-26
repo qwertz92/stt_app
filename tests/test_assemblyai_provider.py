@@ -438,6 +438,34 @@ class TestAssemblyAIStreaming:
         assert params.format_turns is None
         t.abort_stream()
 
+    def test_a_chosen_language_reaches_the_streaming_request(self):
+        """STT-3.7-Realtime takes `language_codes` as steering (streaming
+        WebSocket spec, read 2026-11-26); Auto sends none, the model
+        code-switches across its 32 languages by itself."""
+        t, clients = _make_streaming_transcriber()
+        t.set_language_mode("de")
+        t.start_stream()
+        assert clients[0].connect_params.language_codes == ["de"]
+        t.abort_stream()
+
+        t, clients = _make_streaming_transcriber()
+        t.set_language_mode("auto")
+        t.start_stream()
+        assert clients[0].connect_params.language_codes is None
+        t.abort_stream()
+
+    def test_a_language_the_realtime_model_lacks_streams_in_auto_and_is_logged(
+        self, caplog
+    ):
+        """ "bg" is a Universal-2 (batch) language, not one of the 32."""
+        t, clients = _make_streaming_transcriber()
+        t.set_language_mode("bg")
+        with caplog.at_level(logging.WARNING):
+            t.start_stream()
+        assert clients[0].connect_params.language_codes is None
+        assert "does not accept language 'bg'" in caplog.text
+        t.abort_stream()
+
     def test_start_stream_passes_custom_vocabulary_as_u3_5_keyterms(self):
         fake_aai = _make_fake_aai()
         clients: list[FakeStreamingClient] = []

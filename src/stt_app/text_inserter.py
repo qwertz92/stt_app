@@ -1,14 +1,23 @@
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import ctypes.wintypes
 import itertools
 import logging
+import os
 import threading
 import time
 from dataclasses import dataclass
 from typing import ClassVar
 
+from .clipboard_owner import (
+    NO_RECEIPT,
+    RECEIPT_UNKNOWN,
+    RECEIPT_UNREAD,
+    ClipboardOwner,
+    PasteReceipt,
+)
 from .config import (
     CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES,
     CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES,
@@ -18,7 +27,9 @@ from .config import (
     CLIPBOARD_RESTORE_RETRY_DELAY_S,
     CLIPBOARD_SETTLE_S,
     PASTE_MODIFIER_POLL_INTERVAL_S,
+    PASTE_MODIFIER_RECHECK_ROUNDS,
     PASTE_MODIFIER_RELEASE_TIMEOUT_S,
+    PASTE_READ_RECEIPT_WAIT_S,
     PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S,
     PASTE_TARGET_RESPONSIVE_PROBE_MS,
     PASTE_TARGET_RESPONSIVE_TIMEOUT_S,
@@ -223,9 +234,14 @@ class ClipboardMarker:
     comparison in `TextInserter._clipboard_changed_after_set` carries the
     check then, and covers the microseconds between the close and this read in
     every case.
+
+    `offer` is set when the text was announced instead of written
+    (`Win32ClipboardBackend.offer_clipboard_text`): the serial under which
+    the clipboard owner answers who fetched it.
     """
 
     sequence: int | None
+    offer: int | None = None
 
 
 @dataclass(slots=True)
@@ -282,6 +298,11 @@ class _PendingRestore:
     # so a resumed record never has two chains rescheduling and counting
     # attempts for it.
     chain: int = 0
+    # The read receipt's serial when the transcript was announced, and
+    # whether that receipt has been handed to the receipt handler: once per
+    # paste, however many restore attempts follow.
+    offer: int | None = None
+    receipt_reported: bool = False
 
 
 def _log_history_exclusion_failures(operation: str, failures: int) -> None:
@@ -398,7 +419,11 @@ class Win32ClipboardBackend:
         retry_count: int = 10,
         retry_sleep_s: float = 0.01,
         reopen_attempts: int = 3,
+        owner: ClipboardOwner | None = None,
     ) -> None:
+        # Hands the transcript out on request, which is a paste's read
+        # receipt (`offer_clipboard_text`). None: every write is plain data.
+        self._owner = owner
         self._retry_count = retry_count
         self._retry_sleep_s = retry_sleep_s
         # How often one clipboard operation is opened afresh after a 1418
@@ -423,8 +448,12 @@ class Win32ClipboardBackend:
         exhausted_error=None,
         *,
         reopen_on_lost_close: bool = False,
+        owner_hwnd: int = 0,
     ):
         """Run `body` inside an open clipboard, opening afresh after a 1418.
+
+        `owner_hwnd` is the window the clipboard is opened for, which an
+        `EmptyClipboard` in `body` makes its owner; 0 opens it for nobody.
 
         Returns `(result, lost_close)`. `body` raises `_ClipboardNotOpenError`
         for a call that found the clipboard closed under it. A close refused
@@ -459,7 +488,9 @@ class Win32ClipboardBackend:
         for attempt in range(1, self._reopen_attempts + 1):
             if attempt > 1:
                 time.sleep(self._retry_sleep_s)
-            context = self._clipboard_opened(tolerate_lost_close=True)
+            context = self._clipboard_opened(
+                tolerate_lost_close=True, owner_hwnd=owner_hwnd
+            )
             try:
                 with context:
                     result = body()
@@ -507,6 +538,13 @@ class Win32ClipboardBackend:
             raise
         return str(text)
 
+    def _own_read(self):
+        """Around a read of this app: the request it may cause at the owner
+        window is no read receipt."""
+        if self._owner is None:
+            return contextlib.nullcontext()
+        return self._owner.own_read()
+
     def capture_clipboard_state(self) -> ClipboardState:
         # A lost close is a reason to read again, never a finished capture:
         # the byte copy reads through ctypes, whose `GetClipboardData` answers
@@ -516,9 +554,10 @@ class Win32ClipboardBackend:
         # restore would write that empty state over the user's clipboard. The
         # refused close is the one reliable sign: the open can only be taken
         # by another program's `CloseClipboard`, and once it is, ours fails.
-        state, _lost_close = self._with_reopen(
-            "capture", self._capture_open_clipboard, reopen_on_lost_close=True
-        )
+        with self._own_read():
+            state, _lost_close = self._with_reopen(
+                "capture", self._capture_open_clipboard, reopen_on_lost_close=True
+            )
         return state
 
     def _capture_open_clipboard(self) -> ClipboardState:
@@ -721,6 +760,41 @@ class Win32ClipboardBackend:
         that cannot be registered or set is logged and costs the exclusion,
         never the write.
         """
+        return self._write_clipboard_text(text, exclude_from_history, readers=None)
+
+    def offer_clipboard_text(
+        self, text: str, reader_hwnd: int | None
+    ) -> ClipboardMarker:
+        """`set_clipboard_text` for a paste that puts the clipboard back, with
+        a read receipt.
+
+        The text is announced and the owner window hands it out when a
+        program asks for it (`clipboard_owner`), so the marker's `offer` can
+        later say whether the paste's target fetched it. `reader_hwnd` is the
+        window the paste goes to. Without an owner window this is the plain
+        write, and the marker carries no offer.
+
+        So it is for a paste into a window of this process. Qt then reads
+        the clipboard on the Qt thread, and the owner window answers a
+        read from a Python callback on its own thread: a text field whose
+        key handling runs through a Python override holds the interpreter
+        lock at that moment, and the Qt thread stood still for 35 s
+        (measured 2026-11-25, `scripts/diagnose_own_window_paste.py`).
+        """
+        owner = self._owner
+        if owner is None:
+            return self.set_clipboard_text(text, exclude_from_history=True)
+        readers = self._reader_pids(reader_hwnd)
+        if os.getpid() in readers or not owner.start():
+            return self.set_clipboard_text(text, exclude_from_history=True)
+        return self._write_clipboard_text(text, True, readers=readers)
+
+    def _write_clipboard_text(
+        self, text: str, exclude_from_history: bool, *, readers: frozenset[int] | None
+    ) -> ClipboardMarker:
+        """The write behind both: plain data, or announced for `readers`."""
+        owner = self._owner if readers is not None else None
+        offer: int | None = None
         # Set once our `EmptyClipboard` has succeeded in any attempt: from then
         # on the clipboard is ours to put back if no write of ours lands, and a
         # retry must not empty a clipboard someone else has written to since.
@@ -732,7 +806,7 @@ class Win32ClipboardBackend:
         exclusion_failures = 0
 
         def _write_into_open_clipboard() -> None:
-            nonlocal emptied, exclusion_failures
+            nonlocal emptied, exclusion_failures, offer
             if emptied:
                 self._refuse_if_written_since_our_empty()
             try:
@@ -746,7 +820,13 @@ class Win32ClipboardBackend:
                 raise
             emptied = True
             try:
-                win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+                if owner is None:
+                    win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+                else:
+                    offer = owner.begin_offer(text, readers)
+                    self._announce_unicode_text()
+            except _ClipboardNotOpenError:
+                raise
             except Exception as exc:
                 _raise_if_clipboard_not_open(exc)
                 raise ClipboardEmptiedError(
@@ -771,11 +851,26 @@ class Win32ClipboardBackend:
             )
 
         _result, lost_close = self._with_reopen(
-            "write", _write_into_open_clipboard, exhausted_error=_spent
+            "write",
+            _write_into_open_clipboard,
+            exhausted_error=_spent,
+            owner_hwnd=owner.hwnd if owner is not None else 0,
         )
         _log_history_exclusion_failures("write", exclusion_failures)
-        if lost_close:
+        if lost_close and owner is None:
             return self._confirm_write_landed(text)
+        if lost_close:
+            # Reading the text back would fetch it from our own window and
+            # use the receipt up; the window still owning the clipboard says
+            # the same. Counter first, as in `_confirm_write_landed`.
+            sequence = self.get_clipboard_sequence_number()
+            if not owner.is_intact(offer):
+                raise ClipboardContentionError(
+                    "The clipboard was closed by another program during the write "
+                    "and no longer holds the transcript; left it untouched."
+                )
+            _LOGGER.info("clipboard_set_landed_despite_close_error")
+            return ClipboardMarker(sequence=sequence, offer=offer)
         # The counter is read here -- after `CloseClipboard` and before
         # returning -- so the number the caller gets is the one our write
         # produced. A caller that reads it in a second call instead adopts the
@@ -784,7 +879,98 @@ class Win32ClipboardBackend:
         # increments on `SetClipboardData` or on `CloseClipboard` is not
         # documented and nothing here may depend on the answer: "the value
         # right after our close" is true either way.
-        return ClipboardMarker(sequence=self.get_clipboard_sequence_number())
+        return ClipboardMarker(
+            sequence=self.get_clipboard_sequence_number(), offer=offer
+        )
+
+    def _announce_unicode_text(self) -> None:
+        """`SetClipboardData(CF_UNICODETEXT, NULL)` on the open clipboard.
+
+        The owner window is asked for the data when a program fetches it.
+        NULL is the call's answer on success as well, so the format list
+        says whether the announcement stands.
+        """
+        set_clipboard_data = self._user32.SetClipboardData
+        set_clipboard_data.argtypes = (ctypes.wintypes.UINT, ctypes.c_void_p)
+        set_clipboard_data.restype = ctypes.c_void_p
+        ctypes.set_last_error(0)
+        set_clipboard_data(win32con.CF_UNICODETEXT, None)
+        if ctypes.get_last_error() == ERROR_CLIPBOARD_NOT_OPEN:
+            raise _ClipboardNotOpenError("SetClipboardData: the clipboard is not open.")
+        if not win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+            raise OSError("the clipboard did not take the announced text")
+
+    def _reader_pids(self, hwnd: int | None) -> frozenset[int]:
+        """The processes a paste into `hwnd` is read by.
+
+        The window's own, and those of its child windows: a packaged app's
+        content window lives in another process than the frame that has the
+        foreground.
+        """
+        if not hwnd:
+            return frozenset()
+        pids: set[int] = set()
+        get_pid = self._user32.GetWindowThreadProcessId
+        get_pid.argtypes = (
+            ctypes.wintypes.HWND,
+            ctypes.POINTER(ctypes.wintypes.DWORD),
+        )
+        get_pid.restype = ctypes.wintypes.DWORD
+
+        def _add(window: int) -> None:
+            pid = ctypes.wintypes.DWORD(0)
+            get_pid(window, ctypes.byref(pid))
+            if pid.value:
+                pids.add(int(pid.value))
+
+        child_callback = ctypes.WINFUNCTYPE(
+            ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+        )
+
+        def _add_child(window, _lparam) -> bool:
+            _add(window)
+            return True
+
+        try:
+            _add(int(hwnd))
+            enum_children = self._user32.EnumChildWindows
+            enum_children.argtypes = (
+                ctypes.wintypes.HWND,
+                child_callback,
+                ctypes.wintypes.LPARAM,
+            )
+            enum_children.restype = ctypes.wintypes.BOOL
+            enum_children(int(hwnd), child_callback(_add_child), 0)
+        except Exception:
+            _LOGGER.debug(
+                "The paste target's processes could not be read", exc_info=True
+            )
+        return frozenset(pids)
+
+    def offer_intact(self, offer: int | None) -> bool:
+        """Whether the clipboard still is that announced transcript."""
+        return self._owner is not None and self._owner.is_intact(offer)
+
+    def note_paste_keystroke(self, offer: int | None) -> None:
+        """The keystroke for `offer` goes out now: a fetch from here on counts."""
+        if self._owner is not None:
+            self._owner.note_keystroke(offer)
+
+    def paste_receipt(self, offer: int | None) -> PasteReceipt:
+        """Who has fetched the announced transcript so far."""
+        if self._owner is None:
+            return NO_RECEIPT
+        return self._owner.receipt(offer)
+
+    def release_offer(self, offer: int | None) -> None:
+        """The announced transcript stays on the clipboard for good."""
+        if self._owner is not None:
+            self._owner.release(offer)
+
+    def close(self) -> None:
+        """End the owner window; a transcript it still owes is written out."""
+        if self._owner is not None:
+            self._owner.close()
 
     def _history_exclusion_format_ids(self) -> list[int]:
         """The registered ids of the exclusion formats, 0 for any refused."""
@@ -998,12 +1184,13 @@ class Win32ClipboardBackend:
                 )
             return ClipboardContentionError(f"{message}; left it untouched.")
 
-        self._with_reopen(
-            "restore",
-            _restore_into_open_clipboard,
-            exhausted_error=_spent,
-            reopen_on_lost_close=True,
-        )
+        with self._own_read():
+            self._with_reopen(
+                "restore",
+                _restore_into_open_clipboard,
+                exhausted_error=_spent,
+                reopen_on_lost_close=True,
+            )
         _log_history_exclusion_failures("restore", exclusion_failures)
         # A clipboard that held markers and no content has nothing to miss.
         had_content = wants_text or any(
@@ -1196,7 +1383,8 @@ class Win32ClipboardBackend:
         return int(getter() or 0)
 
     def get_clipboard_text(self) -> str | None:
-        text, _lost_close = self._with_reopen("read", self._unicode_text_or_none)
+        with self._own_read():
+            text, _lost_close = self._with_reopen("read", self._unicode_text_or_none)
         return text
 
     def send_ctrl_v(self) -> None:
@@ -1227,6 +1415,10 @@ class Win32ClipboardBackend:
             if time.monotonic() >= deadline:
                 return False
             time.sleep(max(0.001, poll_interval_s))
+
+    def modifiers_released(self) -> bool:
+        """Whether no modifier key is down right now: one reading, no wait."""
+        return self.wait_for_modifier_release(timeout_s=0.0)
 
     def wait_for_paste_target_ready(
         self,
@@ -1319,10 +1511,15 @@ class Win32ClipboardBackend:
 
     class _ClipboardContext:
         def __init__(
-            self, backend: Win32ClipboardBackend, *, tolerate_lost_close: bool
+            self,
+            backend: Win32ClipboardBackend,
+            *,
+            tolerate_lost_close: bool,
+            owner_hwnd: int = 0,
         ) -> None:
             self._backend = backend
             self._tolerate_lost_close = tolerate_lost_close
+            self._owner_hwnd = owner_hwnd
             # True when the body finished and `CloseClipboard` was refused
             # with 1418 -- only reachable with `tolerate_lost_close`.
             self.lost_before_close = False
@@ -1335,7 +1532,10 @@ class Win32ClipboardBackend:
 
             for _ in range(self._backend._retry_count):
                 try:
-                    win32clipboard.OpenClipboard()
+                    if self._owner_hwnd:
+                        win32clipboard.OpenClipboard(self._owner_hwnd)
+                    else:
+                        win32clipboard.OpenClipboard()
                     return self
                 except Exception:
                     time.sleep(self._backend._retry_sleep_s)
@@ -1366,9 +1566,11 @@ class Win32ClipboardBackend:
             return False
 
     def _clipboard_opened(
-        self, *, tolerate_lost_close: bool = False
+        self, *, tolerate_lost_close: bool = False, owner_hwnd: int = 0
     ) -> Win32ClipboardBackend._ClipboardContext:
-        return self._ClipboardContext(self, tolerate_lost_close=tolerate_lost_close)
+        return self._ClipboardContext(
+            self, tolerate_lost_close=tolerate_lost_close, owner_hwnd=owner_hwnd
+        )
 
     def _send_wm_paste(self, target_hwnd: int | None = None) -> bool:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
@@ -1472,8 +1674,21 @@ class TextInserter:
         clock=time.monotonic,
         restore_retry_attempts: int = CLIPBOARD_RESTORE_RETRY_ATTEMPTS,
         restore_retry_delay_s: float = CLIPBOARD_RESTORE_RETRY_DELAY_S,
+        receipt_wait_s: float = PASTE_READ_RECEIPT_WAIT_S,
     ) -> None:
         self._backend = backend or Win32ClipboardBackend()
+        self._receipt_wait_s = max(0.0, float(receipt_wait_s))
+        # Called once per paste that has a read receipt, when that receipt is
+        # final: `(transaction id, verdict, evidence)`, on whichever thread
+        # ended the paste's hold on the clipboard.
+        self._receipt_handler = None
+        # Whether a transcript may be announced right now (`set_offer_gate`).
+        self._offer_gate = None
+        self._closed = False
+        self._close_lock = threading.Lock()
+        # The offer our last transcript write announced; None after a plain
+        # write. `_clipboard_changed_after_set` asks about that write.
+        self._offer: int | None = None
         self._restore_retry_attempts = max(0, int(restore_retry_attempts))
         self._restore_retry_delay_s = max(0.0, float(restore_retry_delay_s))
         # Called with one user-facing sentence when a restore failed for good;
@@ -1504,6 +1719,72 @@ class TextInserter:
         """Who hears of a clipboard restore that failed for good."""
         self._restore_failure_handler = handler
 
+    def set_paste_receipt_handler(self, handler) -> None:
+        """Who hears whether a paste's target fetched the transcript."""
+        self._receipt_handler = handler
+
+    def set_offer_gate(self, gate) -> None:
+        """Who says whether a transcript may be announced right now.
+
+        The owner window hands the announced text out from a Python
+        callback, so the program that asks waits for the interpreter
+        lock. ``gate()`` answers False while this process is in a state
+        measured to hold that lock for longer than about 100 ms (the
+        controller: `_paste_may_be_announced`); the paste is then the
+        plain write, with no receipt, as before the receipt existed.
+        """
+        self._offer_gate = gate
+
+    def _may_announce(self) -> bool:
+        gate = self._offer_gate
+        if gate is None:
+            return True
+        try:
+            allowed = bool(gate())
+        except Exception:
+            _LOGGER.debug("The offer gate raised", exc_info=True)
+            allowed = False
+        if not allowed:
+            _LOGGER.info("paste_receipt_skipped reason=interpreter_busy")
+        return allowed
+
+    def pending_receipt_id(self) -> int | None:
+        """The transaction id the last paste's receipt will be reported
+        under; None when that paste has none (a plain write, a WM_PASTE)."""
+        record = self._pending_restore
+        if record is None or record.offer is None or record.receipt_reported:
+            return None
+        return record.transaction_id
+
+    def copy_text(self, text: str) -> None:
+        """Put `text` on the clipboard as a copy the user asked for.
+
+        The writer behind `clipboard_copy.copy_text`: every copy this app
+        makes outside a paste comes through here, through the backend and
+        never through `QClipboard` (that module says what the Qt road cost).
+
+        A paste whose transcript still waits for its restore is settled by
+        the copy: the text is what the user wants on the clipboard now, so
+        the state captured before that paste is dropped instead of being put
+        back over it -- which is what the restore did when the copied text
+        was the pasted transcript itself, because the clipboard then still
+        read as ours -- and that paste's receipt is final as it stands.
+
+        Raises `ClipboardContentionError` when the clipboard cannot be
+        written; the pending restore is then left as it was.
+        """
+        with self._insert_lock:
+            record = self._pending_restore
+            self._backend.set_clipboard_text(text, exclude_from_history=False)
+            if record is None:
+                return
+            self._pending_restore = None
+            self._cancel_scheduled_restore(record)
+            if self._offer == record.offer:
+                self._offer = None
+            self._log_restore_outcome(record, "superseded_by_copy")
+            self._report_receipt(record)
+
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
         return self.insert_text_with_options(
             text=text,
@@ -1524,13 +1805,20 @@ class TextInserter:
         `restore_delay_s` from the keystroke, so the caller can hold a paste
         until then instead of guessing a second budget.
 
+        A transcript no program has fetched yet keeps the window open until
+        `receipt_wait_s`: its late reader is still to come.
+
         Answers 0.0 before any paste, after a WM_PASTE and once the window
         has passed.
         """
         pasted_at = self._last_paste_keystroke_at
         if pasted_at is None:
             return 0.0
-        remaining = self._restore_delay_s - (self._clock() - pasted_at)
+        elapsed = self._clock() - pasted_at
+        remaining = self._restore_delay_s - elapsed
+        record = self._pending_restore
+        if record is not None and self._receipt_wait_remaining_s(record) > 0.0:
+            remaining = max(remaining, self._receipt_wait_s - elapsed)
         return max(0.0, remaining)
 
     def _paste_text_with_options(
@@ -1656,8 +1944,14 @@ class TextInserter:
                 # A transcript the transaction will replace with the user's
                 # own content is kept out of Win+V; one the user keeps
                 # ("Keep transcript in clipboard") is an ordinary entry.
-                written = self._backend.set_clipboard_text(
-                    text, exclude_from_history=restore_clipboard
+                written = self._write_transcript(
+                    text,
+                    restore_clipboard=restore_clipboard,
+                    reader_hwnd=(
+                        target_hwnd
+                        if requested_mode == "wm_paste"
+                        else foreground_at_start or target_hwnd
+                    ),
                 )
             except _ClipboardWriteUnconfirmedError as unconfirmed:
                 # Contention for the paste, which is refused. The transcript is
@@ -1694,21 +1988,25 @@ class TextInserter:
             record.restore = "kept"
             clipboard_marker = self._marker_after_write(written)
             record.marker = clipboard_marker
+            self._offer = (
+                written.offer if isinstance(written, ClipboardMarker) else None
+            )
             self._sleep_fn(self._clipboard_settle_s)
 
-            if self._clipboard_changed_after_set(clipboard_marker, text):
-                restore_previous_state = False
-                raise ClipboardContentionError(
-                    "Clipboard changed before paste; left the current "
-                    "clipboard untouched."
-                )
+            self._raise_if_the_clipboard_changed(clipboard_marker, text)
 
             if requested_mode != "wm_paste":
                 # The last moment at which aborting still costs nothing.
                 # WM_PASTE is exempt: it addresses `target_hwnd` itself, so
-                # what happens to have the focus does not reach it.
+                # what happens to have the focus does not reach it, and a
+                # held key cannot turn a message into another shortcut.
                 self._raise_if_the_foreground_changed(foreground_at_start)
+                self._hold_the_keystroke_while_a_modifier_is_down(
+                    clipboard_marker, text, foreground_at_start
+                )
 
+            if self._offer is not None:
+                self._backend.note_paste_keystroke(self._offer)
             if hasattr(self._backend, "send_paste_with_mode"):
                 actual_mode = self._backend.send_paste_with_mode(
                     requested_mode,
@@ -1736,6 +2034,7 @@ class TextInserter:
                         marker=clipboard_marker,
                         text=text,
                         target_hwnd=target_hwnd,
+                        offer=self._offer,
                     )
                     restore_previous_state = False
                     record.restore = "deferred"
@@ -1815,6 +2114,20 @@ class TextInserter:
                 # never touched the clipboard: what that record was going to
                 # put back is still the user's, and still waiting.
                 self._resume_pending_restore(inherited_record)
+            elif inherited_record is not None:
+                # Its transcript is gone from the clipboard, so its receipt
+                # is final; asked only now, after our own write, so a fetch
+                # in the last moment before that write still counts.
+                self._report_receipt(inherited_record)
+            pending = self._pending_restore
+            if self._offer is not None and (
+                pending is None or pending.offer != self._offer
+            ):
+                # No restore of this announced transcript is to come: where
+                # it is still on the clipboard it stays, as ordinary content
+                # every program is served.
+                self._backend.release_offer(self._offer)
+                self._offer = None
 
         combined_error = (
             TextMayHaveBeenPastedError if paste_sent else TextInsertionError
@@ -1882,6 +2195,86 @@ class TextInserter:
         else:
             self._last_paste_keystroke_at = None
 
+    def _write_transcript(
+        self, text: str, *, restore_clipboard: bool, reader_hwnd: int | None
+    ) -> object:
+        """Put the transcript on the clipboard.
+
+        A transcript the transaction replaces with the user's own content
+        afterwards is announced where the backend can (`offer_clipboard_text`:
+        the read receipt) and the process may (`set_offer_gate`); one the
+        user keeps is ordinary data that outlives this app.
+        """
+        offer = getattr(self._backend, "offer_clipboard_text", None)
+        if restore_clipboard and callable(offer) and self._may_announce():
+            return offer(text, reader_hwnd)
+        return self._backend.set_clipboard_text(
+            text, exclude_from_history=restore_clipboard
+        )
+
+    def _receipt_wait_remaining_s(self, record: _PendingRestore) -> float:
+        """How much longer an unfetched transcript stays on the clipboard.
+
+        0.0 once someone fetched it, and once it is no longer there to be
+        fetched (the user copied something else).
+        """
+        if record.offer is None or record.receipt_reported:
+            return 0.0
+        remaining = record.armed_at + self._receipt_wait_s - self._clock()
+        if remaining <= 0.0:
+            return 0.0
+        if self._paste_receipt(record.offer).verdict != RECEIPT_UNREAD:
+            return 0.0
+        try:
+            intact = self._backend.offer_intact(record.offer)
+        except Exception:
+            intact = False
+        return remaining if intact else 0.0
+
+    def _paste_receipt(self, offer: int | None) -> PasteReceipt:
+        try:
+            return self._backend.paste_receipt(offer)
+        except Exception:
+            _LOGGER.debug("The paste's read receipt could not be read", exc_info=True)
+            return NO_RECEIPT
+
+    def _report_receipt(
+        self, record: _PendingRestore, *, transcript_stays: bool = False
+    ) -> None:
+        """Hand the paste's final receipt to the handler, once.
+
+        The caller holds `_insert_lock` and calls this when the transcript
+        has left the clipboard, or stays there for good (``transcript_stays``:
+        a target that may still fetch it is not "unread").
+        """
+        if record.offer is None or record.receipt_reported:
+            return
+        record.receipt_reported = True
+        receipt = self._paste_receipt(record.offer)
+        if transcript_stays:
+            try:
+                self._backend.release_offer(record.offer)
+            except Exception:
+                _LOGGER.debug("The offer could not be released", exc_info=True)
+            if receipt.verdict == RECEIPT_UNREAD:
+                receipt = PasteReceipt(
+                    RECEIPT_UNKNOWN, "transcript_stays", refused=receipt.refused
+                )
+        _LOGGER.info(
+            "paste_receipt id=%s verdict=%s %s after_ms=%s",
+            record.transaction_id,
+            receipt.verdict,
+            receipt.evidence(),
+            int(max(0.0, self._clock() - record.armed_at) * 1000),
+        )
+        handler = self._receipt_handler
+        if not callable(handler):
+            return
+        try:
+            handler(record.transaction_id, receipt.verdict, receipt.evidence())
+        except Exception:
+            _LOGGER.exception("Could not report the paste's read receipt")
+
     def _foreground_window(self) -> int | None:
         """Which window is in front, or None when that cannot be answered.
 
@@ -1930,6 +2323,64 @@ class TextInserter:
             "The foreground window changed before the paste keystroke; "
             "nothing was pasted."
         )
+
+    def _raise_if_the_clipboard_changed(self, marker: int | None, text: str) -> None:
+        """Contention before the keystroke: the clipboard is no longer ours.
+
+        The caller's handler leaves the clipboard alone for this error.
+        """
+        if self._clipboard_changed_after_set(marker, text):
+            raise ClipboardContentionError(
+                "Clipboard changed before paste; left the current clipboard untouched."
+            )
+
+    def _hold_the_keystroke_while_a_modifier_is_down(
+        self,
+        marker: int | None,
+        text: str,
+        foreground_at_start: int | None,
+    ) -> None:
+        """Never inject Ctrl+V into a modifier the user has just pressed.
+
+        The wait at the start of the transaction ends before the clipboard
+        write, the settle sleep and the check of that write, about 25 ms
+        before the keystroke. A Ctrl+Alt pressed inside that gap -- the
+        record hotkey of the next dictation, and results arrive exactly while
+        the user starts and stops recordings -- made the target see
+        Ctrl+Alt+V, which pastes nothing, while the transaction reported a
+        paste. One reading right before the keystroke leaves a gap of
+        microseconds. A key that is down is waited for like the first time,
+        and what that wait can change is checked again: the clipboard (the
+        key was the Ctrl of a Ctrl+C) and the foreground (the Alt of an
+        Alt+Tab). Bounded by `PASTE_MODIFIER_RECHECK_ROUNDS` waits, so keys
+        pressed over and over cancel the paste instead of holding the
+        caller's thread.
+
+        Nothing has been pasted when this raises: every error is a plain,
+        retryable pre-keystroke failure.
+        """
+        for _ in range(PASTE_MODIFIER_RECHECK_ROUNDS):
+            if self._modifiers_released():
+                return
+            self._wait_for_modifier_release()
+            self._raise_if_the_clipboard_changed(marker, text)
+            self._raise_if_the_foreground_changed(foreground_at_start)
+        if not self._modifiers_released():
+            raise TextInsertionError(
+                "Paste canceled because a Ctrl, Alt, Shift, or Windows key "
+                "kept being pressed. Release the keys and retry."
+            )
+
+    def _modifiers_released(self) -> bool:
+        """One reading of the modifier keys; True when it cannot be read."""
+        poll = getattr(self._backend, "modifiers_released", None)
+        if not callable(poll):
+            return True
+        try:
+            return poll() is not False
+        except Exception:
+            # Never let modifier probing break the paste itself.
+            return True
 
     def _marker_after_write(self, written: object) -> int | None:
         """The sequence number of our own write, or the best stand-in for it.
@@ -2000,6 +2451,7 @@ class TextInserter:
         # state is no longer what "the user's clipboard" means and restoring
         # it would overwrite what they just copied.
         self._log_restore_outcome(record, "superseded_changed")
+        self._report_receipt(record)
         return _NO_INHERITED_STATE, None
 
     def _resume_pending_restore(self, record: _PendingRestore) -> None:
@@ -2019,6 +2471,7 @@ class TextInserter:
         marker: int | None,
         text: str,
         target_hwnd: int | None,
+        offer: int | None = None,
     ) -> None:
         """Hand the restore to the scheduler. The caller holds `_insert_lock`."""
         armed_at = self._clock()
@@ -2030,16 +2483,19 @@ class TextInserter:
             target_hwnd=target_hwnd,
             armed_at=armed_at,
             deadline=armed_at + max(0.0, self._restore_max_wait_s),
+            offer=offer,
         )
         self._pending_restore = record
         self._schedule_restore(record)
 
-    def _schedule_restore(self, record: _PendingRestore) -> None:
+    def _schedule_restore(
+        self, record: _PendingRestore, delay_s: float | None = None
+    ) -> None:
         record.chain += 1
         chain = record.chain
         try:
             record.handle = self._schedule_fn(
-                self._restore_delay_s,
+                self._restore_delay_s if delay_s is None else delay_s,
                 lambda: self._run_deferred_restore(record, chain),
             )
         except Exception:
@@ -2084,6 +2540,15 @@ class TextInserter:
                 # user's old content.
                 self._pending_restore = None
                 self._log_restore_outcome(record, "abandoned_busy")
+                self._report_receipt(record, transcript_stays=True)
+                return
+            unread_for_s = self._receipt_wait_remaining_s(record)
+            if unread_for_s > 0.0:
+                # Nobody has fetched the transcript. Putting the clipboard
+                # back now is what makes a target that gets to its paste a
+                # moment later insert the user's old content instead.
+                self._log_restore_outcome(record, "unread_rescheduled")
+                self._schedule_restore(record, unread_for_s)
                 return
             self._finish_restore(record)
 
@@ -2109,6 +2574,7 @@ class TextInserter:
         verdict = self._restore_check(record)
         if verdict == _RESTORE_CHANGED:
             self._log_restore_outcome(record, "skipped_changed")
+            self._report_receipt(record)
             return
         if verdict == _RESTORE_BUSY:
             self._restore_attempt_failed(record, may_retry=may_retry, why="busy")
@@ -2117,6 +2583,7 @@ class TextInserter:
             self._backend.restore_clipboard_state(record.previous_state)
         except _ClipboardRestoreRefusedError:
             self._log_restore_outcome(record, "skipped_changed")
+            self._report_receipt(record)
             return
         except ClipboardEmptiedError:
             # Our `EmptyClipboard` went through, so the transcript is gone and
@@ -2124,6 +2591,7 @@ class TextInserter:
             # counter, read after our last write, can recognise it.
             record.text = None
             record.marker = self._clipboard_sequence_number()
+            self._report_receipt(record)
             self._restore_attempt_failed(record, may_retry=may_retry, why="failed")
             return
         except Exception:
@@ -2131,6 +2599,7 @@ class TextInserter:
             self._restore_attempt_failed(record, may_retry=may_retry, why="failed")
             return
         self._log_restore_outcome(record, "restored")
+        self._report_receipt(record)
 
     def _restore_attempt_failed(
         self, record: _PendingRestore, *, may_retry: bool, why: str
@@ -2144,6 +2613,8 @@ class TextInserter:
             self._schedule_restore_retry(record)
             return
         self._log_restore_outcome(record, "failed")
+        # The transcript was not replaced and may stay where it is.
+        self._report_receipt(record, transcript_stays=True)
         self._report_restore_failure()
 
     def _arm_restore_retry(
@@ -2292,6 +2763,25 @@ class TextInserter:
             # No retry: the timer thread dies with the process.
             self._finish_restore(record, may_retry=False)
 
+    def close(self) -> None:
+        """Shutdown: restore the clipboard now, then end the owner window.
+
+        `main.run` connects this to `aboutToQuit`, after the controller's
+        shutdown, and registers it with `atexit` for an exit that never
+        reached the quit. Only the first call does the work, whichever
+        thread makes it; every other one returns at once.
+        """
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            self.flush_pending_restore()
+        finally:
+            close = getattr(self._backend, "close", None)
+            if callable(close):
+                close()
+
     def _wait_for_modifier_release(self) -> None:
         waiter = getattr(self._backend, "wait_for_modifier_release", None)
         if not callable(waiter):
@@ -2367,7 +2857,15 @@ class TextInserter:
         Comparing content costs one clipboard read that the equal-number case
         used to skip; `_clipboard_text` raises `ClipboardContentionError` when
         that read fails, which every caller treats as "not ours to write".
+
+        An announced transcript (`_offer`) is not read back: the read would
+        fetch it from our own window and use the receipt up. Its evidence is
+        the owner window still owning the clipboard, with no
+        `EmptyClipboard` by anyone since. Once that fails, whatever is there
+        is someone else's and is read like any other content.
         """
+        if self._offer is not None and self._backend.offer_intact(self._offer):
+            return False
         current_text = self._clipboard_text()
         if current_text is not _UNAVAILABLE_CLIPBOARD_TEXT:
             return current_text != expected_text

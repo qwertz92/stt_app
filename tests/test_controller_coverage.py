@@ -29,7 +29,6 @@ from conftest import (
 from conftest import (
     make_controller as _make_controller,
 )
-from PySide6 import QtGui
 
 # The real Deepgram provider's fake socket, so the preconnect flush can be
 # exercised against the provider's real 32-chunk send-queue bound rather
@@ -42,6 +41,7 @@ from test_deepgram_provider import (
     _FakeWebSocketModule,
 )
 
+from stt_app import clipboard_copy
 from stt_app import controller as controller_module
 from stt_app.audio_capture import AudioCaptureError
 from stt_app.config import (
@@ -4722,7 +4722,7 @@ def test_a_re_paste_that_fails_during_a_transcription_reports_through_the_tray(
         def setText(self, text):
             clipboard_text.append(text)
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _Clipboard().setText)
     overlay = FakeOverlay()
     inserter = FakeTextInserter(should_fail=True)
     controller, app = _make_controller(overlay=overlay, text_inserter=inserter)

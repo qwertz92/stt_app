@@ -7,6 +7,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .clipboard_copy import copy_text
 from .config import (
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_HISTORY_MAX_ITEMS,
@@ -658,9 +659,8 @@ class _HistoryTabMixin:
 
     def _copy_selected_history(self) -> None:
         text = join_recent_entries_for_clipboard(self._selected_history_entries())
-        if not text:
+        if not text or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self._flash_history_copy_feedback()
 
     def _on_history_item_double_clicked(
@@ -670,9 +670,8 @@ class _HistoryTabMixin:
         """Copy the double-clicked entry's transcript to the clipboard."""
         entry = item.data(QtCore.Qt.UserRole)
         text = str(getattr(entry, "text", "") or "")
-        if not text:
+        if not text or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self._flash_history_copy_feedback()
 
     def _flash_history_copy_feedback(self) -> None:

@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 from conftest import FakeOverlay, FakeTextInserter, make_controller
-from PySide6 import QtGui
 
 import stt_app.controller as controller_module
+from stt_app import clipboard_copy
 from stt_app.config import (
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
@@ -56,7 +56,7 @@ def _register_every_hotkey(controller):
 
 
 def _controller(monkeypatch, inserter):
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _Clipboard().setText)
     overlay = FakeOverlay()
     controller, app = make_controller(overlay=overlay, text_inserter=inserter)
     controller._target_window_handle = 555
@@ -256,7 +256,7 @@ def test_the_overlay_shows_red_for_a_failure_and_orange_for_the_offer(monkeypatc
     overlay.setAttribute(QtCore.Qt.WA_DontShowOnScreen, True)
     overlay.show()
     QtWidgets.QApplication.processEvents()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _Clipboard().setText)
     controller, app = make_controller(
         overlay=overlay, text_inserter=FakeTextInserter(should_fail=True)
     )

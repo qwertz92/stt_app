@@ -49,7 +49,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   voice-agent model and not used; the SDK must be >= 1.10, where the
   streaming `SpeechModel` enum knows it), optional `keyterms_prompt`, no
   `language_detection` / `format_turns`; the batch selector does not affect
-  it. Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
+  it; the chosen language goes as `language_codes` (`remote-providers.md`,
+  "Streaming language"). Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
   thread with bounded joins; the 8 s budget covers the text-bearing teardown
   (`disconnect(terminate=True)`, `terminate_timeout` pinned to 5 s, two 1 s
   threads) and deliberately not `websockets.sync` `close()`, which waits the
@@ -352,3 +353,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   (bounded by `_stream_error_reported`), a raising AssemblyAI `disconnect`
   and a refused Deepgram `ws.close()` are logged; an unparseable Deepgram
   frame has its own latch. No new lock ordering.
+
+## Which streaming is experimental
+
+Rule (2026-11-26): the Settings mode picker and the docs call streaming
+"experimental" except local streaming with Nemotron
+(`config.streaming_is_experimental`). Why: on 11 clips at real-time pace on CPU
+(2026-11-24, table in `docs/learning-log.md`, entry "streaming review: the end of
+most Nemotron dictations never reached the document") Nemotron's streaming
+document WER is 10.5 % against 10.5 % in its own batch mode, while
+faster-whisper's rolling window gives 22.0 to 44.0 % (tiny 30.4, base 22.0,
+small 44.0, turbo 26.2) against 4.5 to 15.4 % in batch. AssemblyAI and Deepgram
+streaming were not measured, so they keep the label until someone does.

@@ -11,6 +11,7 @@ import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
+from stt_app import clipboard_copy
 from stt_app.app_paths import debug_audio_path
 from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
@@ -481,24 +482,43 @@ def test_switching_to_an_engine_that_cannot_stream_keeps_the_mode_and_says_why()
     _ = app
 
 
-def test_assemblyai_streaming_locks_language_to_auto():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+def _assemblyai_streaming_dialog(language_mode: str) -> SettingsDialog:
     store = _FakeSettingsStore(
-        AppSettings(engine="assemblyai", mode="streaming", language_mode="de")
+        AppSettings(engine="assemblyai", mode="streaming", language_mode=language_mode)
     )
-    dialog = SettingsDialog(
+    return SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto"]
+
+def test_assemblyai_streaming_offers_exactly_the_realtime_models_languages():
+    """Auto (the model code-switches) plus the 32 languages of
+    STT-3.7-Realtime's `language_codes` list, whatever the batch model is."""
+    from stt_app.config import ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _assemblyai_streaming_dialog("de")
+
+    assert tuple(_combo_data(dialog.language_combo)) == (
+        ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
+    )
+    assert dialog.language_combo.currentData() == "de"
+    assert dialog.language_combo.isEnabled() is True
+    assert _combo_offers(dialog.language_combo, "bg") is False
+    _ = app
+
+
+def test_assemblyai_streaming_names_a_language_it_replaces_with_auto():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _assemblyai_streaming_dialog("bg")
+
     assert dialog.language_combo.currentData() == "auto"
-    assert dialog.language_combo.isEnabled() is False
-    assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_offers(dialog.language_combo, "de") is False
-    assert _combo_offers(dialog.language_combo, "en") is False
-    assert "fixed to Auto" in dialog.language_note_label.text()
+    note = dialog.language_note_label.text()
+    assert "does not offer" in note and "streams in Auto" in note
+    # The saved language is remembered, not overwritten by the stand-in.
+    assert dialog._language_fallback == ("auto", "bg")
     _ = app
 
 
@@ -712,11 +732,9 @@ def test_switching_assemblyai_mode_updates_language_options():
 
     streaming_idx = dialog.mode_combo.findData("streaming")
     dialog.mode_combo.setCurrentIndex(streaming_idx)
-    assert _combo_data(dialog.language_combo) == ["auto"]
-    assert dialog.language_combo.isEnabled() is False
-    assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_offers(dialog.language_combo, "de") is False
-    assert _combo_offers(dialog.language_combo, "en") is False
+    assert _combo_data(dialog.language_combo)[:3] == ["auto", "de", "en"]
+    assert dialog.language_combo.currentData() == "de"
+    assert dialog.language_combo.isEnabled() is True
 
     batch_idx = dialog.mode_combo.findData("batch")
     dialog.mode_combo.setCurrentIndex(batch_idx)
@@ -1038,7 +1056,7 @@ def test_settings_history_multiselect_copy_joins_selected_entries(
         ]
     )
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
@@ -4702,7 +4720,7 @@ def test_import_progress_callback_is_passed_to_controller(monkeypatch):
 def test_import_result_has_copy_button_and_resizable_result_area(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     clipboard = _FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
@@ -4841,7 +4859,7 @@ def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
         def setText(self, text: str) -> None:
             copied.append(text)
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _FakeClipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _FakeClipboard().setText)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings(history_max_items=20)),
         secret_store=_FakeSecretStore(),
@@ -5713,3 +5731,68 @@ def test_a_language_the_user_picks_replaces_the_remembered_one():
 
     assert store.saved is not None and store.saved.language_mode == "de"
     _ = app
+
+
+@pytest.mark.parametrize(
+    ("engine", "model_size", "expected"),
+    [
+        ("local", NEMOTRON_MODEL_SIZE, "Streaming"),
+        ("local", "small", "Streaming (Experimental)"),
+        ("local", "large-v3-turbo", "Streaming (Experimental)"),
+        ("assemblyai", "", "Streaming (Experimental)"),
+        ("deepgram", "", "Streaming (Experimental)"),
+    ],
+)
+def test_the_streaming_label_says_experimental_only_where_it_is_true(
+    engine, model_size, expected
+):
+    """Measured 2026-11-25: Nemotron streaming reaches its batch word error
+    rate; faster-whisper's rolling window does not and the cloud engines were
+    not measured. The stored value stays "streaming"."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine=engine, model_size=model_size))
+
+    index = dialog.mode_combo.findData("streaming")
+    assert dialog.mode_combo.itemText(index) == expected
+    assert dialog.mode_combo.itemText(dialog.mode_combo.findData("batch")) == "Batch"
+    _ = app
+
+
+def test_the_streaming_label_follows_the_selected_engine_and_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine="local", model_size="small"))
+    index = dialog.mode_combo.findData("streaming")
+    assert dialog.mode_combo.itemText(index) == "Streaming (Experimental)"
+
+    dialog.model_combo.setCurrentIndex(dialog.model_combo.findData(NEMOTRON_MODEL_SIZE))
+    assert dialog.mode_combo.itemText(index) == "Streaming"
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
+    assert dialog.mode_combo.itemText(index) == "Streaming (Experimental)"
+    assert dialog.mode_combo.itemData(index) == "streaming"
+    _ = app
+
+
+def test_the_mode_picker_keeps_its_width_when_the_label_changes():
+    """The combo is sized once, on first show, from its items: a shorter text
+    must not shrink it and the longer one must not widen it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(
+        AppSettings(engine="local", model_size=NEMOTRON_MODEL_SIZE, mode="streaming")
+    )
+    dialog.show()
+    app.processEvents()
+    index = dialog.mode_combo.findData("streaming")
+    try:
+        short = (dialog.mode_combo.itemText(index), dialog.mode_combo.width())
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
+        app.processEvents()
+        long = (dialog.mode_combo.itemText(index), dialog.mode_combo.width())
+        assert short[0] == "Streaming"
+        assert long[0] == "Streaming (Experimental)"
+        assert short[1] == long[1], (short, long)
+        # The widest label fits without eliding.
+        assert dialog.mode_combo.fontMetrics().horizontalAdvance(long[0]) < long[1]
+    finally:
+        dialog.close()
+        app.processEvents()

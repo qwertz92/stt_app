@@ -3,10 +3,13 @@ from __future__ import annotations
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+from stt_app import clipboard_copy
 from stt_app.config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
+    ENGINE_LANGUAGE_MODES,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    language_modes_for_selection,
 )
 from stt_app.dialog_style import make_label_selectable
 from stt_app.settings_dialog import SettingsDialog
@@ -826,6 +829,24 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
     assert needed + chrome <= design_height, (needed, chrome, design_height)
 
 
+@pytest.mark.parametrize("engine", ["meta", "openrouter"])
+def test_a_batch_only_new_engine_offers_no_streaming_and_its_own_languages(
+    dialog: SettingsDialog, engine: str
+) -> None:
+    """Meta and OpenRouter are batch-only: the Mode picker has no Streaming
+    entry and the language picker lists exactly what the engine accepts."""
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+    QtWidgets.QApplication.processEvents()
+
+    modes = [dialog.mode_combo.itemData(i) for i in range(dialog.mode_combo.count())]
+    assert modes == ["batch"]
+    languages = tuple(
+        dialog.language_combo.itemData(i) for i in range(dialog.language_combo.count())
+    )
+    assert languages == language_modes_for_selection(engine)
+    assert languages == ENGINE_LANGUAGE_MODES[engine]
+
+
 def test_providers_tab_fits_the_default_dialog_height_without_scrolling(
     dialog: SettingsDialog,
 ) -> None:
@@ -1370,7 +1391,7 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
         def setText(self, text: str) -> None:
             copied.append(text)
 
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", _Clipboard().setText)
     label = ElidingLabel()
     make_label_selectable(label)
     label.resize(200, 20)
