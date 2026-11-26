@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from pathlib import Path
@@ -867,6 +868,10 @@ class _LocalModelsMixin:
             )
             self.local_models_label.setStyleSheet("color: #555;")
         if hasattr(self, "local_models_list"):
+            # Whatever the last scan found belongs to a folder that may no
+            # longer be the one the Model Dir names; the retired rows (Delete is
+            # their whole purpose) come back with the next verified scan.
+            self._retired_models_on_disk = []
             self._refresh_local_models_list([])
             self.local_models_list.setEnabled(True)
         if hasattr(self, "benchmark_models_list"):
@@ -2158,6 +2163,7 @@ class _LocalModelsMixin:
         # default Hugging Face cache, so a model listed once here can live in
         # either -- and the shared default cache holds models other tools put
         # there. "This removes downloaded files from disk" did not say which.
+        from .transcriber import local_faster_whisper
         from .transcriber.local_faster_whisper import cached_model_paths
 
         model_dir = self.model_dir_edit.text().strip()
@@ -2170,12 +2176,26 @@ class _LocalModelsMixin:
             except Exception:  # pragma: no cover - listing must never block
                 _logger.exception("Failed to list the cache folders for %s", model_name)
         folders = _describe_doomed_folders(doomed)
+        # The default Hugging Face cache is shared: another program that uses
+        # the same models (the same faster-whisper sizes, say) finds them gone.
+        shared_cache = os.path.normcase(
+            os.path.realpath(local_faster_whisper.default_hf_cache_dir())
+        )
+        if any(
+            os.path.normcase(os.path.realpath(Path(path).parent)) == shared_cache
+            for path in doomed
+        ):
+            folders += (
+                "\n\nOther programs that use the Hugging Face cache share these "
+                "files and would have to download them again."
+            )
+        labels = [local_model_short_label(name) for name in names]
 
         answer = QtWidgets.QMessageBox.question(
             self,
             "Delete local model",
             (
-                f"Delete local cache for: {', '.join(names)}?\n\n"
+                f"Delete local cache for: {', '.join(labels)}?\n\n"
                 "This removes downloaded files from disk." + folders
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
@@ -2201,7 +2221,7 @@ class _LocalModelsMixin:
                 with self._local_model_download_lock:
                     self._local_model_download_completed_names.discard(model_name)
             except Exception as exc:
-                errors.append(f"'{model_name}': {exc}")
+                errors.append(f"'{local_model_short_label(model_name)}': {exc}")
 
         if errors:
             self.local_models_action_label.setStyleSheet("color: #b71c1c;")
@@ -2211,12 +2231,12 @@ class _LocalModelsMixin:
         elif total_removed <= 0:
             self.local_models_action_label.setStyleSheet("color: #555;")
             self.local_models_action_label.setText(
-                f"No cache directories found for: {', '.join(names)}."
+                f"No cache directories found for: {', '.join(labels)}."
             )
         else:
             self.local_models_action_label.setStyleSheet("color: #1b5e20;")
             self.local_models_action_label.setText(
-                f"Deleted {', '.join(names)} ({total_removed} folder(s) removed)."
+                f"Deleted {', '.join(labels)} ({total_removed} folder(s) removed)."
             )
         self._refresh_local_model_views()
 

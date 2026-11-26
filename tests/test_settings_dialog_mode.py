@@ -1902,6 +1902,205 @@ def test_download_all_missing_never_counts_a_retired_model(monkeypatch):
     _ = app
 
 
+def _retired_row_names(dialog) -> list[str]:
+    from stt_app.config import RETIRED_LOCAL_MODEL_REPOS
+
+    return [
+        str(dialog.local_models_list.item(i).data(QtCore.Qt.UserRole))
+        for i in range(dialog.local_models_list.count())
+        if str(dialog.local_models_list.item(i).data(QtCore.Qt.UserRole))
+        in RETIRED_LOCAL_MODEL_REPOS
+    ]
+
+
+def test_retired_rows_go_while_the_inventory_is_unverified(monkeypatch, tmp_path):
+    """A changed Model Dir, a pending scan: the rows of the old folder are not
+    the new folder's, and Delete on them would act on nothing the user sees."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _models_tab_with_a_retired_model_on_disk(monkeypatch)
+    assert _retired_row_names(dialog) == ["granite-speech-4.1-2b"]
+
+    held: list = []
+
+    class _Held:
+        def __init__(self, target, name=None, daemon=None):
+            held.append(target)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _Held)
+    other = tmp_path / "another-model-dir"
+    other.mkdir()
+    dialog.model_dir_edit.setText(str(other))
+    dialog._refresh_local_model_views()
+
+    assert held, "the scan was not requested"
+    assert _retired_row_names(dialog) == []
+    _select_local_model_names(dialog, "granite-speech-4.1-2b")
+    dialog._update_local_model_actions()
+    assert not dialog.delete_selected_model_button.isEnabled()
+    dialog.deleteLater()
+    _ = app
+
+
+def _delete_confirmation(monkeypatch, tmp_path, scanned, select, *, in_default=()):
+    """Run Delete Selected for `select` over real folders and return the
+    confirmation text and the result line."""
+    from stt_app.transcriber import local_faster_whisper
+
+    default = tmp_path / "shared-default-cache"
+    default.mkdir()
+    model_dir = tmp_path / "own-model-dir"
+    model_dir.mkdir()
+    for folder in in_default:
+        (default / folder).mkdir()
+    monkeypatch.setattr(
+        local_faster_whisper, "default_hf_cache_dir", lambda: str(default)
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models", lambda _dir="": list(scanned)
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.delete_cached_model", lambda _name, _dir="": 1
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda parent, title, text, *a, **k: (
+            asked.append(text),
+            QtWidgets.QMessageBox.Yes,
+        )[1],
+    )
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(model_dir=str(model_dir))),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    _wait_for_local_models(dialog, *select, cached=True)
+    _select_local_model_names(dialog, *select)
+    dialog._delete_selected_cached_model()
+    result = dialog.local_models_action_label.text()
+    dialog.deleteLater()
+    return asked[0], result, model_dir
+
+
+def test_the_delete_dialog_and_result_name_models_as_the_rows_do(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    asked, result, _ = _delete_confirmation(
+        monkeypatch,
+        tmp_path,
+        ["granite-speech-5.0-2b", "granite-speech-4.1-2b"],
+        ["granite-speech-4.1-2b", "granite-speech-5.0-2b"],
+    )
+
+    for text in (asked, result):
+        assert "IBM Granite Speech 4.1 2B" in text
+        assert "IBM Granite Speech 5.0 2B" in text
+        assert "granite-speech-4.1-2b" not in text
+        assert "granite-speech-5.0-2b" not in text
+    assert result.startswith("Deleted ")
+    _ = app
+
+
+def test_a_folder_in_the_shared_huggingface_cache_is_called_shared(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    asked, _result, _ = _delete_confirmation(
+        monkeypatch,
+        tmp_path,
+        ["small", "tiny"],
+        ["tiny"],
+        in_default=["models--Systran--faster-whisper-tiny"],
+    )
+
+    assert "Other programs that use the Hugging Face cache share these files" in asked
+    assert "download them again" in asked
+    assert "Recorder" not in asked
+    _ = app
+
+
+def test_a_folder_in_the_users_own_model_dir_is_not_called_shared(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    from stt_app.transcriber import local_faster_whisper
+
+    own = tmp_path / "own-model-dir"
+    (own / "models--Systran--faster-whisper-tiny").mkdir(parents=True)
+    monkeypatch.setattr(
+        local_faster_whisper, "default_hf_cache_dir", lambda: str(tmp_path / "empty")
+    )
+    asked: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models", lambda _dir="": ["tiny"]
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.delete_cached_model", lambda _n, _d="": 1
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda parent, title, text, *a, **k: (
+            asked.append(text),
+            QtWidgets.QMessageBox.No,
+        )[1],
+    )
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(model_dir=str(own))),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    _wait_for_local_models(dialog, "tiny", cached=True)
+    _select_local_model_names(dialog, "tiny")
+
+    dialog._delete_selected_cached_model()
+
+    assert asked and "Other programs" not in asked[0]
+    assert str(own / "models--Systran--faster-whisper-tiny") in asked[0]
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_long_path_in_the_models_status_line_wraps_inside_the_group(monkeypatch):
+    """At the default width an error naming a path (no spaces) was clipped at
+    the group's right edge. It wraps at the path's backslashes, the tooltip and
+    `text()` keep the text as written, and Copy gives it back without the
+    invisible break characters."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _models_tab_with_a_retired_model_on_disk(monkeypatch)
+    dialog.resize(860, 960)
+    dialog.show()
+    app.processEvents()
+    path = "C:\\Users\\someone\\AppData\\Local\\Temp\\" + "\\".join(
+        f"a_rather_long_folder_name_{i}" for i in range(8)
+    )
+    message = f"Failed to delete: 'tiny': [WinError 5] Access is denied: '{path}'"
+    label = dialog.local_models_action_label
+
+    label.setText(message)
+    app.processEvents()
+
+    painted = QtWidgets.QLabel.text(label)
+    needed = label.fontMetrics().boundingRect(
+        QtCore.QRect(0, 0, label.width(), 100000), QtCore.Qt.TextWordWrap, painted
+    )
+    assert label.width() > 100
+    assert needed.width() <= label.width(), (needed.width(), label.width())
+    assert label.text() == message
+    assert label.toolTip() == message
+    label.copy_message()
+    assert QtWidgets.QApplication.clipboard().text() == message
+    dialog.deleteLater()
+    _ = app
+
+
 def test_local_tab_can_download_selected_model(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     cached: list[str] = []

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -127,7 +128,64 @@ class ContentCappedGroupBox(QtWidgets.QGroupBox):
             self.setMaximumHeight(cap)
 
 
-class ElidingLabel(QtWidgets.QLabel):
+ZERO_WIDTH_SPACE = "\u200b"
+
+
+class _FullTextCopyMixin:
+    """Copying from a label whose painted text differs from what was set.
+
+    `QLabel` copies from its own text control, which holds the painted text:
+    the elided one (`ElidingLabel`) or one with break opportunities added
+    (`WrappedStatusLabel`). The whole message, the one worth pasting into a bug
+    report, must come back as written, so Copy goes through `copy_message`.
+    Expects `self._full_text`.
+    """
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.matches(QtGui.QKeySequence.Copy):
+            self.copy_message()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        menu = self._context_menu()
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def _context_menu(self) -> QtWidgets.QMenu:
+        """`QLabel`'s own menu copies through its text control, which holds
+        the elided text; this one copies through `copy_message`."""
+        menu = QtWidgets.QMenu(self)
+        copy_action = menu.addAction("Copy")
+        copy_action.setEnabled(bool(self._full_text))
+        copy_action.triggered.connect(self.copy_message)
+        select_all = menu.addAction("Select All")
+        select_all.setEnabled(bool(self._full_text))
+        select_all.triggered.connect(self._select_all)
+        return menu
+
+    def _select_all(self) -> None:
+        self.setSelection(0, len(QtWidgets.QLabel.text(self)))
+
+    def copy_message(self) -> None:
+        """Put the selected part, or the whole message, on the clipboard.
+
+        `QLabel` copies from its own text control, which holds the elided
+        text: a failed save's message, the one text worth pasting into a bug
+        report, came back as its first 37 characters and an ellipsis, and
+        the tooltip that holds the rest cannot be copied. A part of the
+        painted text copies as selected; the whole of it, or no selection,
+        copies the message as written.
+        """
+        selected = self.selectedText()
+        painted = QtWidgets.QLabel.text(self)
+        text = selected if selected and selected != painted else self._full_text
+        text = text.replace(ZERO_WIDTH_SPACE, "")
+        QtGui.QGuiApplication.clipboard().setText(text)
+
+
+class ElidingLabel(_FullTextCopyMixin, QtWidgets.QLabel):
     """A one-line label that shortens its text to fit instead of clipping it.
 
     A `QLabel` with word wrap off cuts a long line at its right edge with
@@ -170,48 +228,6 @@ class ElidingLabel(QtWidgets.QLabel):
     def text(self) -> str:
         return self._full_text
 
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        if event.matches(QtGui.QKeySequence.Copy):
-            self.copy_message()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
-        menu = self._context_menu()
-        menu.exec(event.globalPos())
-        menu.deleteLater()
-
-    def _context_menu(self) -> QtWidgets.QMenu:
-        """`QLabel`'s own menu copies through its text control, which holds
-        the elided text; this one copies through `copy_message`."""
-        menu = QtWidgets.QMenu(self)
-        copy_action = menu.addAction("Copy")
-        copy_action.setEnabled(bool(self._full_text))
-        copy_action.triggered.connect(self.copy_message)
-        select_all = menu.addAction("Select All")
-        select_all.setEnabled(bool(self._full_text))
-        select_all.triggered.connect(self._select_all)
-        return menu
-
-    def _select_all(self) -> None:
-        self.setSelection(0, len(QtWidgets.QLabel.text(self)))
-
-    def copy_message(self) -> None:
-        """Put the selected part, or the whole message, on the clipboard.
-
-        `QLabel` copies from its own text control, which holds the elided
-        text: a failed save's message, the one text worth pasting into a bug
-        report, came back as its first 37 characters and an ellipsis, and
-        the tooltip that holds the rest cannot be copied. A part of the
-        painted text copies as selected; the whole of it, or no selection,
-        copies the message as written.
-        """
-        selected = self.selectedText()
-        painted = QtWidgets.QLabel.text(self)
-        text = selected if selected and selected != painted else self._full_text
-        QtGui.QGuiApplication.clipboard().setText(text)
-
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_elide()
@@ -228,19 +244,48 @@ class ElidingLabel(QtWidgets.QLabel):
         )
 
 
-class WrappedStatusLabel(QtWidgets.QLabel):
+# A token longer than this with no space in it (a path, a URL) gets a break
+# opportunity after each backslash and underscore: Qt breaks after a hyphen or a
+# slash by itself, never after a backslash, so a Windows path stayed one unbroken
+# word that a wrapped label clipped at its edge.
+_UNBROKEN_TOKEN_CHARS = 30
+
+
+def breakable(text: str) -> str:
+    """`text` with a zero-width space after each backslash and underscore of
+    every long token, so a wrapped label can break a path."""
+    return " ".join(
+        re.sub(r"([\\_])", r"\1" + ZERO_WIDTH_SPACE, token)
+        if len(token) > _UNBROKEN_TOKEN_CHARS
+        else token
+        for token in text.split(" ")
+    )
+
+
+class WrappedStatusLabel(_FullTextCopyMixin, QtWidgets.QLabel):
     """A word-wrapped status line whose whole text is also its tooltip.
 
     No wrapped label may widen the dialog (`_let_wrapped_labels_narrow`), so
-    one unbroken token in a status line -- a cache path, a URL in a
-    provider's error -- is cut off at the label's edge: 110-140 px of a
-    120-character path at the default width (measured). The tooltip is where
-    the rest can be read.
+    an unbroken token in a status line -- a cache path, a URL in a provider's
+    error -- used to be cut off at the label's edge: 110-140 px of a
+    120-character path at the default width (measured). It now wraps at the
+    token's backslashes and underscores (`breakable`); the tooltip still holds
+    the text as written, `text()` returns it, and Copy puts it on the
+    clipboard without the invisible break characters.
     """
 
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setText(text)
+
     def setText(self, text: str) -> None:
-        super().setText(text)
-        self.setToolTip(text)
+        self._full_text = str(text)
+        super().setText(breakable(self._full_text))
+        self.setToolTip(self._full_text)
+
+    def text(self) -> str:
+        return self._full_text
 
 
 class CollapsingStatusLabel(WrappedStatusLabel):
