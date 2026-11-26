@@ -264,6 +264,10 @@ class FakeTrayIcon(QtWidgets.QSystemTrayIcon):
         super().__init__()
         self.messages: list[tuple[str, str]] = []
 
+    def isVisible(self):
+        # A registered icon: the start notices wait for one.
+        return True
+
     def showMessage(self, title, message, icon=None, msecs=10000):
         self.messages.append((title, message))
 
@@ -1590,6 +1594,48 @@ def test_two_start_notices_are_never_sent_closer_than_the_spacing(monkeypatch):
     callback()
     assert shown[-1] == ("Speech model updated", "b")
     assert timers == []
+
+
+def test_the_update_notice_keeps_the_spacing_after_the_model_notice(monkeypatch):
+    """The update check's balloon is a start notice too: sent right after the
+    model notice it would replace it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda delay, callback: timers.append((delay, callback)),
+    )
+    tray = FakeTrayIcon()
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.2",
+            latest_tag="v0.4.2",
+            update_available=True,
+        ),
+    )
+
+    main_module._show_model_notice_when_ready(tray, "model moved")
+    checker.start()
+
+    assert [title for title, _text in tray.messages] == ["Speech model updated"]
+    assert len(timers) == 1
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+
+    assert [title for title, _text in tray.messages] == [
+        "Speech model updated",
+        "Voice Dictation App",
+    ]
+    _ = app
 
 
 def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):

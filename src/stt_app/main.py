@@ -724,14 +724,15 @@ class _TrayUpdateChecker(QtCore.QObject):
             )
 
         if result.update_available:
-            self._tray_icon.showMessage(
+            # Through the spaced path every start notice takes: a balloon sent
+            # while another is up replaces it, and the model notice is one.
+            _show_tray_notice_when_ready(
+                self._tray_icon,
                 APP_DISPLAY_NAME,
                 (
                     f"Update {result.latest_tag or result.latest_version} is "
                     f"available. Current version: {result.current_version}."
                 ),
-                QtWidgets.QSystemTrayIcon.Information,
-                10000,
             )
             if manual:
                 show_update_available_dialog(result, parent=self._parent_widget)
