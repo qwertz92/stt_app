@@ -3736,7 +3736,7 @@ def test_the_status_of_every_row_stays_visible_with_real_model_names():
         )
         for second, model in (
             (0, "nemotron-3.5-asr-streaming-0.6b-int4"),
-            (5, "granite-speech-5.0-470m-turboctc"),
+            (5, "granite-5.0-470m-turboctc-multi"),
         )
     ]
     labels = [

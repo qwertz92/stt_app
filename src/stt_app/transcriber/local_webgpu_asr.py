@@ -334,6 +334,10 @@ _GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
         "tokenizer.json",
         "onnx/model_int8.onnx",
     ),
+    # The owner's export repository, public since 2026-11-26. The commit is
+    # pinned like Fluid Speech Pro's: the files cannot be replaced under the
+    # name, and the download never falls back to a mirror.
+    revision="208430c2b4f47a7211e6984fbee9f790fac92e60",
 )
 
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {

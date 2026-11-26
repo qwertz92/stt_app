@@ -2335,6 +2335,7 @@ def test_a_retirement_never_moves_a_streaming_choice_to_a_batch_only_model():
         "granite-4.0-1b-speech",
         "granite-speech-4.1-2b",
         "parakeet-tdt-0.6b-v3-ultra",
+        "granite-speech-5.0-470m-turboctc",
     }
     for old, new in RETIRED_LOCAL_MODEL_SUCCESSORS.items():
         assert supports_streaming("local", new) is (old not in was_batch_only)

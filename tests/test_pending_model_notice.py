@@ -266,6 +266,113 @@ def test_a_successor_already_on_disk_is_not_downloaded_again(tmp_path, monkeypat
     _ = app
 
 
+def _english_turboctc_files(model_dir):
+    """What a user of the English-only TurboCTC export has on disk."""
+    folder = model_dir / "granite-speech-5.0-470m-turboctc-onnx"
+    (folder / "onnx").mkdir(parents=True)
+    for name in ("config.json", "tokenizer.json", "onnx/model_int8.onnx"):
+        (folder / name).write_bytes(b"english-only export")
+
+
+@pytest.mark.parametrize("offline_mode", [False, True])
+def test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure(
+    tmp_path, monkeypatch, offline_mode
+):
+    """The whole sequence for a user who selected the English-only TurboCTC and
+    has only its files on disk: the model id moved to the multilingual one, one
+    notice at start says so, the new files are fetched at once (online) or the
+    notice says where to get them (offline), a dictation before they exist
+    says so, and the old files stay as a "No longer offered" row."""
+    import stt_app.controller as controller_module
+    from stt_app.config import GRANITE_CTC_MODEL_SIZE
+    from stt_app.controller import _preload_failure_text
+    from stt_app.settings_dialog_helpers import model_move_notices
+    from stt_app.transcriber.base import ModelNotCachedError
+    from stt_app.transcriber.local_faster_whisper import (
+        find_cached_models,
+        find_retired_models_on_disk,
+    )
+    from stt_app.transcriber.local_onnx_asr import resolve_or_download_onnx_model
+
+    model_dir = tmp_path / "models"
+    _english_turboctc_files(model_dir)
+    path = tmp_path / "settings.json"
+    _write(
+        path,
+        engine="local",
+        model_size="granite-speech-5.0-470m-turboctc",
+        keep_onnx_model_loaded=False,
+        offline_mode=offline_mode,
+        model_dir=str(model_dir),
+    )
+    started: list[tuple] = []
+
+    def fake_start(model_name, model_dir=""):
+        started.append((model_name, model_dir))
+        raise RuntimeError("stop here")
+
+    monkeypatch.setattr(controller_module, "start_model_download_process", fake_start)
+
+    # 1. The start moves the choice once; the move waits for the tray.
+    store = SettingsStore(path)
+    moved = store.load()
+    assert moved.model_size == GRANITE_CTC_MODEL_SIZE
+    assert [(m["from"], m["to"]) for m in moved.pending_model_moves] == [
+        ("granite-speech-5.0-470m-turboctc", GRANITE_CTC_MODEL_SIZE)
+    ]
+
+    # 2. The English files do not count as the selected model, and show as a
+    # retired row.
+    assert find_cached_models(str(model_dir)) == []
+    assert find_retired_models_on_disk(str(model_dir)) == [
+        "granite-speech-5.0-470m-turboctc"
+    ]
+
+    # 3. One notice, in the shared style, saying what happens next.
+    notices = model_move_notices(
+        moved.pending_model_moves, successor_on_disk=False, offline_mode=offline_mode
+    )
+    assert len(notices) == 1
+    text = notices[0][0]
+    assert "English-only is no longer offered, your choice is now" in text
+    assert "IBM Granite Speech 5.0 470M." in text
+    if offline_mode:
+        assert "Offline mode is on" in text
+        assert "Settings > Models" in text
+    else:
+        assert "Downloading it now (~552 MB); dictation works when it is done." in text
+
+    # 4. Online, the download starts at once; offline, none does.
+    controller, app = _controller(SettingsStore(path))
+    controller.reload_settings(re_register_hotkey=False)
+    future = controller._start_retirement_download()
+    if offline_mode:
+        assert future is None
+        assert started == []
+    else:
+        assert future is not None
+        future.result(timeout=30)
+        assert started == [(GRANITE_CTC_MODEL_SIZE, str(model_dir))]
+
+    # 5. A dictation before the files exist is refused with a readable text.
+    with pytest.raises(ModelNotCachedError) as refusal:
+        resolve_or_download_onnx_model(
+            GRANITE_CTC_MODEL_SIZE,
+            str(model_dir),
+            offline_mode=True,
+            cancel_check=None,
+        )
+    shown = controller._transcription_error_text(controller.settings, refusal.value)
+    assert "IBM Granite Speech 5.0 470M (~552 MB) is not on this PC" in shown
+    assert "No fallback model was used." in shown
+    failure = _preload_failure_text(
+        controller.settings, OSError("no snapshot"), RuntimeError("no network")
+    )
+    assert "Could not download IBM Granite Speech 5.0 470M" in failure
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # A selected model that is not on this PC and cannot be fetched (offline mode)
 

@@ -43,10 +43,9 @@ LANGUAGE
 `--language` defaults to `auto`, which reaches the worker as "no language" --
 faster-whisper then detects it, Parakeet ignores it, and Cohere falls back to
 German because it has no auto mode at all. Name the clip's real language when
-you know it; the numbers are then comparable with the benchmark history. An
-English-only model (distil-large-v3.5) is refused for any language but
-English, so with another language it runs in a pass of its own on `auto`:
-that proves its frozen runtime, though its text is then no transcript.
+you know it; the numbers are then comparable with the benchmark history. The
+models checked here all accept `auto`; the one English-only model
+(distil-large-v3.5) is a CTranslate2 model like `small`, so it is not checked.
 
 COMMAND LINE
     .venv\\Scripts\\python.exe scripts\\release_check_frozen_bundle.py \\
@@ -73,8 +72,6 @@ import _release_check_common as common
 
 common.add_src_to_sys_path()
 
-from stt_app.config import LOCAL_ENGLISH_ONLY_MODELS  # noqa: E402
-
 EVENT_PREFIX = "@@STTBENCH@@"
 
 # One model per local runtime, in the order they are preferred. Only the
@@ -86,7 +83,7 @@ PREFERRED = (
     "nemotron-3.5-asr-streaming-0.6b-int4",  # ONNX Runtime GenAI
     "cohere-transcribe-03-2026",  # Node.js and Transformers.js from the bundle
     # The app's own numpy features, the CPU ONNX Runtime and `tokenizers`.
-    "granite-speech-5.0-470m-turboctc",
+    "granite-5.0-470m-turboctc-multi",
 )
 WHISPER_SIZES = ("small",)
 NODE_MODELS = (
@@ -428,15 +425,7 @@ def main() -> int:
         for name in PREFERRED
         if name in cached and (name not in WHISPER_SIZES or name == whisper)
     ]
-    # The worker refuses an English-only model for any other language, so a
-    # clip named as German failed it by construction. Its own pass leaves the
-    # language to detection: that still runs the model's frozen runtime, which
-    # is what this check is for; only its text is no transcript of the clip.
-    english_only: list[str] = []
-    if args.language.lower() not in {"auto", "en"}:
-        english_only = [name for name in models if name in LOCAL_ENGLISH_ONLY_MODELS]
-        models = [name for name in models if name not in english_only]
-    if not models and not english_only:
+    if not models:
         checks.skipped(
             "frozen.benchmark.worker_exits_cleanly",
             "none of the preferred models is cached on this machine",
@@ -448,14 +437,6 @@ def main() -> int:
             args.exe,
             sandbox,
             benchmark_options(args.clip, models, args.language, model_dir),
-        )
-    if english_only:
-        checks.details["benchmark_english_only"] = run_benchmark_pass(
-            checks,
-            "benchmark_english_only",
-            args.exe,
-            sandbox,
-            benchmark_options(args.clip, english_only, "auto", model_dir),
         )
 
     if args.node_models:

@@ -403,7 +403,7 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
     monkeypatch.setattr(local_benchmark, "_audio_duration_seconds", lambda _path: 1.0)
 
     planned = local_benchmark.planned_benchmark_cases(
-        ["granite-speech-5.0-470m-turboctc"], "all", "auto", "int8"
+        ["granite-5.0-470m-turboctc-multi"], "all", "auto", "int8"
     )
     assert [(case.device_target, case.display_compute_type) for case in planned] == [
         ("auto", "onnx-int8")
@@ -411,7 +411,7 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
 
     cases = local_benchmark.run_benchmark_cases(
         audio_path=audio_path,
-        model_names=["granite-speech-5.0-470m-turboctc"],
+        model_names=["granite-5.0-470m-turboctc-multi"],
         runs=1,
         warmup=False,
         webgpu_devices="all",

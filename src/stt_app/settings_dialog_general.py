@@ -831,6 +831,13 @@ class _GeneralTabMixin:
                 "there is nothing to choose."
             )
 
+        if engine == "local" and model in LOCAL_GRANITE_CTC_MODEL_SIZES:
+            return (
+                "TurboCTC detects the language itself (English, French, German, "
+                "Spanish, Portuguese, Italian or Japanese); there is nothing to "
+                "choose."
+            )
+
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
             # Only the Granite models reach here: Cohere and Canary have their
             # own branches above, and both of those really do lack Auto.

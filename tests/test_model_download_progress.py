@@ -275,7 +275,7 @@ def test_format_model_download_progress_includes_rate_and_queue():
 
 def test_format_model_download_progress_names_the_model_as_the_screen_does():
     progress = measure_model_download_progress(
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
         212_000_000,
         reported_total_bytes=552_442_697,
         display_name="IBM Granite Speech 5.0 470M",
@@ -284,7 +284,7 @@ def test_format_model_download_progress_names_the_model_as_the_screen_does():
     text = format_model_download_progress(progress)
 
     assert text.startswith("Downloading IBM Granite Speech 5.0 470M:")
-    assert "granite-speech-5.0-470m-turboctc" not in text
+    assert "granite-5.0-470m-turboctc-multi" not in text
     assert "212 of 552 MB (38%)" in text
 
 
@@ -332,9 +332,9 @@ def test_the_baseline_counts_the_flat_layout_without_its_partials(tmp_path):
         destination / ".cache" / "huggingface" / "download" / "tok.json.metadata", 80
     )
 
-    assert completed_download_bytes(
-        "granite-speech-5.0-470m-turboctc", destination
-    ) == (4_001_148)
+    assert completed_download_bytes("granite-5.0-470m-turboctc-multi", destination) == (
+        4_001_148
+    )
 
 
 def test_the_baseline_skips_partial_blobs(tmp_path):
@@ -594,12 +594,12 @@ def test_a_resume_of_a_nearly_finished_download_reads_as_nearly_finished():
     driver.chunk(1_148)
 
     first = measure_model_download_progress(
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
         report.seen[0][0],
         reported_total_bytes=report.seen[0][1],
     )
     last = measure_model_download_progress(
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
         report.seen[-1][0],
         reported_total_bytes=report.seen[-1][1],
     )
@@ -671,7 +671,7 @@ def test_download_webgpu_model_snapshot_counts_the_files_already_on_disk(
     report = _Recorder()
 
     local_webgpu_asr.download_webgpu_model_snapshot(
-        "granite-speech-5.0-470m-turboctc", str(tmp_path), progress_hook=report
+        "granite-5.0-470m-turboctc-multi", str(tmp_path), progress_hook=report
     )
 
     assert report.seen[-1] == (4_001_148, 4_001_148)

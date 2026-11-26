@@ -312,7 +312,7 @@ def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
     for model_size in (
         "small",
         "parakeet-tdt-0.6b-v3",
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
     ):
         settings = AppSettings(
             engine="local",

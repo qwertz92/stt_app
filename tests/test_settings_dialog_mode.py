@@ -3706,7 +3706,7 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    dialog._refresh_local_models_list(["granite-speech-5.0-470m-turboctc"])
+    dialog._refresh_local_models_list(["granite-5.0-470m-turboctc-multi"])
 
     rows = {
         str(
@@ -3715,7 +3715,7 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
         for index in range(dialog.local_models_list.count())
     }
 
-    assert rows["granite-speech-5.0-470m-turboctc"].endswith(
+    assert rows["granite-5.0-470m-turboctc-multi"].endswith(
         " - Downloaded, ONNX Runtime INT8 CTC, CPU, batch only"
     )
     # One rule for every ONNX runtime: the two onnx-asr rows used to end at

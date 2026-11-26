@@ -302,7 +302,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`_transcription_error_text`) and logs the raw wording.
   - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
     Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
-    `medium` -> `large-v3-turbo`.
+    `medium` -> `large-v3-turbo`; the English-only TurboCTC export ->
+    the multilingual one (2026-11-26, below in the TurboCTC entry).
   - Added: Granite 5.0 2B (de 3.46 against 10.57 for 4.1 2B as shipped) and
     Fluid Speech Pro (de 3.25 / en 3.57 against Parakeet v3's 6.50 / 4.89,
     about three times slower at RTF 0.2).
@@ -581,12 +582,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   revision (IBM `91dcb06`, 2026-10-21; en, fr, de, es, pt, it, ja; punctuated,
   capitalised, language detected by the model): weights
   `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx`
-  (our own INT8 export, `onnx/model_int8.onnx` 551,294,349 bytes, sha256
-  `373123d8...1110f`; IBM publishes no ONNX of it). The English-only export
-  `qwertz92/granite-speech-5.0-470m-turboctc-onnx` rev `e6e3b4d` (nine files,
-  552,442,697 bytes) is no longer downloaded; its folder stays on disk,
-  unlisted. `onnx/model_int8.onnx` only (`onnx/*.onnx` would add fp32 and fp16
-  if a repository held them).
+  (our own INT8 export, public since 2026-11-26, Apache-2.0, pinned to commit
+  `208430c2b4f47a7211e6984fbee9f790fac92e60`: `onnx/model_int8.onnx`
+  551,294,349 bytes, sha256 `373123d8...1110f`; IBM publishes no ONNX of it).
+  The pin means no ModelScope fallback, and the model is in
+  `MODELS_WITHOUT_MODELSCOPE_MIRROR`: with Hugging Face unreachable the user
+  reads `format_model_download_error`'s "no ModelScope mirror ... point 'Model
+  Dir' at it" text. `onnx/model_int8.onnx` only (`onnx/*.onnx` would add fp32
+  and fp16 if a repository held them).
+  - **The English-only export is retired (2026-11-26, owner decision)**:
+    `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (rev `e6e3b4d`, nine files,
+    552,442,697 bytes) is no longer offered. On 25 English FLEURS clips the
+    multilingual INT8 graph had 4.14 % WER against 5.83 % for the English-only
+    export, so the English one has no advantage. The model id changed with the
+    repository: `granite-speech-5.0-470m-turboctc` (English) moves once to
+    `granite-5.0-470m-turboctc-multi` through
+    `RETIRED_LOCAL_MODEL_SUCCESSORS`, and the English folder is the "No longer
+    offered, still on disk" row (`RETIRED_LOCAL_MODEL_REPOS`). A new id, not a
+    new repository under the old id, because the move, its one notice, the
+    download at start (`_start_retirement_download`) and the Models row all key
+    on a retired id; with the id kept, a user who selected the model and has
+    only the English files would have got no notice and a download only inside
+    the first dictation. `tests/test_pending_model_notice.py`
+    (`test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure`)
+    runs the sequence online and offline.
   - No GPU path: DirectML saves 0.10-0.18 s per 29.4 s clip over INT8 CPU
     for a 1-2 GB download and a raw-graph Node runtime. Not built.
   - The extractor is a numpy port of `GraniteSpeech5FeatureExtractor` (which
@@ -604,8 +623,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `<|nospeech|>` (id 1) is a special token the decode skips: silence is an
     empty string. Blank is id 0 (`<unk>`).
   - Measured 2026-11-25 (25 + 25 FLEURS clips): INT8 de 4.27 / en 4.14, fp32
-    de 3.46 / en 4.70, RTF 0.023 against 0.068; shipped English-only INT8 en
-    5.83.
+    de 3.46 / en 4.70, RTF 0.023 against 0.068; the English-only INT8 export
+    en 5.83.
+  - The Settings language note for it says it detects the language itself
+    (`_language_constraint_note`); the picker offers Auto only.
   - Cancel reuses `_RunAbortHandle` / `_CancelWatchdog` from `local_onnx_asr`
     with its own `RunOptions`, checked before load, between passes and
     mid-run (0.46 s). The load itself (tokenizer, `InferenceSession`, ~1.4 s)

@@ -3,6 +3,29 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: one Granite TurboCTC model, the multilingual one, under a new id
+
+Structurally: `GRANITE_CTC_MODEL_SIZE` is now `granite-5.0-470m-turboctc-multi`, and the
+old id `granite-speech-5.0-470m-turboctc` is a retired model like Ultra (successor, repository, label).
+
+- Owner's decision with the reason: on 25 English FLEURS clips the multilingual INT8 graph had 4.14 %
+  WER against 5.83 % for the English-only export, so the English export has no advantage.
+- The repository `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` went public on
+  2026-11-26 and is pinned to commit `208430c` (the layout's `revision`, so no ModelScope fallback;
+  the model stays in `MODELS_WITHOUT_MODELSCOPE_MIRROR`).
+- Why a new id instead of keeping the id (as the branch `turboctc-multilingual` did): the move, its one
+  notice, the download at start and the "No longer offered" row all key on a retired id. With the id
+  kept, a user who selected the model and had only the English files got no notice and a download only
+  inside the first dictation. With the new id the existing flow serves them unchanged
+  (`test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure`).
+- Real download through the app's own code into a scratch model dir: 9 files in 44 s, `model_int8.onnx`
+  551,294,349 bytes, SHA-256 `373123d8...1110f` as expected; German and English clips transcribed.
+- The id is short on purpose: the long form (`...-turboctc-multilingual`, 258 px) no longer fit the
+  benchmark results table's Model column at the default dialog width (the layout test caught it); the
+  retired English id was 183 px, this one fits.
+- The frozen-bundle check had a pass for English-only models in `PREFERRED`; with this model gone from
+  the English-only set nothing could reach it, so it was removed.
+
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 
 The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,

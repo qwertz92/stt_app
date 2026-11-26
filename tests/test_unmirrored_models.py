@@ -40,7 +40,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
                 "parakeet-tdt-0.6b-v3",
                 "fluid-speech-pro",
                 "canary-1b-v2",
-                "granite-speech-5.0-470m-turboctc",
+                "granite-5.0-470m-turboctc-multi",
             }
         )
         == MODELS_WITHOUT_MODELSCOPE_MIRROR
@@ -54,7 +54,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
         "parakeet-tdt-0.6b-v3",
         "fluid-speech-pro",
         "canary-1b-v2",
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
     ],
 )
 def test_unmirrored_download_error_does_not_blame_the_connection(model_name):

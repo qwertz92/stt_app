@@ -302,7 +302,12 @@ LOCAL_ONNX_ASR_MODEL_SIZES = (
 # decode -- no Node.js, no onnx-asr, no new dependency. Batch only. It detects
 # English, French, German, Spanish, Portuguese, Italian and Japanese itself
 # (no language input) and writes punctuated, capitalised text.
-GRANITE_CTC_MODEL_SIZE = "granite-speech-5.0-470m-turboctc"
+#
+# The id is not the English-only model's id (`granite-speech-5.0-470m-turboctc`,
+# now in `RETIRED_LOCAL_MODEL_SUCCESSORS`): a new id is what lets the one-time
+# move, its notice and its download at start serve a user who selected the
+# English model, whose files sit under another repository.
+GRANITE_CTC_MODEL_SIZE = "granite-5.0-470m-turboctc-multi"
 LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
 
 # The local runtimes that run inside the app's own process on ONNX Runtime.
@@ -335,15 +340,16 @@ LOCAL_ONNX_MODEL_SIZES = (
 DEVICE_AWARE_LOCAL_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES
 
 # Models whose upstream repo has no ModelScope counterpart (the first three
-# verified against the ModelScope API on 2026-08-18, Granite Speech 5.0
-# TurboCTC on 2026-09-19). On a network that blocks Hugging Face wholesale
+# verified against the ModelScope API on 2026-08-18; the English-only
+# TurboCTC export on 2026-09-19). On a network that blocks Hugging Face wholesale
 # -- a proxy denying the whole "Generative AI and ML Applications" category is
 # the common case -- these cannot be fetched at all. Naming them up front beats
 # a download that ends in "check your internet connection", which is exactly the
 # one thing that is not wrong. Fluid Speech Pro is here by design and was not
 # probed: it is fetched at one pinned commit (its layout's `revision`), and a
 # mirror serves a repository by name at whatever it holds now, so the download
-# never falls back to one.
+# never falls back to one. The multilingual TurboCTC export is pinned the same
+# way and is published on Hugging Face only (its owner has no ModelScope copy).
 MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
     {
         "distil-large-v3.5",
@@ -501,6 +507,7 @@ RETIRED_LOCAL_MODEL_SUCCESSORS: dict[str, str] = {
     "granite-4.0-1b-speech": "granite-speech-5.0-2b",
     "granite-speech-4.1-2b": "granite-speech-5.0-2b",
     "parakeet-tdt-0.6b-v3-ultra": FLUID_SPEECH_PRO_MODEL_SIZE,
+    "granite-speech-5.0-470m-turboctc": GRANITE_CTC_MODEL_SIZE,
     "tiny": "small",
     "base": "small",
     "medium": "large-v3-turbo",
@@ -513,6 +520,7 @@ RETIRED_LOCAL_MODEL_REPOS: dict[str, str] = {
     "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
     "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
     "parakeet-tdt-0.6b-v3-ultra": "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
+    "granite-speech-5.0-470m-turboctc": "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
     "tiny": "Systran/faster-whisper-tiny",
     "base": "Systran/faster-whisper-base",
     "medium": "Systran/faster-whisper-medium",

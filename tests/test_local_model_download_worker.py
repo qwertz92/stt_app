@@ -58,7 +58,7 @@ def test_download_worker_streams_the_downloaders_byte_counts(monkeypatch, capsys
     monkeypatch.setattr(worker, "download_model_snapshot", fake_download)
     monkeypatch.setattr(worker, "_MIN_EVENT_INTERVAL_S", 0.0)
 
-    assert worker.main(["--model", "granite-speech-5.0-470m-turboctc"]) == 0
+    assert worker.main(["--model", "granite-5.0-470m-turboctc-multi"]) == 0
 
     events = _events(capsys.readouterr().out)
     assert events[-1] == {

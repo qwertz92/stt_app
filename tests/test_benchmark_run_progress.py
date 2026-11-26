@@ -144,17 +144,16 @@ def test_the_case_list_shows_what_the_current_selection_will_run(tmp_path):
     _ = app
 
 
-def test_the_german_refusal_names_the_english_only_models_that_were_selected(
+def test_the_german_refusal_names_only_the_english_only_models_that_were_selected(
     tmp_path,
 ):
-    """There is more than one English-only model, and the sentence named a
-    fixed one -- so a run refused because of the Granite CTC graph told the
-    user to deselect distil-large-v3.5, which they may not even have
-    installed. And it names them the way the model list above it does: the
-    settings id `granite-speech-5.0-470m-turboctc` appears nowhere on
-    screen, so a sentence built from it sent the user looking for a row
-    that does not exist."""
-    dialog, app = _dialog(tmp_path, ["small", "granite-speech-5.0-470m-turboctc"])
+    """The sentence names the English-only model that was selected the way the
+    model list above it does, not a fixed one and not the settings id (which
+    appears nowhere on screen). The multilingual TurboCTC in the same
+    selection is not the problem."""
+    dialog, app = _dialog(
+        tmp_path, ["small", "distil-large-v3.5", "granite-5.0-470m-turboctc-multi"]
+    )
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
     dialog._set_benchmark_audio_path(str(audio_path))
@@ -166,12 +165,9 @@ def test_the_german_refusal_names_the_english_only_models_that_were_selected(
 
     status = dialog.benchmark_status_label.text()
     assert dialog._active_benchmark_thread is None
-    assert "deselect IBM Granite Speech 5.0 470M." in status
-    assert "granite-speech-5.0-470m-turboctc" not in status
-    # The multilingual model in the same selection is not the problem, and
-    # neither is an English-only model nobody selected.
+    assert "deselect distil-large-v3.5." in status
+    assert "Granite" not in status
     assert "small" not in status
-    assert "distil" not in status.lower()
     _ = app
 
 

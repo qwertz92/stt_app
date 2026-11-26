@@ -116,7 +116,7 @@ also support streaming.
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
-| Fastest, seven languages, punctuated | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
+| Fastest, seven languages, punctuated | `granite-5.0-470m-turboctc-multi` | ONNX Runtime int8 CTC | ~552 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
 measured a mean real-time factor of 0.043 on a Ryzen 5 7600X, against 0.154 for
