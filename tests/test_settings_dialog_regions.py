@@ -86,6 +86,7 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
             "mistral": "mi-key",
             "meta": "me-key",
             "openrouter": "or-key",
+            "soniox": "so-key",
         },
     )
     try:
@@ -99,6 +100,7 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
         assert saved.has_mistral_key is True
         assert saved.has_meta_key is True
         assert saved.has_openrouter_key is True
+        assert saved.has_soniox_key is True
     finally:
         dialog.deleteLater()
     _ = app
@@ -112,6 +114,7 @@ def test_the_new_engines_have_a_label_models_and_a_key_row(tmp_path):
             ("mistral", "Mistral (Voxtral)"),
             ("meta", "Meta (Muse Voice)"),
             ("openrouter", "OpenRouter"),
+            ("soniox", "Soniox"),
         ):
             index = dialog.engine_combo.findData(engine)
             assert index >= 0, engine
@@ -175,15 +178,70 @@ def test_each_region_choice_says_what_it_guarantees(tmp_path):
 
         assemblyai = choices("assemblyai")
         assert [value for value, _label, _tip in assemblyai] == ["auto", "us", "eu"]
-        assert assemblyai[0][1].startswith("Automatic")
+        assert assemblyai[0][1].startswith("Auto")
         assert "US or EU" in assemblyai[0][2]
-        assert assemblyai[1][1] == "US only" and assemblyai[2][1] == "EU only"
+        assert assemblyai[1][1] == "US region only"
+        assert assemblyai[2][1] == "EU region only"
         deepgram = choices("deepgram")
         assert [value for value, _label, _tip in deepgram] == ["global", "eu"]
         assert deepgram[0][1].startswith("Global")
         assert all(tip for _value, _label, tip in [*assemblyai, *deepgram])
         assert all(tip for _value, _label, tip in choices("speechmatics"))
     finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_the_region_pickers_are_named_and_every_entry_says_region(tmp_path):
+    """The row has no caption: an unlabelled "Automatic (default)" beside a key
+    field did not say what is automatic."""
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        assert set(dialog._provider_region_combos) == {
+            "assemblyai",
+            "deepgram",
+            "speechmatics",
+            "soniox",
+        }
+        for provider, combo in dialog._provider_region_combos.items():
+            assert combo.accessibleName() == (
+                f"{remote_module._remote_provider_label(provider)} region"
+            )
+            for index in range(combo.count()):
+                assert "region" in combo.itemText(index), (provider, index)
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_the_region_pickers_share_one_width_and_the_key_fields_one_right_edge(
+    tmp_path,
+):
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        dialog.show()
+        dialog.tabs.setCurrentIndex(_providers_tab_index(dialog))
+        app.processEvents()
+        combos = dialog._provider_region_combos
+        widths = {combo.width() for combo in combos.values()}
+        assert len(widths) == 1, widths
+        metrics = dialog.fontMetrics()
+        longest = max(
+            metrics.horizontalAdvance(combo.itemText(i))
+            for combo in combos.values()
+            for i in range(combo.count())
+        )
+        assert widths.pop() > longest
+        rights = {
+            provider: dialog._provider_key_edits[provider]
+            .mapTo(dialog, QtCore.QPoint(0, 0))
+            .x()
+            + dialog._provider_key_edits[provider].width()
+            for provider in combos
+        }
+        assert len(set(rights.values())) == 1, rights
+    finally:
+        dialog.hide()
         dialog.deleteLater()
     _ = app
 
@@ -285,6 +343,44 @@ def test_openrouter_connection_test_builds_the_openrouter_transcriber(tmp_path):
 
         assert error is None
         assert type(tester.__self__).__name__ == "OpenRouterTranscriber"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_soniox_connection_test_builds_the_soniox_transcriber_for_its_region(
+    tmp_path,
+):
+    dialog, _store, app = _dialog(
+        tmp_path, AppSettings(soniox_region="eu"), secrets={"soniox": "k"}
+    )
+    try:
+        snapshot = dialog._connection_test_snapshot(
+            "soniox", dialog._provider_key_edits["soniox"]
+        )
+
+        tester, error = remote_module._build_connection_tester("soniox", snapshot)
+
+        assert error is None
+        assert type(tester.__self__).__name__ == "SonioxTranscriber"
+        assert tester.__self__._base_url == "https://api.eu.soniox.com/v1"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_soniox_region_is_saved_and_shown_in_the_providers_row(tmp_path):
+    """The region picker sits beside the key field, not in a row of its own
+    (a row more would make the tab scroll at the default size), and a save
+    keeps the pick."""
+    dialog, store, app = _dialog(tmp_path, AppSettings(soniox_region="jp"))
+    try:
+        combo = dialog._provider_region_combos["soniox"]
+        assert combo.currentData() == "jp"
+        key_edit = dialog._provider_key_edits["soniox"]
+        assert combo.parentWidget() is key_edit.parentWidget()
+        dialog._save()
+        assert store.load().soniox_region == "jp"
     finally:
         dialog.deleteLater()
     _ = app

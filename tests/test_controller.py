@@ -40,6 +40,7 @@ from stt_app.config import (
     OVERLAY_ERROR_ACTION_INSERT,
     SPEECHMATICS_LANGUAGE_MODES,
     VALID_ENGINES,
+    streaming_engines_phrase,
 )
 from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
@@ -703,6 +704,33 @@ def test_background_and_import_history_do_not_replace_edit_target(
         "import transcript",
     ]
     assert history_entries[-1].source_audio_path == str(audio_path.resolve())
+    controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_start_with_a_batch_only_engine_names_the_engines_that_stream():
+    """The sentence listed "Local, AssemblyAI or Deepgram" by hand and left
+    ElevenLabs out when it began to stream."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="groq", mode="streaming")
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    controller.start_recording()
+
+    state, detail = overlay.states[-1][:2]
+    assert state == "Error"
+    assert "Streaming is not available for Groq" in detail
+    assert f"pick {streaming_engines_phrase()}." in detail
+
     controller.shutdown()
     _ = app
 
@@ -2828,6 +2856,11 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("meta", {"custom_vocabulary": "Kubernetes"}, True),
         ("meta", {"silence_gate_threshold": 0.02}, True),
         ("meta", {"mistral_model": "voxtral-small-transcribe-3"}, False),
+        ("soniox", {"soniox_region": "eu"}, True),
+        ("soniox", {"custom_vocabulary": "Kubernetes"}, True),
+        ("soniox", {"silence_gate_threshold": 0.02}, True),
+        ("assemblyai", {"soniox_region": "eu"}, False),
+        ("soniox", {"speechmatics_region": "us1"}, False),
         ("openrouter", {"openrouter_model": "google/chirp-3"}, True),
         ("openrouter", {"custom_vocabulary": "Kubernetes"}, True),
         ("openrouter", {"silence_gate_threshold": 0.02}, True),

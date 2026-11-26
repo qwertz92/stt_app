@@ -34,6 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from .mistral_provider import MistralTranscriber as MistralTranscriber
     from .openai_provider import OpenAITranscriber as OpenAITranscriber
     from .openrouter_provider import OpenRouterTranscriber as OpenRouterTranscriber
+    from .soniox_provider import SonioxTranscriber as SonioxTranscriber
     from .speechmatics_provider import (
         SpeechmaticsTranscriber as SpeechmaticsTranscriber,
     )
@@ -52,6 +53,7 @@ _LAZY_ATTRIBUTES = {
     "MistralTranscriber": ".mistral_provider",
     "OpenAITranscriber": ".openai_provider",
     "OpenRouterTranscriber": ".openrouter_provider",
+    "SonioxTranscriber": ".soniox_provider",
     "SpeechmaticsTranscriber": ".speechmatics_provider",
     "TranscriptionError": ".base",
     "create_transcriber": ".factory",

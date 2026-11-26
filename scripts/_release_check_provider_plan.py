@@ -20,6 +20,7 @@ REAL_SETTINGS_FIELDS = (
     "assemblyai_region",
     "deepgram_region",
     "speechmatics_region",
+    "soniox_region",
     "azure_endpoint",
     "custom_endpoint",
     "custom_model",

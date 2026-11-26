@@ -36,10 +36,9 @@ from .settings_dialog_helpers import (
 # The key field's minimum on the Providers tab. Every other column is sized
 # by its caption, so this decides the page's minimum width with them.
 _PROVIDER_KEY_FIELD_MIN_WIDTH_PX = 140
-# How far a row that belongs to the provider above it (a region, Azure's
-# endpoint) indents its label.
+# How far a row that belongs to the provider above it (Azure's endpoint)
+# indents its label.
 _PROVIDER_SUB_ROW_INDENT_PX = 12
-_REGION_ROW_LABEL = "Region"
 _AZURE_ENDPOINT_ROW_LABEL = "Endpoint"
 _CUSTOM_ENDPOINT_ROW_LABELS = ("Base URL", "API Style", "Key Command")
 _CUSTOM_KEY_ROW_LABEL = "API Key"
@@ -147,6 +146,12 @@ def _meta_transcriber_factory(**kwargs: object) -> object:
     return MetaTranscriber(**kwargs)
 
 
+def _soniox_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.soniox_provider import SonioxTranscriber
+
+    return SonioxTranscriber(**kwargs)
+
+
 def _openrouter_transcriber_factory(**kwargs: object) -> object:
     from .transcriber.openrouter_provider import OpenRouterTranscriber
 
@@ -177,6 +182,9 @@ _CONNECTION_TESTER_FACTORIES: dict[
     "mistral": (_mistral_transcriber_factory, ("language_mode",)),
     "meta": (_meta_transcriber_factory, ("language_mode",)),
     "openrouter": (_openrouter_transcriber_factory, ("language_mode",)),
+    # A region is passed so the test asks the host the dictation uses: a
+    # key belongs to one region's project.
+    "soniox": (_soniox_transcriber_factory, ("language_mode", "region")),
     "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
@@ -263,21 +271,21 @@ class _RemoteProvidersMixin:
         for provider in _REMOTE_PROVIDERS:
             if provider.name == "custom":
                 continue
+            combo = (
+                self._build_region_combo(provider.name)
+                if provider.name in _REMOTE_REGION_CHOICES
+                else None
+            )
             self._add_provider_key_row(
-                cloud_grid, row, provider.name, provider.title, label_width, badge_width
+                cloud_grid,
+                row,
+                provider.name,
+                provider.title,
+                label_width,
+                badge_width,
+                region_combo=combo,
             )
             row += 1
-            if provider.name in _REMOTE_REGION_CHOICES:
-                combo = self._build_region_combo(provider.name)
-                self._add_provider_sub_row(
-                    cloud_grid,
-                    row,
-                    _REGION_ROW_LABEL,
-                    combo,
-                    label_width,
-                    own_width=True,
-                )
-                row += 1
             if provider.name == "azure":
                 self.azure_endpoint_edit = QtWidgets.QLineEdit()
                 self.azure_endpoint_edit.setPlaceholderText(
@@ -299,6 +307,7 @@ class _RemoteProvidersMixin:
                     label_width,
                 )
                 row += 1
+        self._equalize_region_combo_widths()
         cloud_layout.addLayout(cloud_grid)
         layout.addWidget(cloud_box)
 
@@ -313,6 +322,7 @@ class _RemoteProvidersMixin:
         self.mistral_key_edit = self._provider_key_edits["mistral"]
         self.meta_key_edit = self._provider_key_edits["meta"]
         self.openrouter_key_edit = self._provider_key_edits["openrouter"]
+        self.soniox_key_edit = self._provider_key_edits["soniox"]
 
         layout.addWidget(self._build_custom_endpoint_group(label_width, badge_width))
 
@@ -396,9 +406,9 @@ class _RemoteProvidersMixin:
                 _CUSTOM_KEY_ROW_LABEL,
             )
         ]
-        widths.extend(
-            metrics.horizontalAdvance(text) + _PROVIDER_SUB_ROW_INDENT_PX
-            for text in (_REGION_ROW_LABEL, _AZURE_ENDPOINT_ROW_LABEL)
+        widths.append(
+            metrics.horizontalAdvance(_AZURE_ENDPOINT_ROW_LABEL)
+            + _PROVIDER_SUB_ROW_INDENT_PX
         )
         return max(widths) + _REMOTE_PROVIDER_LABEL_EXTRA_PX
 
@@ -423,6 +433,8 @@ class _RemoteProvidersMixin:
         title: str,
         label_width: int,
         badge_width: int,
+        *,
+        region_combo: QtWidgets.QComboBox | None = None,
     ) -> None:
         key_field = QtWidgets.QLineEdit()
         key_field.setEchoMode(QtWidgets.QLineEdit.Password)
@@ -479,7 +491,15 @@ class _RemoteProvidersMixin:
         grid.addWidget(
             title_label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
         )
-        grid.addWidget(key_field, row, 1)
+        if region_combo is None:
+            grid.addWidget(key_field, row, 1)
+        else:
+            field_box = QtWidgets.QHBoxLayout()
+            field_box.setContentsMargins(0, 0, 0, 0)
+            field_box.setSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
+            field_box.addWidget(key_field, 1)
+            field_box.addWidget(region_combo)
+            grid.addLayout(field_box, row, 1)
         grid.addWidget(test_button, row, 2)
         grid.addWidget(remove_button, row, 3)
         grid.addWidget(mark, row, 4)
@@ -498,14 +518,11 @@ class _RemoteProvidersMixin:
         text: str,
         field: QtWidgets.QWidget,
         label_width: int,
-        *,
-        own_width: bool = False,
     ) -> None:
         """A setting that belongs to the row above it, label indented.
 
         The field takes the key field's column and so ends where the key
-        fields do. ``own_width`` keeps it at its own, narrower width,
-        left-aligned (a region combo).
+        fields do.
         """
         label = QtWidgets.QLabel(text)
         label.setIndent(_PROVIDER_SUB_ROW_INDENT_PX)
@@ -513,10 +530,7 @@ class _RemoteProvidersMixin:
         label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         label.setStyleSheet("color: #555;")
         grid.addWidget(label, row, 0, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        if own_width:
-            grid.addWidget(field, row, 1, QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        else:
-            grid.addWidget(field, row, 1)
+        grid.addWidget(field, row, 1)
 
     def _build_region_combo(self, provider: str) -> QtWidgets.QComboBox:
         """Where the provider processes the audio; always enabled whatever
@@ -533,8 +547,25 @@ class _RemoteProvidersMixin:
             + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
         )
         combo.setToolTip(tooltip)
+        # The row has no "Region" caption any more: the picker names itself to
+        # a screen reader, and every entry says "region" on screen.
+        combo.setAccessibleName(f"{_remote_provider_label(provider)} region")
         self._provider_region_combos[provider] = combo
         return combo
+
+    def _equalize_region_combo_widths(self) -> None:
+        """One width for every region picker: the widest entry of any of them.
+
+        Measured from the entries (the combo's own size hint follows its longest
+        entry at the current font), so the key fields of the region rows end at
+        one x position and the pickers form a column at any text size.
+        """
+        combos = list(self._provider_region_combos.values())
+        if not combos:
+            return
+        width = max(combo.sizeHint().width() for combo in combos)
+        for combo in combos:
+            combo.setFixedWidth(width)
 
     def _build_custom_endpoint_group(
         self, label_width: int, badge_width: int

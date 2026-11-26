@@ -3,11 +3,13 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from stt_app.config import DEFAULT_ENGINE, STREAMING_ENGINES, VALID_ENGINES
+from stt_app.settings_store import AppSettings
 
 
 def _load_plan():
@@ -116,6 +118,25 @@ def test_the_legacy_folder_is_read_without_being_renamed(tmp_path):
     assert fields == {"deepgram_region": "eu"}
     assert (tmp_path / "tts_app").is_dir()
     assert not (tmp_path / "stt_app").exists()
+
+
+def test_soniox_is_called_in_batch_and_realtime_in_the_saved_region(tmp_path):
+    """The engine is in both plans, a key is all it needs, and the owner's
+    saved region reaches the settings, so the paid check calls the host the
+    key works on (a US key against the EU host would prove nothing)."""
+    assert "soniox" in REMOTE
+    assert "soniox" in STREAMING_ENGINES
+    assert plan.skip_reason("soniox", True, {}) is None
+    _write_settings(
+        tmp_path,
+        "stt_app",
+        {"soniox_region": "eu", "soniox_api_key": "must-not-be-read"},
+    )
+
+    fields = plan.real_settings_fields(str(tmp_path), ("stt_app",))
+
+    assert fields == {"soniox_region": "eu"}
+    assert replace(AppSettings(), **fields).soniox_region == "eu"
 
 
 @pytest.mark.parametrize("content", ["{not json", "[1, 2]", '"text"'])

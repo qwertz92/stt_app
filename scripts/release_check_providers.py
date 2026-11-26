@@ -5,11 +5,11 @@ For every clip given on the command line:
 
   * one batch request for EVERY remote engine the app offers (AssemblyAI,
     Groq, OpenAI, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR,
-    Speechmatics, Mistral, Meta, OpenRouter and the custom endpoint), each with the engine's
-    default model and through the app's own transcriber,
-  * one streaming session for each engine that has streaming (AssemblyAI and
-    Deepgram): the clip is pushed at real-time pace (100 ms of audio every
-    100 ms, exactly as the microphone delivers it), partials are counted, and
+    Speechmatics, Mistral, Meta, OpenRouter, Soniox and the custom endpoint), each with the
+    engine's default model and through the app's own transcriber,
+  * one streaming session for each engine that has streaming (AssemblyAI,
+    Deepgram, ElevenLabs and Soniox): the clip is pushed at real-time pace (100 ms of
+    audio every 100 ms, exactly as the microphone delivers it), partials are counted, and
     `stop_stream()` has to return the final text.
 
 and then, once and always last:
@@ -46,7 +46,7 @@ WHAT IT TOUCHES
   never printed, never logged and never written to the report.
 * The user's real `settings.json`, READ-ONLY and only for the non-secret
   routing fields in `_release_check_provider_plan.REAL_SETTINGS_FIELDS`: the
-  AssemblyAI, Deepgram and Speechmatics regions, the Azure endpoint and the
+  AssemblyAI, Deepgram, Speechmatics and Soniox regions, the Azure endpoint and the
   custom endpoint with its model and API style. A check against another host
   than the one the user's keys work on would prove nothing, and the Azure
   endpoint and the custom base URL exist nowhere else. The file is read
@@ -405,7 +405,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-streaming",
         action="store_true",
-        help="Leave out the realtime cases (AssemblyAI, Deepgram), which run in real time.",
+        help="Leave out the realtime cases (one per streaming engine), which run in real time.",
     )
     common.add_report_argument(parser)
     return parser

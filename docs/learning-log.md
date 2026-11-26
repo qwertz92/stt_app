@@ -3,6 +3,18 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: two branches each added a streaming engine
+
+Structurally: the two sentences that tell a user which engines stream are built from
+`STREAMING_ENGINES` and `ENGINE_LABELS` (`config.streaming_engines_phrase`), not written by hand.
+
+- The ElevenLabs branch left both sentences at "Local, AssemblyAI or Deepgram"; the Soniox branch
+  added Soniox to them. Merged, ElevenLabs was still missing. No test read either sentence; two do now.
+- Both branches imported a test fake named `_FakeModule` into `test_sdk_key_scrub.py`. Git merged the
+  two import lines without a conflict and the second silently replaced the first, so the ElevenLabs
+  cases would have run against the Soniox fake. Only the linter's F811 showed it.
+- A Soniox test read the log before the cleanup thread had written to it and failed under load.
+
 ## 2026-11-26: Deepgram streaming reported the server's normal close as an error
 
 Structurally: `_on_error` now reads the close code of a server's close frame, ignores a normal
@@ -136,6 +148,65 @@ old id `granite-speech-5.0-470m-turboctc` is a retired model like Ultra (success
   retired English id was 183 px, this one fits.
 - The frozen-bundle check had a pass for English-only models in `PREFERRED`; with this model gone from
   the English-only set nothing could reach it, so it was removed.
+
+## 2026-11-26: Soniox review round: a normal close read as a failure, deletes in the paste path
+
+Structurally: the Soniox stream treats a close frame by when it comes, the batch deletes run after
+the text is returned, and the region pickers are one width with names.
+
+- **A stop without speech ended in an error.** websocket-client 1.9.2 calls `on_error` for every
+  close frame of the server, a normal one (code 1000) included, with a close exception that has
+  `status_code` and `reason`, and only then `on_close`. The vendor closes the socket itself after
+  `finished`, so every stop met it: the session stored it as its error and `stop()` raised for a
+  dictation with no text. Found by running the session against a local server with the real
+  library (3 of 3); my fake socket only called `on_close`, so no test could see it. The fake now
+  delivers what the library delivers. A lost connection is the same exception class without
+  `status_code`, which is how a reset is told from a normal close.
+- **The deletes delayed the paste.** Two DELETE round trips ran before the text was returned; a
+  server that answered them slowly held a 0.2 s dictation back by 30 s. They run on a daemon
+  thread now; a quit while it runs leaves what it had not deleted on Soniox for up to 30 days.
+- **A refused handshake showed the library's header dump**; it is a sentence by HTTP status now.
+- **`language_hints_strict` is undocumented for v6.** A 400 naming the flag is repeated once
+  without it in batch. Streaming cannot repeat a start (the audio sent is gone by then), so it
+  sends the hint without the flag: a refusal would fail every dictation with a chosen language.
+- **Region pickers**: one width (the widest entry, 165 px), an accessible name each, "region" in
+  every entry; the first wording ("Automatic region (default)") pushed the dialog minimum to 864 px,
+  over the 860 px default, so it is "Auto region (default)". Minimum 801, then 827, now 842 px.
+
+## 2026-11-26: Soniox as the `soniox` engine (batch, then realtime)
+
+Structurally: a new cloud engine, `soniox`, built to Soniox's own documentation and OpenAPI schema
+(`https://docs.soniox.com/openapi.yaml`, read that day), not to the research of 2026-11-24. Batch
+is committed first and stands alone; realtime streaming (`soniox_stream.py`) is a separate
+commit.
+
+- **Where the documentation and the research differed**: the research said `stt-async-v6`,
+  `stt-rt-v6`, about $0.10 and $0.12 per hour, 60+ languages. All four held (the pricing page
+  quotes the two prices), and the research's "EU region not stated" was wrong: the data-residency
+  page lists US, EU, Japan and India hosts, but a region needs a project created in it with its own
+  key, and region access is requested in the Console, so the default is US and the picker says
+  what each other region needs.
+- **The vendor's own pages disagree on one word**: the OpenAPI enum for a job's status is
+  `queued`, `processing`, `completed`, `error`; the error-handling reference says a failed job
+  has `status: "failed"`. Both end the wait.
+- **Data hygiene is part of the protocol**: Soniox keeps an upload and a transcription until they
+  are deleted (30 days at the latest), and "deleting the file earlier fails the transcription".
+  The provider deletes both after the text arrived, and deliberately deletes nothing when the wait
+  gave up (the job may still complete). A quit in between leaves that recording on Soniox for up
+  to 30 days; the docs say so.
+- **Live, without a key**: `GET /v1/models` without a key answered 401 on all four REST hosts.
+  A real transcript has never been seen.
+- **Providers tab**: one more row made the tab scroll 28 px at the default 860 x 1010 dialog
+  (measured numbers in `docs/agents/settings-dialog.md`); every region picker (AssemblyAI,
+  Deepgram, Speechmatics, Soniox) therefore sits inside its provider's row beside the key
+  field, which won the height back with 62 px to spare.
+- **Realtime**: the key goes in the handshake header (the start message's `api_key` field is
+  deprecated). Final tokens arrive once and the non-final ones are the whole provisional tail,
+  replaced by each message, so the live text is finals plus tail. `{"type": "keepalive"}`
+  every 5 s of silence on the queue, because 20 s without a message ends the stream and the
+  vendor bills the stream's whole duration. Never run against the live service; the tests use
+  a fake `websocket` module, and the key-scrub test for the socket path failed when the
+  scrubbing was removed from the error text (checked by hand once).
 
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 

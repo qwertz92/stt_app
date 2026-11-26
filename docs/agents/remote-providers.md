@@ -180,7 +180,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   Call sites (`grep -rn "open_request" src`): OpenAI x2 (upload, key check),
   Mistral x2, ElevenLabs x2, Deepgram x2, Azure x2 (upload; the key check is a
   one-second upload too), Speechmatics (`_request`: job upload, polls and
-  transcript fetch), Meta (upload and key check), AssemblyAI (key check
+  transcript fetch), Meta (upload and key check), Soniox (`_request`: upload,
+  job, polls, transcript, deletions, key check), AssemblyAI (key check
   only), the custom endpoint and OpenRouter (upload, model list, key check).
   Not covered: AssemblyAI's and Groq's SDK calls (their redirect handling is
   the SDK's and was not checked); the AssemblyAI, Deepgram and Fun-ASR
@@ -478,13 +479,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     formats). The schema-25 adoption (an OpenAI file without a key took the
     default) is gone: every retired id moves, with or without a key.
   - **Not verified live** (no OpenAI key).
-- **Soniox was not added (2026-09-21)**: a new provider must be both more
-  accurate and cheaper than what is offered (MAI-Transcribe-2 and ElevenLabs
-  Scribe v2 lead). Open argument: Soniox's $0.12/h realtime. Figures:
-  `docs/provider-costs.md`, `docs/local-asr-model-candidates-2026.md`.
-  Speechmatics and Mistral were assessed the same way and are integrated
-  anyway, on request (2026-10-01, entries below); neither beats both leaders
-  on the 2026-09-21 reading.
+- **Soniox was not added on 2026-09-21 and is integrated since 2026-11-26**
+  (entry "Soniox is a polled batch job" below): on 2026-09-21 a new provider
+  had to be both more accurate and cheaper than what was offered
+  (MAI-Transcribe-2 and ElevenLabs Scribe v2 led), and Soniox's accuracy did
+  not clear that bar; it is added on the owner's request for v0.15.0, like
+  Speechmatics and Mistral on 2026-10-01 (neither beat both leaders on the
+  2026-09-21 reading either). Figures: `docs/provider-costs.md`,
+  `docs/local-asr-model-candidates-2026.md`. German accuracy is still not
+  measured here: run a German A/B before recommending it.
 - **Speechmatics is a polled batch job (`speechmatics_provider.py`,
   2026-10-01).** `POST /v2/jobs/` with `data_file` and a JSON `config`, then
   `GET /v2/jobs/{id}` until the status is terminal, then `GET
@@ -674,6 +677,210 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `docs/ROADMAP.md`.
   - **Revert**: remove `meta` from `VALID_ENGINES` and the entries beside the
     `META_*` constants; a saved `engine: "meta"` then falls to local.
+- **Soniox is a polled batch job (`soniox_provider.py`, 2026-11-26).** Engine
+  `soniox`, label "Soniox", key under `soniox`, key-only. Pages read
+  2026-11-26 (all under https://docs.soniox.com/): `openapi.yaml` (paths,
+  schemas, statuses, error bodies), `stt/async/async-transcription`,
+  `stt/async/limits-and-quotas.mdx`, `stt/async/error-handling.mdx`,
+  `api-reference/errors.mdx`, `api-reference.mdx` (base URLs),
+  `data-residency.mdx`, `stt/models.mdx`, `stt/concepts/supported-languages.mdx`,
+  `stt/concepts/context.mdx`. The older `soniox.com/docs/...` links answer 308 to
+  these. **Live, without a key (2026-11-26)**: `GET /v1/models` without a key
+  answers HTTP 401 on all four REST hosts (`api`, `api.eu`, `api.jp`,
+  `api.in`), so the hosts and the route exist; a real transcript has never
+  been seen (**unverified live, no key**). Protocol, in the order the code
+  calls it, every request `Authorization: Bearer <key>` through
+  `open_request`:
+  1. `POST {base}/files`, multipart `file` -> 201 `{"id", "filename", "size",
+     "created_at"}`. 2. `POST {base}/transcriptions`, JSON `model`
+     (`stt-async-v6`), `file_id`, optional `language_hints` (list of ISO 639-1
+     codes), `language_hints_strict`, `context` -> 201 `{"id", "status":
+     "queued", ...}`. 3. `GET {base}/transcriptions/{id}` until `status` is
+     `completed`, `error` or `failed`: the schema's enum is `queued`,
+     `processing`, `completed`, `error`, while the error-handling reference
+     says `failed`; both end the wait (a status added later is waited out). A
+     failed job carries `error_type` and `error_message`
+     (`invalid_audio_file`, `file_not_found`, `transcription_output_too_long`,
+     a 402 budget type). 4. `GET {base}/transcriptions/{id}/transcript` ->
+     `{"id", "text", "tokens": [...]}`; the app reads `text` (a string; `""`
+     is silence) through `transcript_from_json`. 5. `DELETE
+     {base}/transcriptions/{id}` and `DELETE {base}/files/{file_id}` (204).
+     Base is `https://api.soniox.com/v1`, or `https://api.<region>.soniox.com/v1`.
+  - **The vendor's error body** is `{"status_code", "error_type", "message",
+    "validation_errors", "request_id", "more_info"}`; `read_http_error_detail`
+    unwraps `message`. 401 and 403 say the key is invalid, expired or "from a
+    project in another region than the one selected" (a key works in its own
+    region's project only); 402 (balance, monthly or project budget) and 429
+    (`limit_exceeded`: rate, file count, file size, transcription count, pending
+    count) quote the vendor's sentence.
+  - **What stays on Soniox's side** (the API keeps uploads and jobs until they
+    are deleted, "automatically deleted after 30 days"; limits of 10 GB, 1,000
+    files, 2,000 transcriptions make leftovers a real cost): the transcription
+    and the file are deleted, best effort, as soon as the job ended with a
+    transcript or an `error`. **The file must outlive the job** ("deleting it
+    earlier fails the transcription with `file_not_found`"), so: a job that
+    could not be created deletes its file; a wait that gave up (the 30 minute
+    budget, a quit, a final HTTP answer while polling) deletes **nothing**,
+    because the job may still complete; a completed job whose transcript could
+    not be fetched keeps both, and the error names the job id and the 30 days.
+    So **when the app quits during a job, that recording's audio and transcript
+    stay on Soniox for up to 30 days**. **The deletions run after the text is
+    returned**, on a daemon thread (`stt_app_soniox_cleanup`) with the same
+    15 s bound per request: they cost the dictation nothing (a server that
+    answered DELETE slowly had held a 0.2 s dictation back by 30 s). The
+    price is that **a quit while the cleanup thread runs leaves whatever it had
+    not deleted yet** (the transcription, the file, or both, in that order) on
+    Soniox for up to 30 days, like a quit during a job. A refused deletion is only logged
+    (`soniox_cleanup_failed`, key scrubbed), never an error of the dictation.
+    What Soniox keeps of a transcript is documented twice: objects are
+    deleted after 30 days, and a transcript is kept "for a limited window"
+    whose length no page gives; the app does not rely on either figure.
+  - **The loop is `_job_poll.poll_job`, the transcript fetch
+    `fetch_with_retries`** (`SONIOX_BATCH_MAX_WAIT_S` 1800 s, one poll per
+    second, three consecutive failed fetches, the shutdown flag, the job id in
+    every message, 401/403/404 end the wait at once; a refusal of
+    `open_request` during a poll names the job). A status answer that is not
+    JSON or has no status is a failed fetch, as for Speechmatics.
+  - **Language**: the 60 codes of the supported-languages page, all of them
+    in both APIs, are `SONIOX_LANGUAGE_MODES` (plus Auto, which sends no hint).
+    A chosen language is sent as `language_hints: [code]`, in batch with
+    `language_hints_strict: true` ("rely more on language hints"), because
+    choosing German in the app means German; **unverified live** how strict
+    changes the result. Chinese is `zh`. **The vendor does not say whether
+    `stt-async-v6` or `stt-rt-v6` accept the flag** (its models page lists it
+    per model, v6 is not listed; a model without it answers 400 "Model does
+    not support language_hints_strict"). Batch: a 400 whose message names
+    the flag is repeated once without it (hints stay, one WARNING), nothing
+    else is retried. Streaming sends the hint WITHOUT the strict flag: a
+    refusal could not be repeated without losing the audio already sent,
+    and a failed dictation is worse than a hint the model may overrule.
+    Add the flag to streaming once a live check shows `stt-rt-v6` takes it.
+  - **Custom vocabulary** is `context.terms` (up to 8,000 tokens, about
+    10,000 characters for the whole context, else `invalid_request`):
+    `soniox_provider.fit_terms` keeps the terms that fit 8,000 characters in
+    order. `soniox` is in `config.CUSTOM_VOCABULARY_ENGINES`.
+  - **Model**: `stt-async-v6` only (released 2026-11-03, $0.10/h on the
+    pricing page of the research); `stt-async-v5` is deprecated and "will be
+    removed on Dec 15, 2026", so it is not offered. The model setting is
+    `soniox_model`; saved values outside the roster fall to the default.
+  - **Region** `soniox_region`: `us` (default), `eu`, `jp`, `in`, read through
+    `config.normalize_soniox_region`; hosts in `config.SONIOX_API_HOSTS`. The
+    data-residency page guarantees that "audio and transcripts stay in the
+    selected region for both processing and storage" and that content is never
+    used for training; account and usage metadata "may be processed outside the
+    selected region". Region access must be requested in the Console, a
+    project is created in a region and its keys work there only, so **the
+    default is the US host, which every account has** (the vendor names no
+    default), and the EU label says what it needs, not only what it
+    guarantees. Every region picker, this one included, sits **inside its
+    provider's row** beside the key field; see `docs/agents/settings-dialog.md`.
+  - **Parts**: Soniox's duration limit is 300 minutes per file (fixed), no
+    per-file size limit is published, and the request is built in memory, so
+    `SONIOX_MAX_PART_SECONDS` 3600 and `SONIOX_MAX_REQUEST_BYTES` 250,000,000
+    through `remote_batch_part_limit("soniox", ...)`: a dictation never reaches
+    it, a long import is cut at quiet points; each part is its own job.
+  - **The key check is `GET {base}/models`** (documented, key-protected, spends
+    no audio): 200 with a `models` list is "Connection OK", a 401/403 says the
+    key is invalid or from another region, a proxy page or an answer without
+    `models` is not a valid key. 15 s bound.
+  - **Guards** (the binding rules of this file): every request through
+    `open_request`; every JSON answer through `json_from_reply` /
+    `transcript_from_json` / `missing_field_error` with `redact=key_redactor(key)`;
+    an upload or job answer without an `id` is an error. Tests:
+    `tests/test_soniox_provider.py`, and Soniox is an engine in
+    `test_rest_reply_guard.py`, `test_rest_key_scrub.py` and
+    `test_provider_redirects.py` (the shared fake is `_rest_fakes.soniox_job_reply`).
+    The release check (`scripts/release_check_providers.py`) calls Soniox
+    automatically (it iterates `VALID_ENGINES`) and reads `soniox_region` from the
+    saved settings (`REAL_SETTINGS_FIELDS`), so the owner's paid check covers it.
+  - **Unverified live**: everything above that only a key could show (the
+    shapes of the real answers, `language_hints_strict`, whether a WAV needs
+    a content type, the part limit, German quality).
+  - **Revert**: remove `soniox` from `VALID_ENGINES` and the entries beside the
+    `SONIOX_*` constants; a saved `engine: "soniox"` falls to local.
+- **Soniox streaming is a WebSocket session (`soniox_stream.py`, 2026-11-26;
+  `soniox` is in `STREAMING_ENGINES`, so its mode label stays "Streaming
+  (Experimental)").** Pages read 2026-11-26:
+  `https://docs.soniox.com/api-reference/stt/websocket-api.mdx`,
+  `.../authentication/websocket-authentication.mdx`,
+  `.../stt/rt/connection-keepalive.mdx`. **Unverified live, no key**: no
+  connection was ever opened, the protocol below is the documentation's.
+  - **Endpoint and key**: `wss://stt-rt.soniox.com/transcribe-websocket`
+    (`stt-rt.eu.`, `stt-rt.jp.`, `stt-rt.in.` for the region, `SONIOX_REALTIME_HOSTS`).
+    The key goes in the `Authorization: Bearer <key>` header of the handshake;
+    the `api_key` field of the start message is deprecated (refused after
+    2027-01-15) and is never sent, so the key is in no URL and no frame.
+  - **Start message** (first text frame, sent on open): `model` `stt-rt-v6`
+    (`SONIOX_REALTIME_MODEL`, always, whatever `soniox_model` says: the async
+    model is not a realtime model), `audio_format` `pcm_s16le`, `sample_rate`
+    16000, `num_channels` 1, `language_hints` for a chosen language (without
+    `language_hints_strict`, see "Language" above) and `context.terms` for the
+    custom vocabulary. The capture's blocks are raw PCM16 mono 16 kHz, so no
+    conversion happens.
+  - **Audio** goes as binary frames (at most 2,097,144 bytes each; a larger
+    chunk is split). `push_audio_chunk` never blocks the PortAudio callback
+    (`put_nowait`; a full queue fails the stream, only the controller's
+    preconnect flush passes `block_timeout_s`). One sender thread writes audio
+    and keepalive frames, so they never interleave.
+  - **Text**: each message is `{"tokens": [{"text", "is_final"}, ...]}`. A
+    final token arrives once and is kept; the non-final tokens of a message are
+    the whole provisional tail and replace the previous tail. The callback gets
+    finals plus tail, so the text only grows as words are confirmed (the
+    controller's append-only insertion locks what it needs). `<end>` and `<fin>`
+    are never text. A message with neither tokens nor an error changes nothing.
+  - **Keepalive**: "If no message arrives within 20 s the stream ends with a 408
+    `request_timeout`", and any client message resets it, so the sender writes
+    `{"type": "keepalive"}` after 5 s without audio (a handshake stall or the
+    stop's backlog wait). The vendor bills the full stream duration, so a bridged
+    gap costs its length; past `AUDIO_INPUT_BUFFER_S + 10` seconds without audio
+    the microphone is dead and the stream ends with a message naming that.
+  - **Stop**: drain the sender, send the empty text frame, wait up to 10 s for
+    `{"finished": true}` (a socket that closes ends the wait too), close. The text
+    received so far is always returned; a missing `finished` is logged, not
+    raised. An error before any text raises with the vendor's sentence; an
+    error after text returns the text (a finished transcription is never
+    discarded).
+  - **Errors** are a message with `error_code`, `error_type`, `error_message`,
+    after which the server closes: 401/403 say the key is invalid or from a
+    project in another region than the Region on the Providers tab (the host
+    in brackets), 402 says the balance or budget
+    is used up, the rest quote the vendor's sentence with its type and code
+    (408 `request_timeout`, 413 `max_duration_reached`, 429, 503). All go to the
+    controller's error callback once, key scrubbed (plain and JSON-escaped); a
+    certificate failure gets the shared guidance. **A refused handshake** is
+    a sentence by its HTTP status (401/403 key refused, with the Region
+    hint; 402 budget; 429 too many requests or sessions; 5xx the service;
+    else "the service refused the connection (HTTP N)"), never the
+    library's header dump.
+  - **How websocket-client reports a close** (1.9.2, `_app.py`): `on_error`
+    is called for EVERY close frame of the server, a normal one included,
+    with a `WebSocketConnectionClosedException` that has `status_code` and
+    `reason` (a lost connection is the same class without them), and only
+    then `on_close`. The vendor closes the socket itself after `finished`,
+    so that is the normal end of every stop. Rules: after `finished`, or
+    while stopping, a close with code 1000/1001/none is not a failure and
+    only ends the wait; before the stop a close is a failure worded "the
+    connection was closed by the service (code N: reason)", never as an
+    HTTP status; a socket error or close after the session's own close
+    (a flag set just before it) is a non-event; a real failure during the
+    stop (reset, abnormal code, send error) raises when there is no text,
+    and with text returns it and logs one warning that the last words may
+    be missing.
+  - **Sessions are objects**: `SonioxStreamSession` is one session and the
+    transcriber holds the current one, so a callback of an earlier session
+    cannot touch a later one. A stop or abort during the handshake closes the
+    socket and makes `start_stream` raise "stopped while connecting"; nothing
+    stays open.
+  - **Price** $0.12/hour of stream (pricing page of the research, read
+    2026-11-26), against $0.10/hour async.
+  - **Tests**: `tests/test_soniox_streaming.py` (a fake `websocket` module as
+    for Deepgram) and the socket-path cases of `tests/test_sdk_key_scrub.py`.
+  - **Unverified live**: the shape of real token messages, that `<end>` never
+    appears without an endpoint request, the real close behaviour after the
+    end-of-stream frame (the library's side was run against a local
+    server, the vendor's was not), how fast `finished` arrives, whether
+    `stt-rt-v6` accepts `language_hints_strict` (streaming does not send it),
+    German quality.
 - **OpenRouter is an engine of its own on the custom endpoint's code
   (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
   own entry and key, so "Custom endpoint" stays free for something else).**

@@ -90,7 +90,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/build-release-and-
     services** (the provider tests run against fakes), so run it before a
     release after any roster, request-shape or SDK change: one batch
     request per clip for every remote engine that has a key, realtime for
-    AssemblyAI and Deepgram, `SKIPPED` for an engine without a key (Azure
+    every remote streaming engine, `SKIPPED` for an engine without a key (Azure
     without an endpoint, custom without a base URL), `--engine NAME` to limit
     it. It uses paid quota and the user's regions and endpoints, read
     read-only from the real `settings.json`; the owner decides when to run it.

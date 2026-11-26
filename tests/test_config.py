@@ -4,14 +4,25 @@ import pytest
 
 from stt_app.config import (
     DEVICE_AWARE_LOCAL_MODELS,
+    ENGINE_LABELS,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_WEBGPU_AUTO_DEVICE_ORDER,
     LOCAL_WEBGPU_MODEL_SIZES,
     ONNX_MEASURABLE_DEVICES,
+    STREAMING_ENGINES,
     effective_preferred_device,
     nemotron_provider_order,
     order_with_preferred_device,
+    streaming_engines_phrase,
 )
+
+
+def test_the_streaming_engines_phrase_names_every_engine_that_streams():
+    phrase = streaming_engines_phrase()
+    labels = [ENGINE_LABELS[engine] for engine in STREAMING_ENGINES]
+    positions = [phrase.index(label) for label in labels]
+    assert positions == sorted(positions)
+    assert phrase.endswith(f" or {labels[-1]}")
 
 
 def test_the_device_aware_models_are_the_two_runtimes_that_read_a_device():

@@ -36,7 +36,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
   into a window of the checking process is written plainly);
   `--idle-wait-limit` bounds the wait for the user to pause),
   `release_check_providers.py` (one batch request per clip for
-  every remote engine with a key, realtime for AssemblyAI and Deepgram, quit
+  every remote engine with a key, realtime for every remote streaming engine, quit
   during the poll last; `--engine` limits a run; the user's regions and the
   Azure/custom endpoints are read from the real `settings.json` read-only;
   selection and skip logic in `scripts/_release_check_provider_plan.py`,

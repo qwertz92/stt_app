@@ -10,18 +10,23 @@ it into the overlay or the log.
 from __future__ import annotations
 
 import logging
+import time
 
 import pytest
 from _rest_fakes import wav_seconds
 from test_assemblyai_provider import FakeStreamingClient, _make_fake_aai
-from test_elevenlabs_realtime import _FakeModule, _FakeSocket
+from test_elevenlabs_realtime import _FakeModule as _ElevenLabsFakeModule
+from test_elevenlabs_realtime import _FakeSocket
 from test_funasr_provider import FakeWS, _event, _wav_bytes
+from test_soniox_streaming import _FakeApp
+from test_soniox_streaming import _FakeModule as _SonioxFakeModule
 
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.elevenlabs_provider import ElevenLabsTranscriber
 from stt_app.transcriber.funasr_provider import FunAsrTranscriber
 from stt_app.transcriber.groq_provider import GroqTranscriber
+from stt_app.transcriber.soniox_provider import SonioxTranscriber
 
 _KEYS = ["sk-live-0123456789abcdef", 'ab"cd\\ef-0123456789']
 
@@ -141,6 +146,64 @@ def test_assemblyai_streaming_never_shows_the_key(caplog, key):
 
 
 @pytest.mark.parametrize("key", _KEYS, ids=["plain", "escaped"])
+def test_soniox_streaming_never_shows_the_key(monkeypatch, caplog, key):
+    """The socket path: a handshake failure, an error frame and a send failure
+    all carry the server's or the library's text, which may echo the key."""
+    caplog.set_level(logging.DEBUG)
+    message = _echo(key)
+    _FakeApp.instances = []
+    _FakeApp.end_reply = []
+    _FakeApp.never_opens = False
+    _FakeApp.block_binary = None
+
+    def transcriber() -> SonioxTranscriber:
+        t = SonioxTranscriber(api_key=key)
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _SonioxFakeModule)
+        return t
+
+    _FakeApp.open_error = ConnectionError(message)
+    with pytest.raises(TranscriptionError) as raised:
+        transcriber().start_stream()
+    _assert_clean(str(raised.value), key, caplog)
+    _FakeApp.open_error = None
+
+    errors: list[str] = []
+    t = transcriber()
+    t.start_stream(on_error=errors.append)
+    _FakeApp.instances[-1].deliver(
+        {
+            "tokens": [],
+            "error_code": 400,
+            "error_type": "invalid_request",
+            "error_message": message,
+        }
+    )
+    _FakeApp.end_reply = None
+    with pytest.raises(TranscriptionError) as raised:
+        t.stop_stream()
+    for text in (*errors, str(raised.value)):
+        _assert_clean(text, key, caplog)
+    assert errors
+
+    errors = []
+    t = transcriber()
+    t.start_stream(on_error=errors.append)
+
+    def failing_send(payload, opcode=None):
+        raise ConnectionError(message)
+
+    monkeypatch.setattr(_FakeApp.instances[-1], "send", failing_send)
+    t.push_audio_chunk(b"\x00\x00" * 1600)
+    deadline = time.monotonic() + 2.0
+    while not errors and time.monotonic() < deadline:
+        time.sleep(0.01)
+    t.abort_stream()
+    assert errors
+    for text in errors:
+        _assert_clean(text, key, caplog)
+
+
+@pytest.mark.parametrize("key", _KEYS, ids=["plain", "escaped"])
 def test_funasr_never_shows_the_key(monkeypatch, caplog, key):
     caplog.set_level(logging.DEBUG)
     message = _echo(key)
@@ -178,7 +241,7 @@ def test_elevenlabs_streaming_never_shows_the_key(caplog, key):
 
     def make():
         t = ElevenLabsTranscriber(api_key=key)
-        t._get_websocket_module = lambda: _FakeModule
+        t._get_websocket_module = lambda: _ElevenLabsFakeModule
         return t
 
     # The server echoes the key in a refused handshake, in an error message
@@ -217,7 +280,7 @@ def test_elevenlabs_key_that_straddles_the_cut_is_scrubbed_before_cutting(caplog
     key = "sk_" + "0123456789abcdef" * 3
     for padding in (270, 297, 299):  # the key starts before, at and after the cut
         t = ElevenLabsTranscriber(api_key=key)
-        t._get_websocket_module = lambda: _FakeModule
+        t._get_websocket_module = lambda: _ElevenLabsFakeModule
         errors: list[str] = []
         t.start_stream(on_error=errors.append)
         ws = _FakeSocket.instances[-1]

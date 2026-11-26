@@ -30,6 +30,7 @@ from .config import (
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     PARAKEET_MODEL_SIZES,
+    SONIOX_REALTIME_MODEL,
     VALID_ENGINES,
     VALID_INSERT_TARGETS,
     VALID_LANGUAGE_MODES,
@@ -38,6 +39,7 @@ from .config import (
     VALID_PASTE_MODES,
     language_modes_for_selection,
     onnx_auto_device_order,
+    streaming_engines_phrase,
     supports_custom_vocabulary,
     supports_streaming,
 )
@@ -108,6 +110,10 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "English (batch only)."
     ),
     "meta": "{name} uses the custom vocabulary as its keywords (batch only).",
+    "soniox": (
+        "{name} uses the custom vocabulary as its context terms, in batch and "
+        "streaming."
+    ),
     "openrouter": (
         "{name} uses the custom vocabulary as the request prompt, which only "
         "some of the models behind it honour (batch only)."
@@ -754,6 +760,11 @@ class _GeneralTabMixin:
                 f"Streaming always uses {ELEVENLABS_STREAMING_MODEL_LABEL}. The "
                 "model chosen in Batch applies to batch dictation and audio imports."
             )
+        elif provider == "soniox":
+            note = (
+                f"Streaming always uses {SONIOX_REALTIME_MODEL}; the selected "
+                "model applies to batch dictation and audio imports."
+            )
         elif provider == "elevenlabs":
             note = (
                 "The selected model applies to batch dictation and audio imports; "
@@ -1328,7 +1339,7 @@ class _GeneralTabMixin:
             )
         return (
             f"{self._provider_label(engine)} cannot stream; it works in Batch "
-            "mode only. Pick Local, AssemblyAI or Deepgram, or set Mode to Batch."
+            f"mode only. Pick {streaming_engines_phrase()}, or set Mode to Batch."
         )
 
     def _update_mode_availability(self) -> None:

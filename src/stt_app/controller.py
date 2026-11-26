@@ -104,6 +104,7 @@ from .config import (
     VALID_START_BEEP_TONES,
     language_modes_for_selection,
     nemotron_provider_order,
+    streaming_engines_phrase,
     supports_custom_vocabulary,
     supports_streaming,
 )
@@ -743,6 +744,7 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "mistral": "has_mistral_key",
     "meta": "has_meta_key",
     "openrouter": "has_openrouter_key",
+    "soniox": "has_soniox_key",
 }
 
 # `_ENGINE_MODEL_FIELDS` and `_ENGINE_REGION_FIELDS` (imported from the
@@ -2387,8 +2389,8 @@ class DictationController(QtCore.QObject):
                     )
                     detail = (
                         f"Streaming is not available for {name}. In Settings > "
-                        "Transcription, set Mode to Batch or pick Local, "
-                        "AssemblyAI or Deepgram."
+                        "Transcription, set Mode to Batch or pick "
+                        f"{streaming_engines_phrase()}."
                     )
                 self._refuse_recording_start(detail)
                 return

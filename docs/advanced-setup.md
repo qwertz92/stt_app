@@ -551,8 +551,8 @@ request with the message the overlay shows.
 
 1. Create a key in the Speechmatics portal and enter it in the
    **Speechmatics** row on Settings -> **Providers**.
-2. Pick the **Region** right under that row: EU (default), US or
-   Australia.
+2. Pick the region in the picker beside the key field of that row: EU region
+   (default), US region or Australia region.
 3. On **Transcription**, set Engine to `Speechmatics` and pick the model:
    - `melia-1` (default) is the one that works with Language `Auto`: it
      detects the language itself, and a chosen language is sent as a hint.
@@ -627,32 +627,67 @@ transcription endpoint. Batch-only and not yet run against the live service.
 The OpenRouter engine does not use the **Custom endpoint** group, which stays
 free for another service. **Test** asks OpenRouter whether the key is valid.
 
+**Soniox**
+
+Batch and streaming, neither yet run against the live service (no key was
+available while building it). Soniox's async API is a job: the app uploads the
+recording, asks for a transcription, polls until it is done, reads the text and
+then deletes the transcription and the uploaded file on Soniox's side.
+Streaming mode opens a WebSocket instead and always uses `stt-rt-v6`
+($0.12 per hour of stream, billed for the stream's whole duration).
+
+1. Create an API key in the Soniox Console (console.soniox.com) and enter it in
+   the **Soniox** row on Settings -> **Providers**. The selector beside the key
+   field is the region of your Soniox project (US unless you created the
+   project in another one).
+2. On **Transcription**, set Engine to `Soniox`. The model is `stt-async-v6`,
+   $0.10 per hour of audio (Soniox's pricing page, read 2026-11-26).
+3. Language: Auto or one of the 60 languages Soniox lists (German and English
+   included); a chosen language is sent as a strict hint, so choosing German
+   means German. The custom vocabulary is sent as Soniox's `context` terms.
+
+**Test** calls Soniox's model list, which checks the key and costs nothing. A key
+only works in the region of the project it was created in: a "key is invalid"
+answer right after pasting a new key usually means the wrong region is selected.
+Recordings over an hour are sent in parts of at most one hour.
+
+Soniox keeps an uploaded file and its transcription until they are deleted, and
+deletes them itself after 30 days (it keeps a transcript only for a limited
+window whose length it does not state). The app deletes both right after the
+text has arrived, in the background, so the paste does not wait for it. If you
+quit the app while a job is still running or while it is still deleting, or a
+job fails in a way that leaves it unfinished, that recording's audio and transcript stay on
+Soniox for up to 30 days (delete them in the Console if that matters to you).
+
 Sources, read 2026-09-27: Speechmatics'
 [models](https://docs.speechmatics.com/speech-to-text/models) and
 [authentication](https://docs.speechmatics.com/get-started/authentication)
 pages; Mistral's
 [Voxtral 3 announcement](https://mistral.ai/news/voxtral-3/) (read 2026-11-24).
 
-## Data residency regions (AssemblyAI, Deepgram, Speechmatics)
+## Data residency regions (AssemblyAI, Deepgram, Speechmatics, Soniox)
 
-Settings -> **Providers** has a **Region** selector right under each
-provider that offers a choice: AssemblyAI, Deepgram and Speechmatics.
+Settings -> **Providers** has a **Region** selector beside the key field of
+each provider that offers a choice: AssemblyAI, Deepgram, Speechmatics and
+Soniox.
 Dictation, audio imports and the connection test all use the
 selected region; Save or Save API Keys stores it. Each choice's tooltip says
 what the vendor guarantees for it, and no more:
 
 | Selector: choice | Hosts | What the vendor states |
 |---|---|---|
-| AssemblyAI: Automatic (default) | batch `api.assemblyai.com`, streaming `streaming.assemblyai.com` | Batch is processed in the US. Streaming is routed to the nearest location: "Your data may be processed in any of the US or EU locations." |
-| AssemblyAI: US only | batch `api.assemblyai.com`, streaming `streaming.us.assemblyai.com` | Batch in the US (there is no separate US batch host); streaming data "never leaves the specified region". |
-| AssemblyAI: EU only | batch `api.eu.assemblyai.com`, streaming `streaming.eu.assemblyai.com` | Data "never leaves the European Union". |
-| Deepgram: Global (default) | `api.deepgram.com` (batch and streaming) | "The default global endpoint"; no processing location is stated. |
-| Deepgram: EU | `api.eu.deepgram.com` (batch and streaming) | Routes "traffic through the EU"; the same API keys work. |
-| Speechmatics: EU (default), US, Australia | `eu1.`, `us1.`, `au1.asr.api.speechmatics.com` | "Jobs are created in the region corresponding to the endpoint used." |
+| AssemblyAI: Auto region (default) | batch `api.assemblyai.com`, streaming `streaming.assemblyai.com` | Batch is processed in the US. Streaming is routed to the nearest location: "Your data may be processed in any of the US or EU locations." |
+| AssemblyAI: US region only | batch `api.assemblyai.com`, streaming `streaming.us.assemblyai.com` | Batch in the US (there is no separate US batch host); streaming data "never leaves the specified region". |
+| AssemblyAI: EU region only | batch `api.eu.assemblyai.com`, streaming `streaming.eu.assemblyai.com` | Data "never leaves the European Union". |
+| Deepgram: Global region (default) | `api.deepgram.com` (batch and streaming) | "The default global endpoint"; no processing location is stated. |
+| Deepgram: EU region | `api.eu.deepgram.com` (batch and streaming) | Routes "traffic through the EU"; the same API keys work. |
+| Speechmatics: EU region (default), US region, Australia region | `eu1.`, `us1.`, `au1.asr.api.speechmatics.com` | "Jobs are created in the region corresponding to the endpoint used." |
+| Soniox: US region (default), EU region, Japan region, India region | `api.soniox.com`, `api.eu.`, `api.jp.`, `api.in.soniox.com` (REST) | "Audio and transcripts stay in the selected region for both processing and storage"; account and usage metadata may be processed elsewhere. A region needs a Soniox project created in it (its own API key; access is requested in the Console), so the US host every account has is the default. Soniox names no default region. |
 
 In `%APPDATA%\stt_app\settings.json` these are `assemblyai_region` (`auto`,
-`us`, `eu`), `deepgram_region` (`global`, `eu`) and `speechmatics_region`
-(`eu1`, `us1`, `au1`); an unknown value means the default.
+`us`, `eu`), `deepgram_region` (`global`, `eu`), `speechmatics_region`
+(`eu1`, `us1`, `au1`) and `soniox_region` (`us`, `eu`, `jp`, `in`); an unknown
+value means the default.
 
 - **Deepgram** states that the EU endpoint takes the same API keys as the
   global one, and that Whisper models are not offered there (the app uses

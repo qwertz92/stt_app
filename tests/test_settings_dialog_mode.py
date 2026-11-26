@@ -22,7 +22,9 @@ from stt_app.config import (
     LOCAL_BATCH_ONLY_MODELS,
     NEMOTRON_MODEL_SIZE,
     OPENAI_MODELS,
+    STREAMING_ENGINES,
     VALID_MODEL_SIZES,
+    streaming_engines_phrase,
     supports_streaming,
 )
 from stt_app.last_recording_store import LastRecordingStore
@@ -389,7 +391,7 @@ def test_streaming_mode_hides_engines_that_cannot_stream():
 
     dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
 
-    for engine in ("local", "assemblyai", "deepgram", "elevenlabs"):
+    for engine in STREAMING_ENGINES:
         assert _engine_row_hidden(dialog, engine) is False, engine
         assert _combo_item_enabled(dialog.engine_combo, engine) is True, engine
     for engine in ("groq", "openai", "azure", "custom"):
@@ -443,6 +445,8 @@ def test_a_saved_remote_engine_that_cannot_stream_is_kept_and_flagged():
     assert _engine_row_hidden(dialog, "groq") is False
     note = dialog.remote_model_note_label.text()
     assert "cannot stream" in note
+    # The names were a hand-written list that left ElevenLabs out.
+    assert streaming_engines_phrase() in note
     assert "b71c1c" in dialog.remote_model_note_label.styleSheet()
 
     dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
@@ -1738,9 +1742,11 @@ def test_remote_provider_key_fields_align_with_azure_endpoint():
     endpoint_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
     assert abs(key_x - endpoint_x) <= 2
     # The custom endpoint's group uses the same columns, so its key field and
-    # its row buttons line up with the cloud providers' above it.
+    # its row buttons line up with the cloud providers' above it. (OpenAI has
+    # no region picker, so its key field spans the whole key column; a
+    # provider with one shares the column with it.)
     for cloud, custom in (
-        (dialog.assemblyai_key_edit, dialog.custom_key_edit),
+        (dialog._provider_key_edits["openai"], dialog.custom_key_edit),
         (
             dialog._provider_test_buttons["assemblyai"],
             dialog._provider_test_buttons["custom"],

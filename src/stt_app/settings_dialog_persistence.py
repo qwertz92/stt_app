@@ -524,6 +524,7 @@ class _PersistenceMixin:
             has_mistral_key=key_states["mistral"],
             has_meta_key=key_states["meta"],
             has_openrouter_key=key_states["openrouter"],
+            has_soniox_key=key_states["soniox"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
@@ -533,6 +534,7 @@ class _PersistenceMixin:
             assemblyai_region=self._region_shown("assemblyai"),
             deepgram_region=self._region_shown("deepgram"),
             speechmatics_region=self._region_shown("speechmatics"),
+            soniox_region=self._region_shown("soniox"),
         )
         updated = replace(
             widget_settings,
@@ -722,6 +724,7 @@ class _PersistenceMixin:
             has_mistral_key = self._loaded_settings.has_mistral_key
             has_meta_key = self._loaded_settings.has_meta_key
             has_openrouter_key = self._loaded_settings.has_openrouter_key
+            has_soniox_key = self._loaded_settings.has_soniox_key
         else:
             has_openai_key = key_states["openai"]
             has_deepgram_key = key_states["deepgram"]
@@ -735,6 +738,7 @@ class _PersistenceMixin:
             has_mistral_key = key_states["mistral"]
             has_meta_key = key_states["meta"]
             has_openrouter_key = key_states["openrouter"]
+            has_soniox_key = key_states["soniox"]
         return AppSettings(
             # Carried, not stamped. This is the one field with no widget that
             # was never read back, and its dataclass default is *this build's*
@@ -862,6 +866,7 @@ class _PersistenceMixin:
             has_mistral_key=has_mistral_key,
             has_meta_key=has_meta_key,
             has_openrouter_key=has_openrouter_key,
+            has_soniox_key=has_soniox_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -886,9 +891,11 @@ class _PersistenceMixin:
             meta_model=self._remote_model_value_for_provider("meta"),
             openrouter_model=self._remote_model_value_for_provider("openrouter"),
             openrouter_models=self._openrouter_fetched_models,
+            soniox_model=self._remote_model_value_for_provider("soniox"),
             assemblyai_region=self._region_shown("assemblyai"),
             deepgram_region=self._region_shown("deepgram"),
             speechmatics_region=self._region_shown("speechmatics"),
+            soniox_region=self._region_shown("soniox"),
         )
 
     def _custom_api_mode_shown(self) -> str:

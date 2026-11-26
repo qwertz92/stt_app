@@ -1776,6 +1776,31 @@ def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     assert (damaged.assemblyai_region, damaged.deepgram_region) == ("auto", "global")
 
 
+def test_the_soniox_fields_round_trip(tmp_path):
+    """Model, region and key flag of Soniox: an older file carries none of
+    them (no schema bump), and a value this build does not know falls back
+    to the default rather than reaching a provider."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="soniox",
+        soniox_model="stt-async-v6",
+        soniox_region="eu",
+        has_soniox_key=True,
+    )
+    store.save(saved)
+    assert store.load() == saved
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert (older.soniox_model, older.soniox_region) == ("stt-async-v6", "us")
+    assert not older.has_soniox_key
+
+    damaged = AppSettings.from_dict(
+        {"soniox_model": "stt-async-v5", "soniox_region": "EU2"}
+    )
+    assert (damaged.soniox_model, damaged.soniox_region) == ("stt-async-v6", "us")
+    assert AppSettings.from_dict({"soniox_region": " JP "}).soniox_region == "jp"
+
+
 def test_the_meta_fields_round_trip(tmp_path):
     """Model and key flag of Meta's engine: an older file carries neither (no
     schema bump), and a model this build does not offer falls back to the
@@ -1884,6 +1909,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
         ("speechmatics", "speechmatics_model", "enhanced"),
         ("mistral", "mistral_model", "voxtral-small-transcribe-3"),
         ("meta", "meta_model", "muse-voice-transcribe-1.0"),
+        ("soniox", "soniox_model", "stt-async-v6"),
         ("openrouter", "openrouter_model", "google/chirp-3"),
     ],
 )
@@ -1902,6 +1928,7 @@ def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
             "speechmatics_api_key": "s",
             "mistral_api_key": "m",
             "meta_api_key": "x",
+            "soniox_api_key": "z",
             "openrouter_api_key": "y",
         },
     )
@@ -1909,6 +1936,7 @@ def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
     assert "meta_api_key" not in raw
+    assert "soniox_api_key" not in raw
     assert "openrouter_api_key" not in raw
 
 

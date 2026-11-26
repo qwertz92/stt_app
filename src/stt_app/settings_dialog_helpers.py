@@ -31,6 +31,7 @@ from .config import (
     DEFAULT_MISTRAL_MODEL,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OPENROUTER_MODEL,
+    DEFAULT_SONIOX_MODEL,
     DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
     ENGINE_LABELS,
@@ -42,6 +43,7 @@ from .config import (
     MISTRAL_MODELS,
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
+    SONIOX_MODELS,
     SPEECHMATICS_MODELS,
     TRAY_MESSAGE_MAX_CHARS,
     VALID_MODEL_SIZES,
@@ -352,6 +354,9 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
         "voxtral-small-transcribe-3 (slightly more accurate, $0.24/hr)"
     ),
     "muse-voice-transcribe-1.0": "muse-voice-transcribe-1.0 ($0.18/hr, 25 languages)",
+    "stt-async-v6": (
+        "stt-async-v6 ($0.10/hr, 60 languages; streaming runs stt-rt-v6, $0.12/hr)"
+    ),
 }
 
 
@@ -386,6 +391,9 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     "meta": tuple(
         (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in META_MODELS
     ),
+    "soniox": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in SONIOX_MODELS
+    ),
 }
 
 
@@ -401,7 +409,7 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
     "assemblyai": (
         (
             ASSEMBLYAI_REGION_AUTO,
-            "Automatic (default)",
+            "Auto region (default)",
             (
                 "AssemblyAI's default endpoints: batch is processed in the US; "
                 "streaming goes to the nearest location, in the US or EU."
@@ -409,19 +417,19 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
         (
             ASSEMBLYAI_REGION_US,
-            "US only",
+            "US region only",
             "Batch and streaming are processed only in the US.",
         ),
         (
             ASSEMBLYAI_REGION_EU,
-            "EU only",
+            "EU region only",
             "Batch and streaming are processed only in the EU.",
         ),
     ),
     "deepgram": (
         (
             DEEPGRAM_REGION_GLOBAL,
-            "Global (default)",
+            "Global region (default)",
             (
                 "Deepgram's default global endpoint; Deepgram states no "
                 "processing location for it."
@@ -429,7 +437,7 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
         (
             DEEPGRAM_REGION_EU,
-            "EU",
+            "EU region",
             (
                 "Deepgram's EU endpoint, which routes the traffic through the "
                 "EU. It takes the same API key."
@@ -437,14 +445,49 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
     ),
     "speechmatics": (
-        ("eu1", "EU (default)", "Jobs are created in Speechmatics' EU region."),
-        ("us1", "US", "Jobs are created in Speechmatics' US region."),
+        ("eu1", "EU region (default)", "Jobs are created in Speechmatics' EU region."),
+        ("us1", "US region", "Jobs are created in Speechmatics' US region."),
         (
             "au1",
-            "Australia",
+            "Australia region",
             (
                 "Jobs are created in Speechmatics' Australian region; Melia 1 "
                 "is not offered there."
+            ),
+        ),
+    ),
+    "soniox": (
+        (
+            "us",
+            "US region (default)",
+            (
+                "Soniox' US endpoint, the one every account has; Soniox names no "
+                "default region of its own."
+            ),
+        ),
+        (
+            "eu",
+            "EU region",
+            (
+                "Audio and transcripts are processed and stored in the EU. Needs "
+                "a Soniox project created in the EU region (its own key goes in "
+                "the key field; Soniox approves region access on request)."
+            ),
+        ),
+        (
+            "jp",
+            "Japan region",
+            (
+                "Audio and transcripts are processed and stored in Japan. Needs "
+                "a Soniox project created in the Japan region, with its own key."
+            ),
+        ),
+        (
+            "in",
+            "India region",
+            (
+                "Audio and transcripts are processed and stored in India. Needs "
+                "a Soniox project created in the India region, with its own key."
             ),
         ),
     ),
@@ -907,6 +950,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "speechmatics": DEFAULT_SPEECHMATICS_MODEL,
     "mistral": DEFAULT_MISTRAL_MODEL,
     "meta": DEFAULT_META_MODEL,
+    "soniox": DEFAULT_SONIOX_MODEL,
     # Free text, but with a default so that the engine works before the first
     # Refresh.
     "openrouter": DEFAULT_OPENROUTER_MODEL,
@@ -959,6 +1003,7 @@ _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
     _RemoteProviderInfo("mistral", "Mistral", "Mistral (Voxtral)"),
     _RemoteProviderInfo("meta", "Meta", "Meta (Muse Voice)"),
     _RemoteProviderInfo("openrouter", "OpenRouter", "OpenRouter"),
+    _RemoteProviderInfo("soniox", "Soniox", "Soniox"),
     _RemoteProviderInfo("custom", "Custom", "Custom endpoint"),
 )
 

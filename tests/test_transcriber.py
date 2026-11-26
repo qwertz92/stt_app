@@ -1391,6 +1391,7 @@ _TRANSCRIBER_PACKAGE_EXPORTS = {
     "MistralTranscriber",
     "OpenAITranscriber",
     "OpenRouterTranscriber",
+    "SonioxTranscriber",
     "SpeechmaticsTranscriber",
     "TranscriptionError",
     "create_transcriber",

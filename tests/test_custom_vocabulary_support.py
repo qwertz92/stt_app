@@ -45,6 +45,7 @@ _TRANSCRIBER_NAMES = (
     "MistralTranscriber",
     "MetaTranscriber",
     "OpenRouterTranscriber",
+    "SonioxTranscriber",
 )
 
 
@@ -180,6 +181,7 @@ def test_the_sentence_that_names_the_supported_set_names_every_engine() -> None:
         "mistral": "Mistral",
         "meta": "Meta",
         "openrouter": "OpenRouter",
+        "soniox": "Soniox",
     }
 
     assert set(labels) == set(CUSTOM_VOCABULARY_ENGINES)

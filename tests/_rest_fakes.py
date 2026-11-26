@@ -87,6 +87,26 @@ def http_error(url: str, code: int, body: bytes | str = b""):
     return urllib.error.HTTPError(url, code, "Error", {}, io.BytesIO(data))
 
 
+def soniox_job_reply(request, transcript_body):
+    """Soniox's routes for a job that is created and completed at once.
+
+    None for a request to another host. The transcript route answers
+    `transcript_body`, so that a test decides what the one request that
+    matters returns; deletions answer an empty 204.
+    """
+    url = request.full_url
+    if "soniox.com" not in url:
+        return None
+    method = request.get_method()
+    if method == "DELETE":
+        return fake_response(b"", 204)
+    if method == "POST":
+        return json_response({"id": "soniox-1"}, status=201)
+    if url.endswith("/transcript"):
+        return fake_response(transcript_body)
+    return json_response({"id": "soniox-1", "status": "completed"})
+
+
 def wav_seconds(seconds: float) -> bytes:
     """A 16 kHz mono 16-bit WAV, the format the app records."""
     count = int(seconds * 16_000)
