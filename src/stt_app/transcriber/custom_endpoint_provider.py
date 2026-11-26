@@ -466,6 +466,32 @@ def _strip_reply_wrapping(text: str) -> str:
 
 
 class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
+    """The OpenAI-compatible endpoint the user names.
+
+    The class attributes are what a subclass changes to be another engine on
+    the same code (`OpenRouterTranscriber`): the engine id whose tables
+    (languages, part limits) apply, the provider's name in messages, the
+    route of the model list, and the sentences that tell a user with an
+    editable URL to check it.
+    """
+
+    _engine = "custom"
+    _name = _PROVIDER_NAME
+    _upload_progress = _UPLOAD_PROGRESS
+    _models_path = "/models"
+    _missing_key_message = (
+        "Custom endpoint API key is missing. A server without "
+        "authentication accepts any placeholder such as 'none', or "
+        "set a key command. Enter your key in Settings -> Providers."
+    )
+    _wrong_url_hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
+    _html_reply_hint = (
+        "typically a proxy's sign-in or block page, or a base URL that points "
+        f"at a website. Check the base URL ({_ENDPOINT_EXAMPLE}) and whether "
+        "the proxy needs a sign-in."
+    )
+    _model_list_not_json_hint = f" Check the base URL ({_ENDPOINT_EXAMPLE})."
+
     def __init__(
         self,
         api_key: str = "",
@@ -485,16 +511,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         self._api_key = str(api_key or "").strip()
         self._key_command = str(key_command or "").strip()
         if not self._api_key and not self._key_command:
-            raise TranscriptionError(
-                "Custom endpoint API key is missing. A server without "
-                "authentication accepts any placeholder such as 'none', or "
-                "set a key command. Enter your key in Settings -> Providers."
-            )
+            raise TranscriptionError(self._missing_key_message)
         if self._api_key and _header_unsafe(self._api_key):
             # Never echoed: the key is the one thing this message must
             # not contain.
             raise TranscriptionError(
-                "Custom endpoint API key contains a line break, a space or "
+                f"{self._name} API key contains a line break, a space or "
                 "another character an HTTP header cannot carry. Enter it "
                 "again in Settings -> Providers."
             )
@@ -515,7 +537,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
 
     def _normalize_language_mode(self, mode: str) -> str:
         normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        if normalized not in language_modes_for_selection("custom", self._model):
+        if normalized not in language_modes_for_selection(self._engine, self._model):
             normalized = DEFAULT_LANGUAGE_MODE
         return normalized
 
@@ -609,7 +631,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             payload = resp.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the response is larger than "
+                f"{self._name}: the response is larger than "
                 f"{max_bytes // (1024 * 1024)} MB."
             )
         if is_markup_page(payload):
@@ -617,11 +639,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             # plain-text transcript it was pasted into the document; its
             # text is left out of the message, it is not the server's.
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the endpoint answered with an HTML page "
-                "instead of JSON -- typically a proxy's sign-in or block "
-                "page, or a base URL that points at a website. Check the "
-                f"base URL ({_ENDPOINT_EXAMPLE}) and whether the proxy "
-                "needs a sign-in."
+                f"{self._name}: the endpoint answered with an HTML page "
+                f"instead of JSON -- {self._html_reply_hint}"
             )
         return payload
 
@@ -712,7 +731,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
                 "shorter recordings. The transcription API style sends larger "
                 "requests, so it will not help."
             )
-        limit = remote_batch_part_limit("custom", self._model, self._api_mode)
+        limit = remote_batch_part_limit(self._engine, self._model, self._api_mode)
         return (
             f" {refuses}; the app sends parts of at most {limit.seconds:.0f} s "
             f"or {limit.max_bytes // 1_000_000} MB and cannot make them smaller. "
@@ -739,51 +758,51 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             if _SCRUBBED in reason:
                 reason = ""
             return TranscriptionError(
-                f"{_PROVIDER_NAME}: authentication failed (HTTP 401); the "
+                f"{self._name}: authentication failed (HTTP 401); the "
                 f"endpoint refused {source}" + (f": {reason}" if reason else ".")
             )
         if exc.code == 429:
             return TranscriptionError(
-                f"{_PROVIDER_NAME}: rate limit exceeded (HTTP 429). Wait a "
+                f"{self._name}: rate limit exceeded (HTTP 429). Wait a "
                 "moment and try again."
             )
         suffix = f": {detail}" if detail else http_error_suffix(exc, self._scrub)
         hint = ""
         if exc.code in (404, 405):
-            hint = f" Check the base URL ({_ENDPOINT_EXAMPLE}) and the API style."
+            hint = self._wrong_url_hint
         elif exc.code == 413:
             hint = self._request_too_large_hint()
         return TranscriptionError(
-            f"{_PROVIDER_NAME} {what} failed (HTTP {exc.code}){suffix}{hint}"
+            f"{self._name} {what} failed (HTTP {exc.code}){suffix}{hint}"
         )
 
     def _other_error(self, exc: Exception, what: str) -> TranscriptionError:
         if _is_ssl_error(exc):
-            return TranscriptionError(format_ssl_error_message(_PROVIDER_NAME))
+            return TranscriptionError(format_ssl_error_message(self._name))
         if "invalid header" in str(exc).lower():
             # `http.client` puts the refused header value -- the Bearer
             # token -- into its message. The checks above keep such a
             # value from being sent; this keeps any other road to that
             # message from showing it.
             return TranscriptionError(
-                f"{_PROVIDER_NAME} {what} failed: a request header was "
+                f"{self._name} {what} failed: a request header was "
                 f"refused ({type(exc).__name__})."
             )
-        return TranscriptionError(f"{_PROVIDER_NAME} {what} failed: {exc}")
+        return TranscriptionError(f"{self._name} {what} failed: {exc}")
 
     # -- Model list --------------------------------------------------------
 
     def list_models(self) -> list[CustomEndpointModel]:
         """The models the endpoint offers, the likeliest transcribers first.
 
-        `GET {base}/models`. Entries whose `mode` says they cannot transcribe
+        `GET {base}{self._models_path}`. Entries whose `mode` says they cannot transcribe
         (embeddings, image generation, rerankers) are left out; an entry
         without a `mode` is kept, since most servers do not send one.
         """
         with self._errors_scrubbed():
             try:
                 payload = self._send(
-                    lambda token: self._request("/models", token, data=None),
+                    lambda token: self._request(self._models_path, token, data=None),
                     timeout=_MODELS_TIMEOUT_S,
                     max_bytes=_MAX_MODELS_RESPONSE_BYTES,
                 )
@@ -797,13 +816,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             parsed = json.loads(payload.decode("utf-8", errors="replace"))
         except ValueError as exc:
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the model list is not JSON. Check the base "
-                f"URL ({_ENDPOINT_EXAMPLE})."
+                f"{self._name}: the model list is not JSON.{self._model_list_not_json_hint}"
             ) from exc
         entries = parsed.get("data") if isinstance(parsed, dict) else parsed
         if not isinstance(entries, list):
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the model list has no 'data' array."
+                f"{self._name}: the model list has no 'data' array."
             )
         models: dict[str, CustomEndpointModel] = {}
         for entry in entries:
@@ -857,8 +875,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         return transcribe_in_parts(
             audio_source,
             self._transcribe_request,
-            limit=remote_batch_part_limit("custom", self._model, self._api_mode),
-            progress_text=_UPLOAD_PROGRESS,
+            limit=remote_batch_part_limit(self._engine, self._model, self._api_mode),
+            progress_text=self._upload_progress,
             raise_if_canceled=self._raise_if_canceled,
             silence_threshold=self._silence_gate_threshold,
         )
@@ -910,7 +928,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         # transcript to paste (review of 2026-10-01).
         return transcript_from_json(
             payload,
-            prefix=_PROVIDER_NAME,
+            prefix=self._name,
             accept_bare_string=True,
             redact=self._scrub,
         )
@@ -944,7 +962,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             # that does not say why; converting needs a decoder the app does
             # not ship (review of 2026-10-03).
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the chat API style takes WAV or MP3 audio "
+                f"{self._name}: the chat API style takes WAV or MP3 audio "
                 f"only, and this recording is .{audio_format}. Use the OpenAI "
                 "transcription API style, which sends the file as it is, or "
                 "convert the file to WAV."
@@ -1017,11 +1035,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             error_text = reply_error_text(parsed, self._scrub)
             if error_text:
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the endpoint answered HTTP 200 with an "
+                    f"{self._name}: the endpoint answered HTTP 200 with an "
                     f"error: {error_text}"
                 ) from exc
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the chat reply has no message content."
+                f"{self._name}: the chat reply has no message content."
             ) from exc
         reason = choice.get("finish_reason")
         reason = reason if isinstance(reason, str) else ""
@@ -1030,7 +1048,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             # accepted, a part of a long dictation lost its end unnoticed
             # (review of 2026-10-03).
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the model's output limit cut the transcript "
+                f"{self._name}: the model's output limit cut the transcript "
                 f"off (finish reason '{reason[:40]}'). Use the OpenAI "
                 "transcription API style, or dictate in shorter pieces."
             )
@@ -1041,11 +1059,11 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             refusal = message.get("refusal")
             if isinstance(refusal, str) and refusal.strip():
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{self._name}: the model refused: "
                     f"{body_excerpt(refusal, self._scrub)}"
                 )
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the chat reply has no text "
+                f"{self._name}: the chat reply has no text "
                 + (
                     f"(finish reason '{reason}')."
                     if reason
@@ -1064,7 +1082,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             ]
             if not texts and refusals:
                 raise TranscriptionError(
-                    f"{_PROVIDER_NAME}: the model refused: "
+                    f"{self._name}: the model refused: "
                     f"{body_excerpt(refusals[0], self._scrub)}"
                 )
             content = " ".join(texts)
@@ -1072,7 +1090,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             # A number or an object is no reply text; read as silence it
             # would drop a part of a split recording without a word.
             raise TranscriptionError(
-                f"{_PROVIDER_NAME}: the chat reply's content is not text "
+                f"{self._name}: the chat reply's content is not text "
                 f"({type(content).__name__})."
             )
         return normalize_transcript_text(_strip_reply_wrapping(content))
