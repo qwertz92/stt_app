@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
+import time
 
 import pytest
 from _rest_fakes import (
@@ -41,6 +43,13 @@ from stt_app.transcriber.soniox_provider import SonioxTranscriber, fit_terms
 _FILE_ID = "11111111-aaaa-4bbb-8ccc-000000000001"
 _JOB_ID = "22222222-aaaa-4bbb-8ccc-000000000002"
 _KEY = "sx-live-0123456789abcdef"
+
+
+def join_cleanup(timeout_s: float = 5.0) -> None:
+    """Wait for the deletions, which run on a daemon thread after the text."""
+    for thread in threading.enumerate():
+        if thread.name == "stt_app_soniox_cleanup":
+            thread.join(timeout=timeout_s)
 
 
 class _FakeService:
@@ -89,6 +98,11 @@ class _FakeService:
         raise AssertionError(f"unexpected request {route}")
 
     def routes(self) -> list[str]:
+        join_cleanup()
+        return self.routes_now()
+
+    def routes_now(self) -> list[str]:
+        """The routes seen so far, without waiting for the cleanup thread."""
         return [
             f"{r.get_method()} {r.full_url.split('/v1', 1)[1]}" for r in self.requests
         ]
@@ -298,6 +312,89 @@ class TestSonioxPoll:
         assert str(caught.value).endswith(f"Job id {_JOB_ID}.")
 
 
+class TestSonioxStrictHints:
+    """The vendor does not document `language_hints_strict` for v6."""
+
+    @staticmethod
+    def _refusal(message: str):
+        body = json.dumps(
+            {
+                "status_code": 400,
+                "error_type": "invalid_request",
+                "message": message,
+                "validation_errors": [],
+            }
+        )
+        return http_error("https://x", 400, body)
+
+    def test_a_refused_flag_is_repeated_once_without_it_and_the_hint_stays(
+        self, service, caplog
+    ):
+        caplog.set_level(logging.WARNING)
+        service.errors["create"] = [
+            self._refusal("Model does not support language_hints_strict")
+        ]
+
+        text = _transcriber(language_mode="de").transcribe_batch(wav_seconds(1.0))
+
+        assert text == "Hallo Welt."
+        creates = [
+            json.loads(r.data)
+            for r in service.requests
+            if r.get_method() == "POST" and r.full_url.endswith("/transcriptions")
+        ]
+        assert len(creates) == 2
+        assert creates[0]["language_hints_strict"] is True
+        assert "language_hints_strict" not in creates[1]
+        assert creates[1]["language_hints"] == ["de"]
+        assert caplog.text.count("refused language_hints_strict") == 1
+
+    def test_a_second_refusal_is_not_retried_again(self, service):
+        message = "Model does not support language_hints_strict"
+        service.errors["create"] = [self._refusal(message), self._refusal(message)]
+        with pytest.raises(TranscriptionError):
+            _transcriber(language_mode="de").transcribe_batch(wav_seconds(1.0))
+        creates = [
+            r
+            for r in service.requests
+            if r.get_method() == "POST" and r.full_url.endswith("/transcriptions")
+        ]
+        assert len(creates) == 2
+
+    @pytest.mark.parametrize(
+        ("code", "message"),
+        [
+            (400, "Unknown model"),
+            (400, "Invalid language hint"),
+            (429, "Model does not support language_hints_strict"),
+        ],
+    )
+    def test_any_other_refusal_is_not_retried(self, service, code, message):
+        body = json.dumps({"status_code": code, "message": message})
+        service.errors["create"] = [http_error("https://x", code, body)]
+        with pytest.raises(TranscriptionError):
+            _transcriber(language_mode="de").transcribe_batch(wav_seconds(1.0))
+        creates = [
+            r
+            for r in service.requests
+            if r.get_method() == "POST" and r.full_url.endswith("/transcriptions")
+        ]
+        assert len(creates) == 1
+
+    def test_auto_language_sends_no_flag_and_is_never_retried(self, service):
+        service.errors["create"] = [
+            self._refusal("Model does not support language_hints_strict")
+        ]
+        with pytest.raises(TranscriptionError):
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        creates = [
+            r
+            for r in service.requests
+            if r.get_method() == "POST" and r.full_url.endswith("/transcriptions")
+        ]
+        assert len(creates) == 1
+
+
 class TestSonioxErrors:
     @pytest.mark.parametrize("step", ["upload", "create"])
     @pytest.mark.parametrize(
@@ -329,6 +426,39 @@ class TestSonioxErrors:
             assert "Soniox says no." in message
         else:
             assert "region" in message
+
+    def test_a_slow_delete_does_not_delay_the_text(self, service, monkeypatch):
+        """The deletes ran before the text was returned: a server that answered
+        DELETE slowly held a 0.2 s dictation back by 30 s."""
+        release = threading.Event()
+        real = service.__call__
+
+        def slow_delete(request, timeout=None, **kwargs):
+            if request.get_method() == "DELETE":
+                release.wait(timeout=5.0)
+            return real(request, timeout=timeout, **kwargs)
+
+        monkeypatch.setattr(provider_module, "open_request", slow_delete)
+        started = time.monotonic()
+        try:
+            text = _transcriber().transcribe_batch(wav_seconds(1.0))
+            took = time.monotonic() - started
+            assert text == "Hallo Welt."
+            assert took < 2.0
+            assert not any(r.startswith("DELETE") for r in service.routes_now())
+        finally:
+            release.set()
+        join_cleanup()
+        assert f"DELETE /files/{_FILE_ID}" in service.routes()
+
+    def test_a_refused_delete_is_logged_and_never_reaches_the_dictation(
+        self, service, caplog
+    ):
+        caplog.set_level(logging.WARNING)
+        service.errors["delete"] = [http_error("https://x", 500, "{}")]
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == "Hallo Welt."
+        join_cleanup()
+        assert "soniox_cleanup_failed" in caplog.text
 
     def test_a_job_that_cannot_be_created_deletes_the_uploaded_file(self, service):
         service.errors["create"] = [http_error("https://x", 402, "{}")]

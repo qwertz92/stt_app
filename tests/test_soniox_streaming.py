@@ -28,13 +28,42 @@ class _FakeABNF:
     OPCODE_BINARY = 2
 
 
+class WebSocketConnectionClosedException(Exception):
+    """The library's class (matched by name): a close frame carries its code
+    and reason, a lost connection carries neither attribute."""
+
+
+class WebSocketBadStatusException(Exception):
+    def __init__(self, message, status_code):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def _close_exception(code, reason=""):
+    text = (
+        "Connection closed normally (code 1000)"
+        if code == 1000
+        else f"Connection closed (code {code})"
+    )
+    exc = WebSocketConnectionClosedException(f"{text}: {reason}" if reason else text)
+    exc.status_code = code
+    exc.reason = reason
+    return exc
+
+
 class _FakeApp:
-    """Records what the session sends and plays a script back to it."""
+    """Records what the session sends and plays a script back to it.
+
+    A close of the server is delivered as websocket-client 1.9.2 delivers it:
+    `on_error` with a close exception, then `on_close`."""
 
     instances: list[_FakeApp] = []
     # Messages delivered when the empty end-of-stream frame arrives, then the
     # server closes; `None` means the server answers nothing at all.
     end_reply: list[dict] | None = []
+    # How the server ends the connection after the end-of-stream frame:
+    # "normal" (close frame 1000), "abnormal" (1011) or "reset" (no close frame).
+    end_close = "normal"
     open_error: Exception | None = None
     never_opens = False
     block_binary: threading.Event | None = None
@@ -65,12 +94,37 @@ class _FakeApp:
         if payload == "" and opcode is None and _FakeApp.end_reply is not None:
             for message in _FakeApp.end_reply:
                 self.on_message(self, json.dumps(message))
-            self.close()
+            self.end_connection()
+
+    def end_connection(self):
+        if _FakeApp.end_close == "reset":
+            self.lose_connection()
+        else:
+            self.server_close(1000 if _FakeApp.end_close == "normal" else 1011)
+
+    def server_close(self, code=1000, reason=""):
+        """The server's close frame."""
+        if not self.closed:
+            self.on_error(self, _close_exception(code, reason))
+            self.closed = True
+            self.on_close(self, code, reason)
+
+    def lose_connection(self):
+        if not self.closed:
+            self.on_error(
+                self,
+                WebSocketConnectionClosedException(
+                    "Connection to remote host was lost."
+                ),
+            )
+            self.closed = True
+            self.on_close(self, None, None)
 
     def close(self):
+        """The client's own close: only `on_close`."""
         if not self.closed:
             self.closed = True
-            self.on_close(self, 1000, "closed")
+            self.on_close(self, None, None)
 
     def deliver(self, message: dict) -> None:
         self.on_message(self, json.dumps(message))
@@ -99,6 +153,7 @@ def _tokens(*tokens: dict, **extra) -> dict:
 def _fresh_fake():
     _FakeApp.instances = []
     _FakeApp.end_reply = []
+    _FakeApp.end_close = "normal"
     _FakeApp.open_error = None
     _FakeApp.never_opens = False
     _FakeApp.block_binary = None
@@ -359,6 +414,7 @@ class TestSonioxStreamingFailures:
                 "stt-rt.eu.soniox.com" in errors[0] or "api.eu.soniox.com" in errors[0]
             )
             assert errors[0].startswith("Soniox streaming failed")
+            assert "Region selected on the Providers tab" in errors[0]
         finally:
             transcriber.abort_stream()
 
@@ -437,11 +493,68 @@ class TestSonioxStreamingFailures:
         errors: list[str] = []
         transcriber = _transcriber(monkeypatch)
         ws = _start(transcriber, on_error=errors.append)
-        ws.close()
+        ws.server_close(1000, "bye")
         assert len(errors) == 1
-        assert "closed unexpectedly" in errors[0]
+        # A close before the stop is a failure, worded as what it is and never
+        # as an HTTP status, whatever its code.
+        assert "closed by the service (code 1000: bye)" in errors[0]
+        assert "HTTP" not in errors[0]
         with pytest.raises(TranscriptionError):
             transcriber.stop_stream()
+
+    def test_a_lost_connection_in_the_middle_of_a_dictation_is_reported(
+        self, monkeypatch
+    ):
+        errors: list[str] = []
+        transcriber = _transcriber(monkeypatch)
+        ws = _start(transcriber, on_error=errors.append)
+        ws.lose_connection()
+        assert len(errors) == 1
+        assert "Connection to remote host was lost" in errors[0]
+        transcriber.abort_stream()
+
+    @pytest.mark.parametrize(
+        ("status", "shows"),
+        [
+            (401, "API key was refused (HTTP 401)"),
+            (403, "API key was refused (HTTP 403)"),
+            (402, "balance or budget is used up (HTTP 402)"),
+            (429, "too many requests or sessions at once (HTTP 429)"),
+            (503, "service is not available (HTTP 503)"),
+            (404, "service refused the connection (HTTP 404)"),
+        ],
+    )
+    def test_a_refused_handshake_is_a_sentence_and_never_the_header_dump(
+        self, monkeypatch, caplog, status, shows
+    ):
+        caplog.set_level(logging.DEBUG)
+        _FakeApp.open_error = WebSocketBadStatusException(
+            f"Handshake status {status} -+-+- {{'date': 'x', 'x-echo': '{_KEY}'}}",
+            status,
+        )
+        transcriber = _transcriber(monkeypatch, region="eu")
+        with pytest.raises(TranscriptionError) as raised:
+            transcriber.start_stream()
+        text = str(raised.value)
+        assert shows in text
+        assert "Handshake status" not in text
+        assert "{" not in text
+        assert _KEY not in text and _KEY not in caplog.text
+        if status in (401, 403):
+            assert "Region on the Providers tab" in text
+            assert "stt-rt.eu.soniox.com" in text
+
+    def test_a_refused_handshake_reaches_the_error_callback_as_a_sentence_too(
+        self, monkeypatch
+    ):
+        errors: list[str] = []
+        _FakeApp.open_error = WebSocketBadStatusException(
+            "Handshake status 401 Unauthorized -+-+- {'date': 'x'}", 401
+        )
+        transcriber = _transcriber(monkeypatch)
+        with pytest.raises(TranscriptionError):
+            transcriber.start_stream(on_error=errors.append)
+        assert all("{" not in e and "Handshake" not in e for e in errors)
 
     def test_an_error_after_text_returns_the_text_and_not_the_error(self, monkeypatch):
         transcriber = _transcriber(monkeypatch)
@@ -575,3 +688,116 @@ class TestSonioxStreamingAbort:
         _FakeApp.never_opens = False
         _start(transcriber)
         transcriber.abort_stream()
+
+
+class TestSonioxStreamingEnd:
+    """What websocket-client 1.9.2 really does: `on_error` with the close
+    exception for EVERY server close frame (a normal one too), then `on_close`."""
+
+    def _session(self, transcriber):
+        return transcriber._stream_session
+
+    def test_a_stop_without_any_token_ends_in_no_text_and_no_error(self, monkeypatch):
+        transcriber = _transcriber(monkeypatch)
+        _start(transcriber)
+        session = self._session(transcriber)
+        _FakeApp.end_reply = [_tokens(finished=True)]
+
+        assert transcriber.stop_stream() == ""
+        assert session._error is None
+
+    def test_a_stop_with_text_returns_it_and_records_no_error(
+        self, monkeypatch, caplog
+    ):
+        caplog.set_level(logging.WARNING)
+        transcriber = _transcriber(monkeypatch)
+        _start(transcriber)
+        session = self._session(transcriber)
+        _FakeApp.end_reply = [
+            _tokens(_token("Hallo", True)),
+            _tokens(finished=True),
+        ]
+
+        assert transcriber.stop_stream() == "Hallo"
+        assert session._error is None
+        assert "last words may be missing" not in caplog.text
+
+    def test_a_normal_close_without_finished_during_the_stop_is_not_a_failure(
+        self, monkeypatch
+    ):
+        transcriber = _transcriber(monkeypatch)
+        _start(transcriber)
+        _FakeApp.end_reply = [_tokens(_token("Eins", True))]
+        assert transcriber.stop_stream() == "Eins"
+
+    def test_a_reset_during_the_stop_without_text_raises_a_sentence(self, monkeypatch):
+        transcriber = _transcriber(monkeypatch)
+        _start(transcriber)
+        _FakeApp.end_reply = []
+        _FakeApp.end_close = "reset"
+        with pytest.raises(TranscriptionError, match="Connection to remote host"):
+            transcriber.stop_stream()
+
+    def test_a_reset_during_the_stop_with_text_returns_it_and_warns_once(
+        self, monkeypatch, caplog
+    ):
+        caplog.set_level(logging.WARNING)
+        transcriber = _transcriber(monkeypatch)
+        ws = _start(transcriber)
+        ws.deliver(_tokens(_token("Schon da", True)))
+        _FakeApp.end_reply = []
+        _FakeApp.end_close = "reset"
+
+        assert transcriber.stop_stream() == "Schon da"
+        assert caplog.text.count("last words may be missing") == 1
+
+    def test_an_abnormal_close_during_the_stop_is_a_failure(self, monkeypatch, caplog):
+        caplog.set_level(logging.WARNING)
+        transcriber = _transcriber(monkeypatch)
+        _start(transcriber)
+        _FakeApp.end_reply = []
+        _FakeApp.end_close = "abnormal"
+        with pytest.raises(TranscriptionError, match="code 1011"):
+            transcriber.stop_stream()
+
+    def test_a_send_error_while_draining_is_a_failure(self, monkeypatch):
+        transcriber = _transcriber(monkeypatch)
+        ws = _start(transcriber)
+
+        def broken(payload, opcode=None):
+            raise ConnectionResetError("reset by peer")
+
+        ws.send = broken
+        transcriber.push_audio_chunk(_PCM)
+        _wait_for(lambda: transcriber._stream_session._error is not None)
+        with pytest.raises(TranscriptionError, match="reset by peer"):
+            transcriber.stop_stream()
+
+    def test_errors_after_the_sessions_own_close_are_ignored(self, monkeypatch):
+        errors: list[str] = []
+        transcriber = _transcriber(monkeypatch)
+        ws = _start(transcriber, on_error=errors.append)
+        session = self._session(transcriber)
+        transcriber.abort_stream()
+
+        ws.on_error(ws, _close_exception(1006, "gone"))
+        ws.on_error(ws, ConnectionResetError("late"))
+        ws.on_close(ws, 1006, "gone")
+
+        assert errors == []
+        assert session._error is None
+
+    def test_errors_after_the_stop_closed_the_socket_are_ignored(self, monkeypatch):
+        errors: list[str] = []
+        transcriber = _transcriber(monkeypatch)
+        ws = _start(transcriber, on_error=errors.append)
+        session = self._session(transcriber)
+        _FakeApp.end_reply = None
+        monkeypatch.setattr(soniox_stream, "_FINISH_WAIT_S", 0.1)
+        transcriber.stop_stream()
+
+        ws.on_error(ws, ConnectionResetError("late"))
+        ws.on_close(ws, 1006, "late")
+
+        assert errors == []
+        assert session._error is None

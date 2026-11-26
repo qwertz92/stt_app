@@ -624,8 +624,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     because the job may still complete; a completed job whose transcript could
     not be fetched keeps both, and the error names the job id and the 30 days.
     So **when the app quits during a job, that recording's audio and transcript
-    stay on Soniox for up to 30 days**. A refused deletion is only logged
+    stay on Soniox for up to 30 days**. **The deletions run after the text is
+    returned**, on a daemon thread (`stt_app_soniox_cleanup`) with the same
+    15 s bound per request: they cost the dictation nothing (a server that
+    answered DELETE slowly had held a 0.2 s dictation back by 30 s). The
+    price is that **a quit while the cleanup thread runs leaves whatever it had
+    not deleted yet** (the transcription, the file, or both, in that order) on
+    Soniox for up to 30 days, like a quit during a job. A refused deletion is only logged
     (`soniox_cleanup_failed`, key scrubbed), never an error of the dictation.
+    What Soniox keeps of a transcript is documented twice: objects are
+    deleted after 30 days, and a transcript is kept "for a limited window"
+    whose length no page gives; the app does not rely on either figure.
   - **The loop is `_job_poll.poll_job`, the transcript fetch
     `fetch_with_retries`** (`SONIOX_BATCH_MAX_WAIT_S` 1800 s, one poll per
     second, three consecutive failed fetches, the shutdown flag, the job id in
@@ -637,7 +646,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     A chosen language is sent as `language_hints: [code]` with
     `language_hints_strict: true` ("rely more on language hints"), because
     choosing German in the app means German; **unverified live** how strict
-    changes the result. Chinese is `zh`.
+    changes the result. Chinese is `zh`. **The vendor does not say whether
+    `stt-async-v6` or `stt-rt-v6` accept the flag** (its models page lists it
+    per model, v6 is not listed; a model without it answers 400 "Model does
+    not support language_hints_strict"). Batch: a 400 whose message names
+    the flag is repeated once without it (hints stay, one WARNING), nothing
+    else is retried. Streaming does not retry: by the time the error frame
+    arrives the audio already sent is gone, so a refusal fails the session
+    with the vendor's sentence (recorded as unverified below).
   - **Custom vocabulary** is `context.terms` (up to 8,000 tokens, about
     10,000 characters for the whole context, else `invalid_request`):
     `soniox_provider.fit_terms` keeps the terms that fit 8,000 characters in
@@ -725,12 +741,30 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     discarded).
   - **Errors** are a message with `error_code`, `error_type`, `error_message`,
     after which the server closes: 401/403 say the key is invalid or from a
-    project in another region (naming the host), 402 says the balance or budget
+    project in another region than the Region on the Providers tab (the host
+    in brackets), 402 says the balance or budget
     is used up, the rest quote the vendor's sentence with its type and code
     (408 `request_timeout`, 413 `max_duration_reached`, 429, 503). All go to the
     controller's error callback once, key scrubbed (plain and JSON-escaped); a
-    certificate failure gets the shared guidance; a close that nobody asked
-    for is reported as "closed unexpectedly".
+    certificate failure gets the shared guidance. **A refused handshake** is
+    a sentence by its HTTP status (401/403 key refused, with the Region
+    hint; 402 budget; 429 too many requests or sessions; 5xx the service;
+    else "the service refused the connection (HTTP N)"), never the
+    library's header dump.
+  - **How websocket-client reports a close** (1.9.2, `_app.py`): `on_error`
+    is called for EVERY close frame of the server, a normal one included,
+    with a `WebSocketConnectionClosedException` that has `status_code` and
+    `reason` (a lost connection is the same class without them), and only
+    then `on_close`. The vendor closes the socket itself after `finished`,
+    so that is the normal end of every stop. Rules: after `finished`, or
+    while stopping, a close with code 1000/1001/none is not a failure and
+    only ends the wait; before the stop a close is a failure worded "the
+    connection was closed by the service (code N: reason)", never as an
+    HTTP status; a socket error or close after the session's own close
+    (a flag set just before it) is a non-event; a real failure during the
+    stop (reset, abnormal code, send error) raises when there is no text,
+    and with text returns it and logs one warning that the last words may
+    be missing.
   - **Sessions are objects**: `SonioxStreamSession` is one session and the
     transcriber holds the current one, so a callback of an earlier session
     cannot touch a later one. A stop or abort during the handshake closes the
@@ -742,7 +776,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     for Deepgram) and the socket-path cases of `tests/test_sdk_key_scrub.py`.
   - **Unverified live**: the shape of real token messages, that `<end>` never
     appears without an endpoint request, the real close behaviour after the
-    end-of-stream frame, how fast `finished` arrives, German quality.
+    end-of-stream frame (the library's side was run against a local
+    server, the vendor's was not), how fast `finished` arrives, whether
+    `stt-rt-v6` accepts `language_hints_strict` (not retried in streaming),
+    German quality.
 - **OpenRouter is an engine of its own on the custom endpoint's code
   (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
   own entry and key, so "Custom endpoint" stays free for something else).**

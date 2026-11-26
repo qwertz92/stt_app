@@ -94,9 +94,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   session cannot touch a later one; the session is published before the
   handshake so a stop or an abort during it closes the socket and makes
   `start_stream` raise. Final tokens arrive once and are kept, the
-  non-final tokens of each message replace the provisional tail, so the
-  text handed to the controller only grows when words are confirmed
-  (append-only insertion is the controller's, as for Deepgram).
+  non-final tokens of each message replace the provisional tail. The text
+  handed to the controller is the finals plus that tail, so the tail part
+  can change from one message to the next; only the finals never change
+  (append-only insertion and what it locks is the controller's, as for
+  Deepgram).
   `push_audio_chunk` is `put_nowait` on the PortAudio callback; the one
   sender thread writes audio and `{"type": "keepalive"}` (after 5 s of
   silence on the queue, because 20 s without a message ends the stream

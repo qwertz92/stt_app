@@ -85,8 +85,9 @@ _FINAL_HTTP_CODES = (401, 403, 404)
 # The bound of the requests that only tidy up or check the key.
 _SHORT_REQUEST_TIMEOUT_S = 15
 _RETENTION_NOTE = (
-    "Soniox keeps a transcription and its audio file for up to 30 days; the "
-    "transcript can be fetched from its API until then."
+    "Soniox deletes a transcription and its audio file itself after 30 days; "
+    "it also keeps a transcript only for a limited window whose length its "
+    "documentation does not give, so fetch it soon."
 )
 
 
@@ -261,10 +262,18 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
                 delete_transcription = delete_file = False
                 raise
         finally:
-            if delete_transcription:
-                self._delete(f"/transcriptions/{transcription_id}")
-            if delete_file:
-                self._delete(f"/files/{file_id}")
+            # After the text (or the error) is on its way: two round trips, and
+            # a slow server, must not delay the paste.
+            self._delete_in_background(
+                [
+                    *(
+                        [f"/transcriptions/{transcription_id}"]
+                        if delete_transcription
+                        else []
+                    ),
+                    *([f"/files/{file_id}"] if delete_file else []),
+                ]
+            )
 
     def _read_audio(self, audio_source: AudioInput) -> tuple[bytes, str]:
         if isinstance(audio_source, (bytes, bytearray)):
@@ -278,7 +287,8 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
             return (
                 f"{_PROVIDER}: Authentication failed (HTTP {exc.code}). The API "
                 "key is invalid or expired, or belongs to a project in another "
-                f"region than the one selected ({SONIOX_API_HOSTS[self._region]})."
+                "region than the Region selected on the Providers tab "
+                f"({SONIOX_API_HOSTS[self._region]})."
             )
         if exc.code == 402:
             return (
@@ -354,12 +364,67 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
         )
 
     def _create(self, file_id: str) -> str:
+        """`POST /transcriptions`.
+
+        The vendor does not document whether `stt-async-v6` accepts
+        `language_hints_strict` (its models page lists the flag per model, v6
+        is not listed); a model without it answers 400 naming the flag. That
+        one refusal is repeated once without the flag, the hints stay, so a
+        chosen language still works; nothing else is retried.
+        """
+        payload = self._create_payload(file_id)
+        try:
+            return self._post_create(payload)
+        except TranscriptionError as exc:
+            cause = exc.__cause__
+            if not (
+                "language_hints_strict" in payload
+                and isinstance(cause, urllib.error.HTTPError)
+                and cause.code == 400
+                and "language_hints_strict" in str(exc)
+            ):
+                raise
+        logger.warning(
+            "Soniox refused language_hints_strict; repeating the request once "
+            "without it (the language hint stays)."
+        )
+        del payload["language_hints_strict"]
+        return self._post_create(payload)
+
+    def _post_create(self, payload: dict[str, Any]) -> str:
         return self._post_for_id(
             "/transcriptions",
-            data=json.dumps(self._create_payload(file_id)).encode("utf-8"),
+            data=json.dumps(payload).encode("utf-8"),
             content_type="application/json",
             doing="transcription request",
         )
+
+    def _delete_in_background(self, paths: list[str]) -> None:
+        """Delete the objects on a daemon thread, in order, best effort.
+
+        The transcript is already in hand, so the cleanup runs after it is
+        returned, with the same bounds as before (15 s a request); nothing it
+        does reaches the dictation. A quit while it runs leaves what it had not
+        yet deleted on Soniox's side (docs/agents/remote-providers.md).
+        """
+        if not paths:
+            return
+
+        def run() -> None:
+            for path in paths:
+                self._delete(path)
+
+        try:
+            threading.Thread(
+                target=run, name="stt_app_soniox_cleanup", daemon=True
+            ).start()
+        except Exception:
+            logger.warning(
+                "soniox_cleanup_failed could not start the cleanup thread; "
+                "objects %s stay on Soniox until it deletes them itself.",
+                paths,
+                exc_info=True,
+            )
 
     def _delete(self, path: str) -> None:
         """Delete one object on Soniox's side, best effort.
@@ -456,7 +521,8 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
                 return False, (
                     f"Authentication failed (HTTP {exc.code}). The API key is "
                     "invalid or expired, or belongs to a project in another "
-                    f"region than the one selected ({SONIOX_API_HOSTS[self._region]})."
+                    "region than the Region selected on the Providers tab "
+                    f"({SONIOX_API_HOSTS[self._region]})."
                 )
             return (
                 False,

@@ -77,6 +77,32 @@ _SOCKET_CLOSE_TIMEOUT_S = 1.0
 # is never text.
 _MARKER_TOKENS = frozenset({"<end>", "<fin>"})
 _KEEPALIVE_MESSAGE = json.dumps({"type": "keepalive"})
+# Close codes of an orderly end ("normal", "going away") and no code at all.
+_NORMAL_CLOSE_CODES = (None, 1000, 1001)
+
+
+def _close_frame(error: Exception) -> tuple[bool, int | None, str]:
+    """Whether `error` is the library's report of a server close frame, with
+    the frame's code and reason. A lost connection (reset, no close frame) is
+    the same exception class without a `status_code` and is not a close frame."""
+    if type(error).__name__ != "WebSocketConnectionClosedException" or not hasattr(
+        error, "status_code"
+    ):
+        return False, None, ""
+    code = getattr(error, "status_code", None)
+    return (
+        True,
+        code if isinstance(code, int) else None,
+        str(getattr(error, "reason", "") or ""),
+    )
+
+
+def _handshake_status(error: Exception) -> int | None:
+    """The HTTP status of a refused handshake (`WebSocketBadStatusException`)."""
+    if type(error).__name__ != "WebSocketBadStatusException":
+        return None
+    status = getattr(error, "status_code", None)
+    return status if isinstance(status, int) else None
 
 
 class SonioxStreamSession:
@@ -112,6 +138,9 @@ class SonioxStreamSession:
         self._finished = threading.Event()
         self._sender_drained = threading.Event()
         self._error: Exception | None = None
+        # Set immediately before the session closes the socket itself: every
+        # later socket error and close is then a non-event.
+        self._own_close = False
         self._error_reported = False
         self._callback_failed = False
         self._parse_failed = False
@@ -124,12 +153,43 @@ class SonioxStreamSession:
     def _combined_locked(self) -> str:
         return "".join([*self._finals, self._partial]).strip()
 
-    def _format_error(self, error: Exception) -> str:
+    def _describe(self, error: Exception) -> str:
+        """The error as a sentence: certificate guidance, the handshake's HTTP
+        status as a sentence (never the library's header dump), or the scrubbed
+        text. The key is removed before anything is cut or shown."""
         if _is_ssl_error(error):
+            return format_ssl_error_message(_PROVIDER)
+        status = _handshake_status(error)
+        if status is not None:
+            return self._status_sentence(status)
+        return self._scrub(str(error))
+
+    def _status_sentence(self, status: int) -> str:
+        if status in (401, 403):
             return (
-                f"{_PROVIDER} streaming failed: {format_ssl_error_message(_PROVIDER)}"
+                f"the API key was refused (HTTP {status}). Check the key, and that "
+                "the Region on the Providers tab is the region of the Soniox "
+                f"project the key belongs to ({self._host})."
             )
-        return f"{_PROVIDER} streaming failed: {self._scrub(str(error))}"
+        if status == 402:
+            return f"the balance or budget is used up (HTTP {status})."
+        if status == 429:
+            return f"too many requests or sessions at once (HTTP {status})."
+        if status >= 500:
+            return f"the Soniox service is not available (HTTP {status})."
+        return f"the service refused the connection (HTTP {status})."
+
+    def _format_error(self, error: Exception) -> str:
+        return f"{_PROVIDER} streaming failed: {self._describe(error)}"
+
+    @staticmethod
+    def _closed_by_service(code: int | None, reason: str) -> TranscriptionError:
+        detail = "no code" if code is None else f"code {code}"
+        if reason:
+            detail = f"{detail}: {reason}"
+        return TranscriptionError(
+            f"the connection was closed by the service ({detail})"
+        )
 
     # -- errors -------------------------------------------------------------
 
@@ -169,7 +229,7 @@ class SonioxStreamSession:
             return TranscriptionError(
                 f"authentication failed (HTTP {code}): the API key is invalid or "
                 "expired, or belongs to a project in another region than the "
-                f"one selected ({self._host})"
+                f"Region selected on the Providers tab ({self._host})"
             )
         if code == 402:
             return TranscriptionError(
@@ -190,26 +250,46 @@ class SonioxStreamSession:
         self._connected.set()
 
     def _handle_error(self, ws, error) -> None:
+        """The library's error callback.
+
+        websocket-client calls it for EVERY close frame of the server, a
+        normal close (code 1000) included, with a
+        `WebSocketConnectionClosedException` that carries the frame's code,
+        and only then calls `on_close`. A close the session asked for, or one
+        that follows `finished` or comes while stopping with a normal code, is
+        therefore not a failure; anything else is.
+        """
         if not isinstance(error, Exception):
             error = RuntimeError(str(error))
-        self._record_error(error, notify=True)
+        if not self._own_close:
+            is_frame, code, reason = _close_frame(error)
+            with self._lock:
+                finished = self._finished.is_set()
+                ending = self._state == "ending"
+            if is_frame and (finished or (ending and code in _NORMAL_CLOSE_CODES)):
+                pass
+            else:
+                if is_frame:
+                    error = self._closed_by_service(code, reason)
+                self._record_error(error, notify=True)
         with self._lock:
             if self._state == "connecting":
                 self._connected.set()
 
-    def _handle_close(self, ws, _status, _reason) -> None:
+    def _handle_close(self, ws, status, reason) -> None:
         unexpected = None
         with self._lock:
             self._closed.set()
-            if (
-                self._state in ("connecting", "active")
-                and self._error is None
-                and not self._finished.is_set()
-            ):
-                unexpected = RuntimeError("WebSocket connection closed unexpectedly.")
-                self._error = unexpected
             if self._state == "connecting":
                 self._connected.set()
+            if not self._own_close and not self._finished.is_set():
+                normal = status in _NORMAL_CLOSE_CODES
+                if self._error is None and (
+                    self._state in ("connecting", "active")
+                    or (self._state == "ending" and not normal)
+                ):
+                    unexpected = self._closed_by_service(status, str(reason or ""))
+                    self._error = unexpected
         if unexpected is not None:
             self._notify(unexpected)
 
@@ -344,13 +424,8 @@ class SonioxStreamSession:
         self._close_socket(ws)
         thread.join(timeout=2.0)
         if failure is not None:
-            detail = (
-                format_ssl_error_message(_PROVIDER)
-                if _is_ssl_error(failure)
-                else self._scrub(str(failure))
-            )
             raise TranscriptionError(
-                f"{_PROVIDER} streaming failed to connect: {detail}"
+                f"{_PROVIDER} streaming failed to connect: {self._describe(failure)}"
             ) from failure
         if state != "connecting":
             raise TranscriptionError(
@@ -503,7 +578,7 @@ class SonioxStreamSession:
         socket that closed without it ends the wait too."""
         deadline = time.monotonic() + _FINISH_WAIT_S
         while not self._finished.is_set():
-            if self._closed.is_set():
+            if self._closed.is_set() or self._error is not None:
                 return True
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -512,6 +587,10 @@ class SonioxStreamSession:
         return True
 
     def _close_socket(self, ws) -> None:
+        # Before the close starts, so no callback of it can be taken for a
+        # failure of the service.
+        self._own_close = True
+
         def close() -> None:
             try:
                 ws.close()
@@ -587,6 +666,12 @@ class SonioxStreamSession:
                 self._state = "closed"
         if error is not None and not text:
             raise TranscriptionError(self._format_error(error)) from error
+        if error is not None:
+            logger.warning(
+                "Soniox streaming failed while stopping (%s); the text received "
+                "is returned, but the last words may be missing.",
+                self._describe(error),
+            )
         return text
 
     def abort(self) -> None:

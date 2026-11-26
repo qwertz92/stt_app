@@ -3,6 +3,30 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: Soniox review round: a normal close read as a failure, deletes in the paste path
+
+Structurally: the Soniox stream treats a close frame by when it comes, the batch deletes run after
+the text is returned, and the region pickers are one width with names.
+
+- **A stop without speech ended in an error.** websocket-client 1.9.2 calls `on_error` for every
+  close frame of the server, a normal one (code 1000) included, with a close exception that has
+  `status_code` and `reason`, and only then `on_close`. The vendor closes the socket itself after
+  `finished`, so every stop met it: the session stored it as its error and `stop()` raised for a
+  dictation with no text. Found by running the session against a local server with the real
+  library (3 of 3); my fake socket only called `on_close`, so no test could see it. The fake now
+  delivers what the library delivers. A lost connection is the same exception class without
+  `status_code`, which is how a reset is told from a normal close.
+- **The deletes delayed the paste.** Two DELETE round trips ran before the text was returned; a
+  server that answered them slowly held a 0.2 s dictation back by 30 s. They run on a daemon
+  thread now; a quit while it runs leaves what it had not deleted on Soniox for up to 30 days.
+- **A refused handshake showed the library's header dump**; it is a sentence by HTTP status now.
+- **`language_hints_strict` is undocumented for v6.** A 400 naming the flag is repeated once
+  without it in batch; streaming is not retried (the audio sent is gone by then), recorded as
+  unverified.
+- **Region pickers**: one width (the widest entry, 165 px), an accessible name each, "region" in
+  every entry; the first wording ("Automatic region (default)") pushed the dialog minimum to 864 px,
+  over the 860 px default, so it is "Auto region (default)". Minimum 801, then 827, now 842 px.
+
 ## 2026-11-26: Soniox as the `soniox` engine (batch, then realtime)
 
 Structurally: a new cloud engine, `soniox`, built to Soniox's own documentation and OpenAPI schema
