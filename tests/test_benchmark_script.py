@@ -686,7 +686,7 @@ def test_every_local_model_is_dispatchable_by_the_benchmark(monkeypatch, tmp_pat
     table written twice.
     """
     from stt_app import local_benchmark
-    from stt_app.config import CANARY_MODEL_SIZE, VALID_MODEL_SIZES
+    from stt_app.config import VALID_MODEL_SIZES
 
     def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
         return local_benchmark.BenchmarkCase(
@@ -710,40 +710,19 @@ def test_every_local_model_is_dispatchable_by_the_benchmark(monkeypatch, tmp_pat
     audio.write_bytes(b"RIFF")
 
     for model_name in VALID_MODEL_SIZES:
-        # Canary deliberately refuses to guess a language; give it one.
-        language = "en" if model_name == CANARY_MODEL_SIZE else None
         cases = local_benchmark.run_benchmark_cases(
             audio_path=audio,
             model_names=[model_name],
             runs=1,
             warmup=False,
             device="cpu",
-            language=language,
+            language=None,
         )
         assert cases, model_name
         for case in cases:
             assert "is unknown" not in str(case.error or ""), (
                 f"{model_name}: {case.error}"
             )
-
-
-def test_canary_refuses_to_benchmark_without_a_language(tmp_path):
-    """Defaulting a language cannot be right: the sample's language is not
-    knowable, and a wrong one makes Canary translate, so the benchmark would
-    store the translation as the transcript."""
-    import pytest as _pytest
-
-    from stt_app.config import CANARY_MODEL_SIZE
-    from stt_app.local_benchmark import _run_onnx_case
-
-    with _pytest.raises(ValueError, match="cannot detect the language"):
-        _run_onnx_case(
-            audio_path=tmp_path / "clip.wav",
-            model_name=CANARY_MODEL_SIZE,
-            runs=1,
-            language=None,
-            warmup=False,
-        )
 
 
 def _runners_that_record_their_calls(monkeypatch) -> list[str]:
@@ -809,10 +788,8 @@ def test_an_english_only_model_is_not_run_in_another_language(tmp_path, monkeypa
 )
 def test_a_blank_language_is_no_language(tmp_path, monkeypatch, given, received):
     """`--language " "` is a truthy string, so `language or default` kept it:
-    the English-only guard refused the model for "the language '  '", and
-    Canary's `not language` check let it through to a runtime that maps an
-    unknown code onto a trained one -- the translation that check exists to
-    prevent. The runner reads the language once, and blank is none."""
+    the English-only guard refused the model for "the language '  '". The
+    runner reads the language once, and blank is none."""
     seen: list[object] = []
 
     def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
@@ -930,7 +907,7 @@ def test_ctrl_c_during_a_case_sets_the_flag_the_model_polls():
     threading.Thread.join = _join_that_interrupts
     try:
         with pytest.raises(KeyboardInterrupt):
-            module._run_case_threaded({"model_name": "canary-1b-v2"})
+            module._run_case_threaded({"model_name": "parakeet-tdt-0.6b-v3"})
     finally:
         threading.Thread.join = real_join
         module._cancel_requested.clear()

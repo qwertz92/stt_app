@@ -15,7 +15,6 @@ from typing import Any
 from . import local_runtime_support
 from .benchmark_environment import BenchmarkEnvironment, text_or_empty
 from .config import (
-    CANARY_MODEL_SIZE,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_GRANITE_CTC_MODEL_SIZES,
     LOCAL_MODEL_RUNTIME,
@@ -401,18 +400,6 @@ def _run_onnx_case(
 
     total_steps = runs + (1 if warmup else 0)
     step = 0
-    # Canary has no auto-detect: onnx-asr hardcodes the source/target token, so
-    # a wrong language makes it *translate* and the benchmark would record the
-    # translation as the transcript. Defaulting cannot be right here — the
-    # sample's language is not knowable — so refuse instead of guessing.
-    # (Picking "the model's first declared mode" looked like a fix but is a
-    # no-op for Canary, whose first mode is "de".)
-    if model_name == CANARY_MODEL_SIZE and not language:
-        raise ValueError(
-            "Canary cannot detect the language. Choose the language spoken in "
-            "the sample before benchmarking it; with the wrong one this model "
-            "translates instead of transcribing."
-        )
     # Parakeet ignores the language and only offers "auto"; the Granite CTC
     # graph detects the language itself and offers "auto" for the same reason.
     default_language = (
@@ -768,9 +755,7 @@ def run_benchmark_cases(
 
     # Read once, and blank is no language. The CLI's `--language " "` is a
     # truthy string: every `language or default` below kept it, the
-    # English-only guard refused its model for "the language '  '", and
-    # Canary's `not language` check let it through to a runtime that maps an
-    # unknown code onto a trained one.
+    # English-only guard refused its model for "the language '  '".
     language = (str(language).strip() or None) if language is not None else None
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []

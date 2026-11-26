@@ -296,7 +296,7 @@ Tones: replace `winsound.Beep` by playing a short generated sine wave through `s
 | Runtime | Linux status |
 | --- | --- |
 | faster-whisper / CTranslate2 | Pure Python wheel over `ctranslate2`; CPU works with the lock **[M]**. NVIDIA GPU needs CUDA libraries (nixpkgs has a CUDA variant of ctranslate2 **[M]**, unfree). |
-| onnx-asr (Parakeet, Canary) and Granite CTC | Pure Python + onnxruntime CPU; lock resolves onnxruntime 1.30.0 **[M]**. |
+| onnx-asr (Parakeet, Fluid Speech Pro) and Granite CTC | Pure Python + onnxruntime CPU; lock resolves onnxruntime 1.30.0 **[M]**. |
 | Nemotron (`onnxruntime-genai`) | Wheels exist for Linux x86_64 and aarch64, cp312, `manylinux_2_28`, `requires onnxruntime>=1.30.0` **[V]** (PyPI JSON for 0.16.0). The `pyproject.toml` marker `platform_system == 'Windows'` must change; DirectML preference becomes CUDA or CPU. |
 | Node path (Cohere, Granite 4.x via Transformers.js) | `onnxruntime-node` 1.29.0 ships `linux/x64` and `linux/arm64` binaries **[V]** (unpkg listing). Whether WebGPU works there is **[U]**; Node code looks for `node.exe` and Program Files. Treat as CPU-only until measured; phase 4. |
 | Settings: device policies `dml`, `webgpu`, "ONNX Device" | Labels and defaults assume DirectML; Linux needs `cpu` (and `cuda` later). |

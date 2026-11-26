@@ -2368,7 +2368,7 @@ class DictationController(QtCore.QObject):
             ):
                 if self._settings.engine == DEFAULT_ENGINE:
                     # Any batch-only *local* model, not just the ONNX/WebGPU
-                    # ones: Parakeet and Canary are batch-only too and fell
+                    # ones: Parakeet is batch-only too and fell
                     # into the branch below, which told a user who is already
                     # on the local engine to "use local".
                     # Named as the pickers name it: the raw settings id
@@ -11450,8 +11450,8 @@ class DictationController(QtCore.QObject):
         recording this process has no language for (the store refused its
         write, an id from an earlier run), and a language the current engine
         and model do not offer. Passed on, the latter would reach the
-        provider's own normalization, which picks a stand-in -- for Canary the
-        first language of its list, so a translation; the selection is one
+        provider's own normalization, which picks a stand-in -- for Cohere
+        German; the selection is one
         the user picked for the engine in use, and where the saved selection is
         not offered either, the engine's first language
         (`_language_a_retry_runs_in`). The overlay says which applied.
@@ -11532,8 +11532,7 @@ class DictationController(QtCore.QObject):
         (`_retry_settings`) and the one after a restart
         (`transcribe_unfinished_recording`). A language the engine does not
         offer is never passed on: the provider's own normalization would
-        substitute one -- for Canary the first language of its list, so the
-        audio is translated, for Cohere German -- and a wrong
+        substitute one -- for Cohere German -- and a wrong
         transcript in History is worse than the language the user selected
         for this engine, which is what stays. Logged, once per decision.
         """

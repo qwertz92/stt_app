@@ -49,7 +49,7 @@ Windows' x64 emulation. To run from source in a native ARM64 Python instead,
 use `uv` (the pip route cannot skip CTranslate2): CTranslate2 has no ARM64
 build, so the faster-whisper models (`small` to `distil-large-v3.5`) show as
 `[unavailable]` and are never downloaded. Granite (the default is
-Granite TurboCTC), Parakeet, Canary, Nemotron and every cloud engine need nothing that lacks an ARM64
+Granite TurboCTC), Parakeet, Nemotron and every cloud engine need nothing that lacks an ARM64
 build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
 22 or newer; an ARM64 `.msi` exists, and an x64 Node runs under emulation too.
 
@@ -79,7 +79,7 @@ Right-click the **system tray icon** → **Settings**.
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
+| Model size | Which local model transcribes. `granite-5.0-470m-turboctc-multi` is fast and accurate in its seven languages and needs no GPU; Parakeet covers 25 European languages; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Granite, Parakeet, Cohere are batch-only | `granite-5.0-470m-turboctc-multi` |
 | Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter, Custom endpoint (OpenAI-compatible) | Local |
 | Mode | Batch (after stop) or Streaming (live; experimental except local Nemotron) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
@@ -90,7 +90,7 @@ Right-click the **system tray icon** → **Settings**.
 
 There are five local families. **GPU-accelerated ONNX models** (Cohere, IBM
 Granite) run on the GPU via WebGPU, need Node.js, and are batch-only.
-**onnx-asr models** (Parakeet, Fluid Speech Pro, Canary) are pure Python, CPU
+**onnx-asr models** (Parakeet, Fluid Speech Pro) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
 model here that transcribed the benchmark recording correctly, and Fluid
 Speech Pro measured German 3.3 % and English 3.6 % against its 6.5 % and
@@ -111,7 +111,6 @@ also support streaming.
 | High accuracy, punctuated text, on a GPU | `granite-speech-5.0-2b` | ONNX/WebGPU q4 | ~1.73 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
 | 25 European languages, no GPU or Node.js | `parakeet-tdt-0.6b-v3` | onnx-asr int8 | ~670 MB |
-| German accuracy above Parakeet, 25 explicit languages, CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |

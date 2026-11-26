@@ -14,7 +14,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
-| Local (`faster-whisper`, Parakeet, Canary, Cohere, Granite, Nemotron) | Batch + Streaming (model-dependent) | see [models.md](models.md) | No API fee | $0 API cost (hardware/power only) |
+| Local (`faster-whisper`, Parakeet, Cohere, Granite, Nemotron) | Batch + Streaming (model-dependent) | see [models.md](models.md) | No API fee | $0 API cost (hardware/power only) |
 | AssemblyAI | Batch | AssemblyAI-STT-3.7 or Universal-2 (explicit selection; no fallback) | STT-3.7: $0.21/hour ([models page](https://www.assemblyai.com/llms/models.md), read 2026-11-24), U2: $0.15/hour ([pricing](https://www.assemblyai.com/pricing), checked 2026-09-21) | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | AssemblyAI-STT-3.7-Realtime (launched 2026-11-17, 32 languages, keyterms included) | $0.30/hour ([models page](https://www.assemblyai.com/llms/models.md), read 2026-11-24; Universal-3.6 Pro was $0.45/hour) | $0.30/hour |
 | OpenAI | Batch | `gpt-transcribe` only (`gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, `whisper-1` are removed from the app; OpenAI removes them 2027-02-26) | `gpt-transcribe`: $0.0045/min ([model page](https://developers.openai.com/api/docs/models/gpt-transcribe), read 2026-11-24); the retired `gpt-4o-mini-transcribe` was $0.003/min and `whisper-1` $0.006/min (checked 2026-09-21) | $0.27/hour |

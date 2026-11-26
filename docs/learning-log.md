@@ -3,6 +3,22 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: Canary 1B v2 retired, successor Fluid Speech Pro
+
+Structurally: `canary-1b-v2` moved from the roster into `RETIRED_LOCAL_MODEL_SUCCESSORS` /
+`RETIRED_LOCAL_MODEL_REPOS`; the Canary-only code went with it (language list, no-Auto guards, layout,
+warnings), so every onnx-asr model is now Auto-only.
+
+- Why (owner's decision): Fluid Speech Pro is better in both languages (3.25 / 3.57 against 3.66 /
+  5.45), the TurboCTC is about six times faster at 4.27 / 4.14, and Parakeet v3 covers the same 25
+  languages faster. No capability was lost: Canary's "translation" was the failure mode of onnx-asr's
+  hardcoded `<|en|>` token, which the app only guarded against.
+- Side effect found by the layout test: with nine offered models the Models tab's list kept only three
+  rows to give up when a download's status area appeared, and a four-line error path made the page
+  scroll. The list's minimum is five rows now.
+- Tests that used Canary as "the model without Auto" (retry language rule, retranscribe note) use
+  Cohere, which is the same in the respect they test.
+
 ## 2026-11-26: the multilingual TurboCTC is the default model of new installs
 
 Structurally: `config.DEFAULT_MODEL_SIZE` is `GRANITE_CTC_MODEL_SIZE` (declared next to it now); every

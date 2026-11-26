@@ -43,7 +43,6 @@ import stt_app.main as main_module
 from stt_app import clipboard_copy
 from stt_app.app_paths import ARCHIVED_RECORDING_NAME_RE, KEPT_RECORDING_NAME_RE
 from stt_app.config import (
-    CANARY_MODEL_SIZE,
     CLIPBOARD_RESTORE_DELAY_S,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     FALLBACK_HOTKEY,
@@ -3989,8 +3988,8 @@ def test_a_dying_streams_recording_is_retried_in_its_language(monkeypatch, tmp_p
 @pytest.mark.parametrize(
     ("recorded", "expected"),
     [
-        # Canary never offers Auto and would translate into English instead of
-        # transcribing: the recorded Auto is not sent, the selected German is.
+        # Cohere never offers Auto: the recorded Auto is not sent, the
+        # selected German is.
         pytest.param("auto", "de", id="recorded language not offered"),
         pytest.param("en", "en", id="recorded language offered"),
     ],
@@ -4000,7 +3999,7 @@ def test_retry_keeps_the_recorded_language_only_where_the_engine_offers_it(
 ):
     """The engine the user retries with may not offer the language the audio
     was recorded in. Passed on, a provider's own normalization picks a
-    stand-in (for Canary the first language of its list, a translation); the
+    stand-in (for Cohere German); the
     language selected now is one the user picked for that engine."""
     caplog.set_level(logging.INFO)
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
@@ -4009,7 +4008,7 @@ def test_retry_keeps_the_recorded_language_only_where_the_engine_offers_it(
     token = _record_and_stop(controller)
     controller._on_transcription_failed("boom", request_token=token)
     controller._settings = replace(
-        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+        controller._settings, model_size="cohere-transcribe-03-2026", language_mode="de"
     )
 
     assert controller.retry_last_transcription() is True
@@ -4058,7 +4057,7 @@ def test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_ei
     _ = app
 
 
-def _a_retry_under_canary_that_finished(
+def _a_retry_under_cohere_that_finished(
     monkeypatch,
     tmp_path,
     *,
@@ -4088,7 +4087,7 @@ def _a_retry_under_canary_that_finished(
     controller._on_transcription_failed("boom", request_token=token)
     audio = controller._last_failed_wav_bytes
     controller._settings = replace(
-        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+        controller._settings, model_size="cohere-transcribe-03-2026", language_mode="de"
     )
     tray: list[str] = []
     controller.busy_overlay_error.connect(tray.append)
@@ -4116,7 +4115,7 @@ def test_a_fallback_retry_keeps_its_audio_in_the_recordings_folder_and_links_it(
     Retranscribe takes a language there. The managed slot completes as for
     any success."""
     controller, app, tray, history, audio, recordings = (
-        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
+        _a_retry_under_cohere_that_finished(monkeypatch, tmp_path, recorded="auto")
     )
 
     [entry] = history.load()
@@ -4155,7 +4154,7 @@ def test_the_fallback_notice_comes_after_the_history_entry(
     # bound yet when the notice arrives: read the same file.
     history_file = TranscriptHistoryStore(tmp_path / "history.json")
     controller, app, tray, history, audio, _recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch,
             tmp_path,
             recorded="auto",
@@ -4217,7 +4216,7 @@ def test_a_refused_history_write_leaves_a_fallback_retrys_audio_to_the_managed_r
     deleted, from whichever folder it sits in. The notice says the transcript
     was not saved and that the last recording is what is kept."""
     controller, app, tray, history, _audio, recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch,
             tmp_path,
             recorded="auto",
@@ -4258,7 +4257,7 @@ def test_a_refused_history_write_keeps_a_fallback_retrys_copy_the_slot_cannot_ho
     file. The newer dictation's recording is not relabeled."""
     caplog.set_level(logging.WARNING)
     controller, app, tray, history, audio, recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch,
             tmp_path,
             recorded="auto",
@@ -4307,7 +4306,7 @@ def test_a_refused_history_write_and_a_refused_copy_keep_the_secured_audio(
         monkeypatch.setattr(controller._unfinished_recording_store, "save", _refuse)
 
     controller, app, tray, history, audio, recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch,
             tmp_path,
             recorded="auto",
@@ -4336,7 +4335,7 @@ def test_the_kept_audio_survives_the_next_start_and_the_next_dictation(
     failed recording recoverable with its transcript already in History and
     completes it (deleting the WAV), and the next dictation replaces it."""
     controller, app, _tray, history, audio, _recordings = (
-        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="auto")
+        _a_retry_under_cohere_that_finished(monkeypatch, tmp_path, recorded="auto")
     )
     [entry] = history.load()
     kept = Path(entry.source_audio_path)
@@ -4362,11 +4361,11 @@ def test_the_kept_audio_survives_the_next_start_and_the_next_dictation(
 
 
 def test_a_retry_in_the_recorded_language_keeps_no_extra_copy(monkeypatch, tmp_path):
-    """Negative control: English is offered by Canary, so nothing fell back.
+    """Negative control: English is offered by Cohere, so nothing fell back.
     Retention settings decide as before: no copy, no link, no notice, and the
     managed recording is completed (deleted unless kept)."""
     controller, app, tray, history, _audio, recordings = (
-        _a_retry_under_canary_that_finished(monkeypatch, tmp_path, recorded="en")
+        _a_retry_under_cohere_that_finished(monkeypatch, tmp_path, recorded="en")
     )
 
     [entry] = history.load()
@@ -4403,7 +4402,7 @@ def test_a_fallback_retry_says_so_when_its_audio_could_not_be_kept(
     token = _record_and_stop(controller)
     controller._on_transcription_failed("boom", request_token=token)
     controller._settings = replace(
-        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+        controller._settings, model_size="cohere-transcribe-03-2026", language_mode="de"
     )
 
     def _refuse(*_args, **_kwargs):
@@ -4453,7 +4452,7 @@ def test_the_no_copy_notice_does_not_promise_a_recording_a_newer_dictation_repla
         monkeypatch.setattr(controller._unfinished_recording_store, "find", _refuse)
 
     controller, app, tray, history, _audio, _recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch,
             tmp_path,
             recorded="auto",
@@ -4895,7 +4894,7 @@ def test_a_fallback_retry_with_a_gap_keeps_one_copy(monkeypatch, tmp_path):
     """Both reasons to keep the audio at once: the copy the fallback made is
     the one the entry links, and the gap does not make a second."""
     controller, app, _tray, history, audio, recordings = (
-        _a_retry_under_canary_that_finished(
+        _a_retry_under_cohere_that_finished(
             monkeypatch, tmp_path, recorded="auto", text=_GAP_TEXT
         )
     )

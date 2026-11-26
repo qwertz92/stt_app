@@ -1247,9 +1247,9 @@ def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
 
 
 def test_language_note_names_the_selected_model_family(dialog):
-    """Canary joined LOCAL_EXPLICIT_LANGUAGE_MODELS and inherited Granite's
-    hint, which told the user Auto was available — the exact behaviour the
-    model must never have."""
+    """Cohere is in LOCAL_EXPLICIT_LANGUAGE_MODELS beside Granite 5.0 2B and
+    must not inherit Granite's hint, which tells the user Auto is available —
+    the exact behaviour the model must never have."""
     dialog.show()
     index = dialog.engine_combo.findData("local")
     dialog.engine_combo.setCurrentIndex(index)
@@ -1261,9 +1261,12 @@ def test_language_note_names_the_selected_model_family(dialog):
         QtWidgets.QApplication.processEvents()
         return dialog.language_note_label.text()
 
-    canary_note = note_for("canary-1b-v2")
-    assert "Granite" not in canary_note
-    assert "translat" in canary_note.lower()
+    cohere_note = note_for("cohere-transcribe-03-2026")
+    assert "Granite" not in cohere_note
+    assert (
+        "no automatic" in cohere_note.lower()
+        or "not provide automatic" in cohere_note.lower()
+    )
 
     granite_note = note_for("granite-speech-5.0-2b")
     assert "Granite" not in granite_note
@@ -1433,7 +1436,7 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
     _ = app
 
 
-@pytest.mark.parametrize("downloaded", [1, 8, 10])
+@pytest.mark.parametrize("downloaded", [1, 8, 9])
 def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
     dialog: SettingsDialog,
     downloaded: int,

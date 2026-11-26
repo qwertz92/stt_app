@@ -5,7 +5,6 @@ from __future__ import annotations
 import pytest
 
 from stt_app.config import (
-    CANARY_MODEL_SIZE,
     FLUID_SPEECH_PRO_MODEL_SIZE,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
@@ -39,7 +38,6 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
                 "distil-large-v3.5",
                 "parakeet-tdt-0.6b-v3",
                 "fluid-speech-pro",
-                "canary-1b-v2",
                 "granite-5.0-470m-turboctc-multi",
             }
         )
@@ -53,7 +51,6 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
         "distil-large-v3.5",
         "parakeet-tdt-0.6b-v3",
         "fluid-speech-pro",
-        "canary-1b-v2",
         "granite-5.0-470m-turboctc-multi",
     ],
 )
@@ -74,7 +71,7 @@ def test_mirrored_model_keeps_the_generic_error():
 
 
 @pytest.mark.parametrize(
-    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE, CANARY_MODEL_SIZE]
+    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE]
 )
 def test_onnx_asr_models_report_the_missing_mirror(monkeypatch, tmp_path, model_name):
     """The onnx-asr repos have no ModelScope counterpart.
@@ -181,7 +178,7 @@ def test_missing_file_list_is_summarised_not_dumped(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE, CANARY_MODEL_SIZE]
+    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE]
 )
 def test_public_download_path_reports_the_missing_mirror(
     monkeypatch, tmp_path, model_name

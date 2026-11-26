@@ -308,9 +308,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Added: Granite 5.0 2B (de 3.46 against 10.57 for 4.1 2B as shipped) and
     Fluid Speech Pro (de 3.25 / en 3.57 against Parakeet v3's 6.50 / 4.89,
     about three times slower at RTF 0.2).
-  - Kept: Canary (de 3.66 against v3's 6.50, so the rule keeps it, though
-    Fluid measured 3.25 / 3.57 against Canary's 3.66 / 5.45, a German
-    difference inside the test's noise), Whisper `small` (the one Whisper that
+  - Kept: Whisper `small` (the one Whisper that
     keeps the rolling-window streaming usable on a CPU-only laptop, RTF about
     0.19 against 0.55 to 0.6 for the large ones), `large-v3`,
     `large-v3-turbo`, `distil-large-v3.5`.
@@ -690,6 +688,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`test_a_fresh_install_downloads_the_default_model_and_never_substitutes`).
     A recording made during the download follows the usual path (kept for
     Retry).
+- **Canary 1B v2 retired (2026-11-26, owner decision), successor Fluid
+  Speech Pro.** Reasons: Fluid Speech Pro is better in both languages (de
+  3.25 / en 3.57 against Canary's 3.66 / 5.45), the TurboCTC is about six times
+  faster at 4.27 / 4.14, and Parakeet v3 covers the same 25 languages faster.
+  Canary had no capability the roster lacks: its translation was an accident
+  of onnx-asr hardcoding `<|en|>` (the app only guarded against it), and
+  explicit language choice remains with Cohere. Through the existing pattern
+  (`RETIRED_LOCAL_MODEL_SUCCESSORS` / `RETIRED_LOCAL_MODEL_REPOS`, one move
+  with the shared notice, files stay as a "No longer offered" row for
+  `canary-1b-v2-onnx`). Gone with it: its layout, `CANARY_LANGUAGE_MODES`, the
+  no-Auto guards in the onnx-asr transcriber, the benchmark, the Retranscribe
+  dialog's warning and the Settings notes; every onnx-asr model now offers
+  Auto only and is never sent a language. A history entry made with Canary
+  re-runs through the retired-model substitution of the Retranscribe dialog.
+  The Models tab's minimum list height went from six to five rows
+  (`settings-dialog.md`).
 - **Local ONNX device (`local_onnx_device`, default `auto`, schema 23)**: the
   "ONNX Device" row (Models tab, "Local runtime" group) feeds
   `LOCAL_WEBGPU_DEVICE_POLICIES` into `LocalOnnxWebGpuTranscriber` with the

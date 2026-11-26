@@ -180,7 +180,7 @@ def test_the_queue_line_names_what_starts_next(monkeypatch):
     dialog = _mixin_dialog(
         directory_bytes=0,
         process=SimpleNamespace(),
-        queued=(("parakeet-tdt-0.6b-v3", ""), ("canary-1b-v2", "")),
+        queued=(("parakeet-tdt-0.6b-v3", ""), ("fluid-speech-pro", "")),
         monkeypatch=monkeypatch,
     )
 

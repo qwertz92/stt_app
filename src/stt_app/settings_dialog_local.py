@@ -209,7 +209,7 @@ class _CleanupOutcome(NamedTuple):
 
 
 # Rows of the model list that stay visible when the page is short.
-_LOCAL_LIST_MIN_ROWS = 6
+_LOCAL_LIST_MIN_ROWS = 5
 
 
 class _LocalModelsMixin:
@@ -265,7 +265,7 @@ class _LocalModelsMixin:
         )
         self.offline_mode_checkbox.setToolTip(
             "When enabled, no local engine downloads anything: faster-whisper, "
-            "Nemotron, Parakeet/Canary and the ONNX/WebGPU models all load from "
+            "Nemotron, Parakeet and the ONNX/WebGPU models all load from "
             "the cache only. The selected model must already be present (see "
             "README for offline setup instructions)."
         )

@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from ..config import (
-    CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     FLUID_SPEECH_PRO_MODEL_SIZE,
@@ -286,19 +285,6 @@ _FLUID_SPEECH_PRO_INT8_LAYOUT = _OnnxModelLayout(
     revision="fa588e9f87f1b9ad0ca2e2d8f7eaf84dc3803581",
 )
 
-_CANARY_INT8_LAYOUT = _OnnxModelLayout(
-    name="canary_aed_int8",
-    precision="int8",
-    allow_patterns=_ONNX_ASR_INT8_BASE_ALLOW_PATTERNS,
-    required_files=(
-        "config.json",
-        "vocab.txt",
-        "encoder-model.int8.onnx",
-        # AED, so a plain decoder — Parakeet's TDT ships a fused decoder_joint.
-        "decoder-model.int8.onnx",
-    ),
-)
-
 _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     name="nemotron_int4",
     precision="int4",
@@ -346,7 +332,6 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
     FLUID_SPEECH_PRO_MODEL_SIZE: _FLUID_SPEECH_PRO_INT8_LAYOUT,
-    CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
     GRANITE_CTC_MODEL_SIZE: _GRANITE_CTC_INT8_LAYOUT,
 }
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {

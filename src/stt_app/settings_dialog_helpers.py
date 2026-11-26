@@ -623,7 +623,6 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # what is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, 25 languages"),
     "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual, CC-BY-4.0"),
-    "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-5.0-470m-turboctc-multi": (
         "IBM Granite Speech 5.0 470M",
         "CPU, 7 languages, punctuated",
@@ -641,6 +640,7 @@ _RETIRED_MODEL_LABELS: dict[str, str] = {
     "granite-4.0-1b-speech": "IBM Granite 4.0 1B Speech (removed)",
     "granite-speech-4.1-2b": "IBM Granite Speech 4.1 2B (removed)",
     "parakeet-tdt-0.6b-v3-ultra": "NVIDIA Parakeet TDT 0.6B v3 Ultra (removed)",
+    "canary-1b-v2": "NVIDIA Canary 1B v2 (removed)",
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M English-only (removed)"
     ),

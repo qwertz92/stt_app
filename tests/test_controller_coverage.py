@@ -385,14 +385,14 @@ def test_start_recording_rejects_streaming_for_remote_engine():
 
 @pytest.mark.parametrize(
     "model_size",
-    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "canary-1b-v2"],
+    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "fluid-speech-pro"],
 )
 def test_start_recording_rejects_streaming_for_batch_only_local_model(
     monkeypatch, model_size
 ):
     """The refusal must name the *model*, and must not contradict itself.
 
-    Only the ONNX/WebGPU models took the local branch, so Parakeet and Canary
+    Only the ONNX/WebGPU models took the local branch, so Parakeet and Fluid Speech Pro
     -- batch-only through a different runtime -- fell into the remote branch
     and were told to "use local" while the local engine was already selected.
     """

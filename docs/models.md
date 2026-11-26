@@ -12,14 +12,14 @@ The app has five local runtime families:
   the Whisper models. Batch mode only.
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
-- **onnx-asr models** (Parakeet TDT v3, Fluid Speech Pro, Canary) — pure
+- **onnx-asr models** (Parakeet TDT v3, Fluid Speech Pro) — pure
   Python, CPU only, no Node.js and no GPU. Parakeet is the fastest local model
   in this app that transcribed the benchmark recording correctly: RTF 0.043 on
   a Ryzen 5 7600X. Fluid Speech Pro is FluidVoice Labs' post-training of the
   same model: a lower word error rate than v3 on the 2026-11-25
   German and English test (German 3.3 % against 6.5 %, English 3.6 %
   against 4.9 %), at about three times the processing time (see
-  [onnx-asr models](#onnx-asr-models-parakeet-canary)). Batch mode only.
+  [onnx-asr models](#onnx-asr-models-parakeet-fluid-speech-pro)). Batch mode only.
 - **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
   that runs on the CPU provider the app already ships, with numpy features and
   the `tokenizers` package; no Node.js and no GPU. Batch only. Since
@@ -70,7 +70,6 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): on the 2026-11-25 test German 3.25 % against v3's 6.50 % and English 3.57 % against 4.89 %, about 3x slower; pinned to one commit, batch mode only |
-| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | German 3.7 % against Parakeet's 6.5 % on the 2026-11-25 test, RTF about 0.15; Fluid Speech Pro measured 3.25 % German (within the test's noise of Canary) and 3.57 % English against Canary's 5.45 %; batch mode only |
 | `granite-5.0-470m-turboctc-multi` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | **The default for new installs** (since v0.15.0): RTF 0.023 on CPU against Parakeet v3's 0.085, 551 MB against 670 MB; punctuated text, German 4.27 % and English 4.14 % WER against v3's 6.50 % and 4.89 % on the 2026-11-25 test (25 + 25 FLEURS clips, about 500 words per language, so differences under 1 point are noise). Only seven languages where v3 covers 25. Batch mode only |
 
 ### Which model should I use?
@@ -203,7 +202,7 @@ toward names, product terms, and jargon you type in — but only some engines
 and models read it. It is sent to the Whisper models (`small` through
 `distil-large-v3.5`), OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics
 Enhanced, Mistral, Meta, OpenRouter (only some of the models behind it), and a custom endpoint. It is **ignored**
-by Parakeet, Canary, Nemotron, Cohere, every Granite model (Granite Speech 5.0
+by Parakeet, Nemotron, Cohere, every Granite model (Granite Speech 5.0
 2B and 470M TurboCTC), ElevenLabs, Azure LLM Speech, Fun-ASR, and
 Speechmatics Melia 1 — those runtimes, providers and models expose no
 biasing input at all. The Transcription tab
@@ -302,7 +301,7 @@ dictation:
 | `CPU only` | Never try the GPU |
 
 Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU
-only, so every GPU choice means DirectML for it. Parakeet and Canary run through
+only, so every GPU choice means DirectML for it. Parakeet and Fluid Speech Pro run through
 `onnx-asr` on CPU and ignore the setting entirely; the row is disabled while one
 of them is selected.
 
@@ -417,7 +416,6 @@ ML Applications" category rule (see
   | `distil-large-v3.5` | `distil-whisper/distil-large-v3.5-ct2` |
   | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` |
   | `fluid-speech-pro` | `FluidVoice-Labs/fluid-speech-pro-onnx` (by design, not probed: the app downloads it at one pinned commit, and a mirror serves a repository by name at whatever it holds now) |
-  | `canary-1b-v2` | `istupakov/canary-1b-v2-onnx` |
   | `granite-5.0-470m-turboctc-multi` | `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` (not probed: ModelScope's API answered "too many requests" on 2026-11-26; the owner publishes it on Hugging Face only, and the app downloads it at one pinned commit, so no mirror is asked) |
 
   On a network that blocks Hugging Face wholesale these models cannot be
@@ -517,7 +515,7 @@ uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 The import script is intentionally CTranslate2-only. For Cohere and Granite,
 use `scripts/download_model.py`; it downloads only the ONNX precision tier
 required by the app (q4 for Cohere and Granite 5.0 2B; INT8 for
-Parakeet, Fluid Speech Pro and Canary) and stores it in a real local folder to avoid Windows
+Parakeet and Fluid Speech Pro) and stores it in a real local folder to avoid Windows
 symlink privilege errors.
 
 <details>
@@ -533,7 +531,6 @@ git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
 git clone https://huggingface.co/ibm-granite/granite-speech-5.0-2b-ONNX
 git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 git clone https://huggingface.co/FluidVoice-Labs/fluid-speech-pro-onnx
-git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
 git clone https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4
 git clone https://huggingface.co/qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx
 ```
@@ -681,6 +678,7 @@ never touches it). The retired models and the files they leave:
 | Granite 4.0 1B (2026-11-25) | Granite 5.0 2B | `granite-4.0-1b-speech-ONNX` | ~1.84 GB |
 | Granite 4.1 2B (2026-11-25) | Granite 5.0 2B | `granite-speech-4.1-2b-ONNX` | ~1.84 GB |
 | Parakeet v3 Ultra (2026-11-25) | Fluid Speech Pro | `parakeet-tdt-0.6b-v3-ultra-onnx` | ~668 MB |
+| Canary 1B v2 (2026-11-26) | Fluid Speech Pro | `canary-1b-v2-onnx` | ~1.03 GB |
 | Granite 5.0 470M TurboCTC, English-only export (2026-11-26) | Granite 5.0 470M TurboCTC (multilingual) | `granite-speech-5.0-470m-turboctc-onnx` | ~552 MB |
 | Whisper `tiny` (2026-11-25) | `small` | `models--Systran--faster-whisper-tiny` | ~78 MB |
 | Whisper `base` (2026-11-25) | `small` | `models--Systran--faster-whisper-base` | ~148 MB |
@@ -711,15 +709,15 @@ Setting **Model Dir** (e.g. `D:\whisper-models`) causes all model downloads and 
 
 Useful for: USB transfer, network share, keeping models separate from user profile.
 
-### onnx-asr models (Parakeet, Fluid Speech Pro, Canary)
+### onnx-asr models (Parakeet, Fluid Speech Pro)
 
-`parakeet-tdt-0.6b-v3`, `fluid-speech-pro` and `canary-1b-v2` run
+`parakeet-tdt-0.6b-v3` and `fluid-speech-pro` run
 through [`onnx-asr`](https://github.com/istupakov/onnx-asr), a pure-Python
 runtime. Unlike the Cohere/Granite models they need **no Node.js**, and unlike
 Nemotron they need no extra ONNX Runtime — they reuse the one the app already
 ships.
 
-All three are **CPU only and batch only**. That is not a limitation in practice:
+Both are **CPU only and batch only**. That is not a limitation in practice:
 measured on a Ryzen 5 7600X, Parakeet transcribes a 24.3-second recording in
 about 1.03 s (RTF 0.043), which is faster than any GPU model in this app.
 
@@ -743,7 +741,7 @@ PC shared with other work:
 |-------|-----------:|------------:|----:|
 | Parakeet v3 | 6.5 % | 4.9 % | 0.05 to 0.09 |
 | Fluid Speech Pro | 3.3 % | 3.6 % | 0.16 to 0.26 |
-| Canary 1B v2 | 3.7 % | 5.5 % | 0.13 to 0.16 |
+| Canary 1B v2 (retired 2026-11-26) | 3.7 % | 5.5 % | 0.13 to 0.16 |
 
 The sample is small (a difference of one point is about five words), so read
 it as "clearly better than v3", not as a ranking among the two best. Part of
@@ -752,8 +750,8 @@ of the 25 German clips. Fluid Speech Pro is about three times slower than v3
 (a minute of audio takes about 12 s instead of 4 s), still far faster than
 real time.
 
-**v3 or Fluid Speech Pro?** v3 stays the default for speed, size and the 25
-European languages NVIDIA documents for it; Fluid Speech Pro is the pick for
+**v3 or Fluid Speech Pro?** v3 is the pick for the 25 European languages NVIDIA
+documents for it (the default of new installs is the seven-language TurboCTC); Fluid Speech Pro is the pick for
 German and English dictation where accuracy matters more than a few seconds.
 Languages other than German and English were not measured for Fluid Speech
 Pro. It needs nothing written into its folder.
@@ -763,13 +761,8 @@ selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
 but installing it overwrites the ONNX Runtime that Nemotron depends on and breaks
 that engine, so the app deliberately does not ship it.
 
-**Language selection differs between the two, and it matters:**
-
-- **Parakeet** (v3 and Fluid Speech Pro) is implicitly multilingual and ignores any
-  language you give it, so it offers only `Auto`.
-- **Canary** has no automatic detection. Left to itself it would *translate* into
-  English instead of transcribing, so the app requires you to pick one of its 25
-  trained languages and never offers `Auto`.
+**Language selection:** Parakeet (v3 and Fluid Speech Pro) is implicitly
+multilingual and ignores any language you give it, so it offers only `Auto`.
 
 Parakeet's TDT decoder can return no text for a short but real utterance
 (about one to two seconds). That is a model miss, not the silence gate: the

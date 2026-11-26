@@ -323,10 +323,10 @@ _TWELVE_MODELS = [
     "granite-speech-5.0-2b",
     "nemotron-3.5-asr-streaming-0.6b-int4",
     "parakeet-tdt-0.6b-v3",
-    "canary-1b-v2",
     "cohere-transcribe-03-2026",
     "granite-5.0-470m-turboctc-multi",
     "nemotron-3.5-asr-0.6b",
+    "medium",
 ]
 
 

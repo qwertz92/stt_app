@@ -23,15 +23,12 @@ import numpy as np
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
-    CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     FLUID_SPEECH_PRO_MODEL_SIZE,
-    LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     PARAKEET_MODEL_SIZE,
-    PARAKEET_MODEL_SIZES,
     language_modes_for_selection,
 )
 from .base import (
@@ -54,7 +51,6 @@ logger = logging.getLogger(__name__)
 _ONNX_ASR_MODEL_NAMES: dict[str, str] = {
     PARAKEET_MODEL_SIZE: "nemo-parakeet-tdt-0.6b-v3",
     FLUID_SPEECH_PRO_MODEL_SIZE: "nemo-conformer-tdt",
-    CANARY_MODEL_SIZE: "nemo-canary-1b-v2",
 }
 
 # How often the watchdog asks whether the user cancelled. ONNX Runtime reacts
@@ -289,7 +285,7 @@ def _decode_pcm16_blocks(
 
 
 class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
-    """Batch transcription for Parakeet TDT (v3, Fluid Speech Pro) and Canary via `onnx-asr`."""
+    """Batch transcription for Parakeet TDT (v3, Fluid Speech Pro) via `onnx-asr`."""
 
     def __init__(
         self,
@@ -334,53 +330,25 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
     # -- language ---------------------------------------------------------
 
     def _normalize_language_mode(self, mode: str) -> str:
-        """Restrict to the modes this model was actually trained for.
+        """Restrict to the modes this model offers (``auto`` alone).
 
-        Canary has no auto-detect: `onnx-asr` hardcodes the `<|en|>` source and
-        target token, so an unset language makes it *translate* into English
-        instead of transcribing. It therefore never accepts ``auto``, and an
-        untrained code would raise ``KeyError`` deep inside the runtime, so it
-        is rejected here instead.
+        The language is never sent to the runtime: Parakeet TDT v3 is
+        implicitly multilingual and ignores the argument, so passing it would
+        only invite the illusion of control, and Fluid Speech Pro, the same
+        model post-trained, is treated the same.
         """
         requested = str(mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         supported = language_modes_for_selection("local", self.model_size)
         if requested in supported:
             return requested
         fallback = supported[0]
-        # Never silently: for Canary a *wrong* language is as destructive as
-        # none, because it translates into the requested language instead of
-        # transcribing. The UI keeps `auto` out of its picker, but a stored
-        # `auto` can still arrive here from an older history entry or another
-        # engine's settings snapshot.
-        #
-        # That second sentence is true of Canary and of nothing else this
-        # runtime serves, so it is only emitted for the models it holds for.
-        # Parakeet offers `auto` alone, ignores the argument it is given and
-        # is never sent one (`_recognize_kwargs`), and it was the model the
-        # sentence was actually seen against -- a line telling the user their
-        # transcript may have been translated when nothing of the sort can
-        # happen.
-        translation_warning = (
-            " A wrong language makes this model translate rather than transcribe."
-            if self.model_size in LOCAL_EXPLICIT_LANGUAGE_MODELS
-            else ""
-        )
         logger.warning(
-            "Language '%s' is not supported by '%s'; using '%s' instead.%s",
+            "Language '%s' is not supported by '%s'; using '%s' instead.",
             requested,
             self.model_size,
             fallback,
-            translation_warning,
         )
         return fallback
-
-    def _recognize_kwargs(self) -> dict[str, str]:
-        # Parakeet TDT v3 is implicitly multilingual and ignores the argument,
-        # so passing it would only invite the illusion of control. Fluid Speech
-        # Pro is the same model post-trained and is treated the same.
-        if self.model_size in PARAKEET_MODEL_SIZES:
-            return {}
-        return {"language": self._language_mode}
 
     # -- model lifecycle --------------------------------------------------
 
@@ -586,7 +554,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 # defensive -- the resume-driven reset in particular cannot
                 # reach this class at all, because it filters on
                 # `LOCAL_WEBGPU_MODEL_SIZES`, which holds neither Parakeet nor
-                # Canary. What decides the type is what each one does to the
+                # Fluid Speech Pro. What decides the type is what each one does to the
                 # recording: the controller's cancel path calls
                 # `_drop_request_audio`, discarding the WAV and writing no
                 # overlay state, while the error path promotes the audio for
@@ -615,7 +583,6 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 text = model.recognize(  # type: ignore[attr-defined]
                     waveform,
                     sample_rate=sample_rate,
-                    **self._recognize_kwargs(),
                 )
             except TranscriptionCanceled:
                 raise

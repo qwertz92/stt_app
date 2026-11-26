@@ -10,7 +10,6 @@ from PySide6 import QtCore, QtWidgets
 from . import local_runtime_support
 from .config import (
     ASSEMBLYAI_STREAMING_MODEL_LABEL,
-    CANARY_MODEL_SIZE,
     CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
@@ -818,13 +817,6 @@ class _GeneralTabMixin:
                 "automatic language detection."
             )
 
-        if engine == "local" and model == CANARY_MODEL_SIZE:
-            return (
-                "Canary has no automatic detection: pick the language actually "
-                "spoken. With the wrong one it translates instead of "
-                "transcribing."
-            )
-
         if engine == "local" and model in PARAKEET_MODEL_SIZES:
             return (
                 "Parakeet is multilingual and detects the language itself; "
@@ -839,8 +831,7 @@ class _GeneralTabMixin:
             )
 
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
-            # Only the Granite models reach here: Cohere and Canary have their
-            # own branches above, and both of those really do lack Auto.
+            # Only Granite 5.0 2B reaches here: Cohere has its own branch above.
             return "This model supports Auto plus the languages documented for it."
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
@@ -994,8 +985,7 @@ class _GeneralTabMixin:
         name = local_model_short_label(model_name) if model_name else "This model"
         if not applies:
             if model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
-                # Not "the fastest local option": `tiny` is quicker, and the
-                # claim was never true for Canary at all.
+                # Not "the fastest local option": `tiny` is quicker.
                 self._set_local_onnx_device_note(
                     f"{name} always runs on the CPU through onnx-asr and "
                     "ignores this setting."
@@ -1115,12 +1105,6 @@ class _GeneralTabMixin:
                 "Batch mode only. Runs on the ONNX Device set on the Models "
                 "tab (the overlay shows the active one)."
             )
-        elif engine == "local" and model_name == CANARY_MODEL_SIZE:
-            style = note_style
-            text = (
-                "Batch mode only, CPU. Pick a language: this model has no "
-                "auto-detect and would otherwise translate into English."
-            )
         elif engine == "local" and model_name == FLUID_SPEECH_PRO_MODEL_SIZE:
             style = note_style
             # Measured 2026-11-25: German 3.25 against Parakeet v3's 6.50 and
@@ -1134,7 +1118,7 @@ class _GeneralTabMixin:
             style = note_style
             # Not "the fastest local model here": a Whisper size once measured
             # 0.033 against Parakeet's 0.043 in the same run. Only Parakeet
-            # reaches this branch (Canary and Fluid Speech Pro have their own).
+            # reaches this branch (Fluid Speech Pro has its own).
             text = (
                 "Batch mode only, CPU. 25 European languages, detected "
                 "automatically; pick it when the default model's seven do not "

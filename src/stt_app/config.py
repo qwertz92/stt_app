@@ -110,7 +110,6 @@ FLUID_SPEECH_PRO_MODEL_SIZE = "fluid-speech-pro"
 # Every Parakeet-family TDT model: they share the language handling (Auto only,
 # no `language=` sent).
 PARAKEET_MODEL_SIZES = (PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE)
-CANARY_MODEL_SIZE = "canary-1b-v2"
 
 # IBM Granite Speech 5.0 470M TurboCTC, multilingual revision. Declared here
 # because the default names it; the rest of its wiring is further down.
@@ -298,7 +297,6 @@ LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
 LOCAL_ONNX_ASR_MODEL_SIZES = (
     PARAKEET_MODEL_SIZE,
     FLUID_SPEECH_PRO_MODEL_SIZE,
-    CANARY_MODEL_SIZE,
 )
 
 # IBM Granite Speech 5.0 470M TurboCTC (the multilingual revision of
@@ -338,7 +336,7 @@ LOCAL_ONNX_MODEL_SIZES = (
 )
 
 # The local models whose runtime takes an execution device. The onnx-asr models
-# (Parakeet/Canary) and Granite Speech 5.0 TurboCTC are CPU-only and ignore the
+# (Parakeet, Fluid Speech Pro) and Granite Speech 5.0 TurboCTC are CPU-only and ignore the
 # policy, so the Settings picker must not claim to control them and a measured
 # preference for one would be meaningless. One definition, because the picker,
 # the stored preference map and the benchmark all have to answer this question
@@ -361,7 +359,6 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
         "distil-large-v3.5",
         PARAKEET_MODEL_SIZE,
         FLUID_SPEECH_PRO_MODEL_SIZE,
-        CANARY_MODEL_SIZE,
         GRANITE_CTC_MODEL_SIZE,
     }
 )
@@ -372,7 +369,6 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     NEMOTRON_MODEL_SIZE: "int4",
     PARAKEET_MODEL_SIZE: "int8",
     FLUID_SPEECH_PRO_MODEL_SIZE: "int8",
-    CANARY_MODEL_SIZE: "int8",
     GRANITE_CTC_MODEL_SIZE: "int8",
 }
 
@@ -382,7 +378,6 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
     PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
     FLUID_SPEECH_PRO_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
-    CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
     GRANITE_CTC_MODEL_SIZE: "ONNX Runtime INT8 CTC, CPU",
 }
 
@@ -514,6 +509,7 @@ RETIRED_LOCAL_MODEL_SUCCESSORS: dict[str, str] = {
     "granite-speech-4.1-2b": "granite-speech-5.0-2b",
     "parakeet-tdt-0.6b-v3-ultra": FLUID_SPEECH_PRO_MODEL_SIZE,
     "granite-speech-5.0-470m-turboctc": GRANITE_CTC_MODEL_SIZE,
+    "canary-1b-v2": FLUID_SPEECH_PRO_MODEL_SIZE,
     "tiny": "small",
     "base": "small",
     "medium": "large-v3-turbo",
@@ -527,6 +523,7 @@ RETIRED_LOCAL_MODEL_REPOS: dict[str, str] = {
     "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
     "parakeet-tdt-0.6b-v3-ultra": "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
     "granite-speech-5.0-470m-turboctc": "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
+    "canary-1b-v2": "istupakov/canary-1b-v2-onnx",
     "tiny": "Systran/faster-whisper-tiny",
     "base": "Systran/faster-whisper-base",
     "medium": "Systran/faster-whisper-medium",
@@ -546,7 +543,6 @@ MODEL_REPO_MAP: dict[str, str] = {
     # The vendor's own ONNX repository, fetched at one pinned revision (see its
     # layout in `local_webgpu_asr`).
     FLUID_SPEECH_PRO_MODEL_SIZE: "FluidVoice-Labs/fluid-speech-pro-onnx",
-    CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
     GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx",
 }
 
@@ -580,7 +576,6 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     # int8 encoder 746.9 MB and decoder/joint 53.8 MB with their graphs, vocab,
     # config, README, LICENSE and NOTICE).
     FLUID_SPEECH_PRO_MODEL_SIZE: 801,
-    CANARY_MODEL_SIZE: 1_029,
     # Measured against the repository with this model's allow-patterns applied:
     # 552,442,697 bytes, of which `onnx/model_int8.onnx` is 551,294,349. The
     # fp32 and fp16 graphs beside it (1.76 GiB and 0.88 GiB) are never fetched.
@@ -924,37 +919,6 @@ COHERE_LANGUAGE_MODES = (
 # byte-identical output), so Auto is the only honest choice. Fluid Speech Pro is
 # the same architecture behind onnx-asr and gets the same.
 PARAKEET_LANGUAGE_MODES = ("auto",)
-# Canary must NEVER offer Auto. onnx-asr hardcodes the <|en|> source/target
-# token, so without an explicit language it silently *translates* German into
-# English rather than transcribing it. The 25 trained locales only; the vocab
-# carries ~180 ISO codes and an untrained one raises KeyError.
-CANARY_LANGUAGE_MODES = (
-    "de",
-    "en",
-    "bg",
-    "cs",
-    "da",
-    "el",
-    "es",
-    "et",
-    "fi",
-    "fr",
-    "hr",
-    "hu",
-    "it",
-    "lt",
-    "lv",
-    "mt",
-    "nl",
-    "pl",
-    "pt",
-    "ro",
-    "ru",
-    "sk",
-    "sl",
-    "sv",
-    "uk",
-)
 GRANITE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt", "ja")
 # Bare app language codes for Nemotron's transcription-ready and broad-coverage
 # locales. "no" maps to the official Norwegian Bokmal prompt ID.
@@ -1408,16 +1372,14 @@ LOCAL_BATCH_ONLY_MODELS = (
     + LOCAL_ONNX_ASR_MODEL_SIZES
     + LOCAL_GRANITE_CTC_MODEL_SIZES
 )
-# Models that must never expose Auto. Cohere needs an explicit language; Canary
-# would otherwise translate to English instead of transcribing.
-LOCAL_EXPLICIT_LANGUAGE_MODELS = (*LOCAL_WEBGPU_MODEL_SIZES, CANARY_MODEL_SIZE)
+# Models that take an explicit language (Cohere even needs one).
+LOCAL_EXPLICIT_LANGUAGE_MODELS = LOCAL_WEBGPU_MODEL_SIZES
 MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "cohere-transcribe-03-2026"): COHERE_LANGUAGE_MODES,
     ("local", "granite-speech-5.0-2b"): GRANITE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", FLUID_SPEECH_PRO_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
-    ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
     # No language input: the graph detects the language itself.
     ("local", GRANITE_CTC_MODEL_SIZE): ("auto",),
     ("assemblyai", "assemblyai-stt-3-7"): ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
@@ -1525,7 +1487,7 @@ CUSTOM_VOCABULARY_EXCLUDED_MODELS: tuple[tuple[str, str], ...] = (
     ("speechmatics", "melia-1"),
 )
 # Local runtimes with a biasing input: faster-whisper takes the terms as its
-# `initial_prompt`. The onnx-asr (Parakeet, Canary), ONNX Runtime GenAI
+# `initial_prompt`. The onnx-asr (Parakeet, Fluid Speech Pro), ONNX Runtime GenAI
 # (Nemotron), Transformers.js (Cohere, Granite ONNX) and Granite CTC runtimes
 # have none.
 CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)

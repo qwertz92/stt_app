@@ -313,7 +313,7 @@ def test_the_retranscribe_note_says_when_a_model_does_not_offer_the_language(
 ):
     """Cohere never offers `auto`, so an entry re-run on it with `auto`
     configured lands on Cohere's first language. The note said so only for
-    Canary; every other model made the substitution silently."""
+    a model retired since; every other model made the substitution silently."""
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     audio = tmp_path / "recording.wav"
     audio.write_bytes(b"RIFF")
@@ -339,7 +339,6 @@ def test_the_retranscribe_note_says_when_a_model_does_not_offer_the_language(
     note = label.text()
     assert "(auto) is not offered" in note, note
     assert f"so {chosen} was chosen" in note, note
-    assert "Canary" not in note
     # Newly reachable text, same rules: nothing below the note moves, and
     # nothing is cut off.
     assert label.height() == reserved
@@ -355,8 +354,8 @@ def test_the_retranscribe_note_says_when_a_model_does_not_offer_the_language(
 def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
     """The note's reserved area must cover its longest possible text.
 
-    It can carry a retired-model substitution *and* the Canary language
-    warning at once. Two reserved lines measured 38 px against the 45 px that
+    It can carry a retired-model substitution *and* a language substitution
+    at once. Two reserved lines measured 38 px against the 45 px that
     combination needs, so changing the model moved the buttons below by 7 px.
     Layout shift is a hard defect in this project, so the reservation is
     pinned here rather than left to whatever the current wording happens to
@@ -370,8 +369,8 @@ def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
     for label, entry_model, current_model in (
         ("empty", "large-v3-turbo", "small"),
         ("retired", "granite-speech-4.1-2b-nar", "small"),
-        ("canary", "canary-1b-v2", "canary-1b-v2"),
-        ("retired+canary", "granite-speech-4.1-2b-nar", "canary-1b-v2"),
+        ("cohere", "cohere-transcribe-03-2026", "cohere-transcribe-03-2026"),
+        ("retired+cohere", "granite-speech-4.1-2b-nar", "cohere-transcribe-03-2026"),
     ):
         dialog = RetranscribeDialog(
             entry=_entry(engine="local", model=entry_model),
@@ -389,7 +388,7 @@ def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
             assert note.heightForWidth(note.width()) <= note.height(), label
         dialog.close()
 
-    assert heights["retired+canary"] > 0
+    assert heights["retired+cohere"] > 0
     assert len(set(heights.values())) == 1, heights
 
 
@@ -399,8 +398,7 @@ def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
     The dialog is resizable down to `_MINIMUM_SIZE` and has a size grip, so
     the reserved three lines are only enough at the width they were measured
     at. Narrower, the worst-case note needs more, and what falls off the
-    bottom is the *last* sentence -- the Canary warning, whose absence costs a
-    translated transcript rather than a cosmetic clip. The note therefore
+    bottom is the *last* sentence -- the language substitution sentence. The note therefore
     carries `heightForWidth`, which this pins at the narrowest size the user
     can actually drag the dialog to.
     """
@@ -408,14 +406,16 @@ def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
     dialog = RetranscribeDialog(
         entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     try:
         dialog.show()
         app.processEvents()
         note = dialog._language_note
-        assert "Canary" in note.text(), note.text()
+        assert "is not offered" in note.text(), note.text()
 
         for width in (dialog.width(), 600, dialog.minimumWidth()):
             dialog.resize(width, dialog.height())
@@ -464,7 +464,9 @@ def test_the_retranscribe_note_does_not_move_the_layout_at_any_width():
             dialog = RetranscribeDialog(
                 entry=_entry(engine="local", model=entry_model),
                 audio_path=Path(__file__),
-                base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+                base_settings=AppSettings(
+                    engine="local", model_size="cohere-transcribe-03-2026"
+                ),
                 transcribe=lambda *args, **kwargs: (True, ""),
             )
             dialog.show()
@@ -551,7 +553,9 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
     dialog = RetranscribeDialog(
         entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     try:
@@ -606,7 +610,9 @@ def test_widening_the_dialog_gives_the_reserved_note_height_back():
         dialog = RetranscribeDialog(
             entry=_entry(engine="local", model=model),
             audio_path=Path(__file__),
-            base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+            base_settings=AppSettings(
+                engine="local", model_size="cohere-transcribe-03-2026"
+            ),
             transcribe=lambda *args, **kwargs: (True, ""),
         )
         try:
@@ -653,7 +659,9 @@ def test_the_note_floor_still_fits_three_lines_of_its_own_font():
     dialog = RetranscribeDialog(
         entry=_entry(engine="assemblyai", model="assemblyai-stt-3-7"),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     try:
@@ -675,7 +683,9 @@ def test_the_note_candidates_include_every_offered_model_and_the_entrys_own():
     dialog = RetranscribeDialog(
         entry=_entry(engine="local", model=imported_id),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     try:
@@ -732,7 +742,9 @@ def test_the_reservation_fits_the_note_the_dialog_actually_builds():
     dialog = RetranscribeDialog(
         entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     try:
@@ -936,7 +948,9 @@ def _reserving_dialog(entry_model="granite-speech-4.1-2b-nar"):
     dialog = RetranscribeDialog(
         entry=_entry(engine="local", model=entry_model),
         audio_path=Path(__file__),
-        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        base_settings=AppSettings(
+            engine="local", model_size="cohere-transcribe-03-2026"
+        ),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
     dialog.show()
