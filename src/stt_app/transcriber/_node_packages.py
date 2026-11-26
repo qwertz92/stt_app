@@ -1,6 +1,6 @@
 """Keeps a source checkout's `node_modules` in step with `package-lock.json`.
 
-The Cohere and Granite 4.x models run in a Node.js child whose packages live
+The Cohere and Granite models run in a Node.js child whose packages live
 in the checkout's `node_modules`, installed from `package-lock.json`. A
 release that changes the lock (2026-10-10: Transformers.js 4.3.0 -> 4.3.1 and
 sharp 0.35.4 -> 0.35.5 for an advisory) used to need an `npm ci` by hand after

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -41,11 +42,16 @@ from .config import (
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
     SPEECHMATICS_MODELS,
+    TRAY_MESSAGE_MAX_CHARS,
     VALID_MODEL_SIZES,
     streaming_is_experimental,
 )
 from .local_benchmark import _format_seconds
-from .settings_store import _REMOTE_MODEL_FIELDS, LISTED_MODEL_ENGINES
+from .settings_store import (
+    _REMOTE_MODEL_FIELDS,
+    LISTED_MODEL_ENGINES,
+    remote_move_line,
+)
 
 # What `Thread.start()` raises when the worker cannot be created: the OS refuses
 # the thread (`RuntimeError`) or the interpreter cannot allocate its
@@ -131,7 +137,64 @@ class ContentCappedGroupBox(QtWidgets.QGroupBox):
             self.setMaximumHeight(cap)
 
 
-class ElidingLabel(QtWidgets.QLabel):
+ZERO_WIDTH_SPACE = "\u200b"
+
+
+class _FullTextCopyMixin:
+    """Copying from a label whose painted text differs from what was set.
+
+    `QLabel` copies from its own text control, which holds the painted text:
+    the elided one (`ElidingLabel`) or one with break opportunities added
+    (`WrappedStatusLabel`). The whole message, the one worth pasting into a bug
+    report, must come back as written, so Copy goes through `copy_message`.
+    Expects `self._full_text`.
+    """
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.matches(QtGui.QKeySequence.Copy):
+            self.copy_message()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        menu = self._context_menu()
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def _context_menu(self) -> QtWidgets.QMenu:
+        """`QLabel`'s own menu copies through its text control, which holds
+        the elided text; this one copies through `copy_message`."""
+        menu = QtWidgets.QMenu(self)
+        copy_action = menu.addAction("Copy")
+        copy_action.setEnabled(bool(self._full_text))
+        copy_action.triggered.connect(self.copy_message)
+        select_all = menu.addAction("Select All")
+        select_all.setEnabled(bool(self._full_text))
+        select_all.triggered.connect(self._select_all)
+        return menu
+
+    def _select_all(self) -> None:
+        self.setSelection(0, len(QtWidgets.QLabel.text(self)))
+
+    def copy_message(self) -> None:
+        """Put the selected part, or the whole message, on the clipboard.
+
+        `QLabel` copies from its own text control, which holds the elided
+        text: a failed save's message, the one text worth pasting into a bug
+        report, came back as its first 37 characters and an ellipsis, and
+        the tooltip that holds the rest cannot be copied. A part of the
+        painted text copies as selected; the whole of it, or no selection,
+        copies the message as written.
+        """
+        selected = self.selectedText()
+        painted = QtWidgets.QLabel.text(self)
+        text = selected if selected and selected != painted else self._full_text
+        text = text.replace(ZERO_WIDTH_SPACE, "")
+        copy_text(text)
+
+
+class ElidingLabel(_FullTextCopyMixin, QtWidgets.QLabel):
     """A one-line label that shortens its text to fit instead of clipping it.
 
     A `QLabel` with word wrap off cuts a long line at its right edge with
@@ -174,48 +237,6 @@ class ElidingLabel(QtWidgets.QLabel):
     def text(self) -> str:
         return self._full_text
 
-    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
-        if event.matches(QtGui.QKeySequence.Copy):
-            self.copy_message()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
-        menu = self._context_menu()
-        menu.exec(event.globalPos())
-        menu.deleteLater()
-
-    def _context_menu(self) -> QtWidgets.QMenu:
-        """`QLabel`'s own menu copies through its text control, which holds
-        the elided text; this one copies through `copy_message`."""
-        menu = QtWidgets.QMenu(self)
-        copy_action = menu.addAction("Copy")
-        copy_action.setEnabled(bool(self._full_text))
-        copy_action.triggered.connect(self.copy_message)
-        select_all = menu.addAction("Select All")
-        select_all.setEnabled(bool(self._full_text))
-        select_all.triggered.connect(self._select_all)
-        return menu
-
-    def _select_all(self) -> None:
-        self.setSelection(0, len(QtWidgets.QLabel.text(self)))
-
-    def copy_message(self) -> None:
-        """Put the selected part, or the whole message, on the clipboard.
-
-        `QLabel` copies from its own text control, which holds the elided
-        text: a failed save's message, the one text worth pasting into a bug
-        report, came back as its first 37 characters and an ellipsis, and
-        the tooltip that holds the rest cannot be copied. A part of the
-        painted text copies as selected; the whole of it, or no selection,
-        copies the message as written.
-        """
-        selected = self.selectedText()
-        painted = QtWidgets.QLabel.text(self)
-        text = selected if selected and selected != painted else self._full_text
-        copy_text(text)
-
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._apply_elide()
@@ -232,19 +253,48 @@ class ElidingLabel(QtWidgets.QLabel):
         )
 
 
-class WrappedStatusLabel(QtWidgets.QLabel):
+# A token longer than this with no space in it (a path, a URL) gets a break
+# opportunity after each backslash and underscore: Qt breaks after a hyphen or a
+# slash by itself, never after a backslash, so a Windows path stayed one unbroken
+# word that a wrapped label clipped at its edge.
+_UNBROKEN_TOKEN_CHARS = 30
+
+
+def breakable(text: str) -> str:
+    """`text` with a zero-width space after each backslash and underscore of
+    every long token, so a wrapped label can break a path."""
+    return " ".join(
+        re.sub(r"([\\_])", r"\1" + ZERO_WIDTH_SPACE, token)
+        if len(token) > _UNBROKEN_TOKEN_CHARS
+        else token
+        for token in text.split(" ")
+    )
+
+
+class WrappedStatusLabel(_FullTextCopyMixin, QtWidgets.QLabel):
     """A word-wrapped status line whose whole text is also its tooltip.
 
     No wrapped label may widen the dialog (`_let_wrapped_labels_narrow`), so
-    one unbroken token in a status line -- a cache path, a URL in a
-    provider's error -- is cut off at the label's edge: 110-140 px of a
-    120-character path at the default width (measured). The tooltip is where
-    the rest can be read.
+    an unbroken token in a status line -- a cache path, a URL in a provider's
+    error -- used to be cut off at the label's edge: 110-140 px of a
+    120-character path at the default width (measured). It now wraps at the
+    token's backslashes and underscores (`breakable`); the tooltip still holds
+    the text as written, `text()` returns it, and Copy puts it on the
+    clipboard without the invisible break characters.
     """
 
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setText(text)
+
     def setText(self, text: str) -> None:
-        super().setText(text)
-        self.setToolTip(text)
+        self._full_text = str(text)
+        super().setText(breakable(self._full_text))
+        self.setToolTip(self._full_text)
+
+    def text(self) -> str:
+        return self._full_text
 
 
 class CollapsingStatusLabel(WrappedStatusLabel):
@@ -515,7 +565,7 @@ _START_BEEP_TONE_LABELS: dict[str, str] = {
 }
 
 
-def _approximate_size_text(model_name: str) -> str:
+def approximate_model_size_text(model_name: str) -> str:
     """The download size, taken from the one table that measures it.
 
     Never hand-written next to the name. `MODEL_ESTIMATED_SIZE_MB` is
@@ -553,16 +603,15 @@ def _approximate_size_text(model_name: str) -> str:
 # entry is the display name plus the notes that are not the size; the size is
 # derived above.
 _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
-    "tiny": ("tiny", ""),
-    "base": ("base", ""),
     "small": ("small", ""),
-    "medium": ("medium", ""),
     "large-v3": ("large-v3", "multilingual"),
     "large-v3-turbo": ("large-v3-turbo", "multilingual, fast"),
     "distil-large-v3.5": ("distil-large-v3.5", "English only, improved"),
     "cohere-transcribe-03-2026": ("Cohere Transcribe 03-2026", "ONNX/WebGPU"),
-    "granite-4.0-1b-speech": ("IBM Granite 4.0 1B Speech", "ONNX/WebGPU"),
-    "granite-speech-4.1-2b": ("IBM Granite Speech 4.1 2B", "ONNX/WebGPU"),
+    "granite-speech-5.0-2b": (
+        "IBM Granite Speech 5.0 2B",
+        "ONNX/WebGPU, punctuated",
+    ),
     "nemotron-3.5-asr-streaming-0.6b-int4": (
         "NVIDIA Nemotron 3.5 ASR 0.6B",
         "true 560 ms streaming",
@@ -573,14 +622,7 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # the recording. A picker has no room for that qualifier, so it states
     # what is unambiguous instead.
     "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
-    # No "post-trained by Moondream" here: the retranscribe dialog's model
-    # combo is 476 px wide at its 560 px minimum, and that note made this
-    # label need 572 px, clipped even at the 640 px default (measured
-    # 2026-09-27). docs/models.md carries the attribution.
-    "parakeet-tdt-0.6b-v3-ultra": (
-        "NVIDIA Parakeet TDT 0.6B v3 Ultra",
-        "CPU, multilingual",
-    ),
+    "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual, CC-BY-4.0"),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
     "granite-speech-5.0-470m-turboctc": (
         "IBM Granite Speech 5.0 470M",
@@ -588,13 +630,20 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     ),
 }
 
-# Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md). They
-# are not in VALID_MODEL_SIZES, so they appear in no picker; these entries
-# exist only so a history row recorded with one still reads as a model name
-# instead of a raw identifier.
+# Retired models (Granite 4.1 Plus/NAR on 2026-08-26, see
+# docs/granite-speech-4.1-onnx-variants.md; the others on 2026-11-25). They are
+# not in VALID_MODEL_SIZES, so they appear in no picker; these entries exist
+# only so a history row recorded with one, and the notice that its saved
+# selection moved on, read as a model name instead of a raw identifier.
 _RETIRED_MODEL_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b-plus": "IBM Granite Speech 4.1 2B Plus (removed)",
     "granite-speech-4.1-2b-nar": "IBM Granite Speech 4.1 2B NAR (removed)",
+    "granite-4.0-1b-speech": "IBM Granite 4.0 1B Speech (removed)",
+    "granite-speech-4.1-2b": "IBM Granite Speech 4.1 2B (removed)",
+    "parakeet-tdt-0.6b-v3-ultra": "NVIDIA Parakeet TDT 0.6B v3 Ultra (removed)",
+    "tiny": "tiny (removed)",
+    "base": "base (removed)",
+    "medium": "medium (removed)",
 }
 
 
@@ -602,7 +651,7 @@ def _build_local_model_labels() -> dict[str, str]:
     labels: dict[str, str] = {}
     for name, (display, note) in _LOCAL_MODEL_NAMES_AND_NOTES.items():
         details = ", ".join(
-            part for part in (_approximate_size_text(name), note) if part
+            part for part in (approximate_model_size_text(name), note) if part
         )
         labels[name] = f"{display} ({details})" if details else display
     labels.update(_RETIRED_MODEL_LABELS)
@@ -643,6 +692,60 @@ def local_model_short_label(model_name: str) -> str:
     """
     label = LOCAL_MODEL_LABELS.get(model_name, model_name)
     return label.split(" (", 1)[0].strip() or label
+
+
+def model_move_notices(
+    moves: list[dict[str, str]],
+    *,
+    successor_on_disk: bool,
+    offline_mode: bool,
+    limit: int = TRAY_MESSAGE_MAX_CHARS,
+) -> list[tuple[str, list[dict[str, str]]]]:
+    """The tray notices for the retired-model moves a start found, with the
+    moves each one announces.
+
+    One line per move, local first. The lines go into one notice while they fit
+    in `limit` (the tray cuts a longer balloon off mid-word); otherwise into as
+    few as it takes, never splitting a line, and the caller shows them one after
+    the other.
+
+
+    A model is named by what the pickers call it, never by its settings id. The
+    local line also says what the app does next, because the successor is
+    usually not on this PC: it is being downloaded (and dictation works when
+    that has finished), or, in offline mode where nothing downloads by itself,
+    where the user fetches it. A successor already on disk needs neither.
+    """
+    lines: list[tuple[str, dict[str, str]]] = []
+    for move in moves:
+        if move["engine"] != DEFAULT_ENGINE:
+            lines.append((remote_move_line(move), move))
+            continue
+        old = local_model_short_label(move["from"])
+        new = local_model_short_label(move["to"])
+        line = (
+            f"{ENGINE_LABELS[DEFAULT_ENGINE]}: {old} is no longer offered, "
+            f"your choice is now {new}."
+        )
+        size = approximate_model_size_text(move["to"])
+        size = f" ({size})" if size else ""
+        if offline_mode and not successor_on_disk:
+            line += (
+                f" Offline mode is on: download it{size} under Settings > Models,"
+                " or choose another model."
+            )
+        elif not successor_on_disk:
+            line += f" Downloading it now{size}; dictation works when it is done."
+        lines.append((line, move))
+    # Local first, as `retired_model_moves` orders them.
+    notices: list[tuple[str, list[dict[str, str]]]] = []
+    for line, move in lines:
+        if notices and len(notices[-1][0]) + 1 + len(line) <= limit:
+            text, shown = notices[-1]
+            notices[-1] = (f"{text}\n{line}", [*shown, move])
+        else:
+            notices.append((line, [move]))
+    return notices
 
 
 def model_choices_for_engine(

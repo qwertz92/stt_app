@@ -47,6 +47,14 @@ class TranscriptionError(RuntimeError):
     pass
 
 
+class ModelNotCachedError(TranscriptionError):
+    """A local model is not on this PC and Offline mode forbids fetching it.
+
+    The controller shows the readable "not on this PC" text for it and logs
+    this message, whose raw model id and docs path mean little to a user.
+    """
+
+
 class TranscriptionCanceled(Exception):
     """Raised inside a transcriber when a cooperative cancel was requested.
 

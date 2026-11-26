@@ -2552,7 +2552,7 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     # Saving a setting the runtime is built from, while the job is active,
     # must not close the runtime now.
     controller._settings_store._settings = replace(
-        controller.settings, model_size="medium"
+        controller.settings, model_size="large-v3"
     )
     controller.reload_settings(re_register_hotkey=False)
 
@@ -5074,7 +5074,7 @@ def test_a_second_retry_is_ignored_while_the_first_runs_with_the_same_engine_and
 
 @pytest.mark.parametrize(
     "change",
-    [{"engine": "groq"}, {"model_size": "base"}],
+    [{"engine": "groq"}, {"model_size": "distil-large-v3.5"}],
     ids=["another engine", "another model"],
 )
 def test_a_retry_with_another_engine_or_model_is_allowed_while_the_first_runs(
@@ -5240,6 +5240,38 @@ def test_retry_works_again_after_the_first_retry_failed(monkeypatch, tmp_path):
     assert controller.retry_last_transcription() is True
 
     assert controller._jobs[controller._active_request_token].token != first.token
+    controller.shutdown()
+    _ = app
+
+
+def test_audio_recorded_during_a_download_that_then_fails_waits_in_the_retry_slot(
+    monkeypatch, tmp_path
+):
+    """Batch dictation is allowed while the model downloads. When the download
+    (and so the load) fails, the queued recording fails with the preload's text,
+    which says what to do, and its audio is in the Retry slot -- nothing is lost."""
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token = _record_and_stop(controller)
+    failure = (
+        "Could not download small (~486 MB); it is not on this PC yet. Connect to "
+        "the internet and open Settings > Models to download it, or choose a model "
+        "that is already on this PC under Settings > Transcription."
+    )
+    controller._record_model_preload_result(
+        controller._model_preload_key(controller._settings), 1, failure
+    )
+    failed: list[tuple[int, str]] = []
+    controller.transcription_failed.connect(
+        lambda request_token, message: failed.append((request_token, message))
+    )
+
+    controller._transcribe_worker(token, b"RIFF", controller._settings)
+    assert failed == [(token, failure)]
+    controller._on_transcription_failed(failure, request_token=token)
+
+    assert controller.retry_last_transcription() is True
     controller.shutdown()
     _ = app
 

@@ -1233,7 +1233,7 @@ def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
         return dialog.local_onnx_device_combo.isEnabled(), below_y
 
     faster_whisper_enabled, y_faster_whisper = probe("local", "small")
-    granite_enabled, y_granite = probe("local", "granite-speech-4.1-2b")
+    granite_enabled, y_granite = probe("local", "granite-speech-5.0-2b")
     nemotron_enabled, y_nemotron = probe(
         "local", "nemotron-3.5-asr-streaming-0.6b-int4"
     )
@@ -1265,11 +1265,11 @@ def test_language_note_names_the_selected_model_family(dialog):
     assert "Granite" not in canary_note
     assert "translat" in canary_note.lower()
 
-    granite_note = note_for("granite-speech-4.1-2b")
+    granite_note = note_for("granite-speech-5.0-2b")
     assert "Granite" not in granite_note
 
     assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")
-    assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3-ultra")
+    assert "detects the language itself" in note_for("fluid-speech-pro")
 
 
 def test_the_language_hint_never_contradicts_the_language_picker(dialog):
@@ -1429,7 +1429,7 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
     _ = app
 
 
-@pytest.mark.parametrize("downloaded", [1, 10, 13])
+@pytest.mark.parametrize("downloaded", [1, 8, 10])
 def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
     dialog: SettingsDialog,
     downloaded: int,
@@ -1445,6 +1445,10 @@ def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
     with 1 to 4 models downloaded and 28 px -- a whole row -- with 10 to 13,
     where the separator falls outside the first ten entries so the popup is a
     full 300 px while its last ten entries measure 272 px.
+
+    The roster has 11 models since 2026-11-25 and the popup shows 12 entries
+    unscrolled, so the test lowers `maxVisibleItems` to 8: the guard is about
+    any list longer than the popup, and the roster may grow again.
     """
     from stt_app.config import VALID_MODEL_SIZES
 
@@ -1456,6 +1460,7 @@ def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
     dialog._refresh_model_combo(cached=list(VALID_MODEL_SIZES[:downloaded]))
     app.processEvents()
     combo = dialog.model_combo
+    combo.setMaxVisibleItems(8)
 
     # The grouping this popup exists for is still there: checked models on
     # top, a separator, indented ones below.
@@ -1903,7 +1908,7 @@ def test_the_onnx_device_note_names_the_selected_model(dialog: SettingsDialog) -
 
     dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("local"))
     checked = 0
-    for model in ("small", "parakeet-tdt-0.6b-v3", "granite-speech-4.1-2b"):
+    for model in ("small", "parakeet-tdt-0.6b-v3", "granite-speech-5.0-2b"):
         index = dialog.model_combo.findData(model)
         if index < 0:
             continue
@@ -1938,12 +1943,14 @@ def test_the_downloaded_models_line_is_plain_text(
 ) -> None:
     """Qt's rich text has no border-radius or padding on a span, so the "tag
     badges" rendered as bare settings ids run together."""
-    dialog._refresh_local_models_label(cached=["tiny", "parakeet-tdt-0.6b-v3"])
+    dialog._refresh_local_models_label(
+        cached=["large-v3-turbo", "parakeet-tdt-0.6b-v3"]
+    )
     label = dialog.local_models_label
 
     assert label.textFormat() == QtCore.Qt.PlainText
     assert "<span" not in label.text()
-    assert "tiny" in label.text()
+    assert "large-v3-turbo" in label.text()
     assert "NVIDIA Parakeet TDT 0.6B v3" in label.text()
 
 
@@ -1963,7 +1970,7 @@ def test_download_all_missing_asks_first_and_names_the_size(
 ) -> None:
     from stt_app.config import MODEL_ESTIMATED_SIZE_MB
 
-    missing = ["small", "medium"]
+    missing = ["small", "large-v3"]
     monkeypatch.setattr(dialog, "_missing_downloadable_models", lambda: list(missing))
     started: list[list[str]] = []
     monkeypatch.setattr(

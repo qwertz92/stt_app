@@ -183,7 +183,7 @@ def test_a_selection_of_one_model_is_announced_in_the_singular(tmp_path):
 
 
 def test_a_run_marks_each_case_running_then_done_or_error(tmp_path):
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
 
@@ -205,7 +205,7 @@ def test_a_run_marks_each_case_running_then_done_or_error(tmp_path):
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Running..."]
 
-    dialog._on_benchmark_case_finished(_case("tiny", "cpu", error="it broke"))
+    dialog._on_benchmark_case_finished(_case("large-v3-turbo", "cpu", error="it broke"))
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Error"]
     assert dialog.benchmark_progress_bar.value() == 2
@@ -213,8 +213,8 @@ def test_a_run_marks_each_case_running_then_done_or_error(tmp_path):
 
 
 def test_a_canceled_run_marks_every_unfinished_case_skipped(tmp_path):
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
-    dialog._current_benchmark_options = _options(["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
+    dialog._current_benchmark_options = _options(["small", "large-v3-turbo"])
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
     dialog._current_benchmark_cases = []
@@ -229,7 +229,7 @@ def test_a_canceled_run_marks_every_unfinished_case_skipped(tmp_path):
         "Benchmark summary:\ncanceled",
         {
             "cases": [_case("small", "cpu")],
-            "options": _options(["small", "tiny"]),
+            "options": _options(["small", "large-v3-turbo"]),
             "status": "canceled",
         },
     )
@@ -276,14 +276,16 @@ def test_a_finished_run_leaves_the_case_list_alone_until_the_selection_changes(
 
 def test_a_model_list_refresh_during_a_run_does_not_redraw_the_plan(tmp_path):
     """The plan comes from the options snapshotted at the run's start."""
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
     dialog._on_benchmark_case_finished(_case("small", "cpu"))
     dialog._active_benchmark_thread = threading.Thread(target=lambda: None)
 
-    dialog._refresh_benchmark_model_list(cached=["small", "tiny", "base"])
+    dialog._refresh_benchmark_model_list(
+        cached=["small", "large-v3-turbo", "distil-large-v3.5"]
+    )
     app.processEvents()
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
@@ -292,21 +294,27 @@ def test_a_model_list_refresh_during_a_run_does_not_redraw_the_plan(tmp_path):
     # rebuild keeps the previous selection, so the plan it describes has not
     # changed, and the newly available model is not in it until selected.
     dialog._active_benchmark_thread = None
-    dialog._refresh_benchmark_model_list(cached=["small", "tiny", "base"])
+    dialog._refresh_benchmark_model_list(
+        cached=["small", "large-v3-turbo", "distil-large-v3.5"]
+    )
     app.processEvents()
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
-    assert [row[1] for row in _plan(dialog)] == ["small", "tiny"]
+    assert [row[1] for row in _plan(dialog)] == ["small", "large-v3-turbo"]
 
     dialog.benchmark_select_all_button.click()
     app.processEvents()
 
-    assert [row[1] for row in _plan(dialog)] == ["small", "tiny", "base"]
+    assert [row[1] for row in _plan(dialog)] == [
+        "small",
+        "large-v3-turbo",
+        "distil-large-v3.5",
+    ]
     _ = app
 
 
 def test_the_progress_bar_keeps_its_space_while_it_is_hidden(tmp_path):
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
     app.processEvents()
@@ -428,12 +436,12 @@ def test_starting_a_run_arms_the_case_list_and_the_progress_bar(monkeypatch, tmp
         kwargs["case_callback"](_case("small", "cpu"))
         seen.append(("first done", _statuses(dialog)))
         kwargs["progress_callback"]("[Case 2/2] tiny (auto/int8)")
-        kwargs["case_callback"](_case("tiny", "cpu"))
+        kwargs["case_callback"](_case("large-v3-turbo", "cpu"))
         seen.append(("second done", _statuses(dialog)))
-        return [_case("small", "cpu"), _case("tiny", "cpu")]
+        return [_case("small", "cpu"), _case("large-v3-turbo", "cpu")]
 
     monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", _fake_run)
-    dialog, app = _armed_dialog(monkeypatch, tmp_path, ["small", "tiny"])
+    dialog, app = _armed_dialog(monkeypatch, tmp_path, ["small", "large-v3-turbo"])
 
     assert _statuses(dialog) == ["Pending", "Pending"]
     assert dialog.benchmark_progress_bar.isVisible() is False
@@ -454,7 +462,7 @@ def test_starting_a_run_arms_the_case_list_and_the_progress_bar(monkeypatch, tmp
 
 
 def test_a_run_that_cannot_start_leaves_nothing_counting(monkeypatch, tmp_path):
-    dialog, app = _armed_dialog(monkeypatch, tmp_path, ["small", "tiny"])
+    dialog, app = _armed_dialog(monkeypatch, tmp_path, ["small", "large-v3-turbo"])
 
     class _RefusingThread:
         def __init__(self, *_args, **_kwargs):
@@ -484,8 +492,8 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
     Skipped states of a run that had just ended, although the plan they
     redrew was the one already on screen; only a changed plan redraws.
     """
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
-    dialog._current_benchmark_options = _options(["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
+    dialog._current_benchmark_options = _options(["small", "large-v3-turbo"])
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 2)
     dialog._current_benchmark_cases = []
@@ -496,7 +504,7 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
         "Benchmark summary:\ncanceled",
         {
             "cases": [_case("small", "cpu")],
-            "options": _options(["small", "tiny"]),
+            "options": _options(["small", "large-v3-turbo"]),
             "status": "canceled",
         },
     )
@@ -504,7 +512,7 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
 
     # The inventory the reopen's list rebuild reads, as the app has it.
-    dialog._cached_local_models = ["small", "tiny"]
+    dialog._cached_local_models = ["small", "large-v3-turbo"]
     dialog._cached_local_models_dir = dialog.model_dir_edit.text().strip()
     dialog._cached_local_models_available = True
     dialog._open_benchmark_window()
@@ -512,7 +520,9 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
 
-    dialog._refresh_benchmark_model_list(cached=["small", "tiny", "base"])
+    dialog._refresh_benchmark_model_list(
+        cached=["small", "large-v3-turbo", "distil-large-v3.5"]
+    )
     app.processEvents()
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
@@ -593,14 +603,14 @@ def test_a_dropped_case_event_does_not_shift_the_done_marks(tmp_path):
     deliveries, so the next result landed on the dropped case's row: Done
     with another model's numbers, while the model that was measured read
     Skipped at the end."""
-    models = ["tiny", "base", "small"]
+    models = ["large-v3-turbo", "distil-large-v3.5", "small"]
     dialog, app = _dialog(tmp_path, models)
     dialog._current_benchmark_options = _options(models)
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._set_benchmark_progress(0, 3)
     dialog._current_benchmark_cases = []
     dialog._on_benchmark_progress("[Case 1/3] tiny (auto/int8)")
-    dialog._on_benchmark_case_finished(_case("tiny", "cpu"))
+    dialog._on_benchmark_case_finished(_case("large-v3-turbo", "cpu"))
     dialog._on_benchmark_progress("[Case 2/3] base (auto/int8)")
     # base's case event was malformed: the parent logged it and moved on.
     dialog._on_benchmark_progress("[Case 3/3] small (auto/int8)")
@@ -617,7 +627,7 @@ def test_a_dropped_case_event_does_not_shift_the_done_marks(tmp_path):
         True,
         "Benchmark summary:\ncompleted",
         {
-            "cases": [_case("tiny", "cpu"), _case("small", "cpu")],
+            "cases": [_case("large-v3-turbo", "cpu"), _case("small", "cpu")],
             "options": _options(models),
             "status": "completed",
         },
@@ -704,8 +714,8 @@ def test_the_running_case_shows_how_long_it_has_been_running(monkeypatch, tmp_pa
     monkeypatch.setattr(
         "stt_app.settings_dialog_benchmark.time.monotonic", lambda: clock[0]
     )
-    dialog, app = _dialog(tmp_path, ["small", "tiny"])
-    dialog._current_benchmark_options = _options(["small", "tiny"])
+    dialog, app = _dialog(tmp_path, ["small", "large-v3-turbo"])
+    dialog._current_benchmark_options = _options(["small", "large-v3-turbo"])
     dialog._set_benchmark_plan_rows(dialog._planned_benchmark_cases_from_widgets())
     dialog._current_benchmark_cases = []
 
@@ -732,7 +742,7 @@ def test_the_running_case_shows_how_long_it_has_been_running(monkeypatch, tmp_pa
         "Benchmark summary:\ncanceled",
         {
             "cases": [_case("small", "cpu")],
-            "options": _options(["small", "tiny"]),
+            "options": _options(["small", "large-v3-turbo"]),
             "status": "canceled",
         },
     )

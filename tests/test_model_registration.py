@@ -71,15 +71,18 @@ def test_every_label_entry_is_either_selectable_or_marked_removed():
     """A label for a model nobody can select is either stale or a history aid.
 
     Granite 4.1 Plus and NAR keep entries on purpose, so a history row recorded
-    with one still reads as a name. Anything else left behind here is a table
-    the retirement forgot -- the exact class of half-finished change this file
-    exists to catch.
+    with one still reads as a name, and so does every model with a successor
+    (`RETIRED_LOCAL_MODEL_SUCCESSORS`): its label also names the Models tab's
+    "no longer offered" row and the move notice. Anything else left behind
+    here is a table the retirement forgot -- the exact class of half-finished
+    change this file exists to catch.
     """
     unselectable = set(LOCAL_MODEL_LABELS) - set(config.VALID_MODEL_SIZES)
 
     assert unselectable == {
         "granite-speech-4.1-2b-plus",
         "granite-speech-4.1-2b-nar",
+        *config.RETIRED_LOCAL_MODEL_SUCCESSORS,
     }
     for model_name in unselectable:
         assert "removed" in LOCAL_MODEL_LABELS[model_name].lower(), model_name

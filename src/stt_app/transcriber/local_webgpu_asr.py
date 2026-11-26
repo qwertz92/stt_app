@@ -21,6 +21,7 @@ from ..config import (
     CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     GRANITE_CTC_MODEL_SIZE,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
@@ -30,7 +31,6 @@ from ..config import (
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
-    PARAKEET_ULTRA_MODEL_SIZE,
     TRAY_MESSAGE_MAX_CHARS,
     effective_preferred_device,
     language_modes_for_selection,
@@ -44,12 +44,12 @@ from ..model_download_progress import (
     offset_progress_hook,
     report_unknown_download_progress,
 )
-from ..persistence import atomic_write_bytes
 from ..process_tree import no_window_flags
 from . import _node_packages
 from .base import (
     AudioInput,
     ITranscriber,
+    ModelNotCachedError,
     ProgressReporter,
     TranscriptionCanceled,
     TranscriptionError,
@@ -130,9 +130,6 @@ class _OnnxModelLayout:
     # before this field existed; a pinned layout never falls back to the
     # ModelScope mirror (see `_download_onnx_via_modelscope`).
     revision: str | None = None
-    # The folder, relative to the snapshot root, that the runtime loads from.
-    # "" is the root itself. See `prepare_onnx_inference_dir`.
-    inference_subdir: str = ""
 
 
 _BASE_DOWNLOAD_ALLOW_PATTERNS = (
@@ -175,20 +172,6 @@ _COHERE_Q4_REQUIRED_FILES = (
     "onnx/decoder_model_merged_q4.onnx_data",
 )
 
-_GRANITE_4_0_Q4_REQUIRED_FILES = (
-    "chat_template.jinja",
-    "config.json",
-    "preprocessor_config.json",
-    "processor_config.json",
-    "tokenizer.json",
-    "onnx/audio_encoder_q4.onnx",
-    "onnx/audio_encoder_q4.onnx_data",
-    "onnx/embed_tokens_q4.onnx",
-    "onnx/embed_tokens_q4.onnx_data",
-    "onnx/decoder_model_merged_q4.onnx",
-    "onnx/decoder_model_merged_q4.onnx_data",
-)
-
 _NEMOTRON_INT4_REQUIRED_FILES = (
     "genai_config.json",
     "tokenizer.json",
@@ -209,20 +192,41 @@ _COHERE_Q4_LAYOUT = _OnnxModelLayout(
     required_files=_COHERE_Q4_REQUIRED_FILES,
 )
 
-_GRANITE_4_0_Q4_LAYOUT = _OnnxModelLayout(
-    name="granite_4_0_q4",
-    precision="q4",
-    allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
-    required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
+# Granite Speech 5.0 2B: IBM's own Transformers.js package. Three components
+# (audio encoder, embedding, decoder); the embedding and the decoder are `q4f16`
+# files (4-bit weights, fp16 activations) and only the audio encoder is plain
+# `q4`, so the Cohere `*_q4.onnx` patterns would match the encoder alone.
+_GRANITE_5_0_Q4_REQUIRED_FILES = (
+    "chat_template.jinja",
+    "config.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer.json",
+    "onnx/audio_encoder_q4.onnx",
+    "onnx/audio_encoder_q4.onnx_data",
+    "onnx/embed_tokens_q4f16.onnx",
+    "onnx/embed_tokens_q4f16.onnx_data",
+    "onnx/decoder_model_merged_q4f16.onnx",
+    "onnx/decoder_model_merged_q4f16.onnx_data",
 )
-
-# Granite Speech 4.1 2B (AR) ships as a Transformers.js q4 package with the same
-# component layout as Granite 4.0, so it reuses the 4.0 q4 required-file set.
-_GRANITE_4_1_AR_Q4_LAYOUT = _OnnxModelLayout(
-    name="granite_4_1_ar_q4",
+# IBM's own ONNX export of Granite Speech 5.0 2B. The commit is pinned like
+# Fluid Speech Pro's: the repository is a month old, holds two commits, and
+# `MODEL_ESTIMATED_SIZE_MB` and the measurements in `docs/models.md` describe
+# this one (verified 2026-11-25 as the repository's head).
+_GRANITE_5_0_Q4_LAYOUT = _OnnxModelLayout(
+    name="granite_5_0_q4",
     precision="q4",
-    allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
-    required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
+    allow_patterns=(
+        *_BASE_DOWNLOAD_ALLOW_PATTERNS,
+        "onnx/audio_encoder_q4.onnx",
+        "onnx/audio_encoder_q4.onnx_data",
+        "onnx/embed_tokens_q4f16.onnx",
+        "onnx/embed_tokens_q4f16.onnx_data",
+        "onnx/decoder_model_merged_q4f16.onnx",
+        "onnx/decoder_model_merged_q4f16.onnx_data",
+    ),
+    required_files=_GRANITE_5_0_Q4_REQUIRED_FILES,
+    revision="a9cf1d13d045d65813b4bc80bde8fdd62db4c35c",
 )
 
 # NeMo exports served by the pure-Python onnx-asr runtime. Both repos also ship
@@ -248,37 +252,38 @@ _PARAKEET_INT8_LAYOUT = _OnnxModelLayout(
     ),
 )
 
-# Moondream's post-trained Parakeet TDT 0.6B v3 ("Parakeet Ultra"), exported to
-# ONNX by Olicorne. The repository keeps each precision in its own folder
-# (`int8/`, `w4a8/`, `fp16/`, `fp32/`) beside the shared `vocab.txt` and
-# `config.json`, and carries `.zst` copies and the 2.5 GB `.nemo` checkpoint as
-# well. So every file is named exactly: `*.int8.onnx` would do here, but
-# fnmatch's `*` crosses `/`, and the four names are all this model runs. The
-# commit is pinned because the export is a community upload whose files can be
-# replaced under the same name; `MODEL_ESTIMATED_SIZE_MB` and the measurements
-# in `docs/models.md` describe this commit.
-_PARAKEET_ULTRA_INT8_LAYOUT = _OnnxModelLayout(
-    name="parakeet_tdt_ultra_int8",
+# FluidVoice Labs' Fluid Speech Pro (Parakeet TDT 0.6B v3 post-trained,
+# CC-BY-4.0), from the vendor's own ONNX repository. Besides the int8 pair
+# onnx-asr loads, the repository carries fp32 copies, "clean mode" graphs and
+# sherpa-onnx's separate decoder and joiner (3.6 GB in all), so the files are
+# named exactly. The weights sit in `.data` files beside each graph. The commit
+# is pinned because the repository is days old and its files can be replaced
+# under the same name; `MODEL_ESTIMATED_SIZE_MB` and the measurements in
+# `docs/models.md` describe this commit.
+_FLUID_SPEECH_PRO_INT8_LAYOUT = _OnnxModelLayout(
+    name="fluid_speech_pro_int8",
     precision="int8",
     allow_patterns=(
         ".gitattributes",
+        "LICENSE",
+        "NOTICE",
         "README.md",
         "config.json",
         "vocab.txt",
-        "int8/encoder-model.int8.onnx",
-        "int8/decoder_joint-model.int8.onnx",
+        "encoder-model.int8.onnx",
+        "encoder-model.int8.onnx.data",
+        "decoder_joint-model.int8.onnx",
+        "decoder_joint-model.int8.onnx.data",
     ),
     required_files=(
         "config.json",
         "vocab.txt",
-        "int8/encoder-model.int8.onnx",
-        "int8/decoder_joint-model.int8.onnx",
+        "encoder-model.int8.onnx",
+        "encoder-model.int8.onnx.data",
+        "decoder_joint-model.int8.onnx",
+        "decoder_joint-model.int8.onnx.data",
     ),
-    revision="dd203225f41c8a7d0323967afa1869cea0907436",
-    # onnx-asr 0.12.0 finds its files with a non-recursive glob in the one
-    # folder it is handed, so the graphs' folder is what it loads from and the
-    # two root files are copied in beside them.
-    inference_subdir="int8",
+    revision="fa588e9f87f1b9ad0ca2e2d8f7eaf84dc3803581",
 )
 
 _CANARY_INT8_LAYOUT = _OnnxModelLayout(
@@ -332,11 +337,10 @@ _GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
 
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
-    "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
-    "granite-speech-4.1-2b": _GRANITE_4_1_AR_Q4_LAYOUT,
+    "granite-speech-5.0-2b": _GRANITE_5_0_Q4_LAYOUT,
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
-    PARAKEET_ULTRA_MODEL_SIZE: _PARAKEET_ULTRA_INT8_LAYOUT,
+    FLUID_SPEECH_PRO_MODEL_SIZE: _FLUID_SPEECH_PRO_INT8_LAYOUT,
     CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
     GRANITE_CTC_MODEL_SIZE: _GRANITE_CTC_INT8_LAYOUT,
 }
@@ -538,56 +542,6 @@ def resolve_cached_webgpu_model_root(
         if _valid_snapshot_path(model_name, root) is not None:
             return root
     return None
-
-
-def prepare_onnx_inference_dir(model_name: str, snapshot: Path) -> Path:
-    """Return the folder the runtime loads `model_name` from, ready to load.
-
-    For a layout without `inference_subdir` that is `snapshot` itself and
-    nothing is touched. Otherwise every required file at the snapshot root is
-    copied into that subfolder beside the graphs, because onnx-asr 0.12.0 looks
-    for `vocab.txt` and `config.json` in the same single folder as the
-    `*.onnx` files and does not search above it.
-
-    The copies are idempotent and atomic: a copy whose bytes already match is
-    left alone, a missing or different one (an earlier interrupted run, a
-    hand-edited file, a changed root file) is written again through
-    `atomic_write_bytes`, and only root files are copied, so the graphs are
-    never opened for writing. They add about 94 KB (`vocab.txt` 93,939 bytes,
-    `config.json` 97), which neither the size estimate, the download progress
-    nor the completed-download baseline notices, and `delete_cached_model`
-    removes them together with the rest of the folder. A write that fails is
-    accepted only when a re-read finds the same bytes -- another process that
-    loaded the model at the same moment may have replaced the file first, and
-    on Windows `os.replace` onto a file held open fails with WinError 5 -- and
-    raised otherwise, so a Model Dir the app cannot write to fails the load
-    with that reason instead of a runtime that cannot find its vocabulary.
-    """
-    layout = _MODEL_LAYOUTS.get(model_name)
-    if layout is None or not layout.inference_subdir:
-        return snapshot
-    target_dir = snapshot / layout.inference_subdir
-    for relative in layout.required_files:
-        if "/" in relative:
-            continue
-        data = (snapshot / relative).read_bytes()
-        target = target_dir / relative
-        if _file_holds(target, data):
-            continue
-        try:
-            atomic_write_bytes(target, data)
-        except OSError:
-            if _file_holds(target, data):
-                continue
-            raise
-    return target_dir
-
-
-def _file_holds(path: Path, data: bytes) -> bool:
-    try:
-        return path.read_bytes() == data
-    except OSError:
-        return False
 
 
 def resolve_cached_webgpu_model_path(
@@ -1193,7 +1147,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         if snapshot is not None:
             return snapshot
         if self.offline_mode:
-            raise TranscriptionError(
+            raise ModelNotCachedError(
                 f"ONNX/WebGPU model '{self.model_size}' is not cached locally. "
                 f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
             )

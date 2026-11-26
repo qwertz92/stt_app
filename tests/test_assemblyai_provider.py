@@ -1309,7 +1309,7 @@ def test_a_stream_worker_that_cannot_start_leaves_no_session_behind(monkeypatch)
 
     from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
-    t = LocalFasterWhisperTranscriber(model_size="tiny")
+    t = LocalFasterWhisperTranscriber(model_size="large-v3-turbo")
     real_thread = _threading.Thread
 
     class _RefusingThread(real_thread):

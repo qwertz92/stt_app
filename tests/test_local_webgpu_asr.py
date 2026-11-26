@@ -18,7 +18,7 @@ from types import SimpleNamespace
 import pytest
 
 from stt_app.config import (
-    GRANITE_4_1_REPO_MAP,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     GRANITE_CTC_MODEL_SIZE,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
@@ -26,7 +26,6 @@ from stt_app.config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
     PARAKEET_MODEL_SIZE,
-    PARAKEET_ULTRA_MODEL_SIZE,
 )
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -125,19 +124,16 @@ def test_find_cached_webgpu_models_detects_complete_q4_snapshots(tmp_path):
     assert find_cached_webgpu_models(str(tmp_path)) == ["cohere-transcribe-03-2026"]
 
 
-def test_selectable_webgpu_models_use_granite_4_1_2b_q4_and_keep_4_0_q4():
-    assert "granite-4.0-1b-speech" in LOCAL_WEBGPU_MODEL_SIZES
-    assert "granite-4.0-1b-speech" in MODEL_REPO_MAP
-    assert LOCAL_ONNX_MODEL_PRECISION["granite-4.0-1b-speech"] == "q4"
-    for model_name in GRANITE_4_1_REPO_MAP:
-        assert model_name in LOCAL_WEBGPU_MODEL_SIZES
-        assert model_name in MODEL_REPO_MAP
-    # Granite 4.1 2B ships as a q4 Transformers.js package on the pipeline
-    # path. The raw INT8 graph tier (Plus, NAR) was retired on 2026-08-26, so
-    # every selectable ONNX model now runs through that one pipeline.
-    assert LOCAL_ONNX_MODEL_PRECISION["granite-speech-4.1-2b"] == "q4"
-    assert MODEL_REPO_MAP["granite-speech-4.1-2b"] == (
-        "onnx-community/granite-speech-4.1-2b-ONNX"
+def test_selectable_webgpu_models_are_cohere_and_granite_5_0_2b():
+    """Granite 4.0 and 4.1 were retired on 2026-11-25 for 5.0; every
+    selectable ONNX model runs through the one Transformers.js pipeline."""
+    assert LOCAL_WEBGPU_MODEL_SIZES == (
+        "cohere-transcribe-03-2026",
+        "granite-speech-5.0-2b",
+    )
+    assert LOCAL_ONNX_MODEL_PRECISION["granite-speech-5.0-2b"] == "q4"
+    assert MODEL_REPO_MAP["granite-speech-5.0-2b"] == (
+        "ibm-granite/granite-speech-5.0-2b-ONNX"
     )
 
 
@@ -205,52 +201,21 @@ def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_
     )
 
     result = download_webgpu_model_snapshot(
-        "granite-4.0-1b-speech",
+        "granite-speech-5.0-2b",
         str(tmp_path),
     )
 
     assert result == str(tmp_path / "snapshot")
     repo_id, kwargs = calls[0]
-    assert repo_id == MODEL_REPO_MAP["granite-4.0-1b-speech"]
-    assert kwargs["local_dir"] == str(tmp_path / "granite-4.0-1b-speech-ONNX")
+    assert repo_id == MODEL_REPO_MAP["granite-speech-5.0-2b"]
+    assert kwargs["local_dir"] == str(tmp_path / "granite-speech-5.0-2b-ONNX")
     assert kwargs["max_workers"] == 2
-    assert "onnx/*_q4.onnx" in kwargs["allow_patterns"]
-    assert "onnx/*_q4.onnx_data" in kwargs["allow_patterns"]
-
-
-def test_download_webgpu_model_snapshot_uses_granite_4_1_2b_q4_patterns(
-    monkeypatch,
-    tmp_path,
-):
-    calls = []
-
-    def fake_snapshot_download(repo_id, **kwargs):
-        calls.append((repo_id, kwargs))
-        _materialise_required_files(
-            repo_id, kwargs["local_dir"], kwargs.get("allow_patterns")
-        )
-        return str(tmp_path / "snapshot")
-
-    monkeypatch.setitem(
-        sys.modules,
-        "huggingface_hub",
-        SimpleNamespace(snapshot_download=fake_snapshot_download),
-    )
-
-    result = download_webgpu_model_snapshot(
-        "granite-speech-4.1-2b",
-        str(tmp_path),
-    )
-
-    assert result == str(tmp_path / "snapshot")
-    repo_id, kwargs = calls[0]
-    assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b"]
-    assert kwargs["local_dir"] == str(tmp_path / "granite-speech-4.1-2b-ONNX")
-    assert kwargs["max_workers"] == 2
-    assert "onnx/*_q4.onnx" in kwargs["allow_patterns"]
-    assert "onnx/*_q4.onnx_data" in kwargs["allow_patterns"]
+    assert "onnx/audio_encoder_q4.onnx_data" in kwargs["allow_patterns"]
+    assert "onnx/decoder_model_merged_q4f16.onnx_data" in kwargs["allow_patterns"]
     assert "chat_template.jinja" in kwargs["allow_patterns"]
-    assert "int8/*.onnx" not in kwargs["allow_patterns"]
+    # Only the q4 encoder and the q4f16 embedding and decoder graphs are
+    # named; no wildcard may pull in other `onnx/` variants.
+    assert not [p for p in kwargs["allow_patterns"] if p.startswith("onnx/*")]
 
 
 @pytest.mark.parametrize("model_name", LOCAL_ONNX_MODEL_SIZES)
@@ -300,8 +265,8 @@ def test_an_orphaned_partial_is_gone_before_the_onnx_download_starts(
     at the high-water mark it describes. In this layout hub keeps it under
     `<local_dir>/.cache/huggingface/download/`.
     """
-    model_name = "granite-4.0-1b-speech"
-    destination = tmp_path / "granite-4.0-1b-speech-ONNX"
+    model_name = "granite-speech-5.0-2b"
+    destination = tmp_path / "granite-speech-5.0-2b-ONNX"
     downloads = destination / ".cache" / "huggingface" / "download"
     downloads.mkdir(parents=True)
     orphan = downloads / "model_q4.onnx.1a2b3c4d.incomplete"
@@ -326,23 +291,23 @@ def test_an_orphaned_partial_is_gone_before_the_onnx_download_starts(
     assert seen == [False]
 
 
-def test_required_file_validation_accepts_granite_4_1_2b_q4_snapshot(tmp_path):
-    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
+def test_required_file_validation_accepts_granite_5_0_2b_q4_snapshot(tmp_path):
+    snapshot = _write_required_snapshot(tmp_path, "granite-speech-5.0-2b")
 
     assert (
-        resolve_cached_webgpu_model_path("granite-speech-4.1-2b", str(tmp_path))
+        resolve_cached_webgpu_model_path("granite-speech-5.0-2b", str(tmp_path))
         == snapshot
     )
-    assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-4.1-2b"]
+    assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-5.0-2b"]
 
 
-def test_required_file_validation_rejects_incomplete_granite_4_1_snapshot(tmp_path):
-    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
-    (snapshot / "onnx/decoder_model_merged_q4.onnx_data").unlink()
+def test_required_file_validation_rejects_incomplete_granite_5_0_snapshot(tmp_path):
+    snapshot = _write_required_snapshot(tmp_path, "granite-speech-5.0-2b")
+    (snapshot / "onnx/decoder_model_merged_q4f16.onnx_data").unlink()
 
     assert (
         resolve_cached_webgpu_model_path(
-            "granite-speech-4.1-2b",
+            "granite-speech-5.0-2b",
             str(tmp_path),
         )
         is None
@@ -360,20 +325,20 @@ def test_webgpu_transcriber_defaults_auto_language_to_german():
 
 def test_granite_webgpu_transcriber_allows_auto_language():
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-4.0-1b-speech",
+        model_size="granite-speech-5.0-2b",
         language_mode="auto",
     )
 
     assert transcriber._language_arg() == ""
 
 
-def test_granite_4_1_transcriber_allows_auto_and_french_language():
+def test_granite_5_0_transcriber_allows_auto_and_french_language():
     auto_transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         language_mode="auto",
     )
     french_transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         language_mode="fr",
     )
 
@@ -456,41 +421,67 @@ def test_granite_ctc_fetches_the_int8_graph_and_neither_of_the_other_two():
 
 
 # --------------------------------------------------------------------------
-# Parakeet TDT 0.6B v3 Ultra
+# Fluid Speech Pro
 #
-# A third-party ONNX export (Olicorne) of Moondream's post-trained Parakeet,
-# fetched at one pinned commit. Its repository keeps the int8 graphs in
-# `int8/` and `vocab.txt` / `config.json` at the root, while onnx-asr looks
-# for all four in the one directory it is given.
+# FluidVoice Labs' own ONNX repository, fetched at one pinned commit. Besides
+# the int8 pair onnx-asr loads it carries fp32 copies, "clean mode" graphs and
+# sherpa-onnx's separate decoder and joiner, so every file is named.
 
-_ULTRA_REVISION = "dd203225f41c8a7d0323967afa1869cea0907436"
-_ULTRA_FILES = {
+_FLUID_REVISION = "fa588e9f87f1b9ad0ca2e2d8f7eaf84dc3803581"
+_FLUID_FILES = {
     "config.json": b'{"model_type": "nemo-conformer-tdt", "features_size": 128}',
     "vocab.txt": b"<unk> 0\n\xe2\x96\x81t 1\n<blk> 8192\n",
-    "int8/encoder-model.int8.onnx": b"encoder graph bytes",
-    "int8/decoder_joint-model.int8.onnx": b"decoder graph bytes",
+    "encoder-model.int8.onnx": b"encoder graph bytes",
+    "encoder-model.int8.onnx.data": b"encoder weights",
+    "decoder_joint-model.int8.onnx": b"decoder graph bytes",
+    "decoder_joint-model.int8.onnx.data": b"decoder weights",
 }
+# The repository's file list at `_FLUID_REVISION` (2026-11-25).
+_FLUID_REPOSITORY_FILES = (
+    ".gitattributes",
+    "LICENSE",
+    "NOTICE",
+    "README.md",
+    "config.json",
+    "decoder.clean.int8.onnx",
+    "decoder.clean.onnx",
+    "decoder.int8.onnx",
+    "decoder.int8.onnx.data",
+    "decoder.onnx",
+    "decoder.onnx.data",
+    "decoder_joint-model.clean.int8.onnx",
+    "decoder_joint-model.clean.onnx",
+    "decoder_joint-model.int8.onnx",
+    "decoder_joint-model.int8.onnx.data",
+    "decoder_joint-model.onnx",
+    "decoder_joint-model.onnx.data",
+    "encoder-model.clean.int8.onnx",
+    "encoder-model.clean.onnx",
+    "encoder-model.int8.onnx",
+    "encoder-model.int8.onnx.data",
+    "encoder-model.onnx",
+    "encoder-model.onnx.data",
+    "joiner.clean.int8.onnx",
+    "joiner.clean.onnx",
+    "joiner.int8.onnx",
+    "joiner.int8.onnx.data",
+    "joiner.onnx",
+    "joiner.onnx.data",
+    "vocab.txt",
+)
 
 
-def _write_ultra_download(model_dir: Path) -> Path:
+def _write_fluid_download(model_dir: Path) -> Path:
     """The folder a completed download leaves, at the path it writes to."""
     root = local_webgpu_asr.webgpu_download_destination(
-        PARAKEET_ULTRA_MODEL_SIZE, str(model_dir)
+        FLUID_SPEECH_PRO_MODEL_SIZE, str(model_dir)
     )
     assert root is not None
-    for relative, data in _ULTRA_FILES.items():
+    for relative, data in _FLUID_FILES.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
     return root
-
-
-def _tree(root: Path) -> dict[str, tuple[bytes, int]]:
-    return {
-        path.relative_to(root).as_posix(): (path.read_bytes(), path.stat().st_mtime_ns)
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
 
 
 def _record_hub_downloads(monkeypatch, calls: list) -> None:
@@ -510,14 +501,14 @@ def _record_hub_downloads(monkeypatch, calls: list) -> None:
 
 
 @pytest.mark.parametrize("with_progress_hook", [False, True])
-def test_parakeet_ultra_is_fetched_at_its_pinned_revision(
+def test_fluid_speech_pro_is_fetched_at_its_pinned_revision(
     monkeypatch, tmp_path, with_progress_hook
 ):
-    """The export is a day old and third-party: `main` can be replaced by a
-    different export under the same name at any time, and the app would load
-    whatever it found. Every road goes through `download_model_snapshot` --
-    the download worker with a progress hook, the transcriber's own load path
-    and `scripts/download_model.py` without one -- so both calls are checked
+    """The repository is days old: `main` can be replaced by different files
+    under the same names at any time, and the app would load whatever it
+    found. Every road goes through `download_model_snapshot` -- the download
+    worker with a progress hook, the transcriber's own load path and
+    `scripts/download_model.py` without one -- so both calls are checked
     there."""
     from stt_app.transcriber.local_faster_whisper import download_model_snapshot
 
@@ -525,21 +516,41 @@ def test_parakeet_ultra_is_fetched_at_its_pinned_revision(
     _record_hub_downloads(monkeypatch, calls)
 
     download_model_snapshot(
-        PARAKEET_ULTRA_MODEL_SIZE,
+        FLUID_SPEECH_PRO_MODEL_SIZE,
         str(tmp_path),
         progress_hook=(lambda _done, _total: None) if with_progress_hook else None,
     )
 
     repo_id, kwargs = calls[0]
-    assert repo_id == "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx"
-    assert kwargs["revision"] == _ULTRA_REVISION
-    assert kwargs["local_dir"] == str(tmp_path / "parakeet-tdt-0.6b-v3-ultra-onnx")
+    assert repo_id == "FluidVoice-Labs/fluid-speech-pro-onnx"
+    assert kwargs["revision"] == _FLUID_REVISION
+    assert kwargs["local_dir"] == str(tmp_path / "fluid-speech-pro-onnx")
     assert ("tqdm_class" in kwargs) is with_progress_hook
+
+
+_GRANITE_5_0_REVISION = "a9cf1d13d045d65813b4bc80bde8fdd62db4c35c"
+
+
+def test_granite_5_0_2b_is_fetched_at_its_pinned_revision(monkeypatch, tmp_path):
+    """IBM's export has two commits and the measurements describe the head;
+    pinned like Fluid's so a later push cannot change what the app runs."""
+    calls: list = []
+    _record_hub_downloads(monkeypatch, calls)
+
+    download_webgpu_model_snapshot("granite-speech-5.0-2b", str(tmp_path))
+
+    repo_id, kwargs = calls[0]
+    assert repo_id == "ibm-granite/granite-speech-5.0-2b-ONNX"
+    assert kwargs["revision"] == _GRANITE_5_0_REVISION
 
 
 @pytest.mark.parametrize(
     "model_name",
-    [name for name in LOCAL_ONNX_MODEL_SIZES if name != PARAKEET_ULTRA_MODEL_SIZE],
+    [
+        name
+        for name in LOCAL_ONNX_MODEL_SIZES
+        if name not in (FLUID_SPEECH_PRO_MODEL_SIZE, "granite-speech-5.0-2b")
+    ],
 )
 def test_a_model_without_a_pin_sends_no_revision(monkeypatch, tmp_path, model_name):
     """Absent rather than `None`: every other model's call stays exactly the
@@ -554,158 +565,60 @@ def test_a_model_without_a_pin_sends_no_revision(monkeypatch, tmp_path, model_na
     assert "revision" not in kwargs
 
 
-def test_parakeet_ultra_fetches_the_four_files_it_runs_by_name():
-    """The repository also carries fp32/, fp16/ and w4a8/ graphs, `.zst`
-    copies, `nemo128.onnx` and a 2.5 GB `.nemo`. A wildcard such as the other
-    onnx-asr layouts' `*.int8.onnx` matches across `/` in fnmatch, which is
-    how hub filters, so only exact names keep the download at 668 MB."""
-    layout = local_webgpu_asr._MODEL_LAYOUTS[PARAKEET_ULTRA_MODEL_SIZE]
+def test_fluid_speech_pro_fetches_only_the_int8_pair_onnx_asr_runs():
+    """The repository also carries fp32 copies (2.67 GB), clean-mode graphs and
+    sherpa-onnx's decoder and joiner; about 801 MB of its 3.6 GB are what
+    onnx-asr loads. The names are exact, so a file added to the repository
+    later cannot widen the download."""
+    layout = local_webgpu_asr._MODEL_LAYOUTS[FLUID_SPEECH_PRO_MODEL_SIZE]
+    fetched = {
+        relative
+        for relative in _FLUID_REPOSITORY_FILES
+        if any(fnmatchcase(relative, pattern) for pattern in layout.allow_patterns)
+    }
 
     assert not [
         pattern for pattern in layout.allow_patterns if set(pattern) & set("*?[")
     ]
-    assert set(layout.allow_patterns) == set(layout.required_files) | {
+    assert fetched == set(_FLUID_FILES) | {
         ".gitattributes",
+        "LICENSE",
+        "NOTICE",
         "README.md",
     }
-    assert set(layout.required_files) == set(_ULTRA_FILES)
+    assert set(layout.required_files) == set(_FLUID_FILES)
 
 
-def test_the_inventory_finds_parakeet_ultra_where_the_download_puts_it(tmp_path):
-    root = _write_ultra_download(tmp_path)
+def test_the_inventory_finds_fluid_speech_pro_where_the_download_puts_it(tmp_path):
+    root = _write_fluid_download(tmp_path)
 
     assert (
-        resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
+        resolve_cached_webgpu_model_path(FLUID_SPEECH_PRO_MODEL_SIZE, str(tmp_path))
         == root
     )
-    assert PARAKEET_ULTRA_MODEL_SIZE in find_cached_webgpu_models(str(tmp_path))
+    assert FLUID_SPEECH_PRO_MODEL_SIZE in find_cached_webgpu_models(str(tmp_path))
 
-    (root / "int8" / "decoder_joint-model.int8.onnx").unlink()
+    (root / "encoder-model.int8.onnx.data").unlink()
 
     assert (
-        resolve_cached_webgpu_model_path(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
+        resolve_cached_webgpu_model_path(FLUID_SPEECH_PRO_MODEL_SIZE, str(tmp_path))
         is None
     )
-    assert PARAKEET_ULTRA_MODEL_SIZE not in find_cached_webgpu_models(str(tmp_path))
+    assert FLUID_SPEECH_PRO_MODEL_SIZE not in find_cached_webgpu_models(str(tmp_path))
 
 
-def test_the_companion_files_are_copied_beside_the_graphs(tmp_path):
-    root = _write_ultra_download(tmp_path)
-    before = _tree(root)
-
-    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
-        PARAKEET_ULTRA_MODEL_SIZE, root
-    )
-
-    assert load_dir == root / "int8"
-    after = _tree(root)
-    # Everything that was there is byte-for-byte and mtime-for-mtime the same:
-    # the graphs are never opened for writing, and the root gains nothing.
-    assert {name: after[name] for name in before} == before
-    assert set(after) - set(before) == {"int8/config.json", "int8/vocab.txt"}
-    assert after["int8/vocab.txt"][0] == _ULTRA_FILES["vocab.txt"]
-    assert after["int8/config.json"][0] == _ULTRA_FILES["config.json"]
-
-
-def test_a_second_preparation_writes_nothing(monkeypatch, tmp_path):
-    root = _write_ultra_download(tmp_path)
-    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
-    writes: list[Path] = []
-    monkeypatch.setattr(
-        local_webgpu_asr, "atomic_write_bytes", lambda path, _data: writes.append(path)
-    )
-
-    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
-        PARAKEET_ULTRA_MODEL_SIZE, root
-    )
-
-    assert load_dir == root / "int8"
-    assert writes == []
-
-
-@pytest.mark.parametrize("damage", ["missing", "changed", "emptied"])
-def test_a_missing_or_stale_copy_is_written_again(tmp_path, damage):
-    """A copy can go missing (a user tidying the folder) or go stale (the root
-    file replaced by a later download of another revision); onnx-asr would
-    then fail to find the vocabulary, or read one that does not match the
-    graphs, and nothing would say why."""
-    root = _write_ultra_download(tmp_path)
-    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
-        PARAKEET_ULTRA_MODEL_SIZE, root
-    )
-    copy = load_dir / "vocab.txt"
-    if damage == "missing":
-        copy.unlink()
-    elif damage == "changed":
-        copy.write_bytes(b"<unk> 0\nan older vocabulary 1\n")
-    else:
-        copy.write_bytes(b"")
-
-    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
-
-    assert copy.read_bytes() == _ULTRA_FILES["vocab.txt"]
-
-
-def test_a_copy_another_process_finished_first_is_accepted(monkeypatch, tmp_path):
-    """The app's preload and a benchmark worker can both load the model for the
-    first time at once. `os.replace` onto a file another process holds open is
-    refused on Windows (measured: WinError 5 against a file held open for
-    reading), so the process that loses finds its write refused while the copy
-    the winner wrote is already the right one."""
-    root = _write_ultra_download(tmp_path)
-    real_write = local_webgpu_asr.atomic_write_bytes
-
-    def the_other_process_won(path, data):
-        real_write(path, data)
-        raise PermissionError(13, "Access is denied", str(path))
-
-    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", the_other_process_won)
-
-    load_dir = local_webgpu_asr.prepare_onnx_inference_dir(
-        PARAKEET_ULTRA_MODEL_SIZE, root
-    )
-
-    assert (load_dir / "vocab.txt").read_bytes() == _ULTRA_FILES["vocab.txt"]
-
-
-def test_a_copy_that_cannot_be_written_is_not_hidden(monkeypatch, tmp_path):
-    root = _write_ultra_download(tmp_path)
-
-    def refused(path, _data):
-        raise PermissionError(13, "Access is denied", str(path))
-
-    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", refused)
-
-    with pytest.raises(PermissionError):
-        local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
-
-
-def test_a_layout_without_an_inference_subdir_loads_from_its_root(tmp_path):
-    root = tmp_path / "parakeet-tdt-0.6b-v3-onnx"
-    for relative in local_webgpu_asr._REQUIRED_FILES[PARAKEET_MODEL_SIZE]:
-        (root / relative).parent.mkdir(parents=True, exist_ok=True)
-        (root / relative).write_bytes(relative.encode())
-    before = _tree(root)
-
-    assert (
-        local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_MODEL_SIZE, root) == root
-    )
-    assert _tree(root) == before
-
-
-def test_deleting_parakeet_ultra_removes_the_copies_too(tmp_path):
+def test_deleting_fluid_speech_pro_removes_its_folder(tmp_path):
     from stt_app.transcriber.local_faster_whisper import delete_cached_model
 
-    root = _write_ultra_download(tmp_path)
-    local_webgpu_asr.prepare_onnx_inference_dir(PARAKEET_ULTRA_MODEL_SIZE, root)
+    root = _write_fluid_download(tmp_path)
 
-    assert delete_cached_model(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)) == 1
+    assert delete_cached_model(FLUID_SPEECH_PRO_MODEL_SIZE, str(tmp_path)) == 1
     assert not root.exists()
 
 
 def test_explicit_cpu_policy_does_not_report_failed_gpu_fallback():
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         language_mode="en",
         device="cpu",
     )
@@ -817,7 +730,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert requests[-1]["command"] == "shutdown"
 
 
-def test_granite_4_1_2b_transcriber_passes_q4_precision_to_node(
+def test_granite_5_0_2b_transcriber_passes_q4_precision_to_node(
     monkeypatch,
     tmp_path,
 ):
@@ -856,7 +769,7 @@ def test_granite_4_1_2b_transcriber_passes_q4_precision_to_node(
     )
 
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         language_mode="en",
         device="cpu",
         node_path="node",
@@ -2020,7 +1933,7 @@ def _started_command(monkeypatch, tmp_path, **kwargs) -> list[str]:
         lambda command, **_kwargs: commands.append(list(command)) or _FakeProcess(),
     )
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         node_path="node",
         runner_path=runner,
         **kwargs,
@@ -2073,7 +1986,7 @@ def test_the_transcriber_keeps_only_a_preference_that_changes_something(
     device, preferred, expected
 ):
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         device=device,
         preferred_device=preferred,
     )
@@ -2116,7 +2029,7 @@ def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(monkeypatch, tm
         lambda command, **_kwargs: _FakeProcess(),
     )
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b",
+        model_size="granite-speech-5.0-2b",
         node_path="node",
         runner_path=runner,
         preferred_device="cpu",
@@ -2142,7 +2055,7 @@ def test_cpu_measured_as_fastest_is_not_reported_as_a_failed_gpu(monkeypatch, tm
 def test_a_real_cpu_fallback_is_still_reported_as_one():
     """The measured-CPU wording must not swallow the case it was carved out of:
     `auto` with nothing measured that ends on CPU is still a failed GPU load."""
-    transcriber = LocalOnnxWebGpuTranscriber(model_size="granite-speech-4.1-2b")
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="granite-speech-5.0-2b")
     transcriber._set_runtime_status("cpu", False, ["webgpu: no adapter"])
 
     assert "did not load" in transcriber.runtime_status_text()
@@ -2153,7 +2066,7 @@ def test_a_real_cpu_fallback_is_still_reported_as_one():
 def test_a_gpu_measured_as_fastest_keeps_the_normal_status_text():
     """Only the CPU arm changes; a DirectML run says what it always said."""
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b", preferred_device="dml"
+        model_size="granite-speech-5.0-2b", preferred_device="dml"
     )
     transcriber._set_runtime_status("dml", True, [])
 
@@ -2228,3 +2141,23 @@ def test_node_resolve_device_puts_a_measured_device_first():
     assert result["win32Cpu"] == ["cpu"]
     assert result["win32Dml"] == ["dml"]
     assert result["win32Webgpu"] == ["webgpu"]
+
+
+def test_the_granite_runner_sends_ibms_instruction_and_loads_the_published_dtypes():
+    """Granite 5.0 2B answers German clips in English (WER 15.0 against 3.5)
+    when it is given the 4.x instruction, and it loads from IBM's package only
+    with the encoder in q4 and the embedding and decoder in q4f16. The runner
+    is JavaScript that no Python test executes, so this pins its text."""
+    runner = (
+        Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
+    )
+    source = runner.read_text(encoding="utf-8")
+
+    assert (
+        '"transcribe the speech with proper punctuation and capitalization."' in source
+    )
+    assert "The speech is in ${languageName}. Transcribe it exactly" in source
+    assert 'embed_tokens: "q4f16"' in source
+    assert 'decoder_model_merged: "q4f16"' in source
+    assert "audio_encoder: dtype" in source
+    assert 'new Set(["granite-speech-5.0-2b"])' in source

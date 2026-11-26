@@ -15,7 +15,7 @@ from stt_app.local_benchmark import (
 )
 
 _COHERE = "cohere-transcribe-03-2026"
-_GRANITE = "granite-speech-4.1-2b"
+_GRANITE = "granite-speech-5.0-2b"
 _NEMOTRON = "nemotron-3.5-asr-streaming-0.6b-int4"
 
 
@@ -279,29 +279,29 @@ def test_a_run_that_never_asked_for_a_comparison_is_not_reported():
     assert uncomparable_device_models(no_device) == {}
 
 
-def test_parakeet_ultra_is_benchmarked_once_on_the_cpu_like_parakeet(
+def test_fluid_speech_pro_is_benchmarked_once_on_the_cpu_like_parakeet(
     monkeypatch, tmp_path
 ):
-    """Ultra runs on onnx-asr, which takes no execution device, so "all
+    """Fluid Speech Pro runs on onnx-asr, which takes no execution device, so "all
     targets" must not turn it into three cases measuring the same CPU run
     under three names -- and the runner has to hand it to the onnx-asr case,
     not report an unknown runtime."""
     from stt_app import local_benchmark
     from stt_app.config import (
         DEVICE_AWARE_LOCAL_MODELS,
+        FLUID_SPEECH_PRO_MODEL_SIZE,
         PARAKEET_MODEL_SIZE,
-        PARAKEET_ULTRA_MODEL_SIZE,
     )
 
-    assert PARAKEET_ULTRA_MODEL_SIZE not in DEVICE_AWARE_LOCAL_MODELS
+    assert FLUID_SPEECH_PRO_MODEL_SIZE not in DEVICE_AWARE_LOCAL_MODELS
     planned = local_benchmark.planned_benchmark_cases(
-        [PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE], "all", "auto", "int8"
+        [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE], "all", "auto", "int8"
     )
     assert [
         (case.model, case.device_target, case.display_compute_type) for case in planned
     ] == [
         (PARAKEET_MODEL_SIZE, "auto", "onnx-int8"),
-        (PARAKEET_ULTRA_MODEL_SIZE, "auto", "onnx-int8"),
+        (FLUID_SPEECH_PRO_MODEL_SIZE, "auto", "onnx-int8"),
     ]
 
     handed_over: list[str] = []
@@ -322,9 +322,9 @@ def test_parakeet_ultra_is_benchmarked_once_on_the_cpu_like_parakeet(
     audio.write_bytes(b"")
     cases = local_benchmark.run_benchmark_cases(
         audio_path=audio,
-        model_names=[PARAKEET_ULTRA_MODEL_SIZE],
+        model_names=[FLUID_SPEECH_PRO_MODEL_SIZE],
         webgpu_devices="all",
     )
 
-    assert handed_over == [PARAKEET_ULTRA_MODEL_SIZE]
+    assert handed_over == [FLUID_SPEECH_PRO_MODEL_SIZE]
     assert [case.error for case in cases] == [None]

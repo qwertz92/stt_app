@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gc
 import io
-import re
 import sys
 import threading
 import time
@@ -18,13 +17,13 @@ import pytest
 
 from stt_app.config import (
     CANARY_MODEL_SIZE,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     PARAKEET_MODEL_SIZE,
-    PARAKEET_ULTRA_MODEL_SIZE,
     language_modes_for_selection,
     supports_streaming,
 )
@@ -118,13 +117,15 @@ def test_parakeet_sends_no_language_because_the_model_ignores_it():
     assert "language" not in fake.calls[0]
 
 
-def test_parakeet_ultra_offers_auto_only_and_sends_no_language():
-    """Ultra is the same TDT architecture post-trained further, so it ignores
+def test_fluid_speech_pro_offers_auto_only_and_sends_no_language():
+    """Fluid Speech Pro is a TDT model with no language input, so it ignores
     `language=` exactly like v3: offering a language list would fake control,
     and sending one would be the same illusion one level down."""
-    assert language_modes_for_selection("local", PARAKEET_ULTRA_MODEL_SIZE) == ("auto",)
+    assert language_modes_for_selection("local", FLUID_SPEECH_PRO_MODEL_SIZE) == (
+        "auto",
+    )
 
-    transcriber, fake = _transcriber_with_fake_model(PARAKEET_ULTRA_MODEL_SIZE)
+    transcriber, fake = _transcriber_with_fake_model(FLUID_SPEECH_PRO_MODEL_SIZE)
     transcriber.set_language_mode("de")
     assert transcriber._language_mode == "auto"
     transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
@@ -167,43 +168,39 @@ def _record_onnx_asr_loads(monkeypatch) -> list[dict]:
     return loads
 
 
-_ULTRA_SNAPSHOT = {
+_FLUID_SNAPSHOT = {
     "config.json": b'{"model_type": "nemo-conformer-tdt", "features_size": 128}',
     "vocab.txt": b"<unk> 0\n<blk> 8192\n",
-    "int8/encoder-model.int8.onnx": b"encoder",
-    "int8/decoder_joint-model.int8.onnx": b"decoder",
+    "encoder-model.int8.onnx": b"encoder",
+    "encoder-model.int8.onnx.data": b"encoder weights",
+    "decoder_joint-model.int8.onnx": b"decoder",
+    "decoder_joint-model.int8.onnx.data": b"decoder weights",
 }
 
 
-def test_parakeet_ultra_is_loaded_from_its_int8_folder_with_vocab_and_config(
+def test_fluid_speech_pro_is_loaded_from_its_snapshot_root_as_a_conformer_tdt(
     monkeypatch, tmp_path
 ):
-    """The export keeps the graphs in `int8/` and the vocabulary and config at
-    the root. Handed the root, onnx-asr finds no encoder; handed `int8/` as it
-    was downloaded, it finds no vocabulary, and without `config.json` it would
-    build an 80-bin front end for a model trained on 128."""
+    """The repository keeps everything onnx-asr looks for in one folder, and
+    `config.json` names a 128-bin front end: the model is loaded by its
+    architecture name, not as Parakeet v3, whose 128-bin preprocessor it
+    shares only through that file."""
     from stt_app.transcriber.local_webgpu_asr import webgpu_download_destination
 
-    root = webgpu_download_destination(PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path))
-    _write_snapshot(root, _ULTRA_SNAPSHOT)
+    root = webgpu_download_destination(FLUID_SPEECH_PRO_MODEL_SIZE, str(tmp_path))
+    _write_snapshot(root, _FLUID_SNAPSHOT)
     loads = _record_onnx_asr_loads(monkeypatch)
+    before = sorted(path.relative_to(root) for path in root.rglob("*"))
 
-    transcriber = LocalOnnxAsrTranscriber(
-        PARAKEET_ULTRA_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
-    )
-    transcriber._load_model()
+    LocalOnnxAsrTranscriber(
+        FLUID_SPEECH_PRO_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
+    )._load_model()
 
     assert len(loads) == 1
-    load = loads[0]
-    assert load["name"] == "nemo-parakeet-tdt-0.6b-v3"
-    assert load["path"] == root / "int8"
-    assert load["quantization"] == "int8"
-    assert load["files"] == {
-        "encoder-model.int8.onnx": b"encoder",
-        "decoder_joint-model.int8.onnx": b"decoder",
-        "vocab.txt": _ULTRA_SNAPSHOT["vocab.txt"],
-        "config.json": _ULTRA_SNAPSHOT["config.json"],
-    }
+    assert loads[0]["name"] == "nemo-conformer-tdt"
+    assert loads[0]["path"] == root
+    assert loads[0]["quantization"] == "int8"
+    assert sorted(path.relative_to(root) for path in root.rglob("*")) == before
 
 
 def test_parakeet_v3_is_still_loaded_from_its_snapshot_root(monkeypatch, tmp_path):
@@ -224,37 +221,6 @@ def test_parakeet_v3_is_still_loaded_from_its_snapshot_root(monkeypatch, tmp_pat
     assert loads[0]["path"] == root
     assert loads[0]["name"] == "nemo-parakeet-tdt-0.6b-v3"
     assert sorted(path.relative_to(root) for path in root.rglob("*")) == before
-
-
-def test_a_companion_copy_that_cannot_be_written_fails_the_load_by_name(
-    monkeypatch, tmp_path
-):
-    """A read-only Model Dir, or a scanner holding `int8/vocab.txt`: the load
-    must end in the transcriber's own error naming the model, not in a raw
-    OSError out of the worker, and onnx-asr must not be asked to load a folder
-    that is known to be incomplete."""
-    from stt_app.transcriber import local_webgpu_asr
-
-    root = local_webgpu_asr.webgpu_download_destination(
-        PARAKEET_ULTRA_MODEL_SIZE, str(tmp_path)
-    )
-    _write_snapshot(root, _ULTRA_SNAPSHOT)
-    loads = _record_onnx_asr_loads(monkeypatch)
-
-    def refused(path, _data):
-        raise PermissionError(13, "Access is denied", str(path))
-
-    monkeypatch.setattr(local_webgpu_asr, "atomic_write_bytes", refused)
-    transcriber = LocalOnnxAsrTranscriber(
-        PARAKEET_ULTRA_MODEL_SIZE, model_dir=str(tmp_path), offline_mode=True
-    )
-
-    with pytest.raises(
-        TranscriptionError,
-        match=re.escape("Failed to load local model 'parakeet-tdt-0.6b-v3-ultra'"),
-    ):
-        transcriber._load_model()
-    assert loads == []
 
 
 def test_transcribe_accepts_wav_bytes_raw_pcm_and_a_path(tmp_path):

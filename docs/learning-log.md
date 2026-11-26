@@ -233,6 +233,52 @@ a minute.
   the procedure needed a field set only after the call; the unit tests'
   scripted Windows sent no creation message until one was added.
 
+## 2026-11-25: local roster revised on measurements (Granite 5.0, Fluid Speech Pro)
+
+Structurally: `config.RETIRED_LOCAL_MODEL_SUCCESSORS` maps every removed local
+model to its successor, `AppSettings.from_dict` applies it (the file is written
+back by `load`, so it happens once) and the remote-model mechanism's
+`retired_model_moves` / `pending_model_moves` / "Speech model updated" tray
+notice tells the user (local and remote lines share one notice). The Parakeet Ultra support code is gone with the
+model: `prepare_onnx_inference_dir` and `_OnnxModelLayout.inference_subdir`
+existed only because the community export kept its graphs in `int8/` and
+`vocab.txt` at the root, and the official repository of its replacement is flat.
+Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
+("Roster of 2026-11-25").
+- **Method.** 25 German and 25 English clips of FLEURS test (CC-BY-4.0, 349.5 s
+  and 233.9 s, 490 and 532 reference words), one text normaliser for every
+  model, CPU or WebGPU as the app runs each, on a PC shared with test runs, so
+  the real-time factors are noisy and WER decided. One point of WER is about
+  five words, so differences below a point are not findings.
+- **Removed.** Granite 4.0 1B and 4.1 2B (owner decision; they also scored 10.4
+  and 10.6 % German, 11.5 and 13.5 % English as shipped), Parakeet Ultra
+  (replaced, never measured directly: no official export), Whisper `tiny`,
+  `base` and `medium`.
+- **Added.** Granite 5.0 2B: German 3.46, English 4.89 in Auto (punctuation prompt
+  only) and 5.26 with a language chosen (language sentence plus punctuation, which is
+  what the app sends then). Fluid Speech Pro: German
+  3.25, English 3.57, against Parakeet v3's 6.50 and 4.89, about three times
+  slower (RTF 0.2 against 0.05 to 0.09).
+- **Kept.** Canary (German 3.66, better than v3's 6.50, so the rule keeps it,
+  though Fluid measured 3.25 / 3.57 against Canary's 3.66 / 5.45, a German
+  difference inside the noise), Whisper `small` (German 6.10, English
+  5.64; the one Whisper that streams on a CPU-only laptop) and the three large
+  Whisper models.
+- **Lesson: a model's own prompt belongs to its generation.** The 4.x
+  instruction ("transcribe the speech into a written format") made Granite 5.0 2B
+  answer German clips in English (German WER 15.0). IBM's punctuation
+  instruction gave 3.46; naming the language first gave 4.88 when used alone.
+  Ship the generation's own instruction and measure it.
+- **Lesson: Parakeet v3 in Auto mode drifts to English.** About 3 of 25 German
+  clips came back partly or wholly English, which is most of its 6.5 % German
+  WER; the other models did not.
+- **Lesson: a retired model's files become invisible.** The Models tab listed
+  offered models only, so the files of the six removed models stayed on disk
+  and could not be deleted from the app. Fixed the same day: the tab now lists
+  each retired model whose folder still exists as a grey "No longer offered"
+  row with Delete as its only action (`config.RETIRED_LOCAL_MODEL_REPOS`,
+  `find_retired_models_on_disk`).
+
 ## 2026-11-25: review corrections to the retention and no-signal work
 
 Structurally: kept copies left the "Keep Recordings" count again, a secured

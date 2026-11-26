@@ -6,10 +6,10 @@ import pytest
 
 from stt_app.config import (
     CANARY_MODEL_SIZE,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
-    PARAKEET_ULTRA_MODEL_SIZE,
 )
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.local_faster_whisper import format_model_download_error
@@ -28,7 +28,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
     test green if an entry were dropped -- the models would quietly go back to
     "check your internet connection". The first three were probed against the
     ModelScope API on 2026-08-18 and answered 404, Granite Speech 5.0 TurboCTC
-    on 2026-09-19. Parakeet Ultra is in the set by design and was not probed:
+    on 2026-09-19. Fluid Speech Pro is in the set by design and was not probed:
     it is fetched at one pinned commit, and a mirror cannot promise that
     commit. The two raw-graph Granite 4.1 variants that were also in this set
     were retired on 2026-08-26.
@@ -38,7 +38,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
             {
                 "distil-large-v3.5",
                 "parakeet-tdt-0.6b-v3",
-                "parakeet-tdt-0.6b-v3-ultra",
+                "fluid-speech-pro",
                 "canary-1b-v2",
                 "granite-speech-5.0-470m-turboctc",
             }
@@ -52,7 +52,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
     [
         "distil-large-v3.5",
         "parakeet-tdt-0.6b-v3",
-        "parakeet-tdt-0.6b-v3-ultra",
+        "fluid-speech-pro",
         "canary-1b-v2",
         "granite-speech-5.0-470m-turboctc",
     ],
@@ -74,7 +74,7 @@ def test_mirrored_model_keeps_the_generic_error():
 
 
 @pytest.mark.parametrize(
-    "model_name", [PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE, CANARY_MODEL_SIZE]
+    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE, CANARY_MODEL_SIZE]
 )
 def test_onnx_asr_models_report_the_missing_mirror(monkeypatch, tmp_path, model_name):
     """The onnx-asr repos have no ModelScope counterpart.
@@ -181,7 +181,7 @@ def test_missing_file_list_is_summarised_not_dumped(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "model_name", [PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE, CANARY_MODEL_SIZE]
+    "model_name", [PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE, CANARY_MODEL_SIZE]
 )
 def test_public_download_path_reports_the_missing_mirror(
     monkeypatch, tmp_path, model_name
@@ -253,14 +253,14 @@ def test_a_pinned_download_never_falls_back_to_the_mirror(monkeypatch, tmp_path)
     )
 
     with pytest.raises(RuntimeError) as excinfo:
-        local_webgpu_asr.download_webgpu_model_snapshot(PARAKEET_ULTRA_MODEL_SIZE)
+        local_webgpu_asr.download_webgpu_model_snapshot(FLUID_SPEECH_PRO_MODEL_SIZE)
 
     assert hub_calls and hub_calls[0].get("revision")
     assert probed == []
     assert fetched == []
     message = str(excinfo.value)
     assert "no ModelScope mirror" in message
-    assert PARAKEET_ULTRA_MODEL_SIZE in message
+    assert FLUID_SPEECH_PRO_MODEL_SIZE in message
 
 
 def test_public_download_path_keeps_the_repo_error_for_mirrored_models(
@@ -284,7 +284,7 @@ def test_public_download_path_keeps_the_repo_error_for_mirrored_models(
     )
 
     with pytest.raises(RuntimeError) as excinfo:
-        local_webgpu_asr.download_webgpu_model_snapshot("granite-4.0-1b-speech")
+        local_webgpu_asr.download_webgpu_model_snapshot("granite-speech-5.0-2b")
 
     assert "no ModelScope mirror" not in str(excinfo.value)
 

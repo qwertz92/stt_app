@@ -264,6 +264,10 @@ class FakeTrayIcon(QtWidgets.QSystemTrayIcon):
         super().__init__()
         self.messages: list[tuple[str, str]] = []
 
+    def isVisible(self):
+        # A registered icon: the start notices wait for one.
+        return True
+
     def showMessage(self, title, message, icon=None, msecs=10000):
         self.messages.append((title, message))
 
@@ -1592,6 +1596,94 @@ def test_two_start_notices_are_never_sent_closer_than_the_spacing(monkeypatch):
     assert timers == []
 
 
+def test_the_update_notice_keeps_the_spacing_after_the_model_notice(monkeypatch):
+    """The update check's balloon is a start notice too: sent right after the
+    model notice it would replace it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda delay, callback: timers.append((delay, callback)),
+    )
+    tray = FakeTrayIcon()
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.2",
+            latest_tag="v0.4.2",
+            update_available=True,
+        ),
+    )
+
+    main_module._show_model_notice_when_ready(tray, "model moved")
+    checker.start()
+
+    assert [title for title, _text in tray.messages] == ["Speech model updated"]
+    assert len(timers) == 1
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+
+    assert [title for title, _text in tray.messages] == [
+        "Speech model updated",
+        "Voice Dictation App",
+    ]
+    _ = app
+
+
+def test_the_update_notice_waits_for_the_tray_icon(monkeypatch):
+    """The balloon of an update found at start is dropped by the tray while the
+    shell has not accepted the icon yet; it is held back and shown once it has."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    timers = []
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda delay, callback: timers.append((delay, callback)),
+    )
+    tray = FakeTrayIcon()
+    registered = [False]
+    tray.isVisible = lambda: registered[0]
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.2",
+            latest_tag="v0.4.2",
+            update_available=True,
+        ),
+    )
+
+    checker.start()
+
+    assert tray.messages == []
+    assert len(timers) == 1
+
+    # Still not registered after a retry: held back again.
+    timers.pop()[1]()
+    assert tray.messages == []
+    assert len(timers) == 1
+
+    registered[0] = True
+    timers.pop()[1]()
+
+    assert tray.messages == [
+        (
+            "Voice Dictation App",
+            "Update v0.4.2 is available. Current version: 0.4.1.",
+        )
+    ]
+    _ = app
+
+
 def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
     """The tray drops a balloon sent before the shell accepted the icon, and the
     move the notice announces is already saved, so it must be held back."""
@@ -1664,3 +1756,128 @@ def test_a_moved_model_choice_is_shown_as_one_tray_message():
     assert title == "Speech model updated"
     assert text == "OpenAI: whisper-1 is no longer offered."
     assert icon == QtWidgets.QSystemTrayIcon.Information
+
+
+def test_a_local_retirement_notice_is_shown_through_the_one_model_notice_path():
+    """Local and remote retirements share one pending-moves path and the one
+    "Speech model updated" tray notice (`_show_model_notice`)."""
+    shown = []
+
+    class _Tray:
+        def showMessage(self, title, text, icon, timeout):
+            shown.append((title, text))
+
+    main_module._show_model_notice(
+        _Tray(),
+        "Local (on this PC): base is no longer offered, your choice is now small.",
+    )
+
+    assert shown == [
+        (
+            "Speech model updated",
+            "Local (on this PC): base is no longer offered, your choice is now small.",
+        )
+    ]
+
+
+def test_the_model_notice_is_cleared_only_after_the_balloon_was_shown(monkeypatch):
+    """The pending move stays in the settings file while the tray icon is not
+    there yet, so a start closed in the meantime announces it at the next one."""
+    timers = []
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    events = []
+    tray = SimpleNamespace(
+        visible=False,
+        isVisible=lambda: tray.visible,
+        showMessage=lambda *args: events.append("shown"),
+    )
+
+    main_module._show_model_notice_when_ready(
+        tray, "notice", on_shown=lambda: events.append("cleared")
+    )
+    assert events == []
+
+    tray.visible = True
+    timers.pop()[1]()
+    assert events == ["shown", "cleared"]
+
+
+def test_the_pending_notice_is_written_for_the_disk_as_it_is_at_display_time(
+    monkeypatch,
+):
+    moves = [
+        {
+            "engine": "local",
+            "from": "granite-speech-4.1-2b",
+            "to": "granite-speech-5.0-2b",
+            "extra": "",
+        }
+    ]
+    settings = SimpleNamespace(
+        pending_model_moves=moves, model_dir="", offline_mode=False
+    )
+    store = SimpleNamespace(load=lambda: settings)
+    cached: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda model_dir="": list(cached),
+    )
+
+    def text() -> str:
+        return "\n".join(t for t, _ in main_module._pending_model_notices(store))
+
+    assert "Downloading it now (~1.73 GB)" in text()
+    settings.offline_mode = True
+    assert "Offline mode is on" in text()
+    cached.append("granite-speech-5.0-2b")
+    assert text().endswith("2B.")
+
+
+def test_two_model_notices_are_shown_one_after_the_other_and_cleared_one_by_one(
+    monkeypatch,
+):
+    """A local and a cloud notice that do not fit one balloon are two. The second
+    waits for the spacing between start notices, and each move is cleared only
+    once its own balloon was handed to the tray."""
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(main_module, "_start_notice_not_before", 0.0)
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    events: list = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True,
+        showMessage=lambda title, text, *args: events.append(("shown", text)),
+    )
+    local = {"engine": "local", "from": "a", "to": "b", "extra": ""}
+    cloud = {"engine": "openai", "from": "c", "to": "d", "extra": ""}
+
+    main_module._show_model_notices_when_ready(
+        tray,
+        [("local text", [local]), ("cloud text", [cloud])],
+        lambda moves: events.append(("cleared", [m["engine"] for m in moves])),
+    )
+
+    assert events == [("shown", "local text"), ("cleared", ["local"])]
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+    assert events[2:] == [("shown", "cloud text"), ("cleared", ["openai"])]
+    assert timers == []

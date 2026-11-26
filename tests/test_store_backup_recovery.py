@@ -71,7 +71,7 @@ def _transcript_history(tmp_path: Path):
 
 def _settings(tmp_path: Path):
     store = SettingsStore(tmp_path / "settings.json")
-    store.save(replace(AppSettings(), engine="groq", model_size="tiny"))
+    store.save(replace(AppSettings(), engine="groq", model_size="large-v3-turbo"))
     return store, store.path, lambda: (store.load().engine, store.load().model_size)
 
 
@@ -118,7 +118,7 @@ def _benchmark_history(tmp_path: Path):
 
 def _local_model_inventory(tmp_path: Path):
     store = LocalModelInventoryStore(path=tmp_path / "local_model_inventory.json")
-    store.save_cached_models("D:/models", ["small", "tiny"])
+    store.save_cached_models("D:/models", ["small", "large-v3-turbo"])
     return (
         store,
         store.path,
@@ -453,13 +453,13 @@ _WRITES: dict[str, Callable[[object], object]] = {
         500,
     ),
     "settings": lambda store: store.save(
-        replace(AppSettings(), engine="openai", model_size="tiny")
+        replace(AppSettings(), engine="openai", model_size="large-v3-turbo")
     ),
     "benchmark history": lambda store: store.add_entry(
         _benchmark_entry("run recorded while the file was locked")
     ),
     "local model inventory": lambda store: store.save_cached_models(
-        "D:/models", ["tiny"]
+        "D:/models", ["large-v3-turbo"]
     ),
     "last recording": lambda store: store.mark_completed(),
 }
@@ -569,7 +569,7 @@ def test_a_settings_save_refuses_to_overwrite_a_file_it_cannot_read(
     """
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
-    store.save(replace(AppSettings(), engine="groq", model_size="tiny"))
+    store.save(replace(AppSettings(), engine="groq", model_size="large-v3-turbo"))
     before = path.read_bytes()
 
     never_loaded = SettingsStore(path)
@@ -795,7 +795,7 @@ def test_a_settings_normalisation_is_not_written_over_a_locked_primary(
     """
     path = tmp_path / "settings.json"
     store = SettingsStore(path)
-    store.save(replace(AppSettings(), engine="groq", model_size="tiny"))
+    store.save(replace(AppSettings(), engine="groq", model_size="large-v3-turbo"))
     stored = json.loads(path.read_text(encoding="utf-8"))
     # A numeric string parses to the same number and is written back as one,
     # so every load of this file wants to rewrite it.

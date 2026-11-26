@@ -16,10 +16,10 @@ from test_benchmark_run_progress import _dialog
 from test_settings_dialog_general_ux import _AppFont
 
 _MANY_MODELS = [
-    "tiny",
-    "base",
+    "large-v3-turbo",
+    "distil-large-v3.5",
     "small",
-    "medium",
+    "large-v3",
     "large-v3",
     "large-v3-turbo",
     "distil-large-v3.5",
@@ -50,7 +50,7 @@ def _rect_in(window: QtWidgets.QWidget, widget: QtWidgets.QWidget) -> QtCore.QRe
 
 
 def test_run_and_cancel_stay_put_and_visible_whatever_the_window_shows(tmp_path):
-    dialog, app, window = _shown_window(tmp_path, ["small", "tiny"])
+    dialog, app, window = _shown_window(tmp_path, ["small", "large-v3-turbo"])
     buttons = (dialog.run_benchmark_button, dialog.cancel_benchmark_button)
 
     def geometry():
@@ -81,7 +81,7 @@ def test_run_and_cancel_stay_put_and_visible_whatever_the_window_shows(tmp_path)
 def test_a_long_audio_path_moves_nothing_below_it(tmp_path):
     """The status line under the audio field wrapped to a second line, and
     every row below it -- the model list, the case list -- moved down 9 px."""
-    dialog, app, window = _shown_window(tmp_path, ["small", "tiny"])
+    dialog, app, window = _shown_window(tmp_path, ["small", "large-v3-turbo"])
     label = dialog.benchmark_audio_status_label
     models = dialog.benchmark_models_list
 
@@ -172,7 +172,7 @@ def test_show_results_fits_the_footer_at_the_minimum_window_and_never_moves(
     window's minimum size no caption may be cut or overlap a neighbour, and
     enabling the button after a run must move none of the three."""
     with _AppFont(point_size) as app:
-        dialog, _ = _dialog(tmp_path, ["small", "tiny"])
+        dialog, _ = _dialog(tmp_path, ["small", "large-v3-turbo"])
         window = dialog.benchmark_window
         window.resize(window.minimumSize())
         window.show()

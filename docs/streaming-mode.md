@@ -169,7 +169,7 @@ Recommended:
 
 Local rolling-window streaming supports the faster-whisper/CTranslate2 model choices:
 
-- `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
+- `small`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
 Larger models in local streaming increase partial update cost.
 The Cohere/Granite ONNX/WebGPU local models are batch-only in this app.

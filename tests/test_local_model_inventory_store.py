@@ -11,11 +11,11 @@ def test_local_model_inventory_store_roundtrip_multiple_model_dirs(tmp_path):
 
     assert store.load_cached_models("") is None
 
-    store.save_cached_models("", ["medium", "small", "small", "unknown"])
-    store.save_cached_models("/tmp/models", ["tiny"])
+    store.save_cached_models("", ["large-v3", "small", "small", "unknown"])
+    store.save_cached_models("/tmp/models", ["large-v3-turbo"])
 
-    assert store.load_cached_models("") == ["small", "medium"]
-    assert store.load_cached_models("/tmp/models") == ["tiny"]
+    assert store.load_cached_models("") == ["small", "large-v3"]
+    assert store.load_cached_models("/tmp/models") == ["large-v3-turbo"]
 
 
 def test_local_model_inventory_store_clear_cached_models(tmp_path):
@@ -45,7 +45,12 @@ def test_local_model_inventory_store_recovers_from_backup(tmp_path):
         "schema_version": 1,
         "entries": {
             "": {
-                "cached_models": ["large-v3", "tiny", "invalid", "tiny"],
+                "cached_models": [
+                    "large-v3",
+                    "large-v3-turbo",
+                    "invalid",
+                    "large-v3-turbo",
+                ],
                 "updated_at": "2026-04-08T12:00:00+00:00",
             }
         },
@@ -53,7 +58,7 @@ def test_local_model_inventory_store_recovers_from_backup(tmp_path):
     backup_path(path).write_text(json.dumps(backup_payload), encoding="utf-8")
     store = LocalModelInventoryStore(path)
 
-    assert store.load_cached_models("") == ["tiny", "large-v3"]
+    assert store.load_cached_models("") == ["large-v3", "large-v3-turbo"]
 
     restored = json.loads(path.read_text(encoding="utf-8"))
-    assert restored["entries"][""]["cached_models"] == ["tiny", "large-v3"]
+    assert restored["entries"][""]["cached_models"] == ["large-v3", "large-v3-turbo"]

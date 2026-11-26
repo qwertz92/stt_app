@@ -16,8 +16,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `config.RETIRED_REMOTE_MODELS` (engine -> retired id -> successor).
   `AppSettings.from_dict` applies it through `_current_remote_model`;
   `SettingsStore.load` rewrites the file in the same call, so the move happens
-  once, and `take_model_notice` hands `main` one tray message ("Speech model
-  updated") for the engines the user uses (the selected one, or one with a
+  once, and `AppSettings.pending_model_moves` hands `main` one tray message
+  ("Speech model updated", cleared once shown) for the engines the user uses (the selected one, or one with a
   stored key: a file written before an engine existed carries its default for
   everyone). An id that is neither current nor in the map is damage and falls
   to the default without a notice. A history row keeps the model id it was made

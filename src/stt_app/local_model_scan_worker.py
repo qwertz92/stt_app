@@ -5,11 +5,17 @@ import json
 import sys
 from pathlib import Path
 
-from .transcriber.local_faster_whisper import find_cached_models
+from .transcriber.local_faster_whisper import (
+    find_cached_models,
+    find_retired_models_on_disk,
+)
 
 
 def scan_cached_models(model_dir: str = "") -> list[str]:
-    return find_cached_models(str(model_dir or "").strip())
+    """The models that can run, then the retired ones whose folder is still
+    there; the Models tab tells them apart by `RETIRED_LOCAL_MODEL_REPOS`."""
+    directory = str(model_dir or "").strip()
+    return [*find_cached_models(directory), *find_retired_models_on_disk(directory)]
 
 
 def build_parser() -> argparse.ArgumentParser:

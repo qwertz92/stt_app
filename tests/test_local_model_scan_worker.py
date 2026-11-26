@@ -17,16 +17,20 @@ def test_scan_cached_models_delegates_to_inventory(monkeypatch):
 
 
 def test_worker_main_writes_json_to_stdout(monkeypatch, capsys):
-    monkeypatch.setattr(worker, "scan_cached_models", lambda _model_dir="": ["tiny"])
+    monkeypatch.setattr(
+        worker, "scan_cached_models", lambda _model_dir="": ["large-v3-turbo"]
+    )
 
     assert worker.main(["--model-dir", "/tmp/models"]) == 0
 
     payload = json.loads(capsys.readouterr().out)
-    assert payload == {"cached_models": ["tiny"]}
+    assert payload == {"cached_models": ["large-v3-turbo"]}
 
 
 def test_worker_main_writes_json_to_output_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(worker, "scan_cached_models", lambda _model_dir="": ["base"])
+    monkeypatch.setattr(
+        worker, "scan_cached_models", lambda _model_dir="": ["distil-large-v3.5"]
+    )
     output_path = tmp_path / "scan.json"
 
     assert (
@@ -34,5 +38,5 @@ def test_worker_main_writes_json_to_output_file(monkeypatch, tmp_path):
     )
 
     assert json.loads(output_path.read_text(encoding="utf-8")) == {
-        "cached_models": ["base"]
+        "cached_models": ["distil-large-v3.5"]
     }

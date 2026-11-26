@@ -145,7 +145,7 @@ def test_a_joined_download_is_not_repeated(recording, monkeypatch):
     )
 
     transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b"
+        model_size="granite-speech-5.0-2b"
     )
     with pytest.raises(Exception):
         transcriber._ensure_snapshot()
@@ -173,7 +173,7 @@ def test_no_two_downloads_overlap_across_the_real_call_sites(monkeypatch):
     )
 
     transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
-        model_size="granite-4.0-1b-speech"
+        model_size="granite-speech-5.0-2b"
     )
     thread = threading.Thread(target=lambda: _swallow(transcriber), daemon=True)
     thread.start()
@@ -184,7 +184,7 @@ def test_no_two_downloads_overlap_across_the_real_call_sites(monkeypatch):
     finally:
         real.release("holder", "", succeeded=False)
         thread.join(timeout=10)
-    assert started == ["granite-4.0-1b-speech"]
+    assert started == ["granite-speech-5.0-2b"]
 
 
 def _swallow(transcriber) -> None:
@@ -398,13 +398,13 @@ def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
     coordinator = model_download_coordinator()
     dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
     dialog._local_model_download_lock = threading.RLock()
-    dialog._local_model_download_queue = [("medium", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", "")]
     dialog._local_model_download_active = None
     dialog._local_model_download_claimed = None
     dialog._local_model_download_worker_running = True
     # Left by a Cancel this drain consumed nothing of; the arm clears it.
     dialog._local_model_download_removed_by_cancel = ["stale"]
-    coordinator.register_explicit_interest("medium", "")
+    coordinator.register_explicit_interest("parakeet-tdt-0.6b-v3", "")
 
     monkeypatch.setattr(
         _LocalModelsMixin,
@@ -423,7 +423,7 @@ def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
     assert dialog._local_model_download_worker_running is False
     assert dialog._local_model_download_queue == []
     assert dialog._local_model_download_removed_by_cancel == []
-    assert coordinator.has_explicit_interest("medium", "") is False
+    assert coordinator.has_explicit_interest("parakeet-tdt-0.6b-v3", "") is False
     assert emitted, "the user must be told the queue stopped"
 
 
@@ -790,7 +790,7 @@ def test_cancelling_with_nobody_waiting_still_removes_the_partials():
     ("label", "slot_holder", "expect_waiting"),
     [
         ("another model owns the slot", "large-v3", True),
-        ("our own model owns the slot", "medium", False),
+        ("our own model owns the slot", "parakeet-tdt-0.6b-v3", False),
         ("the slot is free", None, False),
     ],
 )
@@ -823,15 +823,15 @@ def test_the_overlay_never_invents_progress_for_a_queued_preload(
     controller._preload_result_lock = threading.RLock()
     controller._preload_generation = 7
     controller._preload_phase = (7, _PRELOAD_PHASE_DOWNLOAD)
-    controller._preload_target_model = "medium"
-    controller._settings = AppSettings(model_size="medium")
+    controller._preload_target_model = "parakeet-tdt-0.6b-v3"
+    controller._settings = AppSettings(model_size="parakeet-tdt-0.6b-v3")
     controller._insert_action_text = ""  # nothing pending: "Use Cancel"
 
     if slot_holder is not None:
         coordinator.acquire(slot_holder, "", explicit=False)
     try:
         waits = DictationController._preload_waits_for_another_model(
-            controller, "medium", ""
+            controller, "parakeet-tdt-0.6b-v3", ""
         )
         word = DictationController._preload_phase_word(controller)
         # Only the waiting branch returns without measuring the cache, so it
@@ -927,8 +927,8 @@ def test_a_crashed_drain_drops_the_names_its_cancel_removed(monkeypatch):
     `_consume_cancel_locked` empties it. The crash arm reset the queue, the
     active and claimed entries and the running flag, and left the list, so
     the next drain's first Cancel reported the crashed drain's removed models
-    as its own: drain 2 queued only `medium` and `large-v3`, and its summary
-    named `base` and `small` before them."""
+    as its own: drain 2 queued only `parakeet-tdt-0.6b-v3` and `large-v3`, and its summary
+    named `distil-large-v3.5` and `small` before them."""
     from stt_app import settings_dialog_local as local_module
     from stt_app.model_download_coordinator import ModelDownloadCoordinator
     from stt_app.settings_dialog_local import _LocalModelsMixin
@@ -945,7 +945,7 @@ def test_a_crashed_drain_drops_the_names_its_cancel_removed(monkeypatch):
         # Cancel lands while this entry downloads: the entries queued behind
         # it are removed and recorded for the summary.
         _LocalModelsMixin._cancel_local_model_downloads(self)
-        if name == "tiny":
+        if name == "large-v3-turbo":
             raise ZeroDivisionError("the download queue crashed")
         return ("canceled", "", _CleanupOutcome(_CLEANUP_SKIPPED))
 
@@ -953,7 +953,9 @@ def test_a_crashed_drain_drops_the_names_its_cancel_removed(monkeypatch):
         _LocalModelsMixin, "_download_local_model_in_subprocess", _download
     )
 
-    _LocalModelsMixin._start_local_model_download(dialog, ["tiny", "base", "small"])
+    _LocalModelsMixin._start_local_model_download(
+        dialog, ["large-v3-turbo", "distil-large-v3.5", "small"]
+    )
     with pytest.raises(ZeroDivisionError):
         _LocalModelsMixin._run_local_model_download_queue(dialog, 1)
     assert dialog._local_model_download_worker_running is False
@@ -962,14 +964,16 @@ def test_a_crashed_drain_drops_the_names_its_cancel_removed(monkeypatch):
     # thread: mark it running, clear the event, queue, and drain.
     dialog._local_model_download_worker_running = True
     dialog._local_model_download_cancel_event.clear()
-    _LocalModelsMixin._start_local_model_download(dialog, ["medium", "large-v3"])
+    _LocalModelsMixin._start_local_model_download(
+        dialog, ["parakeet-tdt-0.6b-v3", "large-v3"]
+    )
     _LocalModelsMixin._drive_local_model_download_queue(dialog, 2)
 
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     summary = finished[-1][4]
-    assert "medium" in summary
+    assert "parakeet-tdt-0.6b-v3" in summary
     assert "large-v3" in summary
-    assert "base" not in summary, summary
+    assert "distil-large-v3.5" not in summary, summary
     assert "small" not in summary, summary
 
 
@@ -1010,12 +1014,12 @@ def test_a_download_queued_while_the_active_one_is_being_canceled_runs_next(
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", "")]
     downloads: list[str] = []
 
     def _download(self, name, model_dir):
         downloads.append(name)
-        if name == "medium":
+        if name == "parakeet-tdt-0.6b-v3":
             # The user presses Cancel, then Download on another model, while
             # this one's process is being terminated.
             _LocalModelsMixin._cancel_local_model_downloads(self)
@@ -1033,14 +1037,14 @@ def test_a_download_queued_while_the_active_one_is_being_canceled_runs_next(
 
     _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
 
-    assert downloads == ["medium", "small"]
+    assert downloads == ["parakeet-tdt-0.6b-v3", "small"]
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     # A download was killed, so the Cancel is the headline; what the user
     # queued afterwards is listed after it, not reported as a plain success.
     assert finished[-1][3] is False
     assert finished[-1][4] == (
         "Download canceled. No incomplete files remained. "
-        "Canceled: medium. Then downloaded: small."
+        "Canceled: parakeet-tdt-0.6b-v3. Then downloaded: small."
     )
 
 
@@ -1049,7 +1053,7 @@ def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", "")]
     downloads: list[str] = []
 
     def _download(self, name, model_dir):
@@ -1069,7 +1073,7 @@ def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
 
     _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
 
-    assert downloads == ["medium"]
+    assert downloads == ["parakeet-tdt-0.6b-v3"]
     assert dialog._local_model_download_worker_running is False
     # The worker consumed the cancel on its way out; a set event left behind
     # would make the next worker start with a phantom cancel and report the
@@ -1083,17 +1087,17 @@ def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
 def test_a_cancel_after_the_first_model_finished_is_reported_as_a_cancel(
     monkeypatch,
 ):
-    """Queue [medium, small]; medium finishes; the user cancels before the
+    """Queue [parakeet-tdt-0.6b-v3, small]; parakeet-tdt-0.6b-v3 finishes; the user cancels before the
     worker looks at the queue again. `resumed = canceled and bool(successes)`
-    read medium's success as the drain having resumed after the cancel and
-    reported "Downloaded: medium (an earlier download was canceled)" in the
+    read parakeet-tdt-0.6b-v3's success as the drain having resumed after the cancel and
+    reported "Downloaded: parakeet-tdt-0.6b-v3 (an earlier download was canceled)" in the
     success colour, while small -- the model the user was waiting for -- was
     dropped without a word."""
     from stt_app.settings_dialog_local import _LocalModelsMixin
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", ""), ("small", "")]
     downloads: list[str] = []
 
     def _download(self, name, model_dir):
@@ -1113,7 +1117,7 @@ def test_a_cancel_after_the_first_model_finished_is_reported_as_a_cancel(
 
     _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
 
-    assert downloads == ["medium"]
+    assert downloads == ["parakeet-tdt-0.6b-v3"]
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
     # The Cancel removed `small` from the queue; the summary says so, where
@@ -1121,7 +1125,7 @@ def test_a_cancel_after_the_first_model_finished_is_reported_as_a_cancel(
     # interrupted, so there is nothing to say about incomplete files -- "No
     # incomplete files remained." was a claim about a disk nobody read.
     assert finished[-1][4] == (
-        "Download canceled. Downloaded: medium. Then removed from the queue: small."
+        "Download canceled. Downloaded: parakeet-tdt-0.6b-v3. Then removed from the queue: small."
     )
     assert dialog._local_model_download_cancel_event.is_set() is False
 
@@ -1136,10 +1140,10 @@ def test_a_cancel_that_kills_the_second_model_names_it_and_keeps_the_cleanup(
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", ""), ("small", "")]
 
     def _download(self, name, model_dir):
-        if name == "medium":
+        if name == "parakeet-tdt-0.6b-v3":
             return _through_the_slot(name, model_dir, "success")
         _LocalModelsMixin._cancel_local_model_downloads(self)
         _through_the_slot(name, model_dir, "canceled")
@@ -1159,7 +1163,7 @@ def test_a_cancel_that_kills_the_second_model_names_it_and_keeps_the_cleanup(
     assert finished[-1][3] is False
     assert finished[-1][4] == (
         "Download canceled. Removed 3 incomplete files (1.5 MB). "
-        "Downloaded: medium. Then canceled: small."
+        "Downloaded: parakeet-tdt-0.6b-v3. Then canceled: small."
     )
 
 
@@ -1172,7 +1176,11 @@ def test_a_cancel_that_kills_a_download_also_names_the_queue_it_emptied(monkeypa
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", ""), ("small", ""), ("tiny", "")]
+    dialog._local_model_download_queue = [
+        ("parakeet-tdt-0.6b-v3", ""),
+        ("small", ""),
+        ("large-v3-turbo", ""),
+    ]
 
     def _download(self, name, model_dir):
         _LocalModelsMixin._cancel_local_model_downloads(self)
@@ -1193,7 +1201,7 @@ def test_a_cancel_that_kills_a_download_also_names_the_queue_it_emptied(monkeypa
     assert finished[-1][3] is False
     assert finished[-1][4] == (
         "Download canceled. No incomplete files remained. "
-        "Canceled: medium. Then removed from the queue: small, tiny."
+        "Canceled: parakeet-tdt-0.6b-v3. Then removed from the queue: small, large-v3-turbo."
     )
 
 
@@ -1203,16 +1211,16 @@ def test_work_before_and_after_a_cancel_is_listed_on_its_side_of_it(monkeypatch)
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
     dialog._local_model_download_queue = [
-        ("tiny", ""),
-        ("medium", ""),
+        ("large-v3-turbo", ""),
+        ("parakeet-tdt-0.6b-v3", ""),
         ("small", ""),
     ]
 
     def _download(self, name, model_dir):
-        if name == "tiny":
+        if name == "large-v3-turbo":
             _through_the_slot(name, model_dir, "error")
             return ("error", "disk full", _CleanupOutcome())
-        if name == "medium":
+        if name == "parakeet-tdt-0.6b-v3":
             return _through_the_slot(name, model_dir, "success")
         if name == "small":
             _LocalModelsMixin._cancel_local_model_downloads(self)
@@ -1236,8 +1244,8 @@ def test_work_before_and_after_a_cancel_is_listed_on_its_side_of_it(monkeypatch)
     assert finished[-1][3] is False
     assert finished[-1][4] == (
         "Download canceled. Removed 1 incomplete file (0.2 MB). "
-        "Failed: tiny: disk full. "
-        "Then downloaded: medium. "
+        "Failed: large-v3-turbo: disk full. "
+        "Then downloaded: parakeet-tdt-0.6b-v3. "
         "Then canceled: small. "
         "Then failed: large-v3: network error."
     )
@@ -1254,7 +1262,7 @@ def test_a_cancel_that_only_emptied_the_queue_is_reported_as_one(monkeypatch):
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
     dialog._local_model_download_worker_running = True
-    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", ""), ("small", "")]
     _LocalModelsMixin._cancel_local_model_downloads(dialog)
     assert dialog._local_model_download_queue == []
 
@@ -1265,7 +1273,7 @@ def test_a_cancel_that_only_emptied_the_queue_is_reported_as_one(monkeypatch):
     # Nothing ever started downloading, so the summary says nothing about
     # incomplete files rather than reporting a cleanup that never ran.
     assert finished[-1][4] == (
-        "Download canceled. Removed from the queue: medium, small."
+        "Download canceled. Removed from the queue: parakeet-tdt-0.6b-v3, small."
     )
 
 
@@ -1277,9 +1285,9 @@ def test_a_download_queued_after_a_queue_only_cancel_is_listed_after_it(
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
     dialog._local_model_download_worker_running = True
-    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", ""), ("small", "")]
     _LocalModelsMixin._cancel_local_model_downloads(dialog)
-    _LocalModelsMixin._start_local_model_download(dialog, ["tiny"])
+    _LocalModelsMixin._start_local_model_download(dialog, ["large-v3-turbo"])
     monkeypatch.setattr(
         _LocalModelsMixin,
         "_download_local_model_in_subprocess",
@@ -1291,8 +1299,8 @@ def test_a_download_queued_after_a_queue_only_cancel_is_listed_after_it(
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
     assert finished[-1][4] == (
-        "Download canceled. Removed from the queue: medium, small. "
-        "Then downloaded: tiny."
+        "Download canceled. Removed from the queue: parakeet-tdt-0.6b-v3, small. "
+        "Then downloaded: large-v3-turbo."
     )
 
 
@@ -1531,11 +1539,11 @@ def test_two_cancels_in_one_drain_name_the_model_each_cleanup_sentence_is_about(
 
     dialog, emitted = _draining_dialog(monkeypatch)
     dialog._local_model_download_cancel_event.clear()
-    dialog._local_model_download_queue = [("medium", "")]
+    dialog._local_model_download_queue = [("parakeet-tdt-0.6b-v3", "")]
 
     def _download(self, name, model_dir):
         _LocalModelsMixin._cancel_local_model_downloads(self)
-        if name == "medium":
+        if name == "parakeet-tdt-0.6b-v3":
             _LocalModelsMixin._start_local_model_download(self, ["large-v3"])
             _through_the_slot(name, model_dir, "canceled")
             return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN, 3, 2_400_000))
@@ -1556,7 +1564,7 @@ def test_two_cancels_in_one_drain_name_the_model_each_cleanup_sentence_is_about(
     assert finished[-1][4] == (
         "Download canceled. Removed 3 incomplete files (2.4 MB). Incomplete "
         "files of large-v3 were left in place: its download had not started "
-        "yet. Canceled: medium, large-v3."
+        "yet. Canceled: parakeet-tdt-0.6b-v3, large-v3."
     )
 
 
@@ -1589,30 +1597,30 @@ def test_a_file_the_cleanup_could_not_remove_is_reported_as_still_there():
     from stt_app.settings_dialog_local import _LocalModelsMixin
 
     summary = _LocalModelsMixin._canceled_drain_summary(
-        [("canceled", "tiny")],
+        [("canceled", "large-v3-turbo")],
         0,
         0,
-        cleanups=[("tiny", _CleanupOutcome(_CLEANUP_RAN, 0, 0, 1))],
+        cleanups=[("large-v3-turbo", _CleanupOutcome(_CLEANUP_RAN, 0, 0, 1))],
     )
     assert summary == (
-        "Download canceled. 1 incomplete file of tiny could not be removed: "
-        "still in use. Canceled: tiny."
+        "Download canceled. 1 incomplete file of large-v3-turbo could not be removed: "
+        "still in use. Canceled: large-v3-turbo."
     )
 
     summary = _LocalModelsMixin._canceled_drain_summary(
-        [("canceled", "tiny"), ("canceled", "base")],
+        [("canceled", "large-v3-turbo"), ("canceled", "distil-large-v3.5")],
         1,
         1000,
         cleanups=[
-            ("tiny", _CleanupOutcome(_CLEANUP_RAN, 1, 1000, 2)),
-            ("base", _CleanupOutcome(_CLEANUP_SKIPPED)),
+            ("large-v3-turbo", _CleanupOutcome(_CLEANUP_RAN, 1, 1000, 2)),
+            ("distil-large-v3.5", _CleanupOutcome(_CLEANUP_SKIPPED)),
         ],
     )
     assert summary == (
         "Download canceled. Removed 1 incomplete file (0.0 MB). Incomplete files "
-        "of base were left in place: its download had not started yet. 2 "
-        "incomplete files of tiny could not be removed: still in use. "
-        "Canceled: tiny, base."
+        "of distil-large-v3.5 were left in place: its download had not started yet. 2 "
+        "incomplete files of large-v3-turbo could not be removed: still in use. "
+        "Canceled: large-v3-turbo, distil-large-v3.5."
     )
 
 

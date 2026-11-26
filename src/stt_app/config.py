@@ -103,13 +103,13 @@ DEFAULT_REPASTE_HOTKEY_ID = 4
 # NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime; the rest of
 # their wiring is further down. Declared here because the default names one.
 PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
-# Moondream's post-trained Parakeet TDT 0.6B v3 ("Parakeet Ultra"): the same
-# architecture and the same onnx-asr model type, other weights. See
-# `docs/models.md` for its source, licence and the measurements.
-PARAKEET_ULTRA_MODEL_SIZE = "parakeet-tdt-0.6b-v3-ultra"
-# Every Parakeet TDT variant: they share the language handling (Auto only, no
-# `language=` sent) and the onnx-asr model type.
-PARAKEET_MODEL_SIZES = (PARAKEET_MODEL_SIZE, PARAKEET_ULTRA_MODEL_SIZE)
+# FluidVoice Labs' Fluid Speech Pro: Parakeet TDT 0.6B v3 post-trained (CC-BY-4.0),
+# loaded from the vendor's own ONNX repository by the same onnx-asr runtime. See
+# `docs/models.md` for its licence and the measurements.
+FLUID_SPEECH_PRO_MODEL_SIZE = "fluid-speech-pro"
+# Every Parakeet-family TDT model: they share the language handling (Auto only,
+# no `language=` sent).
+PARAKEET_MODEL_SIZES = (PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE)
 CANARY_MODEL_SIZE = "canary-1b-v2"
 
 # What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
@@ -271,10 +271,7 @@ CUSTOM_VOCABULARY_MAX_TERMS = 100
 DEFAULT_MODEL_DIR = ""
 
 FASTER_WHISPER_MODEL_SIZES = (
-    "tiny",
-    "base",
     "small",
-    "medium",
     "large-v3",
     "large-v3-turbo",  # Multilingual, ~1.6 GB, pruned large-v3 (4 decoder layers)
     "distil-large-v3.5",  # English-only, ~1.5 GB, improved v3 (98k h training data)
@@ -282,8 +279,7 @@ FASTER_WHISPER_MODEL_SIZES = (
 
 LOCAL_WEBGPU_MODEL_SIZES = (
     "cohere-transcribe-03-2026",
-    "granite-4.0-1b-speech",
-    "granite-speech-4.1-2b",
+    "granite-speech-5.0-2b",
 )
 
 NEMOTRON_MODEL_SIZE = "nemotron-3.5-asr-streaming-0.6b-int4"
@@ -295,7 +291,7 @@ LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
 # further up, next to `DEFAULT_MODEL_SIZE`, which names one of them.
 LOCAL_ONNX_ASR_MODEL_SIZES = (
     PARAKEET_MODEL_SIZE,
-    PARAKEET_ULTRA_MODEL_SIZE,
+    FLUID_SPEECH_PRO_MODEL_SIZE,
     CANARY_MODEL_SIZE,
 )
 
@@ -343,7 +339,7 @@ DEVICE_AWARE_LOCAL_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZE
 # -- a proxy denying the whole "Generative AI and ML Applications" category is
 # the common case -- these cannot be fetched at all. Naming them up front beats
 # a download that ends in "check your internet connection", which is exactly the
-# one thing that is not wrong. Parakeet Ultra is here by design and was not
+# one thing that is not wrong. Fluid Speech Pro is here by design and was not
 # probed: it is fetched at one pinned commit (its layout's `revision`), and a
 # mirror serves a repository by name at whatever it holds now, so the download
 # never falls back to one.
@@ -351,7 +347,7 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
     {
         "distil-large-v3.5",
         PARAKEET_MODEL_SIZE,
-        PARAKEET_ULTRA_MODEL_SIZE,
+        FLUID_SPEECH_PRO_MODEL_SIZE,
         CANARY_MODEL_SIZE,
         GRANITE_CTC_MODEL_SIZE,
     }
@@ -359,28 +355,22 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
 
 LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "cohere-transcribe-03-2026": "q4",
-    "granite-4.0-1b-speech": "q4",
-    "granite-speech-4.1-2b": "q4",
+    "granite-speech-5.0-2b": "q4",
     NEMOTRON_MODEL_SIZE: "int4",
     PARAKEET_MODEL_SIZE: "int8",
-    PARAKEET_ULTRA_MODEL_SIZE: "int8",
+    FLUID_SPEECH_PRO_MODEL_SIZE: "int8",
     CANARY_MODEL_SIZE: "int8",
     GRANITE_CTC_MODEL_SIZE: "int8",
 }
 
 LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "cohere-transcribe-03-2026": "ONNX/WebGPU q4",
-    "granite-4.0-1b-speech": "ONNX/WebGPU q4",
-    "granite-speech-4.1-2b": "ONNX/WebGPU q4",
+    "granite-speech-5.0-2b": "ONNX/WebGPU q4",
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
     PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
-    PARAKEET_ULTRA_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
+    FLUID_SPEECH_PRO_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
     CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
     GRANITE_CTC_MODEL_SIZE: "ONNX Runtime INT8 CTC, CPU",
-}
-
-GRANITE_4_1_REPO_MAP: dict[str, str] = {
-    "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
 }
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
@@ -500,26 +490,49 @@ LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
 
 VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_ONNX_MODEL_SIZES
 
+# Local models this version no longer offers, each with the model a saved
+# selection of it moves to (once, with a tray notice: `SettingsStore.load`).
+# The successor is in the same family and runtime where one exists, so a
+# streaming selection stays a streaming one. Their files on disk are never
+# touched; the Models tab lists the ones still on disk as "no longer offered"
+# with Delete as their only action (docs/agents/local-models-and-downloads.md).
+RETIRED_LOCAL_MODEL_SUCCESSORS: dict[str, str] = {
+    "granite-4.0-1b-speech": "granite-speech-5.0-2b",
+    "granite-speech-4.1-2b": "granite-speech-5.0-2b",
+    "parakeet-tdt-0.6b-v3-ultra": FLUID_SPEECH_PRO_MODEL_SIZE,
+    "tiny": "small",
+    "base": "small",
+    "medium": "large-v3-turbo",
+}
+
+# The repository each retired model's files came from. Only what lets the
+# Models tab find and delete the folder (`_model_cache_dirs` names it exactly,
+# so a neighbouring folder is never touched); nothing downloads from these.
+RETIRED_LOCAL_MODEL_REPOS: dict[str, str] = {
+    "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+    "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
+    "parakeet-tdt-0.6b-v3-ultra": "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "medium": "Systran/faster-whisper-medium",
+}
+
 # Short model name → HuggingFace repo ID.
 # Single source of truth used by local transcribers, download script, and settings.
 MODEL_REPO_MAP: dict[str, str] = {
-    "tiny": "Systran/faster-whisper-tiny",
-    "base": "Systran/faster-whisper-base",
     "small": "Systran/faster-whisper-small",
-    "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     "cohere-transcribe-03-2026": "onnx-community/cohere-transcribe-03-2026-ONNX",
-    "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+    "granite-speech-5.0-2b": "ibm-granite/granite-speech-5.0-2b-ONNX",
     NEMOTRON_MODEL_SIZE: ("onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"),
     PARAKEET_MODEL_SIZE: "istupakov/parakeet-tdt-0.6b-v3-onnx",
-    # An ONNX export of Moondream's `moondream/parakeet-ultra` by Olicorne,
-    # fetched at one pinned revision (see its layout in `local_webgpu_asr`).
-    PARAKEET_ULTRA_MODEL_SIZE: "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
+    # The vendor's own ONNX repository, fetched at one pinned revision (see its
+    # layout in `local_webgpu_asr`).
+    FLUID_SPEECH_PRO_MODEL_SIZE: "FluidVoice-Labs/fluid-speech-pro-onnx",
     CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
     GRANITE_CTC_MODEL_SIZE: "qwertz92/granite-speech-5.0-470m-turboctc-onnx",
-    **GRANITE_4_1_REPO_MAP,
 }
 
 LOCAL_MODEL_RUNTIME: dict[str, str] = {
@@ -537,24 +550,21 @@ LOCAL_MODEL_RUNTIME: dict[str, str] = {
 # its CTranslate2 `model.bin` is 1513 MB, so the download bar reached "approx.
 # 100%" at half the transfer and then kept counting.
 MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
-    "tiny": 78,
-    "base": 148,
     "small": 486,
-    "medium": 1_531,
     "large-v3": 3_091,
     "large-v3-turbo": 1_622,
     "distil-large-v3.5": 1_516,
-    # Selectable local ONNX downloads. Cohere, Granite 4.0, and Granite 4.1 2B
+    # Selectable local ONNX downloads. Cohere and Granite 5.0 2B
     # are q4 Transformers.js packages.
     "cohere-transcribe-03-2026": 2_128,
-    "granite-4.0-1b-speech": 1_843,
-    "granite-speech-4.1-2b": 1_843,
+    "granite-speech-5.0-2b": 1_730,
     NEMOTRON_MODEL_SIZE: 793,
     # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
     PARAKEET_MODEL_SIZE: 670,
-    # The four files the pinned revision's layout fetches: 667,821,528 bytes
-    # (encoder 649,524,002, decoder/joint 18,203,490, vocab 93,939, config 97).
-    PARAKEET_ULTRA_MODEL_SIZE: 668,
+    # The files the pinned revision's layout fetches: 800,881,653 bytes (the
+    # int8 encoder 746.9 MB and decoder/joint 53.8 MB with their graphs, vocab,
+    # config, README, LICENSE and NOTICE).
+    FLUID_SPEECH_PRO_MODEL_SIZE: 801,
     CANARY_MODEL_SIZE: 1_029,
     # Measured against the repository with this model's allow-patterns applied:
     # 552,442,697 bytes, of which `onnx/model_int8.onnx` is 551,294,349. The
@@ -896,8 +906,8 @@ COHERE_LANGUAGE_MODES = (
 )
 # Parakeet TDT v3 is implicitly multilingual: onnx-asr accepts a `language`
 # argument but the model ignores it (verified: "de" and a bogus code produce
-# byte-identical output), so Auto is the only honest choice. Parakeet Ultra is
-# the same architecture behind the same onnx-asr model type and gets the same.
+# byte-identical output), so Auto is the only honest choice. Fluid Speech Pro is
+# the same architecture behind onnx-asr and gets the same.
 PARAKEET_LANGUAGE_MODES = ("auto",)
 # Canary must NEVER offer Auto. onnx-asr hardcodes the <|en|> source/target
 # token, so without an explicit language it silently *translates* German into
@@ -1388,11 +1398,10 @@ LOCAL_BATCH_ONLY_MODELS = (
 LOCAL_EXPLICIT_LANGUAGE_MODELS = (*LOCAL_WEBGPU_MODEL_SIZES, CANARY_MODEL_SIZE)
 MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "cohere-transcribe-03-2026"): COHERE_LANGUAGE_MODES,
-    ("local", "granite-4.0-1b-speech"): GRANITE_LANGUAGE_MODES,
-    ("local", "granite-speech-4.1-2b"): GRANITE_LANGUAGE_MODES,
+    ("local", "granite-speech-5.0-2b"): GRANITE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
-    ("local", PARAKEET_ULTRA_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
+    ("local", FLUID_SPEECH_PRO_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
     ("assemblyai", "assemblyai-stt-3-7"): ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,

@@ -1495,7 +1495,7 @@ class _BenchmarkMixin:
                 self.benchmark_webgpu_device_combo.addItem(label, value)
         self.benchmark_webgpu_device_combo.setToolTip(
             "Applies to the local ONNX models that can use a GPU: Cohere, Granite "
-            "4.0/4.1 and Nemotron. Auto tries GPU first and falls back to CPU; "
+            "5.0 2B and Nemotron. Auto tries GPU first and falls back to CPU; "
             "GPU-only fails instead of using CPU. Nemotron has no WebGPU "
             "provider, so every GPU target means DirectML for it and duplicate "
             "targets are measured once."
@@ -1505,7 +1505,7 @@ class _BenchmarkMixin:
         # setting", and the app has no such setting -- the benchmark always
         # passes device="auto" to CTranslate2, and onnx-asr is CPU only.
         webgpu_device_note = QtWidgets.QLabel(
-            "Applies to Cohere, Granite 4.0/4.1 and Nemotron. Whisper models pick "
+            "Applies to Cohere, Granite 5.0 2B and Nemotron. Whisper models pick "
             "their device themselves (CUDA if present, otherwise CPU); Parakeet, "
             "Canary and Granite Speech 5.0 always run on the CPU. A run that "
             "measures a model on more than one device also decides which one "
