@@ -14,8 +14,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   wipes it. Abort (`_abort_streaming_session`): history, last transcript for
   Copy, shown, overlay revealed. Dying runtime (`_on_transcription_failed`):
   history with the retained audio path, `_last_transcript`, the Error's
-  `copy_text`. Empty finalize (`_on_transcription_ready`; AssemblyAI and
-  Deepgram can return "" from `stop_stream()` after a socket error): rescued;
+  `copy_text`. Empty finalize (`_on_transcription_ready`; AssemblyAI can
+  return "" from `stop_stream()` after a socket error; Deepgram raises after one
+  when there is no text and returns "" only for a silent stop, the server's
+  normal close being no error): rescued;
   a silent session has no live text and still reads "No speech detected".
   (Keying that on `job.mode` instead of `_active_session_mode` only
   relabelled history and muted the beep.)

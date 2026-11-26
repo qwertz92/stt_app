@@ -2286,7 +2286,7 @@ def test_a_dead_microphone_ends_a_deepgram_stream_once_and_keeps_the_recording(
                 f"{overlay.state}: {overlay.detail}"
             )
         ws = _FakeWebSocketApp.instances[-1]
-        ws.close()  # the server's own close, arriving after the teardown
+        ws.server_close()  # the server's own close, arriving after the teardown
         _pump_until(app, lambda: False, timeout=0.3)
 
         assert failures == [_SHORT_GAP_CAP_ERROR]
