@@ -243,6 +243,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   everything else is the transcript, as before the change. A plain-text body
   such as "Internal Server Error" cannot be told from a transcript and is
   returned.
+- **Speechmatics reads the job-upload and status replies through
+  `json_from_reply`** (2026-11-26): a proxy's HTML page there read "Expecting
+  value: line 1 column 1 (char 0)". At the upload it names the page; at a
+  status poll it ends the wait at once (a page will not turn into JSON) with
+  the job id.
 - **A certificate failure is recognised by type, then by text** (2026-11-26):
   `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
   `reason` and answers True for any `ssl.SSLCertVerificationError` before it looks at

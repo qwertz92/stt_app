@@ -335,6 +335,30 @@ class TestSpeechmaticsErrors:
         assert "7 days" in message
         assert "no 'transcript' field" not in message
 
+    def test_an_html_page_for_the_job_upload_is_named(self, service, monkeypatch):
+        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+        monkeypatch.setattr(
+            provider_module, "open_request", lambda *_a, **_k: fake_response(page)
+        )
+        with pytest.raises(TranscriptionError, match="HTML page") as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        assert "Expecting value" not in str(caught.value)
+        assert str(caught.value).startswith("Speechmatics transcription failed")
+
+    def test_an_html_page_for_a_status_poll_names_the_job(self, service, monkeypatch):
+        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+
+        def answer(request, timeout=None, **_kwargs):
+            if request.get_method() == "POST":
+                return json_response({"id": _JOB_ID}, status=201)
+            return fake_response(page)
+
+        monkeypatch.setattr(provider_module, "open_request", answer)
+        with pytest.raises(TranscriptionError, match="HTML page") as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        assert str(caught.value).endswith(f"Job id {_JOB_ID}.")
+        assert "Expecting value" not in str(caught.value)
+
     def test_a_job_that_never_finishes_is_bounded(self, service):
         service.statuses = ["running"]
         with pytest.raises(TranscriptionError, match="did not finish") as caught:

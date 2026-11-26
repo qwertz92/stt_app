@@ -38,6 +38,7 @@ from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
     is_html_page,
+    json_from_reply,
     key_redactor,
     multipart_form_data,
     normalize_transcript_text,
@@ -204,7 +205,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             with self._request(
                 f"{self._base_url}/jobs/", data=body, content_type=content_type
             ) as resp:
-                created = json.loads(resp.read().decode("utf-8", errors="replace"))
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             raise TranscriptionError(self._submit_error(exc)) from exc
         except TranscriptionError:
@@ -214,6 +215,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 f"Speechmatics transcription failed: {self._format_error(exc)}"
             ) from exc
 
+        created = json_from_reply(
+            payload, prefix="Speechmatics transcription failed", redact=self._scrub
+        )
         job_id = str(created.get("id") or "") if isinstance(created, dict) else ""
         job = poll_job(
             lambda: self._fetch_job(job_id),
@@ -253,7 +257,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         anything else raised here is a failed fetch the poll retries."""
         try:
             with self._job_request(f"{self._base_url}/jobs/{job_id}", job_id) as resp:
-                answer = json.loads(resp.read().decode("utf-8", errors="replace"))
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
@@ -261,6 +265,11 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                     f"{exc.code}){http_error_suffix(exc, self._scrub)}. Job id {job_id}."
                 ) from exc
             raise
+        try:
+            answer = json_from_reply(payload, prefix="Speechmatics", redact=self._scrub)
+        except TranscriptionError as exc:
+            # A proxy's page ends the wait at once: it will not turn into JSON.
+            raise TranscriptionError(f"{exc} Job id {job_id}.") from exc
         job = answer.get("job") if isinstance(answer, dict) else None
         if not isinstance(job, dict) or not isinstance(job.get("status"), str):
             # Retried by the poll: an answer without a status says nothing.
