@@ -15,7 +15,6 @@ gateway may route audio only to a multimodal LLM:
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
 import logging
 import ntpath
@@ -57,6 +56,7 @@ from ._http_utils import (
     KEY_SCRUBBED,
     audio_content_type,
     body_excerpt,
+    errors_scrubbed,
     format_ssl_error_message,
     header_value_unsafe,
     http_error_suffix,
@@ -610,21 +610,10 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         holding `"` or `\\` appears escaped in a JSON body)."""
         return key_redactor(*self._secrets())(text)
 
-    @contextlib.contextmanager
     def _errors_scrubbed(self):
-        """Lets no error raised inside show the token or the stored key.
-
-        A gateway may echo the credential it refused ("Received API Key =
-        ...", a request dump); the detail reaches the overlay and its log.
-        """
-        try:
-            yield
-        except TranscriptionError as exc:
-            message = str(exc)
-            scrubbed = self._scrub(message)
-            if scrubbed == message:
-                raise
-            raise TranscriptionError(scrubbed) from None
+        """Lets no error raised inside show the token or the stored key (a
+        gateway may echo "Received API Key = ..."; see `errors_scrubbed`)."""
+        return errors_scrubbed(self._scrub)
 
     def _request_too_large_hint(self) -> str:
         """What to do about a 413, which depends on the API style.

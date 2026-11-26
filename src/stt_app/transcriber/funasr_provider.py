@@ -40,7 +40,9 @@ from ..config import (
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import (
+    errors_scrubbed,
     format_ssl_error_message,
+    key_redactor,
     nested_error_text,
     normalize_transcript_text,
     recovered_text_suffix,
@@ -194,6 +196,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model if model in FUNASR_MODELS else DEFAULT_FUNASR_MODEL
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
@@ -474,6 +477,12 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
     # -- Batch transcription ----------------------------------------------------
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
+        # The service's messages and the socket's exceptions are quoted in the
+        # errors below; none may show the key a server echoed.
+        with errors_scrubbed(self._scrub):
+            return self._transcribe_batch(audio_source)
+
+    def _transcribe_batch(self, audio_source: AudioInput) -> str:
         try:
             pcm, sample_rate = self._pcm_from_audio(audio_source)
         except TranscriptionError:
@@ -662,7 +671,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         try:
             ws = self._connect(min(self._request_timeout_s, 15))
         except Exception as exc:
-            return False, str(self._connect_error(exc))
+            return False, self._scrub(str(self._connect_error(exc)))
         try:
             task_id = uuid.uuid4().hex
             ws.send(self._run_task_message(task_id, AUDIO_SAMPLE_RATE))
@@ -675,12 +684,12 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             if event == "task-started":
                 return True, "Connection OK — API key is valid."
             if event == "task-failed":
-                return False, self._fail_message(message)
+                return False, self._scrub(self._fail_message(message))
             return False, f"Unexpected response from Fun-ASR ('{event or 'none'}')."
         except Exception as exc:
             if _is_ssl_error(exc):
                 return False, format_ssl_error_message("Fun-ASR")
-            return False, f"Connection failed: {exc}"
+            return False, self._scrub(f"Connection failed: {exc}")
         finally:
             try:
                 ws.close()

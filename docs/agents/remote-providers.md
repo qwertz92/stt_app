@@ -220,6 +220,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   and the custom endpoint's copies were replaced by it). Tests:
   `tests/test_rest_key_scrub.py`, every REST engine x a plain and an escaped
   key x a 200 error object, a 4xx body, and the key check, with the log.
+- **The SDK and WebSocket engines scrub their key too** (2026-11-26, review
+  of the key scrubbing): Groq printed an SDK exception's text ("Error code: 400
+  - {... 'invalid key <key>' ...}") in a batch and in its key check, and
+  AssemblyAI and Fun-ASR quote SDK or service messages the same way. Their
+  `transcribe_batch` runs inside `_http_utils.errors_scrubbed(self._scrub)`
+  (the custom endpoint's old private copy), which re-raises a
+  `TranscriptionError` with the key replaced; the strings returned by
+  `test_connection`, AssemblyAI's streaming errors and Fun-ASR's key check go
+  through `self._scrub` directly. Tests: `tests/test_sdk_key_scrub.py`. Not
+  covered: tracebacks that `logger.exception` writes for a failed callback
+  (AssemblyAI streaming) -- they hold the exception, not a server text, and no
+  case where an SDK put the key into one was found.
 - **Azure: a transcription result without text is silence** (2026-11-26,
   review; deliberate and **unverified live**, no key exists to try it).
   Microsoft's reference marks no member of the result as required and does not

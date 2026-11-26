@@ -7,6 +7,7 @@ error formatting.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import re
@@ -156,6 +157,25 @@ def key_redactor(*secrets: str) -> Redactor:
         return text
 
     return redact
+
+
+@contextlib.contextmanager
+def errors_scrubbed(redact: Redactor):
+    """Lets no `TranscriptionError` raised inside show what `redact` hides.
+
+    For the engines whose messages are built from an SDK exception or a
+    WebSocket message (Groq, AssemblyAI, Fun-ASR, the custom endpoint): a
+    server that echoes the credential it refused must not get it into the
+    overlay or the log. The original is not chained (`from None`).
+    """
+    try:
+        yield
+    except TranscriptionError as exc:
+        message = str(exc)
+        scrubbed = redact(message)
+        if scrubbed == message:
+            raise
+        raise TranscriptionError(scrubbed) from None
 
 
 def is_markup_page(payload: bytes) -> bool:
