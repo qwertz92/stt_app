@@ -497,19 +497,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     child without a presence deferred it in 0.83 s with no npm run.
 - **Python dependencies are exact pins, updated 2026-10-03 and measured
   through their code** (locked: onnxruntime 1.30.0, onnxruntime-genai 0.17.1,
-  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.0; direct
+  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.1; direct
   pins are in `pyproject.toml`).
   `uv lock --upgrade` moves only transitive packages; `uv tree --outdated
   --depth 1` shows stale direct pins; `requirements-win.txt` /
   `requirements-dev-win.txt` mirror them (a test compares). Evidence: suite,
   `scripts/release_check_providers.py`, one real model per runtime. `uv audit`
-  and `pip-audit` report no known vulnerability on the lock.
+  and `pip-audit` report no known vulnerability on the lock (2026-11-26, after
+  certifi 2026.11.20, filelock 4.3.1 and the build-only setuptools 84.2.1
+  replaced versions with advisories; audit the export of the lock, not
+  `requirements-win.txt`, which holds only the 14 direct pins).
   - **`av` is a direct pin on the last 18.x, below the newest (19.0.1,
     2026-10-03), because faster-whisper 1.2.1 breaks on 19.** It requires only
     `av>=11` but calls `av.open(..., metadata_errors="ignore")`, which av 19
     rejects with `TypeError`; every file-path transcription through
     faster-whisper then fails (measured: `LocalFasterWhisperTranscriber.
     transcribe_batch` on av 19.0.1, fine on 18.1.0;
+    **2026-11-26: 18.1.0 was withdrawn from PyPI ("Memory corruption
+    (double free) when decoding audio with custom channel layouts"), so
+    the pin is 18.1.1, the fixed 18.x; `uv lock` printed the warning,
+    `pip-audit` did not**;
     `test_installed_av_decodes_a_file_the_way_faster_whisper_opens_it` fails on
     19). Lift the pin when a faster-whisper release newer than 1.2.1 supports
     av 19, and re-run that test.
