@@ -58,6 +58,15 @@ class _FakeSocket:
     def say(self, **fields):
         self.on_message(self, json.dumps(fields))
 
+    def server_closes(self, code, reason=""):
+        """What websocket-client 1.9.2 does for a close frame of the server:
+        `on_error` first, with an exception whose `status_code` is the close
+        code, then `on_close` (`_app.py`, `closed()` and `handleDisconnect`)."""
+        error = ConnectionError(f"Connection closed (code {code}): {reason}")
+        error.status_code = code
+        self.on_error(self, error)
+        self.on_close(self, code, reason)
+
 
 class _FakeModule:
     WebSocketApp = _FakeSocket
@@ -216,9 +225,9 @@ def test_a_server_that_never_sends_session_started_is_an_error(monkeypatch):
 
 
 def test_a_server_that_closes_during_the_handshake_is_an_error():
-    _FakeSocket.on_run = staticmethod(lambda ws: ws.on_close(ws, 1008, "policy"))
+    _FakeSocket.on_run = staticmethod(lambda ws: ws.server_closes(1008, "policy"))
     t = _transcriber()
-    with pytest.raises(TranscriptionError, match="closed by the service"):
+    with pytest.raises(TranscriptionError, match=r"closed by the service \(code 1008"):
         t.start_stream()
 
 
@@ -269,8 +278,10 @@ def test_a_socket_closed_mid_stream_is_reported_and_keeps_the_text():
     t.start_stream(on_error=errors.append)
     ws = _FakeSocket.instances[-1]
     ws.say(message_type="committed_transcript", text="already said")
-    ws.on_close(ws, 1011, "internal")
-    assert len(errors) == 1 and "closed by the service" in errors[0]
+    ws.server_closes(1011, "internal")
+    assert len(errors) == 1
+    assert "closed by the service (code 1011)" in errors[0]
+    assert "HTTP" not in errors[0]
     assert t.stop_stream() == "already said"
 
 
@@ -370,3 +381,84 @@ def test_an_audio_queue_that_is_full_fails_the_push_without_blocking(monkeypatch
             t.push_audio_chunk(b"\x00\x00" * 8)
     gate.set()
     t.abort_stream()
+
+
+def test_a_late_vad_commit_before_the_answer_does_not_cut_off_the_last_words():
+    t = _transcriber()
+    t.start_stream()
+
+    def answer(sock):
+        def later():
+            sock.say(message_type="committed_transcript", text="first segment")
+            time.sleep(0.2)
+            sock.say(message_type="committed_transcript", text="last words")
+
+        threading.Thread(target=later, daemon=True).start()
+
+    _FakeSocket.on_commit = staticmethod(answer)
+    t.push_audio_chunk(b"\x00\x00" * 8)
+    assert t.stop_stream() == "first segment last words"
+
+
+def test_an_answer_with_nothing_after_it_ends_the_stop_after_the_quiet_gap():
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(
+        lambda sock: sock.say(message_type="committed_transcript", text="done")
+    )
+    started = time.monotonic()
+    assert t.stop_stream() == "done"
+    assert time.monotonic() - started < 1.5
+
+
+def test_a_partial_after_the_first_commit_keeps_the_wait_open_until_its_commit():
+    t = _transcriber()
+    t.start_stream()
+
+    def answer(sock):
+        def later():
+            sock.say(message_type="committed_transcript", text="one")
+            time.sleep(0.1)
+            sock.say(message_type="partial_transcript", text="tw")
+            time.sleep(0.6)  # longer than the quiet gap: a partial is pending
+            sock.say(message_type="committed_transcript", text="two")
+
+        threading.Thread(target=later, daemon=True).start()
+
+    _FakeSocket.on_commit = staticmethod(answer)
+    assert t.stop_stream() == "one two"
+
+
+def test_a_server_close_during_stop_is_not_an_error_and_ends_the_wait_at_once():
+    t = _transcriber()
+    errors: list[str] = []
+    t.start_stream(on_error=errors.append)
+    _FakeSocket.on_commit = staticmethod(lambda sock: sock.server_closes(1000, "bye"))
+    started = time.monotonic()
+    assert t.stop_stream() == ""
+    assert time.monotonic() - started < 1.0
+    assert errors == []
+
+
+def test_a_close_that_only_calls_on_close_during_stop_ends_the_wait_at_once():
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(lambda sock: sock.on_close(sock, 1000, "done"))
+    started = time.monotonic()
+    t.stop_stream()
+    assert time.monotonic() - started < 1.0
+
+
+def test_audio_not_sent_before_the_stop_is_logged_when_text_is_returned(
+    monkeypatch, caplog
+):
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(elevenlabs_realtime, "_DRAIN_TIMEOUT_S", 0.2)
+    _FakeSocket.on_chunk = staticmethod(lambda _ws: time.sleep(0.15))
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.instances[-1].say(message_type="committed_transcript", text="early")
+    for _ in range(10):
+        t.push_audio_chunk(b"\x01\x00" * 8)
+    assert t.stop_stream() == "early"
+    assert "could not be sent before the stop" in caplog.text

@@ -210,3 +210,20 @@ def test_elevenlabs_streaming_never_shows_the_key(caplog, key):
     assert errors
     _assert_clean(errors[0], key, caplog)
     t.abort_stream()
+
+
+def test_elevenlabs_key_that_straddles_the_cut_is_scrubbed_before_cutting(caplog):
+    caplog.set_level(logging.DEBUG)
+    key = "sk_" + "0123456789abcdef" * 3
+    for padding in (270, 297, 299):  # the key starts before, at and after the cut
+        t = ElevenLabsTranscriber(api_key=key)
+        t._get_websocket_module = lambda: _FakeModule
+        errors: list[str] = []
+        t.start_stream(on_error=errors.append)
+        ws = _FakeSocket.instances[-1]
+        ws.say(message_type="quota_exceeded", error="x" * padding + key)
+        assert errors
+        assert key[:12] not in errors[0]
+        t.abort_stream()
+    ws.say(message_type="warning", warning="y" * 290 + key)
+    assert key[:12] not in caplog.text

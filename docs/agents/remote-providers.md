@@ -346,7 +346,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - https://elevenlabs.io/docs/overview/models (Scribe v3 Live succeeds
     Scribe v2 Realtime, 90+ languages, concurrency by plan: Free 6, Starter 9,
     Creator 15, Pro 30, Scale 45) and https://elevenlabs.io/pricing/api
-    ($0.22/h live, $0.20/h batch; silence is billed).
+    ($0.22/h live, $0.20/h batch, "billed per second, no minimum"; the page says
+    nothing about silence, so whether the keep-alive silence below is billed is unknown).
   - **Wire format as built**: `wss://api.elevenlabs.io/v1/speech-to-text/realtime`
     with the query `model_id=scribe_v3_live`, `audio_format=pcm_16000`,
     `commit_strategy=vad`, `vad_silence_threshold_secs=1.0` (documented range
@@ -363,8 +364,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Stop**: the vendor documents no end-of-session message. The sender
     drains its queue, then one `input_audio_chunk` with empty audio and
     `commit: true` (the vendor's own example), then the last
-    `committed_transcript` is awaited for at most 3 s, then the socket is
-    closed (bounded). Without that answer the last partial is the tail, so a
+    answer is awaited for at most 3 s: it ends once a commit answer arrived,
+    no partial is pending and no transcript message came for 0.3 s
+    (`_FINAL_QUIET_S`, a guess; a VAD commit for earlier audio may land before
+    the answer), or at once on a failure or a close; then the socket is closed
+    (bounded). A socket error or close while the session is stopping is not a
+    failure. websocket-client 1.9.2 reports a server's close frame to `on_error`
+    first, as an exception whose `status_code` is the close code, then to
+    `on_close`; a code in 1000-4999 reads "closed by the service (code N)",
+    never as an HTTP status. Without that answer the last partial is the tail, so a
     stop never loses text and never waits unboundedly. Not documented, so
     guessed: whether an empty final commit is answered when nothing is
     pending (a stop then costs the 3 s bound), and the close codes.
@@ -379,6 +387,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     sentence; a transcript message without a string `text` is an error. The
     key is scrubbed from every text (`key_redactor`), a certificate failure
     gets `format_ssl_error_message`.
+  - **Also unverified or undocumented**: a manual commit while
+    `commit_strategy=vad` is active (the vendor's only example uses the manual
+    strategy); what an unsupported `language_code` does (it may end the session
+    with `invalid_request`); the vendor's error-messages page could not be read
+    (HTTP 403 on 2026-11-26), so the error list comes from the API reference.
   - **Silence**: the server closes a session without client messages for 15 s,
     so the sender writes 0.1 s of silence when its queue stayed empty for 5 s,
     and ends the stream with a sentence after 30 s without audio (the same cap

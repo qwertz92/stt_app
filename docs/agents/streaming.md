@@ -94,7 +94,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   worker, never the Qt thread. The sender thread checks `_halted`, not the
   state, because a stop retires the session first and still needs every
   queued chunk written before its final commit (found by the first test). A
-  stop is bounded: 2 s drain, 1 s send, 3 s for the last committed segment,
+  stop is bounded: 2 s drain, 1 s send, up to 3 s for the answer to the final commit (ends after 0.3 s of quiet once
+  it came and no partial is pending),
   1 s close; a session that already failed or closed skips the commit and the
   wait. The text is the committed segments plus the current partial, so the
   tail survives a missing answer. Its mode label stays "Streaming

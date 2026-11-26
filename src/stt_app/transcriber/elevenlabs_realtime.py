@@ -43,8 +43,10 @@ _PROVIDER = "ElevenLabs streaming"
 _CONNECT_TIMEOUT_S = 8.0
 # The server closes a session that received no client message for 15 s. Audio
 # normally flows every 100 ms; when the queue stayed empty this long (a start
-# stall, a stop's backlog wait) the sender writes 0.1 s of silence, which the
-# vendor bills like speech. 5 s leaves room for a late sender thread.
+# stall, a stop's backlog wait) the sender writes 0.1 s of silence. Whether the
+# vendor bills that silence is undocumented (its pricing page says per second,
+# no minimum, and nothing about silence). 5 s leaves room for a late sender
+# thread.
 _KEEPALIVE_S = 5.0
 # One gap is bridged for at most this long: the capture's input buffer plus a
 # margin (the same reasoning as Deepgram's, docs/agents/streaming.md). Past it
@@ -55,9 +57,13 @@ _QUEUE_MAX_CHUNKS = (
     math.ceil(AUDIO_INPUT_BUFFER_S * 1000 / AUDIO_BLOCK_DURATION_MS) + 32
 )
 _DRAIN_TIMEOUT_S = 2.0
-# After the final commit the last committed segment is awaited this long; the
-# text of the last partial is used when it does not arrive.
+# After the final commit the answer is awaited at most this long; the text of
+# the last partial is used when it does not arrive.
 _FINAL_COMMIT_WAIT_S = 3.0
+# The wait ends once an answer arrived, no partial is pending and no transcript
+# message came for this long: a VAD commit for earlier audio can land before the
+# answer to the final commit. A guess; no live call has confirmed the gap.
+_FINAL_QUIET_S = 0.3
 _SEND_TIMEOUT_S = 1.0
 _CLOSE_TIMEOUT_S = 1.0
 _SENTINEL = object()
@@ -151,7 +157,11 @@ class ElevenLabsRealtimeSession:
         # Set by abort and by a failure: the sender writes nothing more.
         self._halted = threading.Event()
         self._closed = threading.Event()
-        self._committed = threading.Event()
+        # The final wait (`_await_final_answer`): `_awaiting_answer` is set when
+        # the final commit is sent, `_answered` once a commit answer arrived after.
+        self._awaiting_answer = False
+        self._answered = False
+        self._last_transcript_at = 0.0
         self._started = False
         self._error: str | None = None
         self._error_reported = False
@@ -257,7 +267,6 @@ class ElevenLabsRealtimeSession:
                 self._error_reported = True
         self._halted.set()
         self._ready.set()
-        self._committed.set()
         if notify and callback is not None:
             try:
                 callback(message)
@@ -267,14 +276,20 @@ class ElevenLabsRealtimeSession:
                 )
 
     def _on_socket_error(self, _ws, error) -> None:
+        with self._lock:
+            if self._state == "retiring":
+                # Our own stop or abort closed the socket (websocket-client
+                # reports a close frame here before `on_close`): not a failure.
+                return
         self._fail(self._describe_socket_error(error))
 
     def _on_close(self, _ws, status, reason) -> None:
+        # Also ends the final wait of a stop.
         self._closed.set()
         with self._lock:
             if self._state == "retiring":
                 return
-        detail = self._scrub(f" (code {status}: {str(reason)[:100]})" if status else "")
+        detail = f" (code {status}: {self._clip(reason, 100)})" if status else ""
         self._fail(
             f"{_PROVIDER} failed: the connection was closed by the service{detail}."
         )
@@ -284,6 +299,13 @@ class ElevenLabsRealtimeSession:
         if is_ssl_error(error):
             return format_ssl_error_message(_PROVIDER)
         status = getattr(error, "status_code", None)
+        if isinstance(status, int) and 1000 <= status <= 4999:
+            # websocket-client reports a server's close frame as an exception
+            # whose `status_code` is the close code, not an HTTP status.
+            return (
+                f"{_PROVIDER} failed: the connection was closed by the service "
+                f"(code {status})."
+            )
         if status in (401, 403):
             return f"{_PROVIDER} failed: authentication failed (HTTP {status}). The API key is invalid or expired."
         if status == 429:
@@ -327,11 +349,13 @@ class ElevenLabsRealtimeSession:
             )
         elif kind in _NON_FATAL:
             logger.warning("ElevenLabs: %s: %s", kind, self._detail(payload))
-            self._committed.set()
+            with self._lock:
+                if self._awaiting_answer:
+                    self._answered = True
         elif kind == "warning":
             logger.warning(
                 "ElevenLabs warning: %s",
-                self._scrub(str(payload.get("warning", ""))[:_MAX_DETAIL_CHARS]),
+                self._clip(payload.get("warning", ""), _MAX_DETAIL_CHARS),
             )
         elif kind in _ERROR_SENTENCES or (
             isinstance(kind, str) and kind.endswith("error") and "error" in payload
@@ -341,22 +365,27 @@ class ElevenLabsRealtimeSession:
             suffix = f" ({detail})" if detail and kind not in ("auth_error",) else ""
             self._fail(f"{_PROVIDER} failed: {sentence}{suffix}")
 
+    def _clip(self, value, limit: int) -> str:
+        """Scrub the key out first, then cut: a key must not survive as a prefix."""
+        return self._scrub(str(value))[:limit]
+
     def _detail(self, payload: dict) -> str:
         value = payload.get("error")
-        return self._scrub(str(value)[:_MAX_DETAIL_CHARS]) if value else ""
+        return self._clip(value, _MAX_DETAIL_CHARS) if value else ""
 
     def _take_transcript(self, *, committed: bool, text: str) -> None:
         with self._lock:
+            self._last_transcript_at = time.monotonic()
             if committed:
                 if text:
                     self._finals.append(text)
                 self._partial_text = ""
+                if self._awaiting_answer:
+                    self._answered = True
             else:
                 self._partial_text = text
             combined = self._combined_locked()
             callback = self._on_partial
-        if committed:
-            self._committed.set()
         if callback is None or not text or not combined:
             return
         try:
@@ -471,19 +500,29 @@ class ElevenLabsRealtimeSession:
                 # Nothing to commit to: the text so far is all there will be.
                 pass
             elif self._drain_sender(sender):
-                self._committed.clear()
+                with self._lock:
+                    self._awaiting_answer, self._answered = True, False
+                    self._last_transcript_at = time.monotonic()
                 send_error = _bounded(
                     lambda: ws.send(_chunk_message(b"", commit=True)),
                     timeout_s=_SEND_TIMEOUT_S,
                     name="commit",
                 )
                 if send_error is None:
-                    self._committed.wait(timeout=_FINAL_COMMIT_WAIT_S)
+                    self._await_final_answer()
                 else:
                     self._keep_error(self._describe_socket_error(send_error))
+                    logger.warning(
+                        "ElevenLabs streaming: the final commit could not be sent; "
+                        "the last words may be missing from the text."
+                    )
             else:
                 self._keep_error(
                     f"{_PROVIDER} failed: queued audio could not be sent in time."
+                )
+                logger.warning(
+                    "ElevenLabs streaming: queued audio could not be sent before the "
+                    "stop; the last words may be missing from the text."
                 )
         finally:
             self._close_socket()
@@ -498,6 +537,25 @@ class ElevenLabsRealtimeSession:
         if error is not None and not text:
             raise TranscriptionError(error)
         return text
+
+    def _await_final_answer(self) -> None:
+        """Wait for the answer to the final commit, and for the server to go quiet."""
+        deadline = time.monotonic() + _FINAL_COMMIT_WAIT_S
+        while True:
+            now = time.monotonic()
+            if now >= deadline or self._closed.is_set():
+                return
+            with self._lock:
+                if self._error is not None:
+                    return
+                done = (
+                    self._answered
+                    and not self._partial_text
+                    and now - self._last_transcript_at >= _FINAL_QUIET_S
+                )
+            if done:
+                return
+            time.sleep(0.02)
 
     def _failed_or_closed(self) -> bool:
         with self._lock:

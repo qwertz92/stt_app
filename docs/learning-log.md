@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: review round on the ElevenLabs realtime stop
+
+Structurally: the final wait of a stop is now "answered, no partial pending, 0.3 s of quiet", not
+"the first committed message".
+
+- A VAD commit for earlier audio landing before the answer to the final commit ended the wait early
+  and cut off the last words (reproduced with a 0.2 s late answer; fixed, three tests).
+- websocket-client 1.9.2 reports a server close frame to `on_error` first, with the close code as
+  `status_code`; that read as "refused the connection (HTTP 1011)", and an error during a stop turned
+  silence into an error. Socket errors and closes while stopping are now ignored, a close code is
+  described as such, and `on_close` always ends the final wait. The fake socket now delivers the
+  library's order.
+- The key was scrubbed after the text was cut, so a key crossing the cut survived as a prefix; it is
+  scrubbed first now.
+- "Silence is billed" was not on the pricing page (per second, no minimum, nothing on silence);
+  reworded. A failure at the stop that leaves text is logged and recorded as a limitation of both
+  WebSocket engines (`docs/agents/known-limitations.md`).
+
 ## 2026-11-26: ElevenLabs streams (Scribe v3 Live), built from the documentation only
 
 Structurally: `elevenlabs` joined `STREAMING_ENGINES`; the WebSocket session lives in its own module
