@@ -833,18 +833,26 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
 def test_a_batch_only_new_engine_offers_no_streaming_and_its_own_languages(
     dialog: SettingsDialog, engine: str
 ) -> None:
-    """Meta and OpenRouter are batch-only: the Mode picker has no Streaming
-    entry and the language picker lists exactly what the engine accepts."""
+    """Meta and OpenRouter are batch-only. The Mode picker keeps its Streaming
+    entry (Mode is chosen first and filters the engine list), so the engine's
+    row is hidden once Streaming is picked, and in batch mode the language
+    picker lists exactly what the engine accepts."""
     dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
     QtWidgets.QApplication.processEvents()
 
-    modes = [dialog.mode_combo.itemData(i) for i in range(dialog.mode_combo.count())]
-    assert modes == ["batch"]
     languages = tuple(
         dialog.language_combo.itemData(i) for i in range(dialog.language_combo.count())
     )
     assert languages == language_modes_for_selection(engine)
     assert languages == ENGINE_LANGUAGE_MODES[engine]
+
+    # The selected engine's own row stays visible; leave it, then Streaming mode
+    # hides the batch-only engine.
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("assemblyai"))
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
+    QtWidgets.QApplication.processEvents()
+    index = dialog.engine_combo.findData(engine)
+    assert dialog.engine_combo.view().isRowHidden(index)
 
 
 def test_providers_tab_fits_the_default_dialog_height_without_scrolling(
