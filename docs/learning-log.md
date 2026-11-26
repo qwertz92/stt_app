@@ -3,6 +3,33 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: OpenRouter as the `openrouter` engine
+
+Structurally: a second engine on the custom endpoint's code, with its own key and a fixed URL, so the
+user's "Custom endpoint" stays free; the model fetch behind the Refresh button now serves both.
+
+- **Why not a preset of the custom endpoint** (the research's recommendation of 2026-11-24): the lead
+  decided on an engine of its own. `OpenRouterTranscriber` subclasses `CustomEndpointTranscriber`;
+  the first commit moved the custom endpoint's literals into class attributes (no behaviour change),
+  the second added the engine.
+- **The model list's query string** (`?output_modalities=transcription`, 30 models against 469) was
+  the research's blocker, because the custom endpoint's base-URL validation refuses a query; it is
+  part of the subclass's route instead, and the base class keeps the validation.
+- **A trap avoided**: the filtered model list is public, so using it as the connection test would
+  have passed every key, a wrong one included. The test asks `GET /key`.
+- **Refresh needs no key** (public list): the dialog builds a `listing_only` instance that sends no
+  `Authorization` header unless a key was typed.
+- **Checked live without a key**: the list (200, 30 models, `openai/gpt-transcribe` in it) and an
+  unauthenticated POST of a one-second WAV to `/audio/transcriptions` (401, `{"error": {"message":
+  "No cookie auth credentials found", "code": 401}}`). Never seen: a transcript, `/key`.
+- **Page versus research**: all the figures held (25 MB, 60 s upstream timeout); the create page lists
+  `prompt` ("Context to guide transcription on providers that support contextual prompting"), so the
+  vocabulary is sent, with a note that only some models honour it.
+- **Side effect on the dialog**: Meta and OpenRouter made two more Providers rows, so the tab needs
+  877 px (818 with nine rows) against the 829 px viewport of a 960 px dialog and scrolled 48 px. The
+  default dialog height is now 1010 px (measured with an offscreen throwaway dialog at 9 pt; the
+  12-failure summary line still fits its two reserved lines, 42 of 42 px).
+
 ## 2026-11-26: Meta Muse Voice Transcribe as the `meta` engine
 
 Structurally: a new batch-only remote engine, `meta`, built to Meta's own docs page

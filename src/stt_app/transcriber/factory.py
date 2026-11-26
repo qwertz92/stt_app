@@ -30,6 +30,7 @@ from .local_webgpu_asr import LocalOnnxWebGpuTranscriber
 from .meta_provider import MetaTranscriber
 from .mistral_provider import MistralTranscriber
 from .openai_provider import OpenAITranscriber
+from .openrouter_provider import OpenRouterTranscriber
 from .speechmatics_provider import SpeechmaticsTranscriber
 
 
@@ -210,6 +211,14 @@ def create_transcriber(
             api_key=_api_key(secret_store, "mistral"),
             language_mode=settings.language_mode,
             model=settings.mistral_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
+        )
+    if settings.engine == "openrouter":
+        return OpenRouterTranscriber(
+            api_key=_api_key(secret_store, "openrouter"),
+            model=settings.openrouter_model,
+            language_mode=settings.language_mode,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
             silence_gate_threshold=_part_silence_threshold(settings),
         )

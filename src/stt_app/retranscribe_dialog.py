@@ -38,9 +38,10 @@ from .settings_dialog_helpers import (
     model_choices_for_engine,
 )
 from .settings_store import (
+    _REMOTE_MODEL_FIELDS,
     AppSettings,
     apply_engine_model_selection,
-    listed_custom_models,
+    listed_models,
 )
 from .transcript_history import split_unsaved_transcript
 from .ui_feedback import (
@@ -401,13 +402,16 @@ class RetranscribeDialog(QtWidgets.QDialog):
         engine = self.selected_engine()
         blocker = QtCore.QSignalBlocker(self._model_combo)
         self._model_combo.clear()
-        custom_models = (
-            self._entry_model if self._entry_engine == "custom" else "",
-            str(getattr(self._base_settings, "custom_model", "") or ""),
-            # The endpoint's list from the last Refresh, as Settings offers it.
-            *listed_custom_models(self._base_settings),
+        listed = (
+            self._entry_model if self._entry_engine == engine else "",
+            str(
+                getattr(self._base_settings, _REMOTE_MODEL_FIELDS.get(engine, ""), "")
+                or ""
+            ),
+            # The service's list from the last Refresh, as Settings offers it.
+            *listed_models(self._base_settings, engine),
         )
-        for value, label in model_choices_for_engine(engine, custom_models):
+        for value, label in model_choices_for_engine(engine, listed):
             self._model_combo.addItem(label, value)
         del blocker
         fallback = (

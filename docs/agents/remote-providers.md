@@ -373,6 +373,95 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `docs/ROADMAP.md`.
   - **Revert**: remove `meta` from `VALID_ENGINES` and the entries beside the
     `META_*` constants; a saved `engine: "meta"` then falls to local.
+- **OpenRouter is an engine of its own on the custom endpoint's code
+  (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
+  own entry and key, so "Custom endpoint" stays free for something else).**
+  Pages read that day: `openrouter.ai/docs/api/api-reference/stt/
+  create-transcription.md`, `.../docs/guides/overview/multimodal/stt.md`,
+  `.../docs/api-reference/limits`. `OpenRouterTranscriber` is a subclass of
+  `CustomEndpointTranscriber` that changes class attributes only (engine id,
+  name, model-list route, missing-key text, URL-advice sentences) and the key
+  check; the request, the part splitting, the error readers, the key scrub and
+  the redirect guard are that class's. Engine `openrouter`, label
+  "OpenRouter", key under `openrouter`. Rules:
+  - **Fixed base URL, transcription style only**: `POST
+    https://openrouter.ai/api/v1/audio/transcriptions`, multipart `model`,
+    `file`, optional `language`, `prompt`, `response_format=json`; the answer
+    is `{text, usage}`. No editable URL, no chat style, no key command (the
+    constructor passes `key_command=""` and the transcriptions mode), so none
+    of the custom endpoint's fields is in the OpenRouter identity
+    (`_transcriber_identity` reads them for `custom` only; pinned). Sentences
+    that tell a custom-endpoint user to "check the base URL" are replaced by
+    ones that do not point at a field that does not exist.
+  - **Model is free text with a list** (default `openai/gpt-transcribe`,
+    `config.DEFAULT_OPENROUTER_MODEL`, in the live list on 2026-11-26 at
+    $0.27/h per the research). No roster in `config.py`: the research of
+    2026-11-24 found Scribe v3 and STT-3.7 missing from OpenRouter's list a
+    week or two after launch, and dead ids still in it. A blank model is the
+    default. **No prices in the picker** (the list's price fields use
+    inconsistent units: per second for most, per hour for MAI, tokens for
+    Gemini).
+  - **The model list is `GET /models?output_modalities=transcription`**
+    (public; 30 models on 2026-11-26, shape `{"data": [{"id", "name",
+    "architecture", "pricing", ...}], "total_count", "links"}`, no `mode`
+    field), the plain `/models` being 469 chat models. The query is part of
+    the class's `_models_path`, so the base-URL validation that refuses a
+    query (right for the custom endpoint) is not in the way. **Both listed
+    engines share one fetch**: `SettingsDialog._fetch_models` (worker thread,
+    bounded: 15 s, 2 MB) builds the transcriber of the selected engine from a
+    snapshot taken on the GUI thread; `settings_store.LISTED_MODEL_ENGINES`
+    names them and `listed_models(settings, engine)` reads each one's saved
+    list (`custom_models` + `custom_models_endpoint` for the custom endpoint,
+    keyed by its URL; `openrouter_models` for OpenRouter, which has one URL).
+    The note under the Model row and the pick of the placeholder and the
+    Refresh tooltip are per engine, so a Refresh of one never paints under the
+    other's picker. **Refresh needs no key**: the dialog builds the instance
+    with `listing_only=True`, which sends no `Authorization` header unless a
+    key was entered (the live GET of 2026-11-26 carried none and answered 200).
+  - **The connection test is `GET /key`**, not the model list: the list is
+    public, so any key would pass it. The limits page says "To check the rate
+    limit or credits left on an API key, make a GET request to
+    `https://openrouter.ai/api/v1/key`" with the key as Bearer; a success is a
+    `data` object. It does not say what an invalid key returns, so any HTTP
+    error is reported through the shared reader and a 200 without a `data`
+    object is "unexpected". **Unverified live** (a valid key was never sent;
+    the unauthenticated 401 below is not this route).
+  - **Parts: 300 s and 25,000,000 bytes** (`OPENROUTER_MAX_PART_SECONDS`, the
+    chat style's value, and `OPENROUTER_MAX_REQUEST_BYTES`). The page says
+    "Max 25 MB" for an upload, "Upstream providers time out after 60 seconds
+    per request" and to "split recordings that take more than about a minute
+    to process"; it states no processing time per minute of audio, so 300 s
+    (9.6 MB of the app's WAV) is a judgement: a speech model needs a fraction
+    of a minute for five. A 504 or 524 shows OpenRouter's own message; the
+    413 sentence names the part size. Matches the research.
+  - **Custom vocabulary is the multipart `prompt`**, comma-joined as the custom
+    endpoint sends it. The create-transcription page lists the field ("Context
+    to guide transcription on providers that support contextual prompting")
+    and the guide says it is "forwarded on OpenAI, Azure OpenAI, Groq, and
+    Together", mapped by Alibaba, used by AssemblyAI only with prompted
+    pricing, and "other providers ignore it". So the Transcription tab's note
+    says only some models behind OpenRouter use it. `keyterms[]` was not used:
+    a model that cannot use it answers 400 ("Requests fail with 400 if the
+    model can't use keyterms").
+  - **Language** is the app's ISO code as `language` ("An ISO-639-1 code"), or
+    no field for Auto; every code the app knows is offered, as for the custom
+    endpoint.
+  - **Data**: the Providers row's tooltip says that the audio is sent to
+    OpenRouter, which forwards it to the vendor of the model picked. The
+    research found the privacy page silent on audio; no region or retention
+    claim is made.
+  - **Live, without a key (2026-11-26)**: the model list answered 200 with 30
+    models (reply saved in the lead's scratch folder, not in the repository);
+    `openai/gpt-transcribe` is among them. An unauthenticated `POST` of a
+    one-second WAV to `/audio/transcriptions` answered HTTP 401
+    `{"error": {"message": "No cookie auth credentials found", "code": 401}}`,
+    so host and path exist. **Unverified live, no key**: a real transcript, the
+    `prompt` and `language` behaviour per model, the `/key` check, a part over
+    60 s on a slow model.
+  - **Revert**: remove `openrouter` from `VALID_ENGINES` and the entries beside
+    the `OPENROUTER_*` constants, `openrouter_provider.py`, the factory branch
+    and the settings fields; the custom endpoint is unchanged by it (the
+    refactor commit only moved literals into class attributes).
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
   16 kHz WAV). `config.remote_batch_part_limit(engine, model, api_mode)`
@@ -781,7 +870,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     configured" target and the Import tab's credential check treat a typed
     command the same way.
   - **Model ids are free text**: the Transcription tab's remote combo is
-    editable only for `custom`, "Refresh" lists `GET {base}/models` on a
+    editable only for the engines of `LISTED_MODEL_ENGINES` (`custom` and, since
+    2026-11-26, `openrouter`, whose own entry above describes what differs),
+    "Refresh" lists `GET {base}/models` on a
     worker thread with the typed (unsaved) fields and rolls back if
     `Thread.start` fails. The list is saved by Save as `custom_models`
     (2026-10-03; in the unsaved-changes fingerprint, a list in the JSON --

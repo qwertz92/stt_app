@@ -2817,6 +2817,13 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("meta", {"custom_vocabulary": "Kubernetes"}, True),
         ("meta", {"silence_gate_threshold": 0.02}, True),
         ("meta", {"mistral_model": "voxtral-small-transcribe-3"}, False),
+        ("openrouter", {"openrouter_model": "google/chirp-3"}, True),
+        ("openrouter", {"custom_vocabulary": "Kubernetes"}, True),
+        ("openrouter", {"silence_gate_threshold": 0.02}, True),
+        # The custom endpoint's own fields are not the OpenRouter engine's.
+        ("openrouter", {"custom_endpoint": "http://x/v1"}, False),
+        ("openrouter", {"custom_model": "whisper-1"}, False),
+        ("custom", {"openrouter_model": "google/chirp-3"}, False),
         # Melia 1 has no custom dictionary; Enhanced has one.
         ("speechmatics", {"custom_vocabulary": "Kubernetes"}, False),
     ],

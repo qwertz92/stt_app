@@ -41,6 +41,13 @@ _REGION_ROW_LABEL = "Region"
 _AZURE_ENDPOINT_ROW_LABEL = "Endpoint"
 _CUSTOM_ENDPOINT_ROW_LABELS = ("Base URL", "API Style", "Key Command")
 _CUSTOM_KEY_ROW_LABEL = "API Key"
+# A row whose provider needs a sentence beside its name and key field.
+_PROVIDER_ROW_TOOLTIPS: dict[str, str] = {
+    "openrouter": (
+        "Audio is sent to OpenRouter, which forwards it to the vendor of the "
+        "model you pick. One OpenRouter key works for every model in its list."
+    ),
+}
 _TEST_OK_MARK = "✓"
 _TEST_FAILED_MARK = "✗"
 _TEST_OK_COLOR = "#1b5e20"
@@ -137,6 +144,12 @@ def _meta_transcriber_factory(**kwargs: object) -> object:
     return MetaTranscriber(**kwargs)
 
 
+def _openrouter_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.openrouter_provider import OpenRouterTranscriber
+
+    return OpenRouterTranscriber(**kwargs)
+
+
 # Maps provider name to (lazy transcriber factory, extra snapshot fields the
 # factory needs besides api_key and model).
 _CONNECTION_TESTER_FACTORIES: dict[
@@ -160,6 +173,7 @@ _CONNECTION_TESTER_FACTORIES: dict[
     ),
     "mistral": (_mistral_transcriber_factory, ("language_mode",)),
     "meta": (_meta_transcriber_factory, ("language_mode",)),
+    "openrouter": (_openrouter_transcriber_factory, ("language_mode",)),
     "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
@@ -295,6 +309,7 @@ class _RemoteProvidersMixin:
         self.speechmatics_key_edit = self._provider_key_edits["speechmatics"]
         self.mistral_key_edit = self._provider_key_edits["mistral"]
         self.meta_key_edit = self._provider_key_edits["meta"]
+        self.openrouter_key_edit = self._provider_key_edits["openrouter"]
 
         layout.addWidget(self._build_custom_endpoint_group(label_width, badge_width))
 
@@ -452,6 +467,10 @@ class _RemoteProvidersMixin:
         )
 
         title_label = QtWidgets.QLabel(title)
+        row_tooltip = _PROVIDER_ROW_TOOLTIPS.get(provider, "")
+        if row_tooltip:
+            title_label.setToolTip(row_tooltip)
+            key_field.setToolTip(row_tooltip)
         title_label.setFixedWidth(label_width)
         title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         grid.addWidget(

@@ -41,6 +41,7 @@ from .settings_store import (
     AppSettings,
     custom_endpoint_identity,
     listed_custom_models,
+    listed_models,
     normalize_local_onnx_device,
 )
 
@@ -209,6 +210,7 @@ class _PersistenceMixin:
             else {}
         )
         self._custom_fetched_models = listed_custom_models(settings)
+        self._openrouter_fetched_models = listed_models(settings, "openrouter")
         if hasattr(self, "azure_endpoint_edit"):
             blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
             self.azure_endpoint_edit.setText(
@@ -521,6 +523,7 @@ class _PersistenceMixin:
             has_speechmatics_key=key_states["speechmatics"],
             has_mistral_key=key_states["mistral"],
             has_meta_key=key_states["meta"],
+            has_openrouter_key=key_states["openrouter"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
             custom_endpoint=self.custom_endpoint_edit.text().strip(),
             custom_api_mode=self._custom_api_mode_shown(),
@@ -712,6 +715,7 @@ class _PersistenceMixin:
             has_speechmatics_key = self._loaded_settings.has_speechmatics_key
             has_mistral_key = self._loaded_settings.has_mistral_key
             has_meta_key = self._loaded_settings.has_meta_key
+            has_openrouter_key = self._loaded_settings.has_openrouter_key
         else:
             has_openai_key = key_states["openai"]
             has_deepgram_key = key_states["deepgram"]
@@ -724,6 +728,7 @@ class _PersistenceMixin:
             has_speechmatics_key = key_states["speechmatics"]
             has_mistral_key = key_states["mistral"]
             has_meta_key = key_states["meta"]
+            has_openrouter_key = key_states["openrouter"]
         return AppSettings(
             # Carried, not stamped. This is the one field with no widget that
             # was never read back, and its dataclass default is *this build's*
@@ -850,6 +855,7 @@ class _PersistenceMixin:
             has_speechmatics_key=has_speechmatics_key,
             has_mistral_key=has_mistral_key,
             has_meta_key=has_meta_key,
+            has_openrouter_key=has_openrouter_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -872,6 +878,8 @@ class _PersistenceMixin:
             speechmatics_model=self._remote_model_value_for_provider("speechmatics"),
             mistral_model=self._remote_model_value_for_provider("mistral"),
             meta_model=self._remote_model_value_for_provider("meta"),
+            openrouter_model=self._remote_model_value_for_provider("openrouter"),
+            openrouter_models=self._openrouter_fetched_models,
             assemblyai_region=self._region_shown("assemblyai"),
             deepgram_region=self._region_shown("deepgram"),
             speechmatics_region=self._region_shown("speechmatics"),

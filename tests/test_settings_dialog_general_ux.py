@@ -388,6 +388,7 @@ def test_dynamic_notes_fit_their_reserved_area(
             "speechmatics",
             "mistral",
             "meta",
+            "openrouter",
             "custom",
         ):
             dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
@@ -823,6 +824,33 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
             f"{point_size} pt and General needs {needed} px plus {chrome} px"
         )
     assert needed + chrome <= design_height, (needed, chrome, design_height)
+
+
+def test_providers_tab_fits_the_default_dialog_height_without_scrolling(
+    dialog: SettingsDialog,
+) -> None:
+    """Meta and OpenRouter made the Providers tab 877 px tall (818 with nine
+    rows), more than the 829 px viewport of the old 960 px default, so it
+    scrolled by 48 px; the default height was raised to 1010. Measured against
+    the design height, as for General above."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    _switch_to_tab(dialog, "Providers")
+    for _ in range(5):
+        app.processEvents()
+
+    page = dialog.tabs.currentWidget()
+    needed = page.widget().minimumSizeHint().height()
+    chrome = dialog.height() - page.viewport().height()
+    point_size = app.font().pointSizeF()
+    if point_size != 9.0:
+        pytest.skip(f"the height budget was measured at 9 pt, not {point_size} pt")
+    assert needed + chrome <= _DEFAULT_SETTINGS_DIALOG_SIZE.height(), (
+        needed,
+        chrome,
+        _DEFAULT_SETTINGS_DIALOG_SIZE.height(),
+    )
 
 
 def test_audio_values_are_greyed_out_while_their_checkbox_is_off(

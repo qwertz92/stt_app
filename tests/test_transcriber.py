@@ -1390,6 +1390,7 @@ _TRANSCRIBER_PACKAGE_EXPORTS = {
     "MetaTranscriber",
     "MistralTranscriber",
     "OpenAITranscriber",
+    "OpenRouterTranscriber",
     "SpeechmaticsTranscriber",
     "TranscriptionError",
     "create_transcriber",

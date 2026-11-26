@@ -52,6 +52,7 @@ from .config import (
     DEFAULT_MODEL_SIZE,
     DEFAULT_OFFLINE_MODE,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
     DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_OVERLAY_OPACITY_PERCENT,
@@ -189,6 +190,7 @@ DEFAULTS = {
     "has_speechmatics_key": False,
     "has_mistral_key": False,
     "has_meta_key": False,
+    "has_openrouter_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -209,6 +211,8 @@ DEFAULTS = {
     "speechmatics_region": DEFAULT_SPEECHMATICS_REGION,
     "mistral_model": DEFAULT_MISTRAL_MODEL,
     "meta_model": DEFAULT_META_MODEL,
+    "openrouter_model": DEFAULT_OPENROUTER_MODEL,
+    "openrouter_models": (),
 }
 
 
@@ -373,6 +377,7 @@ class AppSettings:
     has_speechmatics_key: bool = False
     has_mistral_key: bool = False
     has_meta_key: bool = False
+    has_openrouter_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -412,6 +417,11 @@ class AppSettings:
     speechmatics_region: str = DEFAULT_SPEECHMATICS_REGION
     mistral_model: str = DEFAULT_MISTRAL_MODEL
     meta_model: str = DEFAULT_META_MODEL
+    # OpenRouter's model is free text like the custom endpoint's, with the
+    # list its last Refresh returned (same cache rules as `custom_models`;
+    # the URL is fixed, so no URL is stored beside it).
+    openrouter_model: str = DEFAULT_OPENROUTER_MODEL
+    openrouter_models: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppSettings:
@@ -571,6 +581,10 @@ class AppSettings:
             _text_setting(merged.get("meta_model")),
             META_MODELS,
             DEFAULT_META_MODEL,
+        )
+        # Free text: a blank is no choice, anything else is the user's.
+        openrouter_model = (
+            _text_setting(merged.get("openrouter_model")) or DEFAULT_OPENROUTER_MODEL
         )
         custom_api_mode = (
             str(merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)).strip().lower()
@@ -818,6 +832,7 @@ class AppSettings:
             has_speechmatics_key=parse_json_bool(merged.get("has_speechmatics_key")),
             has_mistral_key=parse_json_bool(merged.get("has_mistral_key")),
             has_meta_key=parse_json_bool(merged.get("has_meta_key")),
+            has_openrouter_key=parse_json_bool(merged.get("has_openrouter_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -842,6 +857,8 @@ class AppSettings:
             ),
             mistral_model=mistral_model,
             meta_model=meta_model,
+            openrouter_model=openrouter_model,
+            openrouter_models=normalize_custom_models(merged.get("openrouter_models")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -853,6 +870,7 @@ class AppSettings:
         # payload, and a tuple never equals the list JSON gives back, so every
         # load rewrote the file.
         data["custom_models"] = list(self.custom_models)
+        data["openrouter_models"] = list(self.openrouter_models)
         return data
 
 
@@ -894,6 +912,7 @@ _REMOTE_MODEL_FIELDS: dict[str, str] = {
     "speechmatics": "speechmatics_model",
     "mistral": "mistral_model",
     "meta": "meta_model",
+    "openrouter": "openrouter_model",
 }
 
 # Which field carries each remote engine's data-residency region; an engine
@@ -1042,6 +1061,7 @@ class SettingsStore:
             "speechmatics_api_key",
             "mistral_api_key",
             "meta_api_key",
+            "openrouter_api_key",
         ):
             payload.pop(secret_key, None)
         return payload
@@ -1138,6 +1158,20 @@ def listed_custom_models(settings: AppSettings) -> tuple[str, ...]:
     ):
         return ()
     return tuple(settings.custom_models)
+
+
+# The engines whose model is free text with a list the user refreshes: the
+# endpoint (or OpenRouter) decides what is offered, so there is no roster.
+LISTED_MODEL_ENGINES = ("custom", "openrouter")
+
+
+def listed_models(settings: AppSettings, engine: str) -> tuple[str, ...]:
+    """The saved model list of one of `LISTED_MODEL_ENGINES`; () for the rest."""
+    if engine == "custom":
+        return listed_custom_models(settings)
+    if engine == "openrouter":
+        return tuple(settings.openrouter_models)
+    return ()
 
 
 def normalize_custom_models(value: Any) -> tuple[str, ...]:

@@ -351,7 +351,17 @@ def test_a_missing_key_points_at_the_providers_tab(engine):
 
 
 @pytest.mark.parametrize(
-    "engine", ["openai", "groq", "azure", "custom", "speechmatics", "mistral", "meta"]
+    "engine",
+    [
+        "openai",
+        "groq",
+        "azure",
+        "custom",
+        "speechmatics",
+        "mistral",
+        "meta",
+        "openrouter",
+    ],
 )
 def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
     monkeypatch, engine
@@ -370,6 +380,8 @@ def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
             "speechmatics": "stt_app.transcriber.speechmatics_provider",
             "mistral": "stt_app.transcriber.mistral_provider",
             "meta": "stt_app.transcriber.meta_provider",
+            # The same request code as the custom endpoint (a subclass).
+            "openrouter": "stt_app.transcriber.custom_endpoint_provider",
         }[engine]
     )
     seen: list[float] = []
@@ -463,6 +475,32 @@ def test_the_meta_model_language_and_vocabulary_reach_the_provider():
     assert built._model == "muse-voice-transcribe-1.0"
     assert built._language_mode == "de"
     assert built._keywords == ["Kubernetes", "Grafana"]
+
+
+def test_the_openrouter_model_language_and_vocabulary_reach_the_provider():
+    built = create_transcriber(
+        AppSettings(
+            engine="openrouter",
+            language_mode="de",
+            openrouter_model="mistralai/voxtral-small-transcribe-3-0",
+            custom_vocabulary="Kubernetes",
+        ),
+        secret_store=_AnyKeyStore(),
+    )
+    assert type(built).__name__ == "OpenRouterTranscriber"
+    assert built._model == "mistralai/voxtral-small-transcribe-3-0"
+    assert built._language_mode == "de"
+    assert built._terms == ["Kubernetes"]
+    assert built._base_url == "https://openrouter.ai/api/v1"
+    assert built._api_mode == "transcriptions"
+    # The custom endpoint's fields never reach it.
+    assert built._key_command == ""
+
+
+def test_openrouter_without_a_key_is_refused_like_every_remote_engine():
+    with pytest.raises(TranscriptionError) as raised:
+        create_transcriber(AppSettings(engine="openrouter"), secret_store=None)
+    assert "key is missing" in str(raised.value)
 
 
 def test_the_mistral_model_reaches_the_provider():

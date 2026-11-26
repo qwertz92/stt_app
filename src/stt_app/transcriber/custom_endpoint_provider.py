@@ -479,6 +479,9 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     _name = _PROVIDER_NAME
     _upload_progress = _UPLOAD_PROGRESS
     _models_path = "/models"
+    # An instance made only to list models, where the list is public: no key
+    # is needed to build it and none is sent. Never true for a transcriber.
+    _listing_only = False
     _missing_key_message = (
         "Custom endpoint API key is missing. A server without "
         "authentication accepts any placeholder such as 'none', or "
@@ -510,7 +513,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         self._silence_gate_threshold = float(silence_gate_threshold)
         self._api_key = str(api_key or "").strip()
         self._key_command = str(key_command or "").strip()
-        if not self._api_key and not self._key_command:
+        if not self._api_key and not self._key_command and not self._listing_only:
             raise TranscriptionError(self._missing_key_message)
         if self._api_key and _header_unsafe(self._api_key):
             # Never echoed: the key is the one thing this message must
@@ -673,7 +676,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             data=data,
             method="POST" if data is not None else "GET",
         )
-        request.add_header("Authorization", f"Bearer {token}")
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
         request.add_header("Accept", "application/json")
         if content_type:
             request.add_header("Content-Type", content_type)

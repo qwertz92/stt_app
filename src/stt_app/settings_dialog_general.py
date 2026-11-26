@@ -65,6 +65,7 @@ from .settings_dialog_helpers import (
 )
 from .settings_store import (
     _REMOTE_MODEL_FIELDS,
+    LISTED_MODEL_ENGINES,
     AppSettings,
     apply_engine_model_selection,
     custom_endpoint_identity,
@@ -104,6 +105,29 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "English (batch only)."
     ),
     "meta": "{name} uses the custom vocabulary as its keywords (batch only).",
+    "openrouter": (
+        "{name} uses the custom vocabulary as the request prompt, which only "
+        "some of the models behind it honour (batch only)."
+    ),
+}
+
+# What the editable model field and its Refresh button say for each engine of
+# `LISTED_MODEL_ENGINES`.
+_MODEL_ID_PLACEHOLDERS: dict[str, str] = {
+    "custom": "Model id, e.g. whisper-1",
+    "openrouter": "Model id, e.g. openai/gpt-transcribe",
+}
+_REFRESH_TOOLTIPS: dict[str, str] = {
+    "custom": (
+        "Ask the custom endpoint which models it offers (GET /models), "
+        "using the URL and key entered on the Providers tab. Save keeps "
+        "the list for the next start."
+    ),
+    "openrouter": (
+        "Ask OpenRouter which models can transcribe (its public list, "
+        "GET /models?output_modalities=transcription; no key needed). Save "
+        "keeps the list for the next start."
+    ),
 }
 
 # Where the two things the Model row does not do are done. The tabs are named
@@ -258,22 +282,22 @@ class _GeneralTabMixin:
         # fills rather than on the Providers tab, because the result is read
         # and picked here. The list it returns is saved with the settings
         # (`custom_models`), so the combo offers it again after a restart.
-        self.custom_fetch_models_button = QtWidgets.QPushButton("Refresh")
-        self.custom_fetch_models_button.setToolTip(
+        self.fetch_models_button = QtWidgets.QPushButton("Refresh")
+        self.fetch_models_button.setToolTip(
             "Ask the custom endpoint which models it offers (GET /models), "
             "using the URL and key entered on the Providers tab. Save keeps "
             "the list for the next start."
         )
-        self.custom_fetch_models_button.clicked.connect(self._fetch_custom_models)
+        self.fetch_models_button.clicked.connect(self._fetch_models)
         self._match_field_button_height(
-            self.remote_model_combo, self.custom_fetch_models_button
+            self.remote_model_combo, self.fetch_models_button
         )
-        self.custom_fetch_models_button.setVisible(False)
+        self.fetch_models_button.setVisible(False)
         remote_model_row = QtWidgets.QHBoxLayout()
         remote_model_row.setContentsMargins(0, 0, 0, 0)
         remote_model_row.setSpacing(_INLINE_FIELD_BUTTON_SPACING_PX)
         remote_model_row.addWidget(self.remote_model_combo, 1)
-        remote_model_row.addWidget(self.custom_fetch_models_button)
+        remote_model_row.addWidget(self.fetch_models_button)
         self.remote_model_note_label = QtWidgets.QLabel("")
         self.remote_model_note_label.setWordWrap(True)
         self._style_field_hint_label(self.remote_model_note_label)
@@ -453,9 +477,10 @@ class _GeneralTabMixin:
         normalized = str(provider or "").strip().lower()
         fallback = _REMOTE_MODEL_DEFAULTS.get(normalized, "")
         value = str(self._remote_model_values.get(normalized, fallback) or fallback)
-        if normalized == "custom":
-            # Free text: the endpoint, not a roster, decides what is valid.
-            return value.strip()
+        if normalized in LISTED_MODEL_ENGINES:
+            # Free text: the service, not a roster, decides what is valid. A
+            # blank is the default (none for the custom endpoint).
+            return value.strip() or fallback
         valid_values = {
             item_value
             for item_value, _label in _REMOTE_MODEL_CHOICES.get(normalized, ())
@@ -464,13 +489,21 @@ class _GeneralTabMixin:
             return fallback
         return value
 
-    def _custom_model_candidates(self, *extra: str) -> tuple[str, ...]:
-        """The custom endpoint's known models: the given ones, the chosen one
-        and whatever the last fetch returned."""
+    def _fetched_models_for(self, engine: str) -> tuple[str, ...]:
+        """What the last Refresh listed for one of `LISTED_MODEL_ENGINES`."""
+        if engine == "custom":
+            return self._custom_fetched_models
+        if engine == "openrouter":
+            return self._openrouter_fetched_models
+        return ()
+
+    def _listed_model_candidates(self, engine: str, *extra: str) -> tuple[str, ...]:
+        """A listed engine's known models: the given ones, the chosen one and
+        whatever the last fetch returned."""
         return (
             *extra,
-            self._remote_model_value_for_provider("custom"),
-            *self._custom_fetched_models,
+            self._remote_model_value_for_provider(engine),
+            *self._fetched_models_for(engine),
         )
 
     def _import_model_choices(
@@ -479,8 +512,8 @@ class _GeneralTabMixin:
     ) -> tuple[tuple[str, str], ...]:
         return model_choices_for_engine(
             engine,
-            self._custom_model_candidates(
-                str(self._import_model_values.get("custom", "") or "")
+            self._listed_model_candidates(
+                engine, str(self._import_model_values.get(engine, "") or "")
             ),
         )
 
@@ -597,17 +630,22 @@ class _GeneralTabMixin:
 
         self._update_model_selector_page()
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        is_custom = provider == "custom"
+        is_listed = provider in LISTED_MODEL_ENGINES
         choices = (
-            model_choices_for_engine(provider, self._custom_model_candidates())
-            if is_custom
+            model_choices_for_engine(provider, self._listed_model_candidates(provider))
+            if is_listed
             else _REMOTE_MODEL_CHOICES.get(provider, ())
         )
 
         self.remote_model_combo.blockSignals(True)
         self.remote_model_combo.clear()
-        self._set_remote_model_combo_editable(is_custom)
-        self.custom_fetch_models_button.setVisible(is_custom)
+        self._set_remote_model_combo_editable(is_listed)
+        self.fetch_models_button.setVisible(is_listed)
+        if is_listed:
+            self.remote_model_combo.lineEdit().setPlaceholderText(
+                _MODEL_ID_PLACEHOLDERS[provider]
+            )
+            self.fetch_models_button.setToolTip(_REFRESH_TOOLTIPS[provider])
 
         if provider == DEFAULT_ENGINE:
             self.remote_model_combo.addItem("Not applicable for local engine", "")
@@ -625,7 +663,7 @@ class _GeneralTabMixin:
             self.remote_model_combo,
             self._remote_model_value_for_provider(provider),
         )
-        if is_custom:
+        if is_listed:
             self.remote_model_combo.setEditText(
                 self._remote_model_value_for_provider(provider)
             )
@@ -662,7 +700,10 @@ class _GeneralTabMixin:
             note, error = issue, True
         else:
             note = self._remote_model_description(provider)
-            error = provider == "custom" and self._custom_model_note_error
+            error = (
+                provider in LISTED_MODEL_ENGINES
+                and self._model_list_notes.get(provider, ("", False))[1]
+            )
         self.remote_model_note_label.setText(note)
         self.remote_model_note_label.setToolTip(note)
         self.remote_model_note_label.setStyleSheet(
@@ -670,8 +711,10 @@ class _GeneralTabMixin:
         )
 
     def _remote_model_description(self, provider: str) -> str:
-        if provider == "custom":
-            return self._custom_model_note or self._custom_model_default_note()
+        if provider in LISTED_MODEL_ENGINES:
+            return self._model_list_notes.get(provider, ("", False))[
+                0
+            ] or self._model_list_default_note(provider)
         note = (
             f"The selected {self._provider_label(provider)} model is used for "
             "batch dictation and audio imports; its stored API key is reused."
@@ -707,13 +750,18 @@ class _GeneralTabMixin:
         # longest of these notes plus this sentence needs 30 px of the 42.
         return f"{note} {_REMOTE_MODEL_KEY_POINTER}"
 
-    def _custom_model_default_note(self) -> str:
-        """The custom endpoint's note before this session refreshed its list."""
-        count = len(self._custom_fetched_models)
+    def _model_list_default_note(self, engine: str) -> str:
+        """A listed engine's note before this session refreshed its list."""
+        count = len(self._fetched_models_for(engine))
         if count:
             return (
                 f"Batch-only. {count} model{'s' if count != 1 else ''} listed "
                 "at the last Refresh; a model id the list lacks can be typed."
+            )
+        if engine == "openrouter":
+            return (
+                "Batch-only. Type the model id, or press Refresh to list "
+                "OpenRouter's transcription models (no key needed)."
             )
         return (
             "Batch-only. Type the model id, or press Refresh to list the "
@@ -1355,7 +1403,7 @@ class _GeneralTabMixin:
             self._schedule_local_model_auto_refresh(delay_ms=250)
 
     def _set_remote_model_combo_editable(self, editable: bool) -> None:
-        """Only the custom endpoint takes a typed model id."""
+        """Only the engines of `LISTED_MODEL_ENGINES` take a typed model id."""
         combo = self.remote_model_combo
         if combo.isEditable() == editable:
             return
@@ -1371,23 +1419,26 @@ class _GeneralTabMixin:
         combo.setMinimumContentsLength(24 if editable else 0)
         if editable:
             combo.setInsertPolicy(QtWidgets.QComboBox.NoInsert)
-            combo.lineEdit().setPlaceholderText("Model id, e.g. whisper-1")
-            combo.lineEdit().textEdited.connect(self._on_custom_model_text_edited)
+            combo.lineEdit().textEdited.connect(self._on_listed_model_text_edited)
 
-    def _on_custom_model_text_edited(self, text: str) -> None:
-        if str(self.engine_combo.currentData() or "") != "custom":
+    def _on_listed_model_text_edited(self, text: str) -> None:
+        provider = str(self.engine_combo.currentData() or "")
+        if provider not in LISTED_MODEL_ENGINES:
             return
-        self._remote_model_values["custom"] = str(text or "").strip()
+        self._remote_model_values[provider] = str(text or "").strip()
         self._update_engine_indicator()
         self._schedule_unsaved_changes_refresh()
 
-    def _custom_models_fetch_snapshot(self) -> dict[str, str]:
+    def _models_fetch_snapshot(self, engine: str) -> dict[str, str]:
         """What a model fetch needs, read on the GUI thread."""
-        key_field = self._provider_key_edits.get("custom")
+        key_field = self._provider_key_edits.get(engine)
+        api_key = self._resolve_api_key(engine, key_field) if key_field else ""
+        if engine == "openrouter":
+            # The list is public: the key is sent when there is one, and
+            # none is needed.
+            return {"api_key": api_key}
         return {
-            "api_key": (
-                self._resolve_api_key("custom", key_field) if key_field else ""
-            ),
+            "api_key": api_key,
             "endpoint": self.custom_endpoint_edit.text().strip(),
             "api_mode": str(
                 self.custom_api_mode_combo.currentData() or DEFAULT_CUSTOM_API_MODE
@@ -1395,88 +1446,108 @@ class _GeneralTabMixin:
             "key_command": self.custom_key_command_edit.text().strip(),
         }
 
-    def _fetch_custom_models(self) -> None:
-        """List the endpoint's models on a worker thread and fill the combo."""
-        if self._active_custom_models_fetch_thread is not None:
+    def _fetch_models(self) -> None:
+        """List the selected engine's models on a worker thread and fill the
+        combo."""
+        if self._active_models_fetch_thread is not None:
             return
-        snapshot = self._custom_models_fetch_snapshot()
-        self._custom_models_fetch_endpoint = snapshot["endpoint"]
-        self._custom_models_fetch_id += 1
-        fetch_id = self._custom_models_fetch_id
-        self.custom_fetch_models_button.setEnabled(False)
-        self._set_custom_model_note("Fetching the endpoint's models...")
+        engine = str(self.engine_combo.currentData() or "")
+        if engine not in LISTED_MODEL_ENGINES:
+            return
+        snapshot = self._models_fetch_snapshot(engine)
+        self._models_fetch_engine = engine
+        self._models_fetch_endpoint = snapshot.get("endpoint", "")
+        self._models_fetch_id += 1
+        fetch_id = self._models_fetch_id
+        self.fetch_models_button.setEnabled(False)
+        self._set_model_list_note(
+            engine,
+            "Fetching OpenRouter's models..."
+            if engine == "openrouter"
+            else "Fetching the endpoint's models...",
+        )
         worker = threading.Thread(
-            target=self._run_custom_models_fetch,
-            args=(fetch_id, snapshot),
-            name="stt_app_settings_custom_models_fetch",
+            target=self._run_models_fetch,
+            args=(fetch_id, engine, snapshot),
+            name="stt_app_settings_models_fetch",
             daemon=True,
         )
-        self._active_custom_models_fetch_thread = worker
+        self._active_models_fetch_thread = worker
         # The busy marker is set; a start that raises would leave it set for
         # the life of the dialog (see the connection test's guard).
         try:
             worker.start()
         except _THREAD_START_ERRORS as exc:
-            self._on_custom_models_fetched(
+            self._on_models_fetched(
                 fetch_id,
                 False,
                 f"Could not start the model fetch: {exception_reason(exc)}",
             )
 
-    def _run_custom_models_fetch(self, fetch_id: int, snapshot: dict[str, str]) -> None:
+    def _run_models_fetch(
+        self, fetch_id: int, engine: str, snapshot: dict[str, str]
+    ) -> None:
         try:
-            from .transcriber.custom_endpoint_provider import (
-                CustomEndpointTranscriber,
-            )
+            if engine == "openrouter":
+                from .transcriber.openrouter_provider import OpenRouterTranscriber
 
-            transcriber = CustomEndpointTranscriber(**snapshot)
+                transcriber = OpenRouterTranscriber(listing_only=True, **snapshot)
+            else:
+                from .transcriber.custom_endpoint_provider import (
+                    CustomEndpointTranscriber,
+                )
+
+                transcriber = CustomEndpointTranscriber(**snapshot)
             result: object = tuple(model.id for model in transcriber.list_models())
             ok = True
         except Exception as exc:
             ok, result = False, str(exc)
-        _emit_background_signal(
-            self, "custom_models_fetch_finished", fetch_id, ok, result
-        )
+        _emit_background_signal(self, "models_fetch_finished", fetch_id, ok, result)
 
     @QtCore.Slot(int, bool, object)
-    def _on_custom_models_fetched(
-        self, fetch_id: int, ok: bool, result: object
-    ) -> None:
-        if fetch_id != self._custom_models_fetch_id:
+    def _on_models_fetched(self, fetch_id: int, ok: bool, result: object) -> None:
+        if fetch_id != self._models_fetch_id:
             return
-        self._active_custom_models_fetch_thread = None
-        self.custom_fetch_models_button.setEnabled(True)
+        engine = self._models_fetch_engine
+        subject = "OpenRouter" if engine == "openrouter" else "The endpoint"
+        self._active_models_fetch_thread = None
+        self.fetch_models_button.setEnabled(True)
         if not ok:
-            self._set_custom_model_note(f"Could not fetch models: {result}", error=True)
+            self._set_model_list_note(
+                engine, f"Could not fetch models: {result}", error=True
+            )
             return
         models = tuple(result) if isinstance(result, tuple) else ()
         if not models:
             # An outage or a key without rights answers like this too; the
             # list from the last good answer stays rather than going with
             # the next Save unannounced.
-            kept = len(self._custom_fetched_models)
-            text = "The endpoint listed no models this key can use." + (
+            kept = len(self._fetched_models_for(engine))
+            text = f"{subject} listed no models this key can use." + (
                 f" The {kept} model{'s' if kept != 1 else ''} listed before are kept."
                 if kept
                 else ""
             )
-            self._set_custom_model_note(text, error=True)
+            self._set_model_list_note(engine, text, error=True)
             return
-        self._custom_models_by_endpoint[
-            custom_endpoint_identity(self._custom_models_fetch_endpoint)
-        ] = models
-        self._custom_fetched_models = self._custom_models_for_shown_endpoint()
-        chosen = self._remote_model_value_for_provider("custom")
+        if engine == "openrouter":
+            self._openrouter_fetched_models = models
+        else:
+            self._custom_models_by_endpoint[
+                custom_endpoint_identity(self._models_fetch_endpoint)
+            ] = models
+            self._custom_fetched_models = self._custom_models_for_shown_endpoint()
+        chosen = self._remote_model_value_for_provider(engine)
         if chosen and chosen not in models:
             text = (
-                f"The endpoint offers {len(models)} models, but not "
+                f"{subject} offers {len(models)} models, but not "
                 f"'{chosen}'. Pick one from the list."
             )
         else:
-            text = f"The endpoint offers {len(models)} models. Pick one from the list."
-        self._set_custom_model_note(text)
+            text = f"{subject} offers {len(models)} models. Pick one from the list."
+        self._set_model_list_note(engine, text)
         if not chosen:
-            self._remote_model_values["custom"] = models[0]
+            self._remote_model_values[engine] = models[0]
         self._update_remote_model_selector()
         self._update_import_model_selector()
         self._update_engine_indicator()
@@ -1499,17 +1570,17 @@ class _GeneralTabMixin:
         if models != self._custom_fetched_models:
             self._custom_fetched_models = models
             # A Refresh note described the previous endpoint.
-            self._custom_model_note = ""
-            self._custom_model_note_error = False
+            self._model_list_notes.pop("custom", None)
             self._update_remote_model_selector()
             self._update_import_model_selector()
         else:
             self._update_remote_model_note()
 
-    def _set_custom_model_note(self, text: str, *, error: bool = False) -> None:
+    def _set_model_list_note(
+        self, engine: str, text: str, *, error: bool = False
+    ) -> None:
         """The note under the model row reports the fetch while it is shown."""
-        self._custom_model_note = text
-        self._custom_model_note_error = error
+        self._model_list_notes[engine] = (text, error)
         self._update_remote_model_note()
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:

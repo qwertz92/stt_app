@@ -1340,6 +1340,7 @@ VALID_ENGINES = (
     "speechmatics",
     "mistral",
     "meta",
+    "openrouter",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1353,6 +1354,10 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # A bring-your-own endpoint: which languages work is the served model's
     # business, so every code the app knows is offered and sent as a hint.
     "custom": VALID_LANGUAGE_MODES,
+    # OpenRouter forwards to whichever model is picked; its `language` is "an
+    # ISO-639-1 code", so every code the app knows is offered as a hint, as for
+    # the custom endpoint.
+    "openrouter": VALID_LANGUAGE_MODES,
     # The default model's list; Enhanced has its own.
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
@@ -1441,7 +1446,9 @@ def language_modes_for_selection(
 # query parameter, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
 # entries (Enhanced), Mistral as repeated `context_bias`
-# fields, Meta as the `keywords` list of its request part. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
+# fields, Meta as the `keywords` list of its request part, OpenRouter as the
+# multipart `prompt` (honoured by the providers behind it that support
+# contextual prompting, ignored by the rest). ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
@@ -1452,6 +1459,7 @@ CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "speechmatics",
     "mistral",
     "meta",
+    "openrouter",
 )
 # A model of one of those engines that has no biasing input. Melia 1:
 # "Custom Dictionary: ... Not yet."
@@ -1470,7 +1478,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced, Mistral, Meta, and a custom endpoint"
+    "Enhanced, Mistral, Meta, OpenRouter, and a custom endpoint"
 )
 
 
@@ -1579,6 +1587,7 @@ ENGINE_LABELS: dict[str, str] = {
     "speechmatics": "Speechmatics",
     "mistral": "Mistral (Voxtral)",
     "meta": "Meta (Muse Voice)",
+    "openrouter": "OpenRouter",
     "custom": "Custom endpoint",
 }
 
@@ -1832,6 +1841,19 @@ DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 META_MODELS = ("muse-voice-transcribe-1.0",)
 DEFAULT_META_MODEL = "muse-voice-transcribe-1.0"
 
+# OpenRouter's transcription endpoint (https://openrouter.ai/docs/api/
+# api-reference/stt/create-transcription.md, read 2026-11-26). The base URL is
+# fixed. The model is free text with a list the user refreshes
+# (`OPENROUTER_MODELS_QUERY`: the public list of models with a transcription
+# output, 30 on 2026-11-26, against 469 chat models in the plain list); no
+# roster is kept here, because the list moves faster than a release (the
+# research of 2026-11-24 found two vendors' new models missing a week or two
+# after launch). The default is OpenAI's current model, `openai/gpt-transcribe`,
+# which is in that list on 2026-11-26 and costs $0.27/h there.
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_MODELS_QUERY = "output_modalities=transcription"
+DEFAULT_OPENROUTER_MODEL = "openai/gpt-transcribe"
+
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The
 # base URL, the model and the API style are the user's; nothing is validated
@@ -1933,6 +1955,16 @@ MISTRAL_MAX_REQUEST_BYTES = 500_000_000
 # two readings. 590 s of the app's 16 kHz WAV is 18.9 MB, of a 24 kHz one 28.3.
 META_MAX_PART_SECONDS = 590.0
 META_MAX_REQUEST_BYTES = 32_000_000
+# OpenRouter's transcription endpoint (docs read 2026-11-26): "Max 25 MB" for
+# an uploaded file, and "Upstream providers time out after 60 seconds per
+# request ... Split recordings that take more than about a minute to
+# process". How long a model needs per minute of audio is not stated, so the
+# parts are the custom endpoint's chat style's 300 s (9.6 MB of the app's WAV):
+# short enough that a part is a fraction of a minute of work for a speech
+# model, long enough that a dictation is rarely split. The bytes are the
+# documented 25 MB, read as decimal megabytes.
+OPENROUTER_MAX_PART_SECONDS = CUSTOM_CHAT_MAX_PART_SECONDS
+OPENROUTER_MAX_REQUEST_BYTES = 25_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
@@ -1941,6 +1973,7 @@ REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "speechmatics": SPEECHMATICS_MAX_PART_SECONDS,
     "mistral": MISTRAL_MAX_PART_SECONDS,
     "meta": META_MAX_PART_SECONDS,
+    "openrouter": OPENROUTER_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
@@ -1950,6 +1983,7 @@ REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "speechmatics": SPEECHMATICS_MAX_REQUEST_BYTES,
     "mistral": MISTRAL_MAX_REQUEST_BYTES,
     "meta": META_MAX_REQUEST_BYTES,
+    "openrouter": OPENROUTER_MAX_REQUEST_BYTES,
 }
 # An API style whose limit differs from its engine's: (engine, api_mode) ->
 # (seconds, bytes). Only the custom endpoint has more than one style.

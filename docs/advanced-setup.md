@@ -605,6 +605,28 @@ and a file that is not a WAV (an MP3, say) is refused with a message. **Test**
 sends one second of silence, which Meta bills as one second. Meta's page names
 no data region or retention rule, and no region choice is offered.
 
+**OpenRouter**
+
+One key for about 30 speech models of different vendors (OpenAI, Mistral,
+Deepgram, ElevenLabs, Google, Meta and more), reached through OpenRouter's own
+transcription endpoint. Batch-only and not yet run against the live service.
+
+1. Create a key at openrouter.ai and enter it in the **OpenRouter** row on
+   Settings -> **Providers**. Hover the row: the audio goes to OpenRouter,
+   which forwards it to the vendor of the model you pick.
+2. On **Transcription**, set Engine to `OpenRouter`. The model works before
+   any setup (`openai/gpt-transcribe`); press **Refresh** to list the models
+   OpenRouter offers for transcription (a public list, no key needed) and pick
+   one, or type an id. Prices differ per model; the list shows none, see
+   openrouter.ai.
+3. The custom vocabulary is sent as the request prompt, which only some of the
+   models behind OpenRouter use. Long recordings go out in parts of at most
+   five minutes, because OpenRouter's upstream providers time out after 60
+   seconds per request.
+
+The OpenRouter engine does not use the **Custom endpoint** group, which stays
+free for another service. **Test** asks OpenRouter whether the key is valid.
+
 Sources, read 2026-09-27: Speechmatics'
 [models](https://docs.speechmatics.com/speech-to-text/models) and
 [authentication](https://docs.speechmatics.com/get-started/authentication)

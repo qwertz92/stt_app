@@ -28,6 +28,7 @@ from .config import (
     DEFAULT_META_MODEL,
     DEFAULT_MISTRAL_MODEL,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
     DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
     ENGINE_LABELS,
@@ -42,7 +43,7 @@ from .config import (
     VALID_MODEL_SIZES,
 )
 from .local_benchmark import _format_seconds
-from .settings_store import _REMOTE_MODEL_FIELDS
+from .settings_store import _REMOTE_MODEL_FIELDS, LISTED_MODEL_ENGINES
 
 # What `Thread.start()` raises when the worker cannot be created: the OS refuses
 # the thread (`RuntimeError`) or the interpreter cannot allocate its
@@ -639,20 +640,20 @@ def model_choices_for_engine(
 ) -> tuple[tuple[str, str], ...]:
     """``(value, label)`` pairs of the models ``engine`` can transcribe with.
 
-    The custom endpoint has no roster: the endpoint decides what it offers,
-    so its choices are ``custom_models`` -- the stored model and whatever was
-    fetched from the endpoint -- in order, blanks and repeats dropped.
+    The custom endpoint and OpenRouter have no roster: the service decides what
+    it offers, so their choices are ``custom_models`` -- the stored model and
+    whatever the last Refresh fetched -- in order, blanks and repeats dropped.
     """
     normalized = str(engine or "").strip().lower()
     if normalized == DEFAULT_ENGINE:
         return tuple((value, local_model_label(value)) for value in VALID_MODEL_SIZES)
-    if normalized == "custom":
+    if normalized in LISTED_MODEL_ENGINES:
         values = dict.fromkeys(str(model or "").strip() for model in custom_models)
         return tuple((value, value) for value in values if value)
     return _REMOTE_MODEL_CHOICES.get(normalized, ())
 
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 960)
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 1010)
 
 
 _DIALOG_SCREEN_MARGIN = 48
@@ -772,6 +773,9 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "speechmatics": DEFAULT_SPEECHMATICS_MODEL,
     "mistral": DEFAULT_MISTRAL_MODEL,
     "meta": DEFAULT_META_MODEL,
+    # Free text, but with a default so that the engine works before the first
+    # Refresh.
+    "openrouter": DEFAULT_OPENROUTER_MODEL,
     # Free text: there is no default model for an endpoint the app does not
     # know.
     "custom": "",
@@ -820,6 +824,7 @@ _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
     _RemoteProviderInfo("speechmatics", "Speechmatics", "Speechmatics"),
     _RemoteProviderInfo("mistral", "Mistral", "Mistral (Voxtral)"),
     _RemoteProviderInfo("meta", "Meta", "Meta (Muse Voice)"),
+    _RemoteProviderInfo("openrouter", "OpenRouter", "OpenRouter"),
     _RemoteProviderInfo("custom", "Custom", "Custom endpoint"),
 )
 
