@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import faulthandler
 import logging
 import os
@@ -15,6 +16,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from . import __version__, dependency_check
 from .app_icon import load_app_icon
 from .app_paths import appdata_root, resolve_recordings_dir
+from .clipboard_copy import copy_text, set_text_writer
+from .clipboard_owner import ClipboardOwner
 from .config import (
     APP_DISPLAY_NAME,
     APP_LOGGER_NAME,
@@ -44,7 +47,7 @@ from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
-from .text_inserter import TextInserter
+from .text_inserter import TextInserter, Win32ClipboardBackend
 from .transcriber.base import transcript_has_gap
 from .transcriber.local_webgpu_asr import (
     NODE_PACKAGES_NOTICE_TITLE,
@@ -277,7 +280,17 @@ def run() -> int:
         hotkey_id=DEFAULT_SHOW_OVERLAY_HOTKEY_ID
     )
     repaste_hotkey_manager = HotkeyManager(hotkey_id=DEFAULT_REPASTE_HOTKEY_ID)
-    text_inserter = TextInserter()
+    # The transcript is announced on the clipboard and handed out by a window
+    # of this process, so a paste learns whether its target fetched the text.
+    text_inserter = TextInserter(backend=Win32ClipboardBackend(owner=ClipboardOwner()))
+    # Every Copy action of the app writes through the same backend
+    # (`clipboard_copy`), never through Qt.
+    set_text_writer(text_inserter.copy_text)
+    # An announced transcript exists only while this process answers for
+    # it. `aboutToQuit` closes the inserter (below); this covers an exit
+    # that never gets there, such as an exception out of `run`. A kill
+    # runs neither (docs/agents/known-limitations.md).
+    atexit.register(text_inserter.close)
 
     controller = DictationController(
         settings_store=settings_store,
@@ -397,6 +410,9 @@ def run() -> int:
     app.aboutToQuit.connect(request_download_shutdown)
     app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
+    # After the controller put the clipboard back: the owner window writes out
+    # a transcript it still owes, which would vanish with the process.
+    app.aboutToQuit.connect(text_inserter.close)
     # A floating overlay's mouse raw-input watch (docs/agents/overlay.md).
     app.aboutToQuit.connect(overlay.shutdown)
     signal_timer = _install_signal_handlers(app)
@@ -547,14 +563,21 @@ def _create_tray_icon(
 
     def copy_diagnostics() -> None:
         text = app_logger.diagnostics_text()
-        QtGui.QGuiApplication.clipboard().setText(text)
+        if not copy_text(text):
+            controller.show_overlay_error(
+                "Diagnostics not copied: the clipboard is in use by another program."
+            )
+            return
         controller.show_overlay_notice(
             f"Diagnostics copied to clipboard ({len(text.splitlines())} lines)."
         )
 
     def copy_last_transcript() -> None:
         if not controller.copy_last_transcript_to_clipboard():
-            controller.show_overlay_error("No transcript available to copy yet.")
+            controller.show_overlay_error(
+                "Nothing copied: there is no transcript yet, or the clipboard is "
+                "in use by another program."
+            )
             return
         controller.show_overlay_notice("Last transcript copied to clipboard.")
 

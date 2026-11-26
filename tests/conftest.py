@@ -875,6 +875,22 @@ def raw_mouse_input_calls(monkeypatch):
     return fake
 
 
+@pytest.fixture(autouse=True)
+def copied_texts(monkeypatch):
+    """No test writes the real clipboard through a Copy action.
+
+    Every Copy button, the tray's copy actions and the copy-on-error fallback
+    go through `stt_app.clipboard_copy.copy_text`, whose writer is installed
+    once at startup. Here it is a list a test may read; a test with its own
+    fake clipboard patches `clipboard_copy._writer` again.
+    """
+    from stt_app import clipboard_copy
+
+    texts: list[str] = []
+    monkeypatch.setattr(clipboard_copy, "_writer", texts.append)
+    return texts
+
+
 class RealTranscriberRefused(BaseException):
     """Deliberately not an `Exception`, and that is the whole point.
 

@@ -10,6 +10,7 @@ from time import monotonic
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import raw_mouse_input
+from .clipboard_copy import copy_text
 from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
@@ -2845,11 +2846,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def copy_detail_text(self) -> None:
         text = self._copy_text or self._detail_label.text()
-        if not text:
-            return
-        try:
-            QtGui.QGuiApplication.clipboard().setText(text)
-        except Exception:
+        if not text or not copy_text(text):
             return
         self._set_copy_button_feedback(True)
         self._copy_feedback_timer.start()

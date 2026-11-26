@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import local_runtime_support
 from .benchmark_history import BenchmarkHistoryEntry
+from .clipboard_copy import copy_text
 from .config import (
     ASSEMBLYAI_MODELS,
     ASSEMBLYAI_REGION_AUTO,
@@ -209,7 +210,7 @@ class ElidingLabel(QtWidgets.QLabel):
         selected = self.selectedText()
         painted = QtWidgets.QLabel.text(self)
         text = selected if selected and selected != painted else self._full_text
-        QtGui.QGuiApplication.clipboard().setText(text)
+        copy_text(text)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)

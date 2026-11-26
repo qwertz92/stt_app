@@ -24,7 +24,6 @@ from conftest import (
     FakeWindowFocusHelper,
     make_controller,
 )
-from PySide6 import QtGui
 from test_controller import FakeClipboard
 from test_controller_queue import (
     PacedTextInserter,
@@ -32,6 +31,7 @@ from test_controller_queue import (
     _record_and_stop,
 )
 
+from stt_app import clipboard_copy
 from stt_app.config import (
     CLIPBOARD_RESTORE_DELAY_S,
     FALLBACK_HOTKEY,
@@ -326,7 +326,7 @@ def test_copy_follows_a_history_edit_inside_a_coalesced_row(monkeypatch, tmp_pat
     decision 2026-10-09); before, the row and the offer followed and the
     tray's Copy still put the old joined text on the clipboard."""
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     inserter = FakeTextInserter(should_fail=True)
     controller, _app, _overlay, history = _controller(tmp_path, inserter=inserter)
     try:
@@ -349,7 +349,7 @@ def test_copy_follows_an_edit_of_a_possibly_inserted_row_that_stays_unpasted(
     `_last_transcript` setter forgot that row, and the re-paste fallback
     then pasted a text that may already be in the window."""
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     inserter = _SwitchableInserter()
     inserter.post_paste = True
     controller, _app, overlay, history = _controller(tmp_path, inserter=inserter)

@@ -8,8 +8,10 @@ answer by hand and pin what the user gets for each one.
 
 from __future__ import annotations
 
+import itertools
 import logging
 
+import pytest
 from conftest import (
     FakeCapture,
     FakeOverlay,
@@ -287,6 +289,194 @@ def test_a_window_that_always_reads_doubtful_keeps_only_the_latest_row(
     assert inserter.calls[-1][0] == "second words"
     controller.shutdown()
     _ = app
+
+
+def _record(controller):
+    """Record one dictation and return its token; its result comes later."""
+    controller.start_recording()
+    controller.stop_recording()
+    return controller._active_request_token
+
+
+def test_a_doubtful_row_survives_the_paste_of_a_result_recorded_before_it(
+    monkeypatch, tmp_path
+):
+    """Several results were queued (the owner, 2026-11-24): the paste of the
+    next one, recorded before the doubt was reported, went out within a second
+    and took the row with it. Only the paste of a later dictation drops it.
+    Immediate mode pastes each result as it finishes."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 1
+
+    controller._on_transcription_ready("second words", request_token=second)
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert [call[0] for call in inserter.calls] == ["first words", "second words"]
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "first words" in rows[0]
+
+    _dictate(controller, "a later dictation")
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert _rows(overlay) == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_verdict_after_the_paste_of_an_earlier_recording_still_lists_its_row(
+    monkeypatch, tmp_path
+):
+    """The check answers after the next queued result went out. That result
+    was recorded before the doubtful paste, so it supersedes nothing. The
+    default mode: the earlier result waits for the newest and both are pasted
+    one after the other."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, _inserter, _beeps = _make(monkeypatch, tmp_path, check)
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    controller._on_transcription_ready("second words", request_token=second)
+
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "first words" in rows[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_two_doubtful_queued_results_are_pasted_again_in_order(monkeypatch, tmp_path):
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    second = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    controller._on_transcription_ready("second words", request_token=second)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 2
+
+    controller.repaste_last_transcript()
+
+    assert "first words" in inserter.calls[-1][0]
+    assert "second words" in inserter.calls[-1][0]
+    assert inserter.calls[-1][0].index("first") < inserter.calls[-1][0].index("second")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_recording_already_running_when_the_doubt_arose_keeps_the_row(
+    monkeypatch, tmp_path
+):
+    """The owner's queued pattern (review, 2026-11-25): A is recorded, B is
+    being recorded when A's paste is reported as doubtful, then B is stopped
+    and pasted. B's job is submitted at its stop, after the doubtful paste,
+    but the dictation began before it -- and while it was being recorded the
+    overlay showed Listening, so the report was most likely never seen."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 1
+
+    controller.stop_recording()
+    controller._on_transcription_ready(
+        "second words", request_token=controller._active_request_token
+    )
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert [call[0] for call in inserter.calls] == ["first words", "second words"]
+    rows = _rows(overlay)
+    assert len(rows) == 1 and "first words" in rows[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_recording_started_after_the_doubtful_paste_clears_the_row(
+    monkeypatch, tmp_path
+):
+    """The mirror: this dictation began after the report was shown."""
+    check = FakePasteTargetCheck()
+    controller, app, overlay, _inserter, _beeps = _make(
+        monkeypatch, tmp_path, check, immediate_insert=True
+    )
+    first = _record(controller)
+    controller._on_transcription_ready("first words", request_token=first)
+    check.answer(VERDICT_NOT_TEXT_FIELD)
+    assert len(_rows(overlay)) == 1
+
+    controller.start_recording()
+    controller.stop_recording()
+    controller._on_transcription_ready(
+        "second words", request_token=controller._active_request_token
+    )
+    check.answer(VERDICT_TEXT_FIELD)
+
+    assert _rows(overlay) == []
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("immediate", [False, True])
+@pytest.mark.parametrize("count", [3, 4])
+def test_one_doubtful_paste_among_queued_results_in_every_completion_order(
+    monkeypatch, tmp_path, count, immediate
+):
+    """`count` recordings made back to back, their results arriving in every
+    order, the doubt on the first, second or third paste that goes out: every
+    text is pasted once and stored once, the doubtful paste's row is the one
+    row left, and the next dictation clears it."""
+    texts = [f"result {chr(ord('a') + index)}." for index in range(count)]
+    cases = 0
+    for order in itertools.permutations(range(count)):
+        for doubtful_paste in range(3):
+            case_dir = tmp_path / str(cases)
+            case_dir.mkdir()
+            cases += 1
+            label = f"order={order} doubtful_paste={doubtful_paste}"
+            check = FakePasteTargetCheck()
+            controller, _app, overlay, inserter, _beeps = _make(
+                monkeypatch, case_dir, check, immediate_insert=immediate
+            )
+            tokens = [_record(controller) for _text in texts]
+            pastes = 0
+            for index in order:
+                controller._on_transcription_ready(
+                    texts[index], request_token=tokens[index]
+                )
+                while check.callbacks:
+                    doubtful = pastes == doubtful_paste
+                    check.answer(
+                        VERDICT_NOT_TEXT_FIELD if doubtful else VERDICT_TEXT_FIELD
+                    )
+                    pastes += 1
+
+            pasted = " ".join(call[0] for call in inserter.calls)
+            assert [pasted.count(text) for text in texts] == [1] * count, label
+            stored = [entry.text for entry in controller._history_store.load()]
+            assert sorted(stored) == sorted(texts), label
+            # A joined paste can leave fewer than three pastes to doubt.
+            expected_rows = 1 if doubtful_paste < pastes else 0
+            assert len(_rows(overlay)) == expected_rows, label
+
+            _dictate(controller, "a later dictation.")
+            check.answer(VERDICT_TEXT_FIELD)
+
+            assert _rows(overlay) == [], label
+            controller.shutdown()
 
 
 class _MayHavePastedInserter(FakeTextInserter):
