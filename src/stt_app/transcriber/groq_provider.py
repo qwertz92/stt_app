@@ -25,7 +25,12 @@ from ..config import (
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
-from ._http_utils import errors_scrubbed, is_page_instead_of_text, key_redactor
+from ._http_utils import (
+    errors_scrubbed,
+    is_page_instead_of_text,
+    key_redactor,
+    missing_field_error,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -204,7 +209,18 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                 return transcription.strip()
 
             # Fallback: object with .text attribute (json response format).
-            text = getattr(transcription, "text", "") or ""
+            text = getattr(transcription, "text", None)
+            if not isinstance(text, str):
+                # A 200 answer without a transcript (a gateway's `{"error":
+                # ...}`) is not "no speech": read as "", the user saw silence.
+                dump = getattr(transcription, "model_dump", None)
+                parsed = dump() if callable(dump) else transcription
+                raise missing_field_error(
+                    parsed,
+                    prefix="Groq transcription failed",
+                    field="text",
+                    redact=self._scrub,
+                )
             return text.strip()
 
         except TranscriptionError:

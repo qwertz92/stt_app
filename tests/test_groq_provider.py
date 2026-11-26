@@ -216,6 +216,59 @@ class TestGroqTranscribeBatch:
         )
         assert t.transcribe_batch(b"RIFF fake") == text
 
+    @staticmethod
+    def _answering(answer):
+        """A Groq class whose transcription call returns `answer` as it is."""
+
+        class Client:
+            def __init__(self, **_kwargs):
+                class Transcriptions:
+                    def create(self, **_kw):
+                        return answer
+
+                class Audio:
+                    transcriptions = Transcriptions()
+
+                self.audio = Audio()
+
+        return Client
+
+    class _Dumpable:
+        """An SDK model object without `text`, as pydantic gives them."""
+
+        def model_dump(self):
+            return {"error": {"message": "quota exceeded"}}
+
+    @pytest.mark.parametrize(
+        ("answer", "shows"),
+        [
+            (_Dumpable(), "quota exceeded"),
+            ({"error": {"message": "nope"}}, "nope"),
+            ({"unexpected": 1}, "no 'text' field"),
+            (object(), "no 'text' field"),
+            (None, "no 'text' field"),
+        ],
+        ids=["model-with-error", "dict-with-error", "dict", "object", "none"],
+    )
+    def test_an_answer_without_a_transcript_is_an_error_not_silence(
+        self, answer, shows
+    ):
+        t = GroqTranscriber(
+            api_key="test-key", groq_client_class=self._answering(answer)
+        )
+        with pytest.raises(
+            TranscriptionError, match="Groq transcription failed"
+        ) as raised:
+            t.transcribe_batch(b"RIFF fake")
+        assert shows in str(raised.value)
+
+    @pytest.mark.parametrize("answer", ["", FakeTranscription("")], ids=["str", "obj"])
+    def test_an_empty_transcript_is_still_silence(self, answer):
+        t = GroqTranscriber(
+            api_key="test-key", groq_client_class=self._answering(answer)
+        )
+        assert t.transcribe_batch(b"RIFF fake") == ""
+
     def test_transcribe_strips_whitespace(self):
         """Result text is stripped of whitespace."""
         cls = _make_fake_groq_class(text="  trimmed text  ")

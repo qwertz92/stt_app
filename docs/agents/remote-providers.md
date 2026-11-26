@@ -256,6 +256,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   and holds a closing tag is refused with "Groq: an HTML page came instead of
   the transcript -- typically a proxy's sign-in or block page." The test is
   `_http_utils.is_page_instead_of_text`, shared with the Speechmatics fetch.
+  A 200 answer that is neither a string nor holds a string `text` (a
+  gateway's `{"error": ...}`) is an error through `missing_field_error`, not
+  "no speech"; `""` and an object with `text=""` stay silence.
   Engines that refuse a page at status 200: all of them now (the JSON engines
   through `json_from_reply`, the two plain-text ones through this helper).
 - **Speechmatics' plain-text transcript is refused only when it is an HTML page
