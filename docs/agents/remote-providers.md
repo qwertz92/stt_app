@@ -207,6 +207,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `channels` or `alternatives`; an answer without Deepgram's `results`, or
   without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
   names the job in these errors too, since the job already runs.
+- **Speechmatics' plain-text transcript is refused only when it is an HTML page
+  or a JSON object** (2026-11-26, review): `format=txt` answers text, and a
+  dictation may begin with anything (`<b> is the bold tag.`, `< 5 items`,
+  `<3 you`, a number, `true`, `[1, 2]`). The first version refused every body
+  starting with `<` ("an HTML page") and every body that parsed as a JSON
+  object, so those transcripts were lost. Now `is_html_page` (a doctype or an
+  `<html`/`<head`/`<body`/`<title` tag at the start) and a body that parses as
+  a JSON object are errors, each with the job id and the 7-day retention note;
+  everything else is the transcript, as before the change. A plain-text body
+  such as "Internal Server Error" cannot be told from a transcript and is
+  returned.
 - **A certificate failure is recognised by type, then by text** (2026-11-26):
   `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
   `reason` and answers True for any `ssl.SSLCertVerificationError` before it looks at

@@ -291,6 +291,50 @@ class TestSpeechmaticsErrors:
         assert "redirected (HTTP 302)" in message
         assert message.endswith(f"Job id {_JOB_ID}.")
 
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "<b> is the bold tag.",
+            "< 5 items",
+            "<3 you",
+            "<",
+            "42",
+            "true",
+            "null",
+            '"Hello"',
+            "[1, 2]",
+            "{ this is not json",
+        ],
+    )
+    def test_a_transcript_that_starts_like_markup_or_json_is_still_a_transcript(
+        self, service, text
+    ):
+        """`format=txt` is plain text: what was dictated may begin with `<`,
+        a digit, a bracket. Only a real HTML page or a JSON object is refused."""
+        service.transcript = text
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == text
+
+    @pytest.mark.parametrize(
+        ("body", "shows"),
+        [
+            ("<!DOCTYPE html><html><body>Sign in</body></html>", "an HTML page"),
+            ("  <html><head><title>x</title></head></html>", "an HTML page"),
+            ('{"transcript": "hi"}', "a data object instead of the transcript"),
+            ('{"error": {"message": "quota"}}', '("quota")'),
+        ],
+    )
+    def test_an_html_page_or_a_json_object_is_refused_with_the_job_id(
+        self, service, body, shows
+    ):
+        service.transcript = body
+        with pytest.raises(TranscriptionError) as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        message = str(caught.value)
+        assert shows in message
+        assert f"Job id {_JOB_ID}." in message
+        assert "7 days" in message
+        assert "no 'transcript' field" not in message
+
     def test_a_job_that_never_finishes_is_bounded(self, service):
         service.statuses = ["running"]
         with pytest.raises(TranscriptionError, match="did not finish") as caught:

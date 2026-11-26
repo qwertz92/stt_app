@@ -37,11 +37,11 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
-    is_markup_page,
-    missing_field_error,
+    is_html_page,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
+    reply_error_text,
 )
 from ._job_poll import fetch_with_retries, poll_job
 from .base import (
@@ -280,24 +280,31 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                     f"{job_id}."
                 ) from exc
             raise
-        # `format=txt` answers plain text. A proxy's page or a gateway's JSON
-        # at status 200 was returned as the transcript and pasted.
+        # `format=txt` answers plain text, and a dictation may start with
+        # anything (`<b> is the bold tag.`, `< 5 items`, a number, `true`): only
+        # a real HTML page (a proxy's sign-in or block page, status 200) and a
+        # JSON object (a gateway's, which the text endpoint never sends) are
+        # refused; every other body is the transcript.
         text = payload.decode("utf-8", errors="replace")
-        if is_markup_page(payload):
+        if is_html_page(payload):
             raise TranscriptionError(
                 "Speechmatics: the transcript answer is an HTML page instead of "
                 "text -- typically a proxy's sign-in or block page. "
-                f"Job id {job_id}."
+                f"Job id {job_id}. {_RETENTION_NOTE}"
             )
         if text.lstrip().startswith("{"):
             try:
                 parsed = json.loads(text)
             except ValueError:
                 return text
-            error = missing_field_error(
-                parsed, prefix="Speechmatics", field="transcript"
-            )
-            raise TranscriptionError(f"{error} Job id {job_id}.")
+            if isinstance(parsed, dict):
+                gateway_error = reply_error_text(parsed)
+                raise TranscriptionError(
+                    "Speechmatics: the transcript request answered with a data "
+                    "object instead of the transcript text"
+                    + (f' ("{gateway_error}")' if gateway_error else "")
+                    + f". Job id {job_id}. {_RETENTION_NOTE}"
+                )
         return text
 
     @staticmethod
