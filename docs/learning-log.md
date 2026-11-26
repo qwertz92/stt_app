@@ -27,7 +27,7 @@ user's "Custom endpoint" stays free; the model fetch behind the Refresh button n
   vocabulary is sent, with a note that only some models honour it.
 - **Side effect on the dialog**: Meta and OpenRouter made two more Providers rows, so the tab needs
   877 px (818 with nine rows) against the 829 px viewport of a 960 px dialog and scrolled 48 px. The
-  default dialog height is now 1010 px (measured with an offscreen throwaway dialog at 9 pt; the
+  default dialog height is now 1010 px (measured offscreen at 9 pt and confirmed on the real platform plugin, 2026-11-26; the
   12-failure summary line still fits its two reserved lines, 42 of 42 px).
 
 ## 2026-11-26: Meta Muse Voice Transcribe as the `meta` engine

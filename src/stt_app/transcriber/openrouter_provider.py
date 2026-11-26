@@ -22,6 +22,7 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENROUTER_MODEL,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    ENGINE_LABELS,
     OPENROUTER_API_BASE,
     OPENROUTER_MODELS_QUERY,
     remote_batch_part_limit,
@@ -36,8 +37,11 @@ _MAX_KEY_RESPONSE_BYTES = 64 * 1024
 
 class OpenRouterTranscriber(CustomEndpointTranscriber):
     _engine = "openrouter"
-    _name = "OpenRouter"
-    _upload_progress = "Uploading audio to OpenRouter and waiting for transcription..."
+    _name = ENGINE_LABELS["openrouter"]
+    _upload_progress = (
+        f"Uploading audio to {ENGINE_LABELS['openrouter']} and waiting for "
+        "transcription..."
+    )
     # The public list of models with a transcription output; the plain
     # `/models` is 469 chat models.
     _models_path = f"/models?{OPENROUTER_MODELS_QUERY}"

@@ -58,7 +58,7 @@ class _Server:
         self.answers = list(answers)
         self.requests: list[object] = []
 
-    def __call__(self, request, timeout=None, context=None):
+    def __call__(self, request, timeout=None, context=None, provider_name=None):
         self.requests.append(request)
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):

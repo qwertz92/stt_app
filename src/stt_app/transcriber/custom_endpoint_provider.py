@@ -44,6 +44,7 @@ from ..config import (
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    ENGINE_LABELS,
     LANGUAGE_MODE_LABELS,
     language_modes_for_selection,
     parse_custom_vocabulary,
@@ -75,7 +76,7 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
-_PROVIDER_NAME = "Custom endpoint"
+_PROVIDER_NAME = ENGINE_LABELS["custom"]
 _UPLOAD_PROGRESS = (
     "Uploading audio to the custom endpoint and waiting for transcription..."
 )
@@ -223,17 +224,21 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
     list only within its origin.
     """
 
+    def __init__(self, provider_name: str) -> None:
+        super().__init__()
+        self._provider_name = provider_name
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         target = _display_url(newurl)
         if req.data is not None:
             refusal = (
-                f"{_PROVIDER_NAME}: the endpoint redirected the upload (HTTP "
+                f"{self._provider_name}: the endpoint redirected the upload (HTTP "
                 f"{code}) to {target}. Enter the base URL the server redirects "
                 "to in Settings -> Providers."
             )
         elif not _redirect_keeps_origin(req.full_url, newurl):
             refusal = (
-                f"{_PROVIDER_NAME}: the endpoint redirected (HTTP {code}) to "
+                f"{self._provider_name}: the endpoint redirected (HTTP {code}) to "
                 f"another origin, {target}; the key is not sent there. Enter "
                 "that base URL in Settings -> Providers if it is the right "
                 "server."
@@ -247,11 +252,11 @@ class _RedirectGuard(urllib.request.HTTPRedirectHandler):
         raise TranscriptionError(refusal)
 
 
-def _open(request: urllib.request.Request, *, timeout: float):
+def _open(request: urllib.request.Request, *, timeout: float, provider_name: str):
     """`urlopen` with the system trust store and `_RedirectGuard`."""
     opener = urllib.request.build_opener(
         urllib.request.HTTPSHandler(context=create_ssl_context()),
-        _RedirectGuard(),
+        _RedirectGuard(provider_name),
     )
     return opener.open(request, timeout=timeout)
 
@@ -630,7 +635,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def _read(
         self, request: urllib.request.Request, timeout: float, max_bytes: int
     ) -> bytes:
-        with _open(request, timeout=timeout) as resp:
+        with _open(request, timeout=timeout, provider_name=self._name) as resp:
             payload = resp.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise TranscriptionError(
@@ -873,8 +878,8 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         if not self._model:
             raise TranscriptionError(
-                "No model is selected for the custom endpoint. Enter or fetch "
-                "one on the Transcription tab."
+                f"No model is selected for {self._name}. Enter or fetch one on "
+                "the Transcription tab."
             )
         return transcribe_in_parts(
             audio_source,
@@ -1103,17 +1108,17 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
 
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
         raise NotImplementedError(
-            "The custom endpoint is batch-only. Use batch mode, or use "
+            f"{self._name} is batch-only. Use batch mode, or use "
             "local/AssemblyAI/Deepgram for streaming."
         )
 
     def push_audio_chunk(
         self, chunk: bytes, *, block_timeout_s: float | None = None
     ) -> None:
-        raise NotImplementedError("The custom endpoint is batch-only.")
+        raise NotImplementedError(f"{self._name} is batch-only.")
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("The custom endpoint is batch-only.")
+        raise NotImplementedError(f"{self._name} is batch-only.")
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("The custom endpoint is batch-only.")
+        raise NotImplementedError(f"{self._name} is batch-only.")

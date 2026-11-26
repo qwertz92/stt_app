@@ -317,11 +317,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   Measured: content height 1338 -> 818 px at 9 pt (the tab scrolled 219 px,
   now not at all; 1764 -> 1016 px at 13.5 pt). With Meta and OpenRouter the
   content is 877 px (9 pt) against the 829 px viewport of a 960 px dialog, so
-  the tab scrolled 48 px; **the default dialog height is now 1010 px**
-  (`_DEFAULT_SETTINGS_DIALOG_SIZE`, bounded by the screen as before; on a
-  screen with under about 1060 px of available height the tab scrolls a
-  little; the nine-row version did so below about 950 px). Pinned by
+  the tab scrolled 48 px and cut the Save API Keys row; **the default dialog
+  height is now 1010 px** (`_DEFAULT_SETTINGS_DIALOG_SIZE`, bounded by the
+  screen as before; on a screen with under about 1060 px of available height
+  the tab scrolls a little; the nine-row version did so below about 950 px).
+  Measured on the real platform plugin (not offscreen) on 2026-11-26, 2560 x
+  1392 screen, Segoe UI 9 pt: at 960 px content 877 against viewport 829
+  (scroll 48 px); at 1010 px content and viewport are both 879 px, no
+  scrollbar. Pinned by
   `test_providers_tab_fits_the_default_dialog_height_without_scrolling`.
+  **Not built**: moving each region picker into its provider's own row would
+  save about 90 px and let the default go back to 960; it was left because it
+  changes the row grid (region pickers are indented sub-rows by design).
 - **Connection test results persist in `provider_connection_tests.json`**,
   not `settings.json`; restored on open, overwritten only for tested
   providers, cleared when that provider's key is saved or deleted. Each row

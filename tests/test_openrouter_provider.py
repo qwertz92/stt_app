@@ -7,6 +7,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import urllib.request
 
 import pytest
 from _rest_fakes import _parts, seconds_of, sent_fields, sent_file, wav_seconds
@@ -60,7 +61,7 @@ class _Server:
         self.answers = list(answers)
         self.requests: list[object] = []
 
-    def __call__(self, request, timeout=None):
+    def __call__(self, request, timeout=None, provider_name=None):
         self.requests.append(request)
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, BaseException):
@@ -382,3 +383,47 @@ def test_the_connection_test_rejects_an_answer_that_is_not_key_info(server):
     ok, message = OpenRouterTranscriber(_KEY).test_connection()
     assert not ok
     assert "unexpected" in message
+
+
+# -- the shared code names the engine the user selected -----------------------
+
+
+def _engine_transcriber(engine: str):
+    if engine == "openrouter":
+        return OpenRouterTranscriber(_KEY)
+    return provider_module.CustomEndpointTranscriber(
+        api_key="k", endpoint="https://gw.example.com/v1", model="m"
+    )
+
+
+@pytest.mark.parametrize("engine", ["custom", "openrouter"])
+def test_user_visible_messages_of_the_shared_code_name_the_selected_engine(engine):
+    label = ENGINE_LABELS[engine]
+    other = ENGINE_LABELS["custom" if engine == "openrouter" else "openrouter"]
+    transcriber = _engine_transcriber(engine)
+
+    guard = provider_module._RedirectGuard(transcriber._name)
+    with pytest.raises(TranscriptionError) as upload:
+        guard.redirect_request(
+            urllib.request.Request("https://gw.example.com/v1/x", data=b"audio"),
+            io.BytesIO(),
+            307,
+            "",
+            {},
+            "https://elsewhere.example/v1/x",
+        )
+    with pytest.raises(TranscriptionError) as listing:
+        guard.redirect_request(
+            urllib.request.Request("https://gw.example.com/v1/models"),
+            io.BytesIO(),
+            302,
+            "",
+            {},
+            "https://elsewhere.example/models",
+        )
+    with pytest.raises(NotImplementedError) as streaming:
+        transcriber.start_stream()
+
+    for message in (str(upload.value), str(listing.value), str(streaming.value)):
+        assert label in message
+        assert other not in message
