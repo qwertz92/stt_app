@@ -534,8 +534,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     1.30.0 to 1.32.0, onnxruntime-genai 0.17.1 to 0.20.0, ctranslate2 4.8.2
     to 4.9.1; released v0.15.0 still ships the old three). Measured through
     the app's transcribers on the CPU, old and new environment interleaved
-    (new, old, old, new), 5 German and 5 English FLEURS clips, 146.0 audio
-    seconds: every transcript byte-identical, so the word error rates are
+    (new, old, old, new), 5 German clips of Multilingual LibriSpeech and 5
+    English clips of LibriSpeech (the cross-check set of docs/models.md),
+    146.0 audio seconds: every transcript byte-identical, so the word error rates are
     unchanged. Real-time factor old against new (processing seconds per
     audio second): Parakeet v3 0.0513 against 0.0377 (26 % faster, both new
     runs below both old ones), Granite TurboCTC 0.0140 against 0.0147 and
