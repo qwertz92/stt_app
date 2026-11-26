@@ -9,7 +9,10 @@ that was not shown yet.
 
 import json
 import logging
+import threading
+import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 from conftest import (
@@ -385,8 +388,6 @@ def test_a_queued_retirement_download_does_not_fetch_a_model_the_user_left(
     # The user picks another model in Settings; the save cancels the generation
     # the work was queued under and starts the next one.
     controller._settings = replace(controller._settings, model_size="small")
-    controller._cancel_preload_generation(controller._preload_generation)
-    controller._preload_generation += 1
     gate.set()
     future.result(timeout=30)
 
@@ -464,19 +465,21 @@ def test_a_queued_retirement_download_does_not_repeat_what_the_preload_fetched(
     _ = app
 
 
-def test_a_canceled_preload_generation_is_not_restarted_by_the_queued_download(
+def test_a_new_preload_generation_does_not_end_the_queued_download(
     tmp_path, monkeypatch
 ):
-    """The user pressed Cancel on the overlay while the work was queued."""
+    """The queued work belongs to the choice, not to a preload generation: a
+    save that restarts the preload leaves it alone."""
     controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
     gate = _occupy_the_preload_worker(controller)
     future = controller._start_retirement_download()
     controller._cancel_preload_generation(controller._preload_generation)
+    controller._preload_generation += 1
     gate.set()
 
     future.result(timeout=30)
 
-    assert started == []
+    assert started == [("granite-speech-5.0-2b", str(tmp_path / "models"))]
     controller.shutdown()
     _ = app
 
@@ -555,3 +558,194 @@ def test_the_transcriber_refuses_a_missing_offline_model_with_the_typed_error(
 
     assert isinstance(raised.value, TranscriptionError)
     assert "not cached locally" in str(raised.value)
+
+
+# ---------------------------------------------------------------------------
+# While the settings still select the successor, a running download is only
+# ended by the quit: a Settings save that changes none of engine, model, model
+# directory and offline mode leaves it alone (no restart from zero).
+
+
+class _DownloadProcess:
+    def __init__(self):
+        self.returncode = None
+        self.release = threading.Event()
+
+    def poll(self):
+        if self.returncode is None and self.release.is_set():
+            self.returncode = 0
+        return self.returncode
+
+
+def _wait_until(condition, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while not condition() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    return condition()
+
+
+def _a_successor_download_in_progress(tmp_path, monkeypatch, keep):
+    """A moved user whose successor download is running, as the start leaves it:
+    with `keep` False only the download, with `keep` True the preload's own
+    download (then its load) with the queued download behind it."""
+    import stt_app.controller as controller_module
+    import stt_app.transcriber.local_faster_whisper as whisper_module
+
+    controller, app, _unused = _a_moved_granite_user(tmp_path, monkeypatch)
+    started: list[str] = []
+    procs: list[_DownloadProcess] = []
+    loads: list[str] = []
+
+    def fake_start(model_name, model_dir=""):
+        started.append(model_name)
+        process = _DownloadProcess()
+        procs.append(process)
+        return process
+
+    def fake_terminate(process):
+        process.returncode = -1
+
+    monkeypatch.setattr(controller_module, "start_model_download_process", fake_start)
+    monkeypatch.setattr(
+        controller_module, "terminate_model_download_process", fake_terminate
+    )
+    monkeypatch.setattr(
+        controller_module, "release_model_download_process", lambda process: None
+    )
+    monkeypatch.setattr(
+        controller_module, "model_download_process_error", lambda process: ""
+    )
+    monkeypatch.setattr(
+        whisper_module,
+        "find_cached_models",
+        lambda _dir="": [
+            name
+            for name, process in zip(started, procs, strict=False)
+            if process.poll() == 0
+        ],
+    )
+
+    class Lease:
+        transcriber = SimpleNamespace()
+
+        def release(self):
+            return None
+
+    def acquire(settings, **_kwargs):
+        loads.append(settings.model_size)
+        return Lease()
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", acquire)
+    controller._start_local_model_preload = lambda *a, **k: (
+        DictationController._start_local_model_preload(controller, *a, **k)
+    )
+    controller._settings = replace(controller._settings, keep_onnx_model_loaded=keep)
+    if keep:
+        controller._start_local_model_preload()
+    controller._start_retirement_download()
+    assert _wait_until(lambda: procs), "the download did not start"
+    return controller, app, started, procs, loads
+
+
+def _save_in_settings(controller, **changes):
+    """What the dialog does: write the file, then tell the controller."""
+    store = controller._settings_store
+    store.save(replace(store.load(), **changes))
+    controller.on_settings_changed()
+
+
+def _finish_downloads(controller, procs):
+    for process in procs:
+        process.release.set()
+    controller.shutdown()
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["keep off", "keep on"])
+@pytest.mark.parametrize("saves", [1, 2], ids=["one save", "two saves"])
+def test_an_unrelated_save_leaves_the_successor_download_running(
+    tmp_path, monkeypatch, keep, saves
+):
+    controller, app, started, procs, loads = _a_successor_download_in_progress(
+        tmp_path, monkeypatch, keep
+    )
+
+    for opacity in range(55, 55 + saves):
+        _save_in_settings(
+            controller, overlay_opacity_percent=opacity, keep_onnx_model_loaded=keep
+        )
+    time.sleep(0.6)
+
+    assert [process.returncode for process in procs] == [None]
+    procs[0].release.set()
+    assert _wait_until(lambda: procs[0].returncode == 0)
+    assert started == ["granite-speech-5.0-2b"]
+    if keep:
+        assert _wait_until(lambda: loads), "the model was never loaded"
+    else:
+        assert loads == []
+    _finish_downloads(controller, procs)
+    _ = app
+
+
+@pytest.mark.parametrize("keep", [False, True], ids=["off to on", "on to off"])
+def test_toggling_keep_onnx_loaded_leaves_the_successor_download_running(
+    tmp_path, monkeypatch, keep
+):
+    controller, app, started, procs, loads = _a_successor_download_in_progress(
+        tmp_path, monkeypatch, keep
+    )
+
+    _save_in_settings(controller, keep_onnx_model_loaded=not keep)
+    time.sleep(0.6)
+
+    assert [process.returncode for process in procs] == [None]
+    procs[0].release.set()
+    assert _wait_until(lambda: procs[0].returncode == 0)
+    if not keep:
+        # Turned on: the load this save asked for follows the download.
+        assert _wait_until(lambda: loads), "the model was never loaded"
+    time.sleep(0.3)
+    assert started == ["granite-speech-5.0-2b"]
+    if keep:
+        # Turned off: the download finished, nothing is loaded.
+        assert loads == []
+    _finish_downloads(controller, procs)
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"model_size": "small"},
+        {"offline_mode": True},
+        {"engine": "openai"},
+        {"model_dir": "other-models"},
+    ],
+    ids=["another model", "offline mode", "another engine", "another model dir"],
+)
+@pytest.mark.parametrize("keep", [False, True], ids=["keep off", "keep on"])
+def test_a_save_that_changes_the_selection_ends_the_successor_download(
+    tmp_path, monkeypatch, keep, changes
+):
+    controller, app, _started, procs, _loads = _a_successor_download_in_progress(
+        tmp_path, monkeypatch, keep
+    )
+    if "model_dir" in changes:
+        changes = {"model_dir": str(tmp_path / changes["model_dir"])}
+
+    _save_in_settings(controller, keep_onnx_model_loaded=keep, **changes)
+
+    assert _wait_until(lambda: procs[0].returncode == -1)
+    _finish_downloads(controller, procs)
+    _ = app
+
+
+def test_quitting_ends_the_successor_download(tmp_path, monkeypatch):
+    controller, app, _started, procs, _loads = _a_successor_download_in_progress(
+        tmp_path, monkeypatch, keep=False
+    )
+
+    controller.shutdown()
+
+    assert _wait_until(lambda: procs[0].returncode == -1)
+    _ = app

@@ -286,12 +286,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - "Downloading it now" is true even with Keep ONNX model loaded off:
     `controller._start_retirement_download` fetches the successor (download
     only, no load) through the one slot. It is queued on the single preload
-    worker, so it carries the generation it was queued under and gives up,
-    queued or running, once that generation is cancelled or the current
-    settings no longer select that engine and model (or offline mode is on).
-    Any other preload restart (even an unrelated settings save) cancels the
-    generation too, so the download then stops and is not repeated at this
-    start. A dictation without a preload in offline mode gets the same
+    worker and belongs to the choice, not to a preload generation: while the
+    current settings select the same local engine, model and model directory
+    with offline mode off, only the quit ends it
+    (`_retirement_download_wanted`). A Settings save that changes none of
+    those, whatever it does to "Keep ONNX model loaded", leaves the running
+    download untouched instead of restarting it from zero:
+    `_stop_running_preload` skips the old generation's load instead of
+    cancelling it, `_terminate_preload_download_process` spares this download
+    (`force=True` is for the user's cancel and for a download ending itself),
+    and the preload the save starts queues behind it, finds the model on disk
+    and loads it. A save that changes one of the four ends it. A dictation without a preload in offline mode gets the same
     readable "not on this PC" text as the preload path: the transcribers raise
     `ModelNotCachedError`, the controller maps it
     (`_transcription_error_text`) and logs the raw wording.

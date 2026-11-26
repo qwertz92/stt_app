@@ -4305,12 +4305,13 @@ def test_cancel_current_action_cancels_running_preload():
     controller._preload_future = _RunningFuture()
     terminated = []
     controller._terminate_preload_download_process = (  # type: ignore[method-assign]
-        lambda: terminated.append(True)
+        lambda force=False: terminated.append(force)
     )
 
     controller.cancel_current_action()
 
     assert controller._preload_cancel_requested is True
+    # Forced: the user's cancel also ends the successor's wanted download.
     assert terminated == [True]
     assert overlay.states[-1][0] == "Processing"
     assert "Canceling model download" in overlay.states[-1][1]

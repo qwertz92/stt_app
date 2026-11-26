@@ -1638,6 +1638,52 @@ def test_the_update_notice_keeps_the_spacing_after_the_model_notice(monkeypatch)
     _ = app
 
 
+def test_the_update_notice_waits_for_the_tray_icon(monkeypatch):
+    """The balloon of an update found at start is dropped by the tray while the
+    shell has not accepted the icon yet; it is held back and shown once it has."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    timers = []
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda delay, callback: timers.append((delay, callback)),
+    )
+    tray = FakeTrayIcon()
+    registered = [False]
+    tray.isVisible = lambda: registered[0]
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.2",
+            latest_tag="v0.4.2",
+            update_available=True,
+        ),
+    )
+
+    checker.start()
+
+    assert tray.messages == []
+    assert len(timers) == 1
+
+    # Still not registered after a retry: held back again.
+    timers.pop()[1]()
+    assert tray.messages == []
+    assert len(timers) == 1
+
+    registered[0] = True
+    timers.pop()[1]()
+
+    assert tray.messages == [
+        (
+            "Voice Dictation App",
+            "Update v0.4.2 is available. Current version: 0.4.1.",
+        )
+    ]
+    _ = app
+
+
 def test_the_model_notice_waits_for_the_tray_icon(monkeypatch):
     """The tray drops a balloon sent before the shell accepted the icon, and the
     move the notice announces is already saved, so it must be held back."""
