@@ -43,7 +43,7 @@ from .paste_target_check import PasteTargetCheck
 from .quit_dialog import QuitCoordinator
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
-from .settings_dialog_helpers import model_move_notice
+from .settings_dialog_helpers import model_move_notices
 from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
@@ -366,10 +366,10 @@ def run() -> int:
     if startup_settings.pending_model_moves:
         QtCore.QTimer.singleShot(
             _MODEL_NOTICE_FIRST_DELAY_MS,
-            lambda: _show_model_notice_when_ready(
+            lambda: _show_model_notices_when_ready(
                 tray_icon,
-                _pending_model_notice(settings_store),
-                on_shown=settings_store.clear_model_notice,
+                _pending_model_notices(settings_store),
+                settings_store.clear_model_notice,
             ),
         )
 
@@ -797,8 +797,24 @@ def _show_model_notice_when_ready(
     )
 
 
-def _pending_model_notice(settings_store: SettingsStore) -> str:
-    """The text of the moves still waiting, written for the disk as it is now."""
+def _show_model_notices_when_ready(tray_icon, notices, clear) -> None:
+    """Show the notices one after the other; each move is cleared once its own
+    notice was handed to the tray, so a start closed between two balloons still
+    owes the second one. The wait between two start notices is the existing
+    spacing (`_START_NOTICE_SPACING_S`)."""
+    if not notices:
+        return
+    (text, moves), rest = notices[0], notices[1:]
+
+    def shown() -> None:
+        clear(moves)
+        _show_model_notices_when_ready(tray_icon, rest, clear)
+
+    _show_model_notice_when_ready(tray_icon, text, on_shown=shown)
+
+
+def _pending_model_notices(settings_store: SettingsStore):
+    """The notices of the moves still waiting, written for the disk as it is now."""
     from .transcriber.local_faster_whisper import find_cached_models
 
     settings = settings_store.load()
@@ -810,7 +826,7 @@ def _pending_model_notice(settings_store: SettingsStore) -> str:
     on_disk = bool(successors) and successors[0] in find_cached_models(
         settings.model_dir
     )
-    return model_move_notice(
+    return model_move_notices(
         settings.pending_model_moves,
         successor_on_disk=on_disk,
         offline_mode=settings.offline_mode,

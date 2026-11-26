@@ -37,6 +37,7 @@ from .config import (
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
     SPEECHMATICS_MODELS,
+    TRAY_MESSAGE_MAX_CHARS,
     VALID_MODEL_SIZES,
 )
 from .local_benchmark import _format_seconds
@@ -627,10 +628,21 @@ def local_model_short_label(model_name: str) -> str:
     return label.split(" (", 1)[0].strip() or label
 
 
-def model_move_notice(
-    moves: list[dict[str, str]], *, successor_on_disk: bool, offline_mode: bool
-) -> str:
-    """The tray text for the retired-model moves a start found.
+def model_move_notices(
+    moves: list[dict[str, str]],
+    *,
+    successor_on_disk: bool,
+    offline_mode: bool,
+    limit: int = TRAY_MESSAGE_MAX_CHARS,
+) -> list[tuple[str, list[dict[str, str]]]]:
+    """The tray notices for the retired-model moves a start found, with the
+    moves each one announces.
+
+    One line per move, local first. The lines go into one notice while they fit
+    in `limit` (the tray cuts a longer balloon off mid-word); otherwise into as
+    few as it takes, never splitting a line, and the caller shows them one after
+    the other.
+
 
     A model is named by what the pickers call it, never by its settings id. The
     local line also says what the app does next, because the successor is
@@ -638,10 +650,10 @@ def model_move_notice(
     that has finished), or, in offline mode where nothing downloads by itself,
     where the user fetches it. A successor already on disk needs neither.
     """
-    lines: list[str] = []
+    lines: list[tuple[str, dict[str, str]]] = []
     for move in moves:
         if move["engine"] != DEFAULT_ENGINE:
-            lines.append(remote_move_line(move))
+            lines.append((remote_move_line(move), move))
             continue
         old = local_model_short_label(move["from"])
         new = local_model_short_label(move["to"])
@@ -658,9 +670,16 @@ def model_move_notice(
             )
         elif not successor_on_disk:
             line += f" Downloading it now{size}; dictation works when it is done."
-        lines.append(line)
+        lines.append((line, move))
     # Local first, as `retired_model_moves` orders them.
-    return "\n".join(lines)
+    notices: list[tuple[str, list[dict[str, str]]]] = []
+    for line, move in lines:
+        if notices and len(notices[-1][0]) + 1 + len(line) <= limit:
+            text, shown = notices[-1]
+            notices[-1] = (f"{text}\n{line}", [*shown, move])
+        else:
+            notices.append((line, [move]))
+    return notices
 
 
 def model_choices_for_engine(

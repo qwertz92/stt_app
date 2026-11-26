@@ -1717,8 +1717,53 @@ def test_the_pending_notice_is_written_for_the_disk_as_it_is_at_display_time(
         lambda model_dir="": list(cached),
     )
 
-    assert "Downloading it now (~1.73 GB)" in main_module._pending_model_notice(store)
+    def text() -> str:
+        return "\n".join(t for t, _ in main_module._pending_model_notices(store))
+
+    assert "Downloading it now (~1.73 GB)" in text()
     settings.offline_mode = True
-    assert "Offline mode is on" in main_module._pending_model_notice(store)
+    assert "Offline mode is on" in text()
     cached.append("granite-speech-5.0-2b")
-    assert main_module._pending_model_notice(store).endswith("2B.")
+    assert text().endswith("2B.")
+
+
+def test_two_model_notices_are_shown_one_after_the_other_and_cleared_one_by_one(
+    monkeypatch,
+):
+    """A local and a cloud notice that do not fit one balloon are two. The second
+    waits for the spacing between start notices, and each move is cleared only
+    once its own balloon was handed to the tray."""
+    timers = []
+    clock = [1000.0]
+    monkeypatch.setattr(main_module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(main_module, "_start_notice_not_before", 0.0)
+    monkeypatch.setattr(
+        main_module,
+        "QtCore",
+        SimpleNamespace(
+            QTimer=SimpleNamespace(
+                singleShot=lambda delay, callback: timers.append((delay, callback))
+            )
+        ),
+    )
+    events: list = []
+    tray = SimpleNamespace(
+        isVisible=lambda: True,
+        showMessage=lambda title, text, *args: events.append(("shown", text)),
+    )
+    local = {"engine": "local", "from": "a", "to": "b", "extra": ""}
+    cloud = {"engine": "openai", "from": "c", "to": "d", "extra": ""}
+
+    main_module._show_model_notices_when_ready(
+        tray,
+        [("local text", [local]), ("cloud text", [cloud])],
+        lambda moves: events.append(("cleared", [m["engine"] for m in moves])),
+    )
+
+    assert events == [("shown", "local text"), ("cleared", ["local"])]
+    delay_ms, callback = timers.pop()
+    assert delay_ms >= main_module._START_NOTICE_SPACING_S * 1000
+    clock[0] += main_module._START_NOTICE_SPACING_S + 0.1
+    callback()
+    assert events[2:] == [("shown", "cloud text"), ("cleared", ["openai"])]
+    assert timers == []

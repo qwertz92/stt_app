@@ -33,11 +33,15 @@ from stt_app.config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    RETIRED_LOCAL_MODEL_SUCCESSORS,
     VALID_MODEL_SIZES,
     parse_custom_vocabulary,
 )
 from stt_app.persistence import backup_path
-from stt_app.settings_dialog_helpers import local_model_short_label, model_move_notice
+from stt_app.settings_dialog_helpers import (
+    local_model_short_label,
+    model_move_notices,
+)
 from stt_app.settings_store import (
     CURRENT_SCHEMA_VERSION,
     AppSettings,
@@ -1855,10 +1859,13 @@ def test_standard_with_a_vocabulary_says_melia_ignores_it(
 
 def _notice(store, *, successor_on_disk=False, offline_mode=False):
     """The tray text of the moves `store` still holds, as `main` builds it."""
-    return model_move_notice(
-        store.load().pending_model_moves,
-        successor_on_disk=successor_on_disk,
-        offline_mode=offline_mode,
+    return "\n".join(
+        text
+        for text, _moves in model_move_notices(
+            store.load().pending_model_moves,
+            successor_on_disk=successor_on_disk,
+            offline_mode=offline_mode,
+        )
     )
 
 
@@ -1914,18 +1921,64 @@ def test_the_local_notice_adds_nothing_when_the_successor_is_on_disk(
     )
 
 
-def test_a_local_and_a_remote_notice_fit_one_tray_balloon(tmp_path):
+def _notices(store, *, successor_on_disk=False, offline_mode=False):
+    return model_move_notices(
+        store.load().pending_model_moves,
+        successor_on_disk=successor_on_disk,
+        offline_mode=offline_mode,
+    )
+
+
+def test_a_local_and_a_remote_notice_that_fit_share_one_balloon(tmp_path):
     from stt_app.config import TRAY_MESSAGE_MAX_CHARS
 
     store = _local_retirement_store(
         tmp_path, openai_model="whisper-1", has_openai_key=True
     )
-    lines = _notice(store).split("\n")
+    notices = _notices(store, successor_on_disk=True)
 
-    assert len(lines) == 2
-    assert lines[0].startswith("Local (on this PC): ")
-    assert lines[1].startswith("OpenAI: whisper-1 is no longer offered")
-    assert len(_notice(store)) <= TRAY_MESSAGE_MAX_CHARS
+    assert len(notices) == 1
+    text, moves = notices[0]
+    assert len(text) <= TRAY_MESSAGE_MAX_CHARS
+    assert [m["engine"] for m in moves] == ["local", "openai"]
+
+
+@pytest.mark.parametrize("offline_mode", [False, True])
+@pytest.mark.parametrize("retired", sorted(RETIRED_LOCAL_MODEL_SUCCESSORS.items()))
+def test_a_notice_is_never_cut_off_by_the_tray(tmp_path, retired, offline_mode):
+    """`win_tray_icon` truncates a balloon at 255 characters, mid-word. When the
+    local and the cloud notice do not fit together they are two notices (shown
+    one after the other); each fits, and every move is in exactly one of them."""
+    from stt_app.config import TRAY_MESSAGE_MAX_CHARS
+
+    old, _new = retired
+    store = _local_retirement_store(
+        tmp_path,
+        model_size=old,
+        speechmatics_model="standard",
+        speechmatics_region="eu1",
+        custom_vocabulary="Kubernetes",
+        has_speechmatics_key=True,
+        openai_model="whisper-1",
+        has_openai_key=True,
+    )
+    notices = _notices(store, offline_mode=offline_mode)
+
+    assert all(len(text) <= TRAY_MESSAGE_MAX_CHARS for text, _ in notices)
+    shown = [(m["engine"], m["from"]) for _, moves in notices for m in moves]
+    assert sorted(shown) == sorted(
+        (m["engine"], m["from"]) for m in store.load().pending_model_moves
+    )
+    assert len(shown) == len(set(shown))
+    assert notices[0][1][0]["engine"] == "local"
+    # No notice ends in the middle of a sentence.
+    assert all(text.rstrip().endswith((".", ")")) for text, _ in notices)
+    if old == "parakeet-tdt-0.6b-v3-ultra":
+        # The longest pair (189 + 167 characters) cannot share a balloon.
+        assert len(notices) == 2
+    # Two notices only where one would be cut off.
+    joined = "\n".join(text for text, _ in notices)
+    assert (len(notices) == 1) == (len(joined) <= TRAY_MESSAGE_MAX_CHARS)
 
 
 def test_a_notice_not_yet_shown_survives_a_start_that_is_closed_first(tmp_path):
