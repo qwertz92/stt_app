@@ -251,26 +251,36 @@ def _preload_failure_text(
 ) -> str:
     """What the overlay shows when the selected local model could not be loaded.
 
-    A load that failed after the preload's download failed (no network, or
-    `HF_HUB_OFFLINE=1`, whose Hugging Face text -- "outgoing traffic has been
-    disabled ... set 'HF_HUB_OFFLINE=0'" -- means nothing to a user of this app)
-    is a download problem: the text names the model as the pickers do, its
-    size, and the two things the user can do. The raw detail is in the log. A
-    first dictation in this state is refused with this text and records
-    nothing; audio recorded while the download was still running goes to the
-    Retry slot like any failed job.
+    A model that is not on this PC is a problem the user can act on, and the
+    library's text about it ("outgoing traffic has been disabled ...
+    local_files_only=False", `HF_HUB_OFFLINE=0`) means nothing to a user of this
+    app. Two cases, both naming the model as the pickers do and its size: the
+    preload's download failed (no network), or offline mode is on, so none was
+    tried. The raw detail is in the log. A first dictation in this state is
+    refused with this text and records nothing; audio recorded while the
+    download was still running goes to the Retry slot like any failed job.
     """
-    if download_error is not None:
-        from .settings_dialog_helpers import approximate_model_size_text
+    from .settings_dialog_helpers import approximate_model_size_text
+    from .transcriber.local_faster_whisper import find_cached_models
 
-        name = _local_model_display_name(settings.model_size)
-        size = approximate_model_size_text(settings.model_size)
-        size = f" ({size})" if size else ""
+    name = _local_model_display_name(settings.model_size)
+    size = approximate_model_size_text(settings.model_size)
+    size = f" ({size})" if size else ""
+    if download_error is not None:
         return (
             f"Could not download {name}{size}; it is not on this PC yet. "
             "Connect to the internet and open Settings > Models to download it, "
             "or choose a model that is already on this PC under "
             "Settings > Transcription. No fallback model was used."
+        )
+    if settings.offline_mode and settings.model_size not in find_cached_models(
+        settings.model_dir
+    ):
+        return (
+            f"{name}{size} is not on this PC, and Offline mode is on, so nothing "
+            "was downloaded. Turn Offline mode off under Settings > Models and "
+            "download it there, or choose a model that is already on this PC "
+            "under Settings > Transcription. No fallback model was used."
         )
     return (
         f"Selected model '{settings.model_size}' could not be loaded: {exc}. "

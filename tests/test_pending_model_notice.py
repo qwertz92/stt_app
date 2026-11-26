@@ -1,4 +1,5 @@
-"""The retired-model notice a start still owes the user.
+"""The retired-model notice a start still owes the user, and the text for a
+selected model that is not on this PC.
 
 `pending_model_moves` lives in the settings file until the tray has shown the
 balloon. Anything that saves a stale in-memory copy of the settings (the
@@ -258,5 +259,102 @@ def test_a_successor_already_on_disk_is_not_downloaded_again(tmp_path, monkeypat
     assert future is not None
     future.result(timeout=30)
     assert started == []
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# A selected model that is not on this PC and cannot be fetched (offline mode)
+
+
+_RAW_OFFLINE_LOAD_ERROR = (
+    "Cannot find an appropriate cached snapshot folder for the specified "
+    "revision on the local disk and outgoing traffic has been disabled. To "
+    "enable repo look-ups and downloads online, pass 'local_files_only=False' "
+    "as input."
+)
+
+
+@pytest.mark.parametrize(
+    ("model", "name", "size"),
+    [
+        ("large-v3-turbo", "large-v3-turbo", "~1.62 GB"),
+        ("small", "small", "~486 MB"),
+        ("granite-speech-5.0-2b", "IBM Granite Speech 5.0 2B", "~1.73 GB"),
+        ("fluid-speech-pro", "FluidVoice Fluid Speech Pro", "~801 MB"),
+    ],
+)
+def test_a_model_missing_in_offline_mode_gets_the_readable_text(
+    tmp_path, model, name, size
+):
+    from stt_app.controller import _preload_failure_text
+
+    settings = AppSettings(
+        engine="local",
+        model_size=model,
+        offline_mode=True,
+        model_dir=str(tmp_path / "an-empty-model-dir"),
+    )
+
+    text = _preload_failure_text(settings, OSError(_RAW_OFFLINE_LOAD_ERROR), None)
+
+    assert f"{name} ({size}) is not on this PC" in text
+    assert "Offline mode is on" in text
+    assert "Settings > Models" in text
+    assert "Settings > Transcription" in text
+    # Library wording, the raw id and the docs path are for the log.
+    assert "local_files_only" not in text
+    assert f"'{model}'" not in text
+    assert "docs/" not in text
+
+
+def test_a_model_on_disk_that_fails_to_load_in_offline_mode_keeps_its_own_text(
+    tmp_path, monkeypatch
+):
+    import stt_app.transcriber.local_faster_whisper as whisper_module
+    from stt_app.controller import _preload_failure_text
+
+    monkeypatch.setattr(whisper_module, "find_cached_models", lambda _dir="": ["small"])
+    settings = AppSettings(
+        engine="local", model_size="small", offline_mode=True, model_dir=str(tmp_path)
+    )
+
+    text = _preload_failure_text(settings, OSError("corrupt snapshot"), None)
+
+    assert "could not be loaded: corrupt snapshot" in text
+
+
+def test_the_offline_preload_reaches_the_overlay_as_the_readable_text(
+    tmp_path, monkeypatch
+):
+    """The worker path: offline mode skips the download without an error, the
+    load then fails with the library's own text."""
+    path = tmp_path / "settings.json"
+    _write(
+        path,
+        engine="local",
+        model_size="large-v3-turbo",
+        offline_mode=True,
+        model_dir=str(tmp_path / "empty"),
+    )
+    controller, app = _controller(SettingsStore(path))
+    controller.reload_settings(re_register_hotkey=False)
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda generation, ok, message: done.append((generation, ok, message))
+    )
+
+    def failing_load(*_args, **_kwargs):
+        raise OSError(_RAW_OFFLINE_LOAD_ERROR)
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", failing_load)
+    settings = controller.settings
+    controller._preload_model_worker(
+        settings, 1, controller._model_preload_key(settings)
+    )
+
+    assert done and done[-1][1] is False
+    assert "Offline mode is on" in done[-1][2]
+    assert "local_files_only" not in done[-1][2]
     controller.shutdown()
     _ = app
