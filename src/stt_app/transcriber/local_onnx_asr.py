@@ -37,6 +37,7 @@ from ..config import (
 from .base import (
     AudioInput,
     ITranscriber,
+    ModelNotCachedError,
     ProgressReporter,
     TranscriptionCanceled,
     TranscriptionError,
@@ -157,7 +158,7 @@ def resolve_or_download_onnx_model(
     if cached is not None:
         return cached
     if offline_mode:
-        raise TranscriptionError(
+        raise ModelNotCachedError(
             f"Local model '{model_size}' is not cached locally. "
             f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
         )

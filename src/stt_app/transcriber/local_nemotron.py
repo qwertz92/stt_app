@@ -29,6 +29,7 @@ from ._pcm_audio import resample_linear
 from .base import (
     AudioInput,
     ITranscriber,
+    ModelNotCachedError,
     ProgressReporter,
     StreamingCallback,
     StreamingErrorCallback,
@@ -150,7 +151,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         if snapshot is not None:
             return snapshot
         if self.offline_mode:
-            raise TranscriptionError(
+            raise ModelNotCachedError(
                 f"Nemotron model '{self.model_size}' is not cached locally. "
                 f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
             )

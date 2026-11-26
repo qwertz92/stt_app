@@ -49,6 +49,7 @@ from . import _node_packages
 from .base import (
     AudioInput,
     ITranscriber,
+    ModelNotCachedError,
     ProgressReporter,
     TranscriptionCanceled,
     TranscriptionError,
@@ -1146,7 +1147,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         if snapshot is not None:
             return snapshot
         if self.offline_mode:
-            raise TranscriptionError(
+            raise ModelNotCachedError(
                 f"ONNX/WebGPU model '{self.model_size}' is not cached locally. "
                 f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
             )

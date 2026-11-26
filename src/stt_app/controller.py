@@ -156,6 +156,7 @@ from .text_inserter import (
 )
 from .transcriber import create_transcriber
 from .transcriber.base import (
+    ModelNotCachedError,
     TranscriptionCanceled,
     TranscriptionError,
     request_transcription_shutdown,
@@ -258,6 +259,27 @@ def _local_model_display_name(model_name: str) -> str:
     return local_model_short_label(model_name)
 
 
+def _local_model_name_and_size(model_size: str) -> tuple[str, str]:
+    """The model's name as the pickers show it, and " (~1.73 GB)" or ""."""
+    from .settings_dialog_helpers import approximate_model_size_text
+
+    size = approximate_model_size_text(model_size)
+    return _local_model_display_name(model_size), f" ({size})" if size else ""
+
+
+def _model_missing_offline_text(model_size: str) -> str:
+    """The text for a selected local model that is not on this PC while Offline
+    mode forbids fetching it: shared by the preload's failure and by a dictation
+    that ran without a preload."""
+    name, size = _local_model_name_and_size(model_size)
+    return (
+        f"{name}{size} is not on this PC, and Offline mode is on, so nothing "
+        "was downloaded. Turn Offline mode off under Settings > Models and "
+        "download it there, or choose a model that is already on this PC "
+        "under Settings > Transcription. No fallback model was used."
+    )
+
+
 def _preload_failure_text(
     settings: AppSettings, exc: BaseException, download_error: RuntimeError | None
 ) -> str:
@@ -272,13 +294,10 @@ def _preload_failure_text(
     refused with this text and records nothing; audio recorded while the
     download was still running goes to the Retry slot like any failed job.
     """
-    from .settings_dialog_helpers import approximate_model_size_text
     from .transcriber.local_faster_whisper import find_cached_models
 
-    name = _local_model_display_name(settings.model_size)
-    size = approximate_model_size_text(settings.model_size)
-    size = f" ({size})" if size else ""
     if download_error is not None:
+        name, size = _local_model_name_and_size(settings.model_size)
         return (
             f"Could not download {name}{size}; it is not on this PC yet. "
             "Connect to the internet and open Settings > Models to download it, "
@@ -288,12 +307,7 @@ def _preload_failure_text(
     if settings.offline_mode and settings.model_size not in find_cached_models(
         settings.model_dir
     ):
-        return (
-            f"{name}{size} is not on this PC, and Offline mode is on, so nothing "
-            "was downloaded. Turn Offline mode off under Settings > Models and "
-            "download it there, or choose a model that is already on this PC "
-            "under Settings > Transcription. No fallback model was used."
-        )
+        return _model_missing_offline_text(settings.model_size)
     return (
         f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
         "No fallback model was used. Open Settings to retry or select "
@@ -2838,7 +2852,9 @@ class DictationController(QtCore.QObject):
         except TranscriptionError as exc:
             if runtime_lease is not None:
                 runtime_lease.release()
-            self._overlay.set_state("Error", str(exc))
+            self._overlay.set_state(
+                "Error", self._transcription_error_text(settings_snapshot, exc)
+            )
             return
         except Exception as exc:
             if runtime_lease is not None:
@@ -6736,6 +6752,21 @@ class DictationController(QtCore.QObject):
         if failure is not None:
             raise TranscriptionError(failure)
 
+    def _transcription_error_text(
+        self, settings: AppSettings, exc: TranscriptionError
+    ) -> str:
+        """What the overlay shows for a transcriber's refusal.
+
+        A local model that is missing while Offline mode is on has a readable
+        text (`_model_missing_offline_text`); the transcriber's own wording, with
+        its raw id and a docs path, goes to the log. Any other error is shown as
+        it was raised.
+        """
+        if not isinstance(exc, ModelNotCachedError):
+            return str(exc)
+        self._logger.warning("Selected model is not cached: %s", exc)
+        return _model_missing_offline_text(settings.model_size)
+
     def _start_retirement_download(self) -> concurrent.futures.Future | None:
         """Fetch the successor of a retired model the start just moved the user to.
 
@@ -7590,7 +7621,7 @@ class DictationController(QtCore.QObject):
         except TranscriptionError as exc:
             outcome = "provider_error"
             terminal_kind = "failed"
-            terminal_payload = str(exc)
+            terminal_payload = self._transcription_error_text(settings, exc)
         except FileNotFoundError as exc:
             outcome = "missing_file"
             self._logger.exception("Transcription failed due to missing file path")

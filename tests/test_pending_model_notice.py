@@ -479,3 +479,79 @@ def test_a_canceled_preload_generation_is_not_restarted_by_the_queued_download(
     assert started == []
     controller.shutdown()
     _ = app
+
+
+# ---------------------------------------------------------------------------
+# The same readable text without a preload (Keep ONNX model loaded off).
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "granite-speech-5.0-2b",
+        "fluid-speech-pro",
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+    ],
+)
+def test_a_dictation_without_a_preload_names_the_missing_model_offline(tmp_path, model):
+    """With offline mode on and no preload, the transcriber's own refusal reaches
+    the overlay as the readable text; its raw wording (a docs path, a raw id) is
+    for the log."""
+    from stt_app.transcriber.base import ModelNotCachedError
+
+    controller, app = _controller(SettingsStore(tmp_path / "settings.json"))
+    settings = AppSettings(
+        engine="local",
+        model_size=model,
+        offline_mode=True,
+        model_dir=str(tmp_path / "empty"),
+        keep_onnx_model_loaded=False,
+    )
+    controller._settings = settings
+
+    class Refusing:
+        def transcribe_batch(self, *_args, **_kwargs):
+            raise ModelNotCachedError(
+                f"ONNX/WebGPU model '{model}' is not cached locally. Disable Offline "
+                "mode or download it first. See docs/models.md."
+            )
+
+    class Lease:
+        transcriber = Refusing()
+
+        def release(self):
+            return None
+
+    controller._acquire_transcriber_runtime = lambda *a, **k: Lease()
+    controller._wait_for_selected_model_preload = lambda *a, **k: None
+    emitted: list[tuple] = []
+    controller.transcription_failed.connect(lambda *args: emitted.append(args))
+
+    controller._transcribe_worker(7, b"RIFF", settings)
+
+    assert len(emitted) == 1
+    text = emitted[0][-1]
+    assert "is not on this PC" in text and "Offline mode is on" in text
+    assert "Settings > Models" in text
+    assert f"'{model}'" not in text and "docs/" not in text
+    controller.shutdown()
+    _ = app
+
+
+def test_the_transcriber_refuses_a_missing_offline_model_with_the_typed_error(
+    tmp_path,
+):
+    from stt_app.transcriber.base import ModelNotCachedError, TranscriptionError
+    from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-5.0-2b",
+        offline_mode=True,
+        model_dir=str(tmp_path / "empty"),
+    )
+
+    with pytest.raises(ModelNotCachedError) as raised:
+        transcriber._ensure_snapshot()
+
+    assert isinstance(raised.value, TranscriptionError)
+    assert "not cached locally" in str(raised.value)
