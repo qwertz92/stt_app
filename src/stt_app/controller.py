@@ -6755,10 +6755,28 @@ class DictationController(QtCore.QObject):
             for move in settings.pending_model_moves
         ):
             return None
+        # The work may wait behind the start's own preload on the single worker.
+        # It belongs to the generation and the choice it was queued under: a new
+        # generation (the user picked another model, or cancelled) or a changed
+        # selection ends it, whether it is still queued or already downloading.
+        generation = self._preload_generation
+
+        def abandoned() -> bool:
+            current = self._settings
+            return (
+                self._preload_generation_was_canceled(generation)
+                or current.engine != DEFAULT_ENGINE
+                or current.model_size != settings.model_size
+                or current.offline_mode
+            )
 
         def work() -> None:
+            if abandoned():
+                return
             try:
-                self._download_model_for_preload(settings)
+                self._download_model_for_preload(
+                    settings, generation, should_stop=abandoned
+                )
             except RuntimeError as exc:
                 self._logger.warning(
                     "Download of the moved-to model %s failed: %s",
@@ -12163,14 +12181,22 @@ class DictationController(QtCore.QObject):
         self,
         settings: AppSettings,
         generation: int | None = None,
+        *,
+        should_stop: Callable[[], bool] | None = None,
     ) -> None:
         from .transcriber.local_faster_whisper import find_cached_models
 
         use_legacy_cancel_flag = generation is None
         generation = self._preload_generation if generation is None else generation
-        if self._preload_generation_was_canceled(generation) or (
-            use_legacy_cancel_flag and self._preload_cancel_requested
-        ):
+
+        def _canceled() -> bool:
+            return (
+                self._preload_generation_was_canceled(generation)
+                or (use_legacy_cancel_flag and self._preload_cancel_requested)
+                or (should_stop is not None and should_stop())
+            )
+
+        if _canceled():
             raise RuntimeError("Model download canceled.")
         # Before any download: on Windows ARM64 (no CTranslate2) the preload
         # fetched a whole Whisper model only to fail loading it afterwards.
@@ -12190,11 +12216,6 @@ class DictationController(QtCore.QObject):
         # it this path and the Local tab each spawned a worker against the same
         # cache directory: the second one then measured a directory the first
         # owned and sat at 0% forever.
-        def _canceled() -> bool:
-            return self._preload_generation_was_canceled(generation) or (
-                use_legacy_cancel_flag and self._preload_cancel_requested
-            )
-
         coordinator = model_download_coordinator()
         try:
             outcome = coordinator.acquire(

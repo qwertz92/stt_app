@@ -358,3 +358,124 @@ def test_the_offline_preload_reaches_the_overlay_as_the_readable_text(
     assert "local_files_only" not in done[-1][2]
     controller.shutdown()
     _ = app
+
+
+# ---------------------------------------------------------------------------
+# A queued successor download must not outlive the choice it was queued for.
+
+
+def _occupy_the_preload_worker(controller):
+    """Stand-in for the start's own preload (Keep ONNX loaded on, or a Whisper
+    successor): it holds the single preload worker until `gate` is set."""
+    import threading
+
+    gate = threading.Event()
+    controller._preload_executor.submit(gate.wait, 30)
+    return gate
+
+
+def test_a_queued_retirement_download_does_not_fetch_a_model_the_user_left(
+    tmp_path, monkeypatch
+):
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    gate = _occupy_the_preload_worker(controller)
+    future = controller._start_retirement_download()
+    assert future is not None
+
+    # The user picks another model in Settings; the save cancels the generation
+    # the work was queued under and starts the next one.
+    controller._settings = replace(controller._settings, model_size="small")
+    controller._cancel_preload_generation(controller._preload_generation)
+    controller._preload_generation += 1
+    gate.set()
+    future.result(timeout=30)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [{"engine": "openai"}, {"model_size": "small"}, {"offline_mode": True}],
+    ids=["another engine", "another model", "offline mode"],
+)
+def test_a_queued_retirement_download_gives_up_when_only_the_settings_changed(
+    tmp_path, monkeypatch, fields
+):
+    """No new generation at all: the work still looks at what is selected now
+    when it starts."""
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    gate = _occupy_the_preload_worker(controller)
+    future = controller._start_retirement_download()
+    controller._settings = replace(controller._settings, **fields)
+    gate.set()
+
+    future.result(timeout=30)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_retirement_download_runs_once_when_the_user_keeps_the_model(
+    tmp_path, monkeypatch
+):
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    gate = _occupy_the_preload_worker(controller)
+    future = controller._start_retirement_download()
+    gate.set()
+
+    future.result(timeout=30)
+
+    assert started == [("granite-speech-5.0-2b", str(tmp_path / "models"))]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_retirement_download_does_not_repeat_what_the_preload_fetched(
+    tmp_path, monkeypatch
+):
+    """The preload ahead of it downloads the successor; once that finished the
+    queued work finds it on disk and starts no second download."""
+    import stt_app.transcriber.local_faster_whisper as whisper_module
+
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    cached: list[str] = []
+    monkeypatch.setattr(
+        whisper_module, "find_cached_models", lambda _dir="": list(cached)
+    )
+    import threading
+
+    gate = threading.Event()
+
+    def the_preload_downloading_the_successor():
+        gate.wait(30)
+        cached.append("granite-speech-5.0-2b")
+
+    controller._preload_executor.submit(the_preload_downloading_the_successor)
+    future = controller._start_retirement_download()
+    gate.set()
+
+    future.result(timeout=30)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_canceled_preload_generation_is_not_restarted_by_the_queued_download(
+    tmp_path, monkeypatch
+):
+    """The user pressed Cancel on the overlay while the work was queued."""
+    controller, app, started = _a_moved_granite_user(tmp_path, monkeypatch)
+    gate = _occupy_the_preload_worker(controller)
+    future = controller._start_retirement_download()
+    controller._cancel_preload_generation(controller._preload_generation)
+    gate.set()
+
+    future.result(timeout=30)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
