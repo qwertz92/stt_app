@@ -222,6 +222,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   handshake the server aborted, a protocol mismatch) now gets the proxy
   guidance too, which is the right first suggestion behind a TLS-intercepting
   proxy and a harmless one otherwise.
+- **Meta refuses a WAVE_FORMAT_EXTENSIBLE float file with the same sentence as
+  plain float** (2026-11-26): Python's `wave` reports it as "unknown extended
+  format: <GUID>" (3.12), which `_wav_for_meta` did not match, so the user read
+  "not a WAV file that can be read" for a file that is a WAV. Both
+  "unknown format" and "unknown extended format" now say "a WAV file in a
+  format that is not PCM". Tested with a generated 32-bit float extensible file.
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing

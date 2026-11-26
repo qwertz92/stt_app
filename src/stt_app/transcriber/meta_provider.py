@@ -92,8 +92,9 @@ def _wav_for_meta(audio: bytes, filename: str) -> bytes:
                 handle.getframerate(),
             )
     except Exception as exc:
-        if str(exc).startswith("unknown format"):
-            # The RIFF header is a WAV's; its sample format is not PCM.
+        if str(exc).startswith(("unknown format", "unknown extended format")):
+            # The RIFF header is a WAV's; its sample format is not PCM (a
+            # WAVE_FORMAT_EXTENSIBLE float file says "unknown extended format").
             raise refusal(f"a WAV file in a format that is not PCM ({exc})") from exc
         raise refusal(f"not a WAV file that can be read ({exc})") from exc
     if width != 2:

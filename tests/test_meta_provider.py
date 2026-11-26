@@ -187,6 +187,19 @@ def _float32_wav() -> bytes:
     return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
+def _float32_extensible_wav() -> bytes:
+    """WAVE_FORMAT_EXTENSIBLE (0xFFFE) whose sub-format GUID is IEEE float, the
+    layout most audio editors write for 32-bit float: `wave` says "unknown
+    extended format" for it."""
+    samples = np.zeros(1600, dtype="<f4").tobytes()
+    ieee_float = bytes.fromhex("0300000000001000800000aa00389b71")
+    fmt = struct.pack("<HHIIHH", 0xFFFE, 1, 16_000, 64_000, 4, 32)
+    fmt += struct.pack("<HHI", 22, 32, 4) + ieee_float
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(samples)) + samples
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
 def _eight_bit_wav() -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as handle:
@@ -203,6 +216,11 @@ def _eight_bit_wav() -> bytes:
         (_eight_bit_wav(), "8-bit WAV audio"),
         (_wav(0.1, rate=16_000, width=3), "24-bit WAV audio"),
         (_float32_wav(), "a WAV file in a format that is not PCM"),
+        pytest.param(
+            _float32_extensible_wav(),
+            "a WAV file in a format that is not PCM",
+            id="float32-extensible",
+        ),
         (b"ID3\x04\x00 not audio", "not a WAV file that can be read"),
     ],
 )
