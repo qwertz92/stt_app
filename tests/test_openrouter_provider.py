@@ -371,6 +371,24 @@ def test_the_connection_test_checks_the_key_not_the_public_list(server):
     assert request.get_header("Authorization") == f"Bearer {_KEY}"
 
 
+@pytest.mark.parametrize("remaining", [None, 4.5, 100])
+def test_a_key_with_limit_left_or_no_limit_passes(server, remaining):
+    server({"data": {"label": "k", "limit": 10, "limit_remaining": remaining}})
+    ok, message = OpenRouterTranscriber(_KEY).test_connection()
+    assert ok, message
+
+
+@pytest.mark.parametrize("remaining", [0, 0.0, -0.01])
+def test_a_key_whose_own_limit_is_used_up_says_so(server, remaining):
+    """`limit_remaining` is the key's own cap (documented: "Remaining credits for
+    the key, or null if unlimited"). The account's credit is not in `/key`."""
+    server({"data": {"label": "k", "limit": 10, "limit_remaining": remaining}})
+    ok, message = OpenRouterTranscriber(_KEY).test_connection()
+    assert not ok
+    assert "the key is valid, but its own credit limit is used up" in message
+    assert _KEY not in message
+
+
 def test_the_connection_test_reports_a_refused_key(server):
     server(_http_error(401, json.dumps({"error": {"message": "User not found."}})))
     ok, message = OpenRouterTranscriber(_KEY).test_connection()

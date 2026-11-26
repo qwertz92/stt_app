@@ -486,6 +486,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     error is reported through the shared reader and a 200 without a `data`
     object is "unexpected". **Unverified live** (a valid key was never sent;
     the unauthenticated 401 below is not this route).
+    **Credit (page read 2026-11-26)**: the `data` object documents
+    `limit_remaining` ("Remaining credits for the key, or null if
+    unlimited": the key's own cap) and `usage`, and no account balance. When
+    `limit_remaining` is 0 or below the test says "the key is valid, but its
+    own credit limit is used up" (the page names the `openrouter_key_limit`
+    error for it). **A valid key on an account without credit still passes**
+    and its first dictation fails with HTTP 402: the balance is in
+    `GET /credits` (`total_credits`, `total_usage`), which the page says needs
+    a management key, so the app cannot read it and says nothing about it.
   - **Parts: 300 s and 25,000,000 bytes** (`OPENROUTER_MAX_PART_SECONDS`, the
     chat style's value, and `OPENROUTER_MAX_REQUEST_BYTES`). The page says
     "Max 25 MB" for an upload, "Upstream providers time out after 60 seconds

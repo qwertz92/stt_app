@@ -126,4 +126,20 @@ class OpenRouterTranscriber(CustomEndpointTranscriber):
                 False,
                 f"{self._name}: the key check answered with something unexpected.",
             )
+        remaining = parsed["data"].get("limit_remaining")
+        # `limit_remaining` is "Remaining credits for the key, or null if
+        # unlimited" (the key's own limit, set on openrouter.ai/settings/keys).
+        # The account's credit is not in this answer: `GET /credits` carries it
+        # but needs a management key. A key without account credit therefore
+        # still passes, and its first dictation fails with HTTP 402.
+        if (
+            isinstance(remaining, (int, float))
+            and not isinstance(remaining, bool)
+            and remaining <= 0
+        ):
+            return False, (
+                f"{self._name}: the key is valid, but its own credit limit is "
+                "used up. Raise the limit of this key on openrouter.ai or use "
+                "another key."
+            )
         return True, "Connection OK — API key is valid."
