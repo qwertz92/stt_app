@@ -54,9 +54,10 @@ from .local_onnx_asr import _read_wav_float32
 META_API_BASE = "https://api.meta.ai/v1"
 _TRANSCRIBE_URL = f"{META_API_BASE}/asr/transcribe"
 _UPLOAD_PROGRESS = "Uploading audio to Meta and waiting for transcription..."
-_PROVIDER_NAME = ENGINE_LABELS[
-    "meta"
-]  # "Sample rate: 16 kHz or 24 kHz", mono, 16-bit integer PCM.
+_PROVIDER_NAME = ENGINE_LABELS["meta"]
+# The bound of a request that only checks the key, as the other engines' tests.
+_KEY_CHECK_TIMEOUT_S = 15
+# "Sample rate: 16 kHz or 24 kHz", mono, 16-bit integer PCM.
 _ACCEPTED_SAMPLE_RATES = (16_000, 24_000)
 _TARGET_SAMPLE_RATE = 16_000
 _SCRUBBED = "[hidden]"
@@ -70,11 +71,19 @@ _TEST_AUDIO_SECONDS = 1
 def _wav_for_meta(audio: bytes, filename: str) -> bytes:
     """The recording as the WAV Meta takes: mono, 16-bit, 16 or 24 kHz.
 
-    The app records exactly that and it goes out untouched. An import at
-    another rate, in stereo or in another bit depth is mixed down and
-    resampled to 16 kHz mono, as the local models are fed. Anything that is
-    not a WAV cannot be read here, and Meta takes nothing else.
+    The app records exactly that and it goes out untouched. A 16-bit PCM
+    import at another rate or in stereo is mixed down and resampled to 16 kHz
+    mono, as the local models are fed. Anything else (8- or 24-bit, float, not
+    a WAV) is refused: the app has no decoder for it and Meta takes nothing
+    else.
     """
+
+    def refusal(what: str) -> TranscriptionError:
+        return TranscriptionError(
+            f"{_PROVIDER_NAME} takes 16-bit PCM WAV; {filename} is {what}. "
+            "Convert it to 16-bit PCM WAV first."
+        )
+
     try:
         with wave.open(io.BytesIO(audio), "rb") as handle:
             channels, width, rate = (
@@ -83,11 +92,13 @@ def _wav_for_meta(audio: bytes, filename: str) -> bytes:
                 handle.getframerate(),
             )
     except Exception as exc:
-        raise TranscriptionError(
-            f"{_PROVIDER_NAME} takes WAV audio only, and {filename} is not one "
-            f"that can be read ({exc}). Convert it to a WAV file first."
-        ) from exc
-    if channels == 1 and width == 2 and rate in _ACCEPTED_SAMPLE_RATES:
+        if str(exc).startswith("unknown format"):
+            # The RIFF header is a WAV's; its sample format is not PCM.
+            raise refusal(f"a WAV file in a format that is not PCM ({exc})") from exc
+        raise refusal(f"not a WAV file that can be read ({exc})") from exc
+    if width != 2:
+        raise refusal(f"{width * 8}-bit WAV audio")
+    if channels == 1 and rate in _ACCEPTED_SAMPLE_RATES:
         return audio
     samples, source_rate = _read_wav_float32(io.BytesIO(audio))
     resampled = resample_linear(samples, source_rate, _TARGET_SAMPLE_RATE)
@@ -158,7 +169,12 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
             silence_threshold=self._silence_gate_threshold,
         )
 
-    def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
+    def _transcribe_request(
+        self,
+        audio_source: AudioInput,
+        progress_text: str,
+        timeout_s: float | None = None,
+    ) -> str:
         """One request, for a whole recording or one part of it."""
         try:
             if isinstance(audio_source, (bytes, bytearray)):
@@ -184,7 +200,7 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
             self._emit_progress(progress_text)
             with open_request(
                 request,
-                timeout=self._request_timeout_s,
+                timeout=timeout_s or self._request_timeout_s,
                 provider_name=_PROVIDER_NAME,
             ) as resp:
                 payload = resp.read()
@@ -221,7 +237,9 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
             bytes(2 * _TARGET_SAMPLE_RATE * _TEST_AUDIO_SECONDS), _TARGET_SAMPLE_RATE
         )
         try:
-            self._transcribe_request(silence, _UPLOAD_PROGRESS)
+            self._transcribe_request(
+                silence, _UPLOAD_PROGRESS, timeout_s=_KEY_CHECK_TIMEOUT_S
+            )
         except TranscriptionError as exc:
             return False, str(exc)
         return True, "Connection OK — API key is valid."

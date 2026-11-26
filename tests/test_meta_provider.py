@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import struct
 import wave
 
 import numpy as np
@@ -177,6 +178,47 @@ def test_audio_that_is_not_a_wav_is_refused_before_sending(recorder, tmp_path):
     assert recorder.requests == []
 
 
+def _float32_wav() -> bytes:
+    """A WAV whose format tag is 3 (IEEE float): `wave` cannot write one."""
+    samples = np.zeros(1600, dtype="<f4").tobytes()
+    fmt = struct.pack("<HHIIHH", 3, 1, 16_000, 64_000, 4, 32)
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(samples)) + samples
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def _eight_bit_wav() -> bytes:
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(1)
+        handle.setframerate(16_000)
+        handle.writeframes(bytes([128]) * 1600)
+    return buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    ("audio", "what"),
+    [
+        (_eight_bit_wav(), "8-bit WAV audio"),
+        (_wav(0.1, rate=16_000, width=3), "24-bit WAV audio"),
+        (_float32_wav(), "a WAV file in a format that is not PCM"),
+        (b"ID3\x04\x00 not audio", "not a WAV file that can be read"),
+    ],
+)
+def test_an_import_meta_cannot_take_gets_one_true_sentence(recorder, audio, what):
+    """Not "local model", not "convert to a WAV" for a WAV: the engine's name,
+    what the file is, and the one thing that works."""
+    with pytest.raises(TranscriptionError) as raised:
+        MetaTranscriber("k").transcribe_batch(audio)
+    message = str(raised.value)
+    assert message.startswith("Meta (Muse Voice) takes 16-bit PCM WAV; audio.wav is ")
+    assert what in message
+    assert message.endswith("Convert it to 16-bit PCM WAV first.")
+    assert "local model" not in message
+    assert recorder.requests == []
+
+
 def test_an_empty_transcript_is_a_valid_answer(recorder):
     recorder.answer = json_response({"sessionId": "s", "transcript": ""})
     assert MetaTranscriber("k").transcribe_batch(wav_seconds(1.0)) == ""
@@ -314,6 +356,21 @@ def test_the_connection_test_sends_one_second_of_silence(recorder):
     body = sent_file(request)[2]
     assert seconds_of(body) == pytest.approx(1.0, abs=0.01)
     assert not np.frombuffer(body[44:], dtype="<i2").any()
+
+
+def test_the_connection_test_has_the_short_bound_of_a_key_check(recorder, monkeypatch):
+    """It sent a transcription request with the 300 s timeout of a real part."""
+    recorder.answer = json_response({"sessionId": "s", "transcript": ""})
+    seen: dict[str, object] = {}
+
+    def spy(request, timeout=None, **kwargs):
+        seen["timeout"] = timeout
+        return recorder(request, timeout=timeout, **kwargs)
+
+    monkeypatch.setattr(provider_module, "open_request", spy)
+    ok, message = MetaTranscriber("k", request_timeout_s=300).test_connection()
+    assert ok, message
+    assert seen["timeout"] == 15
 
 
 def test_the_connection_test_reports_an_invalid_key(recorder):

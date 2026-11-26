@@ -390,12 +390,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     whether a long list is refused. `meta` is in
     `config.CUSTOM_VOCABULARY_ENGINES` and its summary sentence.
   - **WAV only, mono 16-bit, 16 or 24 kHz, 10 minutes, 32 MB.** The app's own
-    16 kHz recording goes out byte for byte. An imported WAV in another rate,
-    in stereo or 24-bit is mixed down and resampled to 16 kHz mono
+    16 kHz recording goes out byte for byte. An imported **16-bit PCM** WAV in
+    another rate or in stereo is mixed down and resampled to 16 kHz mono
     (`_wav_for_meta`, the resampler the local models use) instead of coming
-    back as a 400; a file that is not a WAV (MP3, M4A) is refused before
-    sending, naming the file, because Meta takes nothing else and the app
-    ships no decoder.
+    back as a 400. **Anything else is refused before sending** with one
+    sentence, "Meta (Muse Voice) takes 16-bit PCM WAV; <file> is <what it is>.
+    Convert it to 16-bit PCM WAV first.": an 8-bit or 24-bit WAV ("8-bit WAV
+    audio"), a WAV with a float or other non-PCM format, or a file that is not
+    a WAV (MP3, M4A). The app ships no decoder for them and Meta takes nothing
+    else. (Until 2026-11-26 this paragraph said 24-bit was converted; it was
+    refused with the local models' wording, "Only 16-bit PCM WAV audio is
+    supported by this local model", and a float WAV was called "not a WAV".)
+  - **The connection test has the 15 s bound** of the other key checks
+    (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
+    keeps the transcription timeout (up to 300 s).
   - **Parts**: `META_MAX_PART_SECONDS` 590 and `META_MAX_REQUEST_BYTES`
     32,000,000 through `remote_batch_part_limit("meta", ...)` and
     `transcribe_in_parts`. 590, not 600: the page does not say whether "10
