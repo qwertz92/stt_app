@@ -16,9 +16,9 @@ The app has five local runtime families:
   Python, CPU only, no Node.js and no GPU. Parakeet is the fastest local model
   in this app that transcribed the benchmark recording correctly: RTF 0.043 on
   a Ryzen 5 7600X. Fluid Speech Pro is FluidVoice Labs' post-training of the
-  same model: about half the word error rate of v3 on the 2026-11-25
-  German and English test (3.3 and 3.6 % against 6.5 and 4.9 %), at about
-  three times the processing time (see
+  same model: a lower word error rate than v3 on the 2026-11-25
+  German and English test (German 3.3 % against 6.5 %, English 3.6 %
+  against 4.9 %), at about three times the processing time (see
   [onnx-asr models](#onnx-asr-models-parakeet-canary)). Batch mode only.
 - **IBM Granite Speech 5.0 470M TurboCTC** (int8, ONNX Runtime) — a CTC encoder
   that runs on the CPU provider the app already ships, with numpy features and
@@ -61,8 +61,8 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `granite-speech-5.0-2b` | ONNX/WebGPU | ~1.73 GB q4 | Auto + the languages IBM lists | IBM's newest speech model (Apache-2.0); German 3.5 % and English 4.9 % in Auto (5.3 % with a language chosen) on the 2026-11-25 test; batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
-| `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): half v3's word error rate in German and English on the 2026-11-25 test, about 3x slower; pinned to one commit, batch mode only |
-| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | German 3.7 % against Parakeet's 6.5 % on the 2026-11-25 test, RTF about 0.15; Fluid Speech Pro beats it in both languages; batch mode only |
+| `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): on the 2026-11-25 test German 3.25 % against v3's 6.50 % and English 3.57 % against 4.89 %, about 3x slower; pinned to one commit, batch mode only |
+| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | German 3.7 % against Parakeet's 6.5 % on the 2026-11-25 test, RTF about 0.15; Fluid Speech Pro measured 3.25 % German (within the test's noise of Canary) and 3.57 % English against Canary's 5.45 %; batch mode only |
 | `granite-speech-5.0-470m-turboctc` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | **English only** | Fastest local model on English (RTF 0.014 on CPU) and the smallest that is not a Whisper size; writes lower case without punctuation or apostrophes, batch mode only |
 
 ### Which model should I use?
@@ -74,7 +74,8 @@ GPU model in the same run on its GPU. The English-only
 `granite-speech-5.0-470m-turboctc` is quicker (see above) but writes plain
 lower-case text and knows no other language, which is why the default is
 Parakeet. Where German or English accuracy matters more than speed,
-`fluid-speech-pro` halves Parakeet's word error rate on the 2026-11-25 test. Between
+`fluid-speech-pro` measured German 3.25 % and English 3.57 % against Parakeet's
+6.50 % and 4.89 % on the 2026-11-25 test. Between
 models that both worked, that benchmark cannot tell you which is more
 accurate -- see the
 [report](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md) -- so pick on

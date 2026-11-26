@@ -1056,8 +1056,8 @@ class _GeneralTabMixin:
             )
         elif engine == "local" and model_name == FLUID_SPEECH_PRO_MODEL_SIZE:
             style = note_style
-            # Measured 2026-11-25: about half Parakeet v3's word error rate in
-            # German and English at about three times its processing time.
+            # Measured 2026-11-25: German 3.25 against Parakeet v3's 6.50 and
+            # English 3.57 against 4.89, at about three times its processing time.
             text = (
                 "Batch mode only, CPU. Multilingual; more accurate than "
                 "Parakeet in German and English, about three times slower. "

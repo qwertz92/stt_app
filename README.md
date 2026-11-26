@@ -93,8 +93,9 @@ Granite) run on the GPU via WebGPU, need Node.js, and are batch-only.
 **onnx-asr models** (Parakeet, Fluid Speech Pro, Canary) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
 model here that transcribed the benchmark recording correctly, and Fluid
-Speech Pro halves its word error rate in German and English at about three
-times the processing time (2026-11-25 test, `docs/models.md`).
+Speech Pro measured German 3.3 % and English 3.6 % against its 6.5 % and
+4.9 % at about three times the processing time (2026-11-25 test,
+`docs/models.md`).
 **Granite Speech 5.0 470M TurboCTC** runs on ONNX Runtime on the CPU with no
 Node.js either; it is the fastest local model on English (RTF 0.014 on a
 Ryzen 5 7600X) and the smallest non-Whisper download, but it is English only

@@ -290,7 +290,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     Fluid Speech Pro (de 3.25 / en 3.57 against Parakeet v3's 6.50 / 4.89,
     about three times slower at RTF 0.2).
   - Kept: Canary (de 3.66 against v3's 6.50, so the rule keeps it, though
-    Fluid beats it in both languages), Whisper `small` (the one Whisper that
+    Fluid measured 3.25 / 3.57 against Canary's 3.66 / 5.45, a German
+    difference inside the test's noise), Whisper `small` (the one Whisper that
     keeps the rolling-window streaming usable on a CPU-only laptop, RTF about
     0.19 against 0.55 to 0.6 for the large ones), `large-v3`,
     `large-v3-turbo`, `distil-large-v3.5`.
@@ -540,7 +541,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     measurements describe exactly these commits, so a later push must not
     change what a user downloads. An unpinned model (the others) follows its
     repository's default branch. Moving a pin means re-measuring size and
-    accuracy first.
+    accuracy first. The pin governs what is DOWNLOADED: a snapshot of another
+    commit that is already on disk and has the required files is used as it
+    is (`local_webgpu_asr._valid_snapshot_path`), so a user who downloaded
+    before the pin keeps working without a new download.
   - Allow-patterns name the six files exactly (config, vocab, int8 encoder and
     decoder_joint with their `.data`) plus README, LICENSE and NOTICE: the
     repository also holds fp32 copies (2.67 GB), clean-mode graphs and

@@ -30,7 +30,8 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
   3.25, English 3.57, against Parakeet v3's 6.50 and 4.89, about three times
   slower (RTF 0.2 against 0.05 to 0.09).
 - **Kept.** Canary (German 3.66, better than v3's 6.50, so the rule keeps it,
-  though Fluid beats it in both languages), Whisper `small` (German 6.10, English
+  though Fluid measured 3.25 / 3.57 against Canary's 3.66 / 5.45, a German
+  difference inside the noise), Whisper `small` (German 6.10, English
   5.64; the one Whisper that streams on a CPU-only laptop) and the three large
   Whisper models.
 - **Lesson: a model's own prompt belongs to its generation.** The 4.x
