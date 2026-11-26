@@ -44,7 +44,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
   worker, one model per runtime, GUI 40 s; a `SKIP ... is not on this PC` check
   per preferred model the scan did not list, so a missing default model is
   visible; `--model-dir PATH` scans and loads a Model Dir, read-only, instead
-  of only the Hugging Face cache; `tests/test_release_check_frozen_bundle.py`); plumbing in
+  of only the Hugging Face cache; with it the faster-whisper sizes are looked
+  for in that folder alone, so on a PC that has the default model only in a
+  folder a release runs the check twice, with and without the option, and
+  each run's SKIP is covered by the other (v0.15.0: `small` skipped with the
+  option, the TurboCTC without it); `tests/test_release_check_frozen_bundle.py`); plumbing in
   `scripts/_release_check_common.py`. Contract: one `OK`/`FAIL`/`SKIP` line
   per check; exit 0/1/2, 2 = nothing measured, never a code failure; an
   uncaught exception or Ctrl+C becomes a failed check via `run_main`, so the

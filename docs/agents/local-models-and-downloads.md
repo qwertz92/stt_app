@@ -502,7 +502,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   `uv lock --upgrade` moves only transitive packages; `uv tree --outdated
   --depth 1` shows stale direct pins; `requirements-win.txt` /
   `requirements-dev-win.txt` mirror them (a test compares). Evidence: suite,
-  `scripts/release_check_providers.py`, one real model per runtime. `uv audit`
+  `scripts/release_check_providers.py`, one real model per runtime. A new lock
+  is tested without touching the `.venv` a running source checkout uses:
+  `UV_PROJECT_ENVIRONMENT=<folder outside the repository> uv sync --frozen`,
+  then that environment's `pytest.exe` from the repository root (2026-11-27:
+  5791 passed, 3 skipped on the three new runtimes); Windows cannot replace a
+  runtime's DLLs while the app has them loaded. `uv audit`
   and `pip-audit` report no known vulnerability on the lock (2026-11-26, after
   certifi 2026.11.20, filelock 4.3.1 and the build-only setuptools 84.2.1
   replaced versions with advisories; audit the export of the lock, not
@@ -543,6 +548,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     ran on the CPU in both: the PyPI wheel has no DirectML build ("the
     installed GenAI has not been built with DML support"), old and new
     alike. Not measured: the GPU path of genai (another distribution).
+    The packaged build of this commit passed the frozen bundle check on
+    every runtime (2026-11-27); Parakeet's real-time factor on its one clip
+    was 0.037 there against 0.052 in the v0.15.0 build.
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro; Canary 1B v2 until 2026-11-26)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
