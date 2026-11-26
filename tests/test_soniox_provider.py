@@ -542,6 +542,7 @@ class TestSonioxErrors:
             OSError(f"gone {_KEY}"),
         ]
         assert _transcriber().transcribe_batch(wav_seconds(1.0)) == "Hallo Welt."
+        join_cleanup()
         assert caplog.text.count("soniox_cleanup_failed") == 2
         assert _KEY not in caplog.text
 

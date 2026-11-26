@@ -226,7 +226,9 @@ class TestSonioxStreamingStart:
         try:
             message = json.loads(ws.sent[0][0])
             assert message["language_hints"] == ["de"]
-            assert message["language_hints_strict"] is True
+            # A hint only: a refusal of the strict flag could not be retried
+            # without losing the audio already sent.
+            assert "language_hints_strict" not in message
             assert message["context"] == {"terms": ["Kubernetes", "Grafana"]}
             assert "api_key" not in message
         finally:

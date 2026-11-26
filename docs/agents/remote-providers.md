@@ -643,7 +643,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     JSON or has no status is a failed fetch, as for Speechmatics.
   - **Language**: the 60 codes of the supported-languages page, all of them
     in both APIs, are `SONIOX_LANGUAGE_MODES` (plus Auto, which sends no hint).
-    A chosen language is sent as `language_hints: [code]` with
+    A chosen language is sent as `language_hints: [code]`, in batch with
     `language_hints_strict: true` ("rely more on language hints"), because
     choosing German in the app means German; **unverified live** how strict
     changes the result. Chinese is `zh`. **The vendor does not say whether
@@ -651,9 +651,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     per model, v6 is not listed; a model without it answers 400 "Model does
     not support language_hints_strict"). Batch: a 400 whose message names
     the flag is repeated once without it (hints stay, one WARNING), nothing
-    else is retried. Streaming does not retry: by the time the error frame
-    arrives the audio already sent is gone, so a refusal fails the session
-    with the vendor's sentence (recorded as unverified below).
+    else is retried. Streaming sends the hint WITHOUT the strict flag: a
+    refusal could not be repeated without losing the audio already sent,
+    and a failed dictation is worse than a hint the model may overrule.
+    Add the flag to streaming once a live check shows `stt-rt-v6` takes it.
   - **Custom vocabulary** is `context.terms` (up to 8,000 tokens, about
     10,000 characters for the whole context, else `invalid_request`):
     `soniox_provider.fit_terms` keeps the terms that fit 8,000 characters in
@@ -712,8 +713,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Start message** (first text frame, sent on open): `model` `stt-rt-v6`
     (`SONIOX_REALTIME_MODEL`, always, whatever `soniox_model` says: the async
     model is not a realtime model), `audio_format` `pcm_s16le`, `sample_rate`
-    16000, `num_channels` 1, and as in batch `language_hints` with
-    `language_hints_strict` for a chosen language and `context.terms` for the
+    16000, `num_channels` 1, `language_hints` for a chosen language (without
+    `language_hints_strict`, see "Language" above) and `context.terms` for the
     custom vocabulary. The capture's blocks are raw PCM16 mono 16 kHz, so no
     conversion happens.
   - **Audio** goes as binary frames (at most 2,097,144 bytes each; a larger
@@ -778,7 +779,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     appears without an endpoint request, the real close behaviour after the
     end-of-stream frame (the library's side was run against a local
     server, the vendor's was not), how fast `finished` arrives, whether
-    `stt-rt-v6` accepts `language_hints_strict` (not retried in streaming),
+    `stt-rt-v6` accepts `language_hints_strict` (streaming does not send it),
     German quality.
 - **OpenRouter is an engine of its own on the custom endpoint's code
   (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its

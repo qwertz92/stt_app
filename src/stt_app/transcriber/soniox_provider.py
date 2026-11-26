@@ -162,15 +162,23 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
         return {
             "model": self._model,
             "file_id": file_id,
-            **self._hints_and_context(),
+            **self._hints_and_context(strict=True),
         }
 
-    def _hints_and_context(self) -> dict[str, Any]:
-        """The language hints and context terms of a batch or realtime request."""
+    def _hints_and_context(self, *, strict: bool) -> dict[str, Any]:
+        """The language hints and context terms of a batch or realtime request.
+
+        `strict` adds `language_hints_strict`. Batch sends it and repeats the
+        request once without it when the model refuses the flag; a realtime
+        session cannot repeat anything without losing the audio already sent,
+        so it sends the hint alone (the vendor does not say whether the v6
+        models accept the flag).
+        """
         fields: dict[str, Any] = {}
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
             fields["language_hints"] = [self._language_mode]
-            fields["language_hints_strict"] = True
+            if strict:
+                fields["language_hints_strict"] = True
         terms = fit_terms(self._vocabulary)
         if terms:
             fields["context"] = {"terms": terms}
@@ -557,7 +565,8 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
 
         Always the realtime model (`stt-rt-v6`): the async model is not one.
         The key is in the handshake header, never here (the `api_key` field is
-        deprecated). Language and vocabulary are those of the batch request.
+        deprecated). The vocabulary is that of the batch request; the language
+        is sent as a hint without the strict flag (`_hints_and_context`).
         """
         message: dict[str, Any] = {
             "model": SONIOX_REALTIME_MODEL,
@@ -565,7 +574,7 @@ class SonioxTranscriber(ProgressReporter, ITranscriber):
             "sample_rate": AUDIO_SAMPLE_RATE,
             "num_channels": AUDIO_CHANNELS,
         }
-        message.update(self._hints_and_context())
+        message.update(self._hints_and_context(strict=False))
         return json.dumps(message)
 
     def start_stream(

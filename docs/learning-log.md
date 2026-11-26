@@ -21,8 +21,8 @@ the text is returned, and the region pickers are one width with names.
   thread now; a quit while it runs leaves what it had not deleted on Soniox for up to 30 days.
 - **A refused handshake showed the library's header dump**; it is a sentence by HTTP status now.
 - **`language_hints_strict` is undocumented for v6.** A 400 naming the flag is repeated once
-  without it in batch; streaming is not retried (the audio sent is gone by then), recorded as
-  unverified.
+  without it in batch. Streaming cannot repeat a start (the audio sent is gone by then), so it
+  sends the hint without the flag: a refusal would fail every dictation with a chosen language.
 - **Region pickers**: one width (the widest entry, 165 px), an accessible name each, "region" in
   every entry; the first wording ("Automatic region (default)") pushed the dialog minimum to 864 px,
   over the 860 px default, so it is "Auto region (default)". Minimum 801, then 827, now 842 px.
