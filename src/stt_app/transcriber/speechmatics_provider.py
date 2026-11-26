@@ -37,9 +37,13 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
+    is_page_instead_of_text,
+    json_from_reply,
+    key_redactor,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
+    reply_error_text,
 )
 from ._job_poll import fetch_with_retries, poll_job
 from .base import (
@@ -90,6 +94,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = (
             model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
         )
@@ -150,6 +155,18 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             request, timeout=self._request_timeout_s, provider_name=_PROVIDER
         )
 
+    def _job_request(self, url: str, job_id: str):
+        """`_request` for a job that exists.
+
+        `open_request` refuses a redirect or an unsendable header with a
+        `TranscriptionError` of its own; the job is already running, so that
+        error names it like every other poll error (`_job_poll`).
+        """
+        try:
+            return self._request(url)
+        except TranscriptionError as exc:
+            raise TranscriptionError(f"{exc} Job id {job_id}.") from exc
+
     def _format_error(self, exc: Exception) -> str:
         if _is_ssl_error(exc):
             return format_ssl_error_message(_PROVIDER)
@@ -188,7 +205,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             with self._request(
                 f"{self._base_url}/jobs/", data=body, content_type=content_type
             ) as resp:
-                created = json.loads(resp.read().decode("utf-8", errors="replace"))
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             raise TranscriptionError(self._submit_error(exc)) from exc
         except TranscriptionError:
@@ -198,6 +215,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 f"Speechmatics transcription failed: {self._format_error(exc)}"
             ) from exc
 
+        created = json_from_reply(
+            payload, prefix="Speechmatics transcription failed", redact=self._scrub
+        )
         job_id = str(created.get("id") or "") if isinstance(created, dict) else ""
         job = poll_job(
             lambda: self._fetch_job(job_id),
@@ -219,8 +239,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         )
         return normalize_transcript_text(text)
 
-    @staticmethod
-    def _submit_error(exc: urllib.error.HTTPError) -> str:
+    def _submit_error(self, exc: urllib.error.HTTPError) -> str:
         if exc.code in (401, 403):
             return (
                 f"Speechmatics: Authentication failed (HTTP {exc.code}). "
@@ -231,21 +250,28 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 "Speechmatics: Rate limit exceeded (HTTP 429). "
                 "Wait a moment and try again."
             )
-        return f"Speechmatics transcription failed (HTTP {exc.code}){http_error_suffix(exc)}"
+        return f"Speechmatics transcription failed (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}"
 
     def _fetch_job(self, job_id: str) -> dict[str, Any]:
         """One status request. A `TranscriptionError` ends the poll at once;
         anything else raised here is a failed fetch the poll retries."""
         try:
-            with self._request(f"{self._base_url}/jobs/{job_id}") as resp:
-                answer = json.loads(resp.read().decode("utf-8", errors="replace"))
+            with self._job_request(f"{self._base_url}/jobs/{job_id}", job_id) as resp:
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
                     f"Speechmatics could not report the job's status (HTTP "
-                    f"{exc.code}){http_error_suffix(exc)}. Job id {job_id}."
+                    f"{exc.code}){http_error_suffix(exc, self._scrub)}. Job id {job_id}."
                 ) from exc
             raise
+        try:
+            answer = json_from_reply(payload, prefix="Speechmatics", redact=self._scrub)
+        except TranscriptionError as exc:
+            # A failed fetch, not a failure of the job: one proxy page between
+            # good polls must not cost the user a second upload, and three in a
+            # row end the wait with the poll's own sentence, naming this cause.
+            raise ValueError(str(exc).removeprefix("Speechmatics: ")) from exc
         job = answer.get("job") if isinstance(answer, dict) else None
         if not isinstance(job, dict) or not isinstance(job.get("status"), str):
             # Retried by the poll: an answer without a status says nothing.
@@ -254,18 +280,44 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
 
     def _fetch_transcript(self, job_id: str) -> str:
         try:
-            with self._request(
-                f"{self._base_url}/jobs/{job_id}/transcript?format=txt"
+            with self._job_request(
+                f"{self._base_url}/jobs/{job_id}/transcript?format=txt", job_id
             ) as resp:
-                return resp.read().decode("utf-8", errors="replace")
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
                     f"Speechmatics finished the job, but its transcript could not "
-                    f"be fetched (HTTP {exc.code}){http_error_suffix(exc)}. Job id "
+                    f"be fetched (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}. Job id "
                     f"{job_id}."
                 ) from exc
             raise
+        # `format=txt` answers plain text, and a dictation may start with
+        # anything (`<b> is the bold tag.`, `< 5 items`, a number, `true`): only
+        # a real HTML page (a proxy's sign-in or block page, status 200) and a
+        # JSON object (a gateway's, which the text endpoint never sends) are
+        # refused; every other body is the transcript.
+        text = payload.decode("utf-8", errors="replace")
+        if is_page_instead_of_text(payload):
+            raise TranscriptionError(
+                "Speechmatics: the transcript answer is an HTML page instead of "
+                "text -- typically a proxy's sign-in or block page. "
+                f"Job id {job_id}. {_RETENTION_NOTE}"
+            )
+        if text.lstrip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return text
+            if isinstance(parsed, dict):
+                gateway_error = reply_error_text(parsed, self._scrub)
+                raise TranscriptionError(
+                    "Speechmatics: the transcript request answered with a data "
+                    "object instead of the transcript text"
+                    + (f' ("{gateway_error}")' if gateway_error else "")
+                    + f". Job id {job_id}. {_RETENTION_NOTE}"
+                )
+        return text
 
     @staticmethod
     def _job_failure(job: dict[str, Any], job_id: str) -> str:
@@ -291,7 +343,10 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                     f"Authentication failed (HTTP {exc.code}). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            return (
+                False,
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}",
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from the Speechmatics API."

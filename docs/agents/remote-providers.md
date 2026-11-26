@@ -189,6 +189,133 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `_job_poll` (opens nothing itself; its callers use `open_request`).
   Tests: `tests/test_provider_redirects.py` (every REST engine x the five
   codes, upload and key check, and the unsafe keys).
+- **A 200 answer that is not a transcript is an error in every REST engine**
+  (2026-11-26; review of the last-round providers). The reader is shared:
+  `_http_utils.json_from_reply` (an HTML page or a non-JSON body gets a
+  sentence starting with the engine's prefix, never the parser's "Expecting
+  value") and `missing_field_error` (quotes a gateway's `error` member, else
+  names the answer's keys); `transcript_from_json` is both. Measured with one
+  parametrized test (`tests/test_rest_reply_guard.py`, a proxy's HTML page and
+  JSON without a transcript through each engine's real batch path): **open**
+  were OpenAI and ElevenLabs (the page's markup was *returned as the
+  transcript*, so it would have been pasted), Deepgram and Azure (HTML ended
+  as "Expecting value: line 1 column 1", JSON without the transcript member
+  as silence, `""`), and Speechmatics (`format=txt` is plain text, so the page
+  or a JSON object at 200 was the transcript). **Already safe**: Mistral, Meta,
+  the custom endpoint in both API styles, OpenRouter. What counts as silence
+  stays: `"text": ""`, Azure's `{"combinedPhrases": []}` and Deepgram's empty
+  `channels` or `alternatives`; an answer without Deepgram's `results`, or
+  without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
+  names the job in these errors too, since the job already runs.
+- **No REST engine's error text or log shows its own key** (2026-11-26,
+  review). A gateway may echo the credential it refused (`{"error": {"message":
+  "quota exceeded for <key>"}}` in a 200 reply, or the same in a 4xx body);
+  OpenAI, ElevenLabs, Deepgram, Azure, Speechmatics' fetch and Mistral printed
+  it, while Meta, the custom endpoint and OpenRouter were clean. The shared
+  readers (`read_http_error_detail`, `http_error_suffix`, `reply_error_text`,
+  `json_from_reply`, `missing_field_error`, `transcript_from_json`) now take a
+  **required** `redact`, so an engine cannot forget it, and every engine builds
+  it with `_http_utils.key_redactor(api_key)` (replaces the key and its
+  JSON-escaped form by `[hidden]`, ignores values under 8 characters; Meta's
+  and the custom endpoint's copies were replaced by it). Tests:
+  `tests/test_rest_key_scrub.py`, every REST engine x a plain and an escaped
+  key x a 200 error object, a 4xx body, and the key check, with the log.
+- **The SDK and WebSocket engines scrub their key too** (2026-11-26, review
+  of the key scrubbing): Groq printed an SDK exception's text ("Error code: 400
+  - {... 'invalid key <key>' ...}") in a batch and in its key check, and
+  AssemblyAI and Fun-ASR quote SDK or service messages the same way. Their
+  `transcribe_batch` runs inside `_http_utils.errors_scrubbed(self._scrub)`
+  (the custom endpoint's old private copy), which re-raises a
+  `TranscriptionError` with the key replaced; the strings returned by
+  `test_connection`, AssemblyAI's streaming errors and Fun-ASR's key check go
+  through `self._scrub` directly. Tests: `tests/test_sdk_key_scrub.py`. Not
+  covered: tracebacks that `logger.exception` writes for a failed callback
+  (AssemblyAI streaming) -- they hold the exception, not a server text, and no
+  case where an SDK put the key into one was found.
+- **Azure: a transcription result without text is silence** (2026-11-26,
+  review; deliberate and **unverified live**, no key exists to try it).
+  Microsoft's reference marks no member of the result as required and does not
+  say what a silent recording returns; the first version of the guard raised
+  when `combinedPhrases` was missing or null, which would have turned silence
+  (and the connection test's one second of silence) into an error. The rule
+  now: a reply is a transcription result when it has `combinedPhrases` **as a
+  list** or `text` **as a string** (a null or wrong-typed member counts as
+  absent), or it has a `durationMilliseconds` or a `phrases` member at all. A
+  result without usable text, such as `{"durationMilliseconds": 1000,
+  "phrases": []}`, is silence (""). Everything else is an error naming the
+  answer's keys: `{"combinedPhrases": null}`, `{"text": null}`, `{"text": 5}`,
+  `{}`, `[]`, `{"status": "ok"}` and `{"error": {...}}` (the last quotes the
+  gateway's message). Before the guard all of those returned "". **Deepgram stays strict**: its
+  response schema documents `results` as required (and silence still arrives
+  as `results.channels[0].alternatives[0].transcript == ""`), so an answer
+  without `results` is not a Deepgram transcription answer.
+- **Groq refuses a proxy's page the same way** (2026-11-26, review): it asks
+  for `response_format="text"`, so the SDK hands the body back as a string and
+  a 200 page was returned (and pasted) as the transcript. The request is
+  unchanged (it cannot be tested live here); a string that starts like HTML
+  and holds a closing tag is refused with "Groq: an HTML page came instead of
+  the transcript -- typically a proxy's sign-in or block page." The test is
+  `_http_utils.is_page_instead_of_text`, shared with the Speechmatics fetch.
+  A 200 answer that is neither a string nor holds a string `text` (a
+  gateway's `{"error": ...}`) is an error through `missing_field_error`, not
+  "no speech"; `""` and an object with `text=""` stay silence.
+  Engines that refuse a page at status 200: all of them now (the JSON engines
+  through `json_from_reply`, the two plain-text ones through this helper).
+- **Speechmatics' plain-text transcript is refused only when it is an HTML page
+  or a JSON object** (2026-11-26, review): `format=txt` answers text, and a
+  dictation may begin with anything (`<b> is the bold tag.`, `< 5 items`,
+  `<3 you`, a number, `true`, `[1, 2]`). The first version refused every body
+  starting with `<` ("an HTML page") and every body that parsed as a JSON
+  object, so those transcripts were lost. Now `is_html_page` (a doctype or an
+  `<html`/`<head`/`<body`/`<title` tag at the start) **and a closing tag `</`
+  somewhere in the body** ("<html> is the root element." is dictation), and a
+  body that parses as a JSON object, are errors, each with the job id and the 7-day retention note;
+  everything else is the transcript, as before the change. A plain-text body
+  such as "Internal Server Error" cannot be told from a transcript and is
+  returned.
+- **Speechmatics reads the job-upload and status replies through
+  `json_from_reply`** (2026-11-26): a proxy's HTML page there read "Expecting
+  value: line 1 column 1 (char 0)". At the upload it names the page; at a
+  status poll it is a failed fetch that the poll retries (as before the
+  guard: one proxy page between good polls must not cost a second upload and a
+  second charge); three in a row end the wait with the poll's own sentence,
+  which names the cause ("could not fetch the job status (the answer is an HTML
+  page instead of JSON ...). The job may still complete; job id ...").
+- **A certificate failure is recognised by type, then by text** (2026-11-26):
+  `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
+  `reason` and answers True for any `ssl.SSLCertVerificationError` before it looks at
+  words. With `truststore`
+  active, as in the running app, Windows verifies the chain and its own text
+  reaches urllib: "A certificate chain processed, but terminated in a root
+  certificate which is not trusted by the trust provider." (reproduced on
+  Windows 11 with a local HTTPS server and a throwaway CA; the exception is an
+  `SSLCertVerificationError` whose message holds none of OpenSSL's words). The
+  word list alone did not match it, so every engine showed that raw text
+  instead of `format_ssl_error_message`. The markers stay for libraries that
+  wrap the failure in a plain exception. Any other `ssl.SSLError` (a handshake abort, a protocol mismatch) is not a
+  certificate problem: it is recognised only by the markers, as before, so the
+  user is not told to install a certificate for it.
+- **A refusal of `open_request` during a poll names the job** (2026-11-26):
+  `speechmatics_provider._job_request` appends "Job id ..." to the
+  `TranscriptionError` that `open_request` raises for a refused redirect or an
+  unsendable header, as `_job_poll` requires of every poll error; the status
+  and transcript fetches had let it through without the id.
+- **A Meta key check that cannot reach Meta says that, not "transcription
+  failed"** (2026-11-26): the check is a one-second upload, and a timeout or a
+  refused connection surfaced as "Meta (Muse Voice) transcription failed:
+  <urlopen error timed out>" although nothing was transcribed. A cause that is
+  an `OSError` other than an HTTP error or a certificate failure now gives
+  "The connection test could not reach Meta (Muse Voice): no answer within 15
+  seconds or the connection was refused." (true for a timeout and for an
+  immediate refusal alike);
+  the raw text goes to the log (`meta_connection_test_unreachable`, key
+  scrubbed). A certificate failure keeps the SSL guidance.
+- **Meta refuses a WAVE_FORMAT_EXTENSIBLE float file with the same sentence as
+  plain float** (2026-11-26): Python's `wave` reports it as "unknown extended
+  format: <GUID>" (3.12), which `_wav_for_meta` did not match, so the user read
+  "not a WAV file that can be read" for a file that is a WAV. Both
+  "unknown format" and "unknown extended format" now say "a WAV file in a
+  format that is not PCM". Tested with a generated 32-bit float extensible file.
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing
@@ -409,7 +536,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     changes (`_import_file_issue`, `_import_start_allowed`,
     `_WAV_ONLY_IMPORT_ENGINES`). The check is the extension only: a `.wav`
     that is not 16-bit PCM is still refused at the start, with the sentence
-    above.
+    above. Every place that gives Start back goes through
+    `_refresh_import_start_button` (a finished import and a credential
+    failure used `bool(path)` and re-enabled it for Meta plus an mp3). A
+    finished import redraws the selected-file line too, so a file that
+    vanished meanwhile shows "Selected file does not exist" beside the
+    disabled Start.
   - **The connection test has the 15 s bound** of the other key checks
     (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
     keeps the transcription timeout (up to 300 s).

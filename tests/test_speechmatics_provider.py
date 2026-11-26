@@ -272,6 +272,137 @@ class TestSpeechmaticsErrors:
         with pytest.raises(TranscriptionError, match=_JOB_ID):
             _transcriber().transcribe_batch(wav_seconds(1.0))
 
+    @pytest.mark.parametrize("step", ["status", "transcript"])
+    def test_a_refused_redirect_after_the_submit_names_the_job(self, service, step):
+        """`open_request` refuses a redirect with a `TranscriptionError` of its
+        own; the job is already running, so the user needs its id like in every
+        other poll error."""
+        refusal = TranscriptionError(
+            "Speechmatics: the server redirected (HTTP 302) to another origin, "
+            "https://login.example/x; the API key is not sent there."
+        )
+        if step == "status":
+            service.status_errors = [refusal]
+        else:
+            service.transcript_errors = [refusal]
+        with pytest.raises(TranscriptionError) as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        message = str(caught.value)
+        assert "redirected (HTTP 302)" in message
+        assert message.endswith(f"Job id {_JOB_ID}.")
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "<b> is the bold tag.",
+            "< 5 items",
+            "<3 you",
+            "<",
+            "42",
+            "true",
+            "null",
+            '"Hello"',
+            "[1, 2]",
+            "{ this is not json",
+            "<html> is the root element.",
+            "<body> tag goes here",
+            "<title> of the page",
+            "  <head> first",
+            "<!doctype html> starts a page",
+        ],
+    )
+    def test_a_transcript_that_starts_like_markup_or_json_is_still_a_transcript(
+        self, service, text
+    ):
+        """`format=txt` is plain text: what was dictated may begin with `<`,
+        a digit, a bracket. Only a real HTML page or a JSON object is refused."""
+        service.transcript = text
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == text.strip()
+
+    @pytest.mark.parametrize(
+        ("body", "shows"),
+        [
+            ("<!DOCTYPE html><html><body>Sign in</body></html>", "an HTML page"),
+            ("  <html><head><title>x</title></head></html>", "an HTML page"),
+            ('{"transcript": "hi"}', "a data object instead of the transcript"),
+            ('{"error": {"message": "quota"}}', '("quota")'),
+        ],
+    )
+    def test_an_html_page_or_a_json_object_is_refused_with_the_job_id(
+        self, service, body, shows
+    ):
+        service.transcript = body
+        with pytest.raises(TranscriptionError) as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        message = str(caught.value)
+        assert shows in message
+        assert f"Job id {_JOB_ID}." in message
+        assert "7 days" in message
+        assert "no 'transcript' field" not in message
+
+    def test_an_html_page_for_the_job_upload_is_named(self, service, monkeypatch):
+        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+        monkeypatch.setattr(
+            provider_module, "open_request", lambda *_a, **_k: fake_response(page)
+        )
+        with pytest.raises(TranscriptionError, match="HTML page") as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        assert "Expecting value" not in str(caught.value)
+        assert str(caught.value).startswith("Speechmatics transcription failed")
+
+    @staticmethod
+    def _polls(monkeypatch, polls):
+        """Status polls answer from `polls` (the last one repeats); returns the
+        list of poll requests made."""
+        seen: list = []
+        queue = list(polls)
+
+        def answer(request, timeout=None, **_kwargs):
+            if request.get_method() == "POST":
+                return json_response({"id": _JOB_ID}, status=201)
+            if request.full_url.endswith("/transcript?format=txt"):
+                return fake_response("Hallo Welt.")
+            seen.append(request)
+            body = queue.pop(0) if len(queue) > 1 else queue[0]
+            return fake_response(body)
+
+        monkeypatch.setattr(provider_module, "open_request", answer)
+        return seen
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "<!DOCTYPE html><html><head><title>Sign in</title></head></html>",
+            '{"job": {"sta',
+            "",
+        ],
+        ids=["html-page", "truncated-json", "empty-body"],
+    )
+    def test_one_unreadable_status_poll_does_not_cost_the_job(
+        self, service, monkeypatch, bad
+    ):
+        """A company proxy slipping in one sign-in page must not end the wait
+        for a job that finishes anyway (a second upload, a second charge)."""
+        running = json.dumps({"job": {"id": _JOB_ID, "status": "running"}})
+        done = json.dumps({"job": {"id": _JOB_ID, "status": "done"}})
+        self._polls(monkeypatch, [running, bad, running, done])
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == "Hallo Welt."
+
+    def test_a_status_page_that_stays_ends_after_three_polls_naming_the_cause(
+        self, service, monkeypatch
+    ):
+        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+        seen = self._polls(monkeypatch, [page])
+        with pytest.raises(TranscriptionError) as caught:
+            _transcriber().transcribe_batch(wav_seconds(1.0))
+        message = str(caught.value)
+        assert len(seen) == 3
+        assert "HTML page" in message
+        assert "may still complete" in message
+        assert f"job id {_JOB_ID}" in message
+        assert "Expecting value" not in message
+        assert "Speechmatics: " not in message.split("(", 1)[1]
+
     def test_a_job_that_never_finishes_is_bounded(self, service):
         service.statuses = ["running"]
         with pytest.raises(TranscriptionError, match="did not finish") as caught:

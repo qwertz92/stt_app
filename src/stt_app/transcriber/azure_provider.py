@@ -40,6 +40,9 @@ from ._audio_parts import transcribe_in_parts, wav_seconds
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
+    json_from_reply,
+    key_redactor,
+    missing_field_error,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -184,6 +187,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         # Validate eagerly so a misconfigured endpoint fails fast and clearly.
         self._transcribe_url = build_transcribe_url(endpoint)
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = (
             model if model in AZURE_SPEECH_MODELS else DEFAULT_AZURE_SPEECH_MODEL
         )
@@ -273,7 +277,26 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             ) as resp:
                 payload = resp.read()
 
-            body = json.loads(payload.decode("utf-8", errors="replace"))
+            prefix = "Azure transcription failed"
+            body = json_from_reply(payload, prefix=prefix, redact=self._scrub)
+            if not isinstance(body, dict) or not any(
+                (
+                    isinstance(body.get("combinedPhrases"), list),
+                    isinstance(body.get("text"), str),
+                    # Microsoft marks no member of the result as required and
+                    # does not say what a silent recording returns: a reply
+                    # that is recognisably a transcription result is silence
+                    # even without `combinedPhrases`, as it always was.
+                    "durationMilliseconds" in body,
+                    "phrases" in body,
+                )
+            ):
+                raise missing_field_error(
+                    body,
+                    prefix=prefix,
+                    field="combinedPhrases",
+                    redact=self._scrub,
+                )
             return self._extract_transcript(body)
         except FileNotFoundError as exc:
             raise TranscriptionError(
@@ -335,7 +358,8 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             f"Azure transcription failed (HTTP {exc.code}){suffix}"
         )
 
-    _read_error_detail = staticmethod(read_http_error_detail)
+    def _read_error_detail(self, exc: urllib.error.HTTPError) -> str:
+        return read_http_error_detail(exc, self._scrub)
 
     # -- Connection test --------------------------------------------------------
 

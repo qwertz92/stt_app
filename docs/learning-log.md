@@ -3,6 +3,31 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: six small fixes in the cloud-provider code (review of the last round)
+
+Structurally: `_http_utils.json_from_reply` / `missing_field_error` are the one reader of a JSON
+answer, and `_refresh_import_start_button` the one setter of the Import tab's Start.
+
+- OpenAI and ElevenLabs returned a proxy's HTML page (status 200) as the transcript; Deepgram and
+  Azure read JSON without a transcript as silence; Speechmatics' `format=txt` took the page or a JSON
+  object as the text. One parametrized test over ten engine paths found these five open and Mistral,
+  Meta, the custom endpoint (both styles) and OpenRouter safe.
+- With `truststore` active Windows' own text for an untrusted root ("A certificate chain processed,
+  but terminated in a root certificate which is not trusted by the trust provider.") matched none of
+  `is_ssl_error`'s words, so the SSL guidance never showed on the owner's machine; the exception's
+  type is now tested first.
+- Meta: a float WAVE_FORMAT_EXTENSIBLE file was called "not a WAV file that can be read"; a key check
+  that timed out said "transcription failed: <urlopen error ...>". Import tab: a finished import or a
+  credential failure re-enabled Start for Meta plus an mp3. Speechmatics: a refused redirect while
+  polling lacked the job id.
+- Azure (follow-up review): a transcription result without text is silence, because Microsoft
+  marks no member as required and does not say what a silent recording returns; the reply counts
+  as a result when `combinedPhrases` is a list, `text` is a string (a null or wrong-typed member
+  counts as absent), or `durationMilliseconds` or `phrases` is present at all. `{}`, `[]`,
+  `{"status": "ok"}`, `{"error": {...}}`, `{"combinedPhrases": null}` and `{"text": 5}` are
+  errors (deliberate, unverified live; before the guard they all returned an empty transcript).
+- Details and the decisions: `docs/agents/remote-providers.md`.
+
 ## 2026-11-26: no REST engine follows a redirect with its API key
 
 Structurally: one `_http_utils.open_request` (the custom endpoint's redirect guard, moved) is how

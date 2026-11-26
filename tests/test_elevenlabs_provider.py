@@ -100,13 +100,12 @@ class TestElevenLabsBatchTranscription:
         assert "deu" in body
 
     @patch("stt_app.transcriber.elevenlabs_provider.open_request")
-    def test_transcribe_plain_text_fallback(self, mock_urlopen):
-        mock_urlopen.return_value = _fake_response("plain transcript")
+    def test_a_plain_text_body_is_not_a_transcript(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_response("Internal Server Error")
         t = ElevenLabsTranscriber(api_key="xi-key")
 
-        result = t.transcribe_batch(b"RIFF fake")
-
-        assert result == "plain transcript"
+        with pytest.raises(TranscriptionError, match=r"ElevenLabs.*not JSON"):
+            t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):

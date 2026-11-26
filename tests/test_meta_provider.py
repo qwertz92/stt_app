@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import struct
+import urllib.error
 import wave
 
 import numpy as np
@@ -187,6 +188,19 @@ def _float32_wav() -> bytes:
     return b"RIFF" + struct.pack("<I", len(body)) + body
 
 
+def _float32_extensible_wav() -> bytes:
+    """WAVE_FORMAT_EXTENSIBLE (0xFFFE) whose sub-format GUID is IEEE float, the
+    layout most audio editors write for 32-bit float: `wave` says "unknown
+    extended format" for it."""
+    samples = np.zeros(1600, dtype="<f4").tobytes()
+    ieee_float = bytes.fromhex("0300000000001000800000aa00389b71")
+    fmt = struct.pack("<HHIIHH", 0xFFFE, 1, 16_000, 64_000, 4, 32)
+    fmt += struct.pack("<HHI", 22, 32, 4) + ieee_float
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt
+    body += b"data" + struct.pack("<I", len(samples)) + samples
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
 def _eight_bit_wav() -> bytes:
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as handle:
@@ -203,6 +217,11 @@ def _eight_bit_wav() -> bytes:
         (_eight_bit_wav(), "8-bit WAV audio"),
         (_wav(0.1, rate=16_000, width=3), "24-bit WAV audio"),
         (_float32_wav(), "a WAV file in a format that is not PCM"),
+        pytest.param(
+            _float32_extensible_wav(),
+            "a WAV file in a format that is not PCM",
+            id="float32-extensible",
+        ),
         (b"ID3\x04\x00 not audio", "not a WAV file that can be read"),
     ],
 )
@@ -371,6 +390,29 @@ def test_the_connection_test_has_the_short_bound_of_a_key_check(recorder, monkey
     ok, message = MetaTranscriber("k", request_timeout_s=300).test_connection()
     assert ok, message
     assert seen["timeout"] == 15
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        urllib.error.URLError(TimeoutError("timed out")),
+        TimeoutError("timed out"),
+        urllib.error.URLError(ConnectionRefusedError(10061, "refused")),
+    ],
+    ids=["urlopen-timeout", "read-timeout", "refused"],
+)
+def test_a_connection_test_that_cannot_reach_meta_says_so(recorder, failure):
+    """Nothing was transcribed, so not "transcription failed: <urlopen error
+    ...>"; urllib's text goes to the log, not into the message."""
+    recorder.answer = failure
+    ok, message = MetaTranscriber("k").test_connection()
+    assert not ok
+    assert message == (
+        "The connection test could not reach Meta (Muse Voice): no answer within "
+        "15 seconds or the connection was refused."
+    )
+    assert "urlopen" not in message
+    assert "transcription failed" not in message
 
 
 def test_the_connection_test_reports_an_invalid_key(recorder):

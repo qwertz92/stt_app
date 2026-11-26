@@ -35,7 +35,13 @@ from ..config import (
 )
 from ..dependency_check import installed_version, version_at_least
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import format_ssl_error_message, http_error_suffix, open_request
+from ._http_utils import (
+    errors_scrubbed,
+    format_ssl_error_message,
+    http_error_suffix,
+    key_redactor,
+    open_request,
+)
 from ._job_poll import MAX_CONSECUTIVE_FETCH_FAILURES, SHUTDOWN_POLL_S, poll_job
 from .base import (
     AudioInput,
@@ -179,6 +185,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "AssemblyAI API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._region = normalize_assemblyai_region(region)
         # No class-specific validation: the base ``_normalize_language_mode``
         # (strip/lower with an "auto" fallback) already matches what this
@@ -374,8 +381,14 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.
 
-        Accepts WAV bytes, a file path, or a Path object.
+        Accepts WAV bytes, a file path, or a Path object. No error raised on
+        the way (an SDK exception, a polling failure, a job's `error`) may show
+        the key a server echoed.
         """
+        with errors_scrubbed(self._scrub):
+            return self._transcribe_batch(audio_source)
+
+    def _transcribe_batch(self, audio_source: AudioInput) -> str:
         temp_path: Path | None = None
         try:
             # Inside the try like everything else: these two ran before it,
@@ -477,7 +490,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}"
+            )
         except Exception as exc:
             if _is_ssl_error(exc):
                 # The shared message, which names SSL_CERT_FILE too:
@@ -485,7 +500,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 # REQUESTS_CA_BUNDLE, so the old advice could not fix what had
                 # just failed.
                 return False, format_ssl_error_message("AssemblyAI")
-            return False, f"Connection failed: {exc}"
+            return False, self._scrub(f"Connection failed: {exc}")
 
         return False, "Unexpected response from AssemblyAI API."
 
@@ -497,7 +512,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "AssemblyAI streaming failed: SSL certificate verification failed "
                 "(likely a corporate proxy such as Zscaler)."
             )
-        return f"AssemblyAI streaming failed: {error}"
+        return self._scrub(f"AssemblyAI streaming failed: {error}")
 
     def _stream_session_matches_locked(self, generation: int, client) -> bool:
         return (
@@ -706,7 +721,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "(likely a corporate proxy such as Zscaler)."
                 ) from exc
             raise TranscriptionError(
-                f"AssemblyAI streaming: failed to connect: {exc}"
+                self._scrub(f"AssemblyAI streaming: failed to connect: {exc}")
             ) from exc
 
         # The SDK reports some connect failures through the error handler
@@ -765,7 +780,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             client.stream(payload)
         except Exception as exc:
             raise TranscriptionError(
-                f"AssemblyAI streaming: failed to send audio: {exc}"
+                self._scrub(f"AssemblyAI streaming: failed to send audio: {exc}")
             ) from exc
 
     def _retire_stream_state_if_ours(self, generation: int, session) -> None:

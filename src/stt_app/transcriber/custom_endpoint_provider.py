@@ -15,7 +15,6 @@ gateway may route audio only to a multimodal LLM:
 from __future__ import annotations
 
 import base64
-import contextlib
 import json
 import logging
 import ntpath
@@ -54,12 +53,15 @@ from ..process_tree import run_bounded
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
+    KEY_SCRUBBED,
     audio_content_type,
     body_excerpt,
+    errors_scrubbed,
     format_ssl_error_message,
     header_value_unsafe,
     http_error_suffix,
     is_markup_page,
+    key_redactor,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -112,8 +114,6 @@ _OUTPUT_LIMIT_FINISH_REASONS = frozenset({"length", "max_tokens"})
 _CHAT_AUDIO_FORMATS = frozenset({"wav", "mp3"})
 # A key shorter than this is a placeholder ("none" for a server without
 # authentication) and, as a word, would be cut out of every message.
-_MIN_SECRET_CHARS = 8
-_SCRUBBED = "[hidden]"
 _CODE_FENCE = re.compile(r"^```[\w+-]*[ \t]*\n?(.*?)\n?```$", re.DOTALL)
 _QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("“", "”"), ("„", "“"))
 
@@ -603,35 +603,17 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
         return request
 
     def _secrets(self) -> list[str]:
-        return [
-            secret
-            for secret in (self._cached_token, self._api_key)
-            if len(secret) >= _MIN_SECRET_CHARS
-        ]
+        return [secret for secret in (self._cached_token, self._api_key) if secret]
 
     def _scrub(self, text: str) -> str:
         """`text` without the credentials, also as JSON writes them (a key
         holding `"` or `\\` appears escaped in a JSON body)."""
-        for secret in self._secrets():
-            for form in {json.dumps(secret)[1:-1], secret}:
-                text = text.replace(form, _SCRUBBED)
-        return text
+        return key_redactor(*self._secrets())(text)
 
-    @contextlib.contextmanager
     def _errors_scrubbed(self):
-        """Lets no error raised inside show the token or the stored key.
-
-        A gateway may echo the credential it refused ("Received API Key =
-        ...", a request dump); the detail reaches the overlay and its log.
-        """
-        try:
-            yield
-        except TranscriptionError as exc:
-            message = str(exc)
-            scrubbed = self._scrub(message)
-            if scrubbed == message:
-                raise
-            raise TranscriptionError(scrubbed) from None
+        """Lets no error raised inside show the token or the stored key (a
+        gateway may echo "Received API Key = ..."; see `errors_scrubbed`)."""
+        return errors_scrubbed(self._scrub)
 
     def _request_too_large_hint(self) -> str:
         """What to do about a 413, which depends on the API style.
@@ -678,7 +660,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
             # one that echoes the key it refused is dropped, not masked: a
             # partly masked key is still part of the key. Read through the
             # scrub, so the credential is found before the reader cuts it.
-            if _SCRUBBED in reason:
+            if KEY_SCRUBBED in reason:
                 reason = ""
             return TranscriptionError(
                 f"{self._name}: authentication failed (HTTP 401); the "

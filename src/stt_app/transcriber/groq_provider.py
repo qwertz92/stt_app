@@ -25,6 +25,12 @@ from ..config import (
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
+from ._http_utils import (
+    errors_scrubbed,
+    is_page_instead_of_text,
+    key_redactor,
+    missing_field_error,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -85,6 +91,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                 "Groq API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model or DEFAULT_GROQ_MODEL
         # Needs self._model, so this must run after it is assigned above
         # (reordered from the model assignment's original position below it).
@@ -142,14 +149,15 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         Accepts WAV bytes, a file path, or a Path object. A recording past the
         per-file limit goes out in parts (`transcribe_in_parts`).
         """
-        return transcribe_in_parts(
-            audio_source,
-            self._transcribe_request,
-            limit=remote_batch_part_limit("groq", self._model),
-            progress_text=_UPLOAD_PROGRESS,
-            raise_if_canceled=self._raise_if_canceled,
-            silence_threshold=self._silence_gate_threshold,
-        )
+        with errors_scrubbed(self._scrub):
+            return transcribe_in_parts(
+                audio_source,
+                self._transcribe_request,
+                limit=remote_batch_part_limit("groq", self._model),
+                progress_text=_UPLOAD_PROGRESS,
+                raise_if_canceled=self._raise_if_canceled,
+                silence_threshold=self._silence_gate_threshold,
+            )
 
     def _transcribe_request(self, audio_source: AudioInput, progress_text: str) -> str:
         """One transcription call, for a whole recording or one part of it."""
@@ -193,10 +201,26 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
 
             # response_format="text" returns a string directly.
             if isinstance(transcription, str):
+                if is_page_instead_of_text(transcription.encode("utf-8")):
+                    raise TranscriptionError(
+                        "Groq: an HTML page came instead of the transcript -- "
+                        "typically a proxy's sign-in or block page."
+                    )
                 return transcription.strip()
 
             # Fallback: object with .text attribute (json response format).
-            text = getattr(transcription, "text", "") or ""
+            text = getattr(transcription, "text", None)
+            if not isinstance(text, str):
+                # A 200 answer without a transcript (a gateway's `{"error":
+                # ...}`) is not "no speech": read as "", the user saw silence.
+                dump = getattr(transcription, "model_dump", None)
+                parsed = dump() if callable(dump) else transcription
+                raise missing_field_error(
+                    parsed,
+                    prefix="Groq transcription failed",
+                    field="text",
+                    redact=self._scrub,
+                )
             return text.strip()
 
         except TranscriptionError:
@@ -265,7 +289,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                 return False, (
                     "Authentication failed — the API key is invalid or expired."
                 )
-            return False, f"Connection failed: {exc}"
+            return False, self._scrub(f"Connection failed: {exc}")
 
     # -- Streaming stubs --------------------------------------------------------
 

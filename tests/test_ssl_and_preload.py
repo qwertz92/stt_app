@@ -66,6 +66,70 @@ class TestIsSSLError:
         exc = Exception("SSLCertVerificationError: something failed")
         assert _is_ssl_error(exc) is True
 
+    # The text Windows' own verifier gives when `truststore` is active and the
+    # chain of a TLS-intercepting proxy ends in a root that is not trusted
+    # (captured on Windows 11 from a local HTTPS server with a throwaway CA).
+    _WINDOWS_UNTRUSTED_ROOT = (
+        "A certificate chain processed, but terminated in a root certificate "
+        "which is not trusted by the trust provider."
+    )
+
+    def test_the_windows_text_inside_a_urlerror_is_recognised(self):
+        import ssl
+        import urllib.error
+
+        inner = ssl.SSLCertVerificationError(self._WINDOWS_UNTRUSTED_ROOT)
+        wrapped = urllib.error.URLError(inner)
+        assert "verify" not in str(wrapped).lower()
+        assert _is_ssl_error(wrapped) is True
+
+    def test_the_windows_text_is_recognised_by_its_type_in_a_context_chain(self):
+        import ssl
+
+        try:
+            try:
+                raise ssl.SSLCertVerificationError(self._WINDOWS_UNTRUSTED_ROOT)
+            except ssl.SSLCertVerificationError:
+                raise OSError("connection failed") from None
+        except OSError as exc:
+            # `from None` hides the cause; the context is still set.
+            assert exc.__cause__ is None
+            assert _is_ssl_error(exc) is True
+
+    def test_the_openssl_text_is_recognised_by_its_type(self):
+        import ssl
+
+        exc = ssl.SSLCertVerificationError(
+            1,
+            "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+            "unable to get local issuer certificate (_ssl.c:1006)",
+        )
+        assert _is_ssl_error(exc) is True
+
+    def test_a_reason_attribute_is_followed(self):
+        import ssl
+        import urllib.error
+
+        # `URLError(reason)` keeps the failure in `.reason`; whether
+        # `__context__` is also set depends on how urllib raised it.
+        wrapped = urllib.error.URLError(
+            ssl.SSLCertVerificationError(self._WINDOWS_UNTRUSTED_ROOT)
+        )
+        assert wrapped.__cause__ is None and wrapped.__context__ is None
+        assert _is_ssl_error(wrapped) is True
+
+    def test_a_plain_sslerror_without_a_marker_is_not_a_certificate_failure(self):
+        import ssl
+
+        # A protocol abort is not an untrusted certificate: no guidance.
+        exc = ssl.SSLError("EOF occurred in violation of protocol")
+        assert _is_ssl_error(exc) is False
+
+    def test_an_unrelated_oserror_is_not_a_certificate_failure(self):
+        import urllib.error
+
+        assert _is_ssl_error(urllib.error.URLError(OSError("refused"))) is False
+
 
 # ---------------------------------------------------------------------------
 # CA bundle resolution

@@ -2241,6 +2241,51 @@ def test_meta_import_of_a_file_that_is_not_wav_is_refused_before_start(
     assert dialog.import_start_button.isEnabled()
 
 
+@pytest.mark.parametrize("how", ["finished", "credential-failure"])
+def test_meta_start_stays_off_for_a_non_wav_file_after_an_import_ends(
+    dialog: SettingsDialog, tmp_path, how: str
+) -> None:
+    """Both ways an import ends gave Start back with `bool(path)`, which
+    bypassed the gate that keeps it off for Meta plus an mp3."""
+    mp3 = tmp_path / "talk.mp3"
+    mp3.write_bytes(b"ID3")
+    wav = tmp_path / "talk.wav"
+    wav.write_bytes(b"RIFF")
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("meta")
+    )
+
+    def end_import(path) -> None:
+        dialog._set_selected_import_file(str(path))
+        if how == "finished":
+            dialog._finish_import_transcription(True, "text")
+            return
+        assert dialog._import_engine_credential_issue("meta") is not None
+        dialog._start_import_transcription(str(path))
+
+    end_import(mp3)
+    assert not dialog.import_start_button.isEnabled()
+    end_import(wav)
+    assert dialog.import_start_button.isEnabled()
+
+
+def test_a_file_that_vanished_during_an_import_says_why_start_is_off(
+    dialog: SettingsDialog, tmp_path
+) -> None:
+    wav = tmp_path / "talk.wav"
+    wav.write_bytes(b"RIFF")
+    dialog._set_selected_import_file(str(wav))
+    assert dialog.import_start_button.isEnabled()
+
+    wav.unlink()
+    dialog._finish_import_transcription(True, "text")
+
+    assert not dialog.import_start_button.isEnabled()
+    assert dialog.import_selected_file_label.text() == (
+        f"Selected file does not exist: {wav}"
+    )
+
+
 def test_the_openrouter_note_says_where_the_audio_goes(
     dialog: SettingsDialog,
 ) -> None:

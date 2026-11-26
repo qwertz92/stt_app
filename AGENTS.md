@@ -47,7 +47,9 @@ no entry is left, in this repository and in meeting-notes-recorder (same pin).
 
 Observation, 2026-11-24 to 2026-11-26: `gh` (REST and GraphQL, also unauthenticated) and the web
 answer 404 for `microsoft/onnxruntime` while other `microsoft` repositories resolve; the cause is
-unknown, and neither issue nor the PRs could be read. `npm view onnxruntime-node dist-tags` is
+unknown, and neither issue nor the PRs could be read. On 2026-11-26 `microsoft/onnxruntime-genai`
+answered 404 too, and a repository search for "onnxruntime" in the organisation listed only
+`OnnxRuntime-UnrealEngine`. `npm view onnxruntime-node dist-tags` is
 unchanged (latest 1.31.1, dev 1.33.0-dev.20261112-74f861c52), so nothing new could be measured.
 The date below stays at the last day the issues were actually read; retry at the next session.
 

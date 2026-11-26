@@ -7,6 +7,7 @@ error formatting.
 
 from __future__ import annotations
 
+import contextlib
 import html
 import json
 import re
@@ -124,6 +125,59 @@ def _unredacted(text: str) -> str:
     return text
 
 
+KEY_SCRUBBED = "[hidden]"
+# A shorter "secret" is a test value or a placeholder, and replacing it would
+# garble ordinary words in the message.
+_MIN_SECRET_CHARS = 8
+
+
+def key_redactor(*secrets: str) -> Redactor:
+    """A redactor that replaces each secret, also as a JSON body writes it.
+
+    A gateway may echo the credential it refused ("quota exceeded for <key>")
+    in a 200 reply's `error` object or in a 4xx body; the text reaches the
+    overlay and the log. A key holding `"` or a backslash appears escaped in JSON,
+    so both forms go. Every function below that quotes server-supplied text
+    requires one (`redact`), so an engine cannot forget its key.
+    """
+    forms = sorted(
+        {
+            form
+            for secret in secrets
+            if len(secret) >= _MIN_SECRET_CHARS
+            for form in (secret, json.dumps(secret)[1:-1])
+        },
+        key=len,
+        reverse=True,
+    )
+
+    def redact(text: str) -> str:
+        for form in forms:
+            text = text.replace(form, KEY_SCRUBBED)
+        return text
+
+    return redact
+
+
+@contextlib.contextmanager
+def errors_scrubbed(redact: Redactor):
+    """Lets no `TranscriptionError` raised inside show what `redact` hides.
+
+    For the engines whose messages are built from an SDK exception or a
+    WebSocket message (Groq, AssemblyAI, Fun-ASR, the custom endpoint): a
+    server that echoes the credential it refused must not get it into the
+    overlay or the log. The original is not chained (`from None`).
+    """
+    try:
+        yield
+    except TranscriptionError as exc:
+        message = str(exc)
+        scrubbed = redact(message)
+        if scrubbed == message:
+            raise
+        raise TranscriptionError(scrubbed) from None
+
+
 def is_markup_page(payload: bytes) -> bool:
     """Whether a response body is an HTML or XML page rather than JSON.
 
@@ -168,6 +222,17 @@ def is_html_page(payload: bytes) -> bool:
     return _HTML_START.match(head.lstrip()) is not None
 
 
+def is_page_instead_of_text(payload: bytes) -> bool:
+    """Whether a body that should be plain text is a proxy's HTML page.
+
+    For the engines whose transcript is plain text (Speechmatics' `format=txt`,
+    Groq's `response_format="text"`), where a dictation may itself start with a
+    tag name ("<html> is the root element."): a page starts like HTML
+    (`is_html_page`) and also holds a closing tag.
+    """
+    return is_html_page(payload) and b"</" in payload
+
+
 def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> str:
     """What to say about an HTML page that came where JSON was expected.
 
@@ -188,12 +253,57 @@ def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> s
     return f"an HTML page {_MARKUP_ERROR_HINT}"
 
 
+def json_from_reply(payload: bytes, *, prefix: str, redact: Redactor) -> object:
+    """The parsed JSON of an answer that must be JSON, or an error naming what came.
+
+    An HTML page (a proxy's sign-in or block page, status 200) and a body that
+    is not JSON (a plain "Internal Server Error") each get a sentence that
+    starts with ``prefix``, never the parser's "Expecting value: line 1".
+    """
+    if is_markup_page(payload):
+        raise TranscriptionError(
+            f"{prefix}: the answer is an HTML page instead of JSON -- "
+            "typically a proxy's sign-in or block page."
+        )
+    try:
+        return json.loads(payload.decode("utf-8-sig", errors="replace"))
+    except ValueError as exc:
+        excerpt = body_excerpt(payload, redact)
+        raise TranscriptionError(
+            f"{prefix}: the answer is not JSON"
+            + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
+        ) from exc
+
+
+def missing_field_error(
+    parsed: object, *, prefix: str, field: str, redact: Redactor
+) -> TranscriptionError:
+    """The error for a JSON answer that holds no transcript.
+
+    An ``error`` member the gateway put into its 200 answer is quoted (it is
+    what the user can act on); otherwise the answer's own keys are named.
+    """
+    error_text = reply_error_text(parsed, redact)
+    if error_text:
+        return TranscriptionError(
+            f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
+        )
+    keys = (
+        ", ".join(sorted(str(key) for key in parsed)[:8])
+        if isinstance(parsed, dict)
+        else type(parsed).__name__
+    )
+    return TranscriptionError(
+        f"{prefix}: the answer has no '{field}' field (it holds: {keys or 'nothing'})."
+    )
+
+
 def transcript_from_json(
     payload: bytes,
     *,
     prefix: str,
     accept_bare_string: bool = False,
-    redact: Redactor = _unredacted,
+    redact: Redactor,
     field: str = "text",
 ) -> str:
     """The ``text`` of a transcription answer, or an error naming what came.
@@ -209,37 +319,12 @@ def transcript_from_json(
     transcription failed"); ``accept_bare_string`` takes a top-level JSON
     string as the transcript.
     """
-    if is_markup_page(payload):
-        raise TranscriptionError(
-            f"{prefix}: the answer is an HTML page instead of JSON -- "
-            "typically a proxy's sign-in or block page."
-        )
-    try:
-        parsed = json.loads(payload.decode("utf-8-sig", errors="replace"))
-    except ValueError as exc:
-        excerpt = body_excerpt(payload, redact)
-        raise TranscriptionError(
-            f"{prefix}: the answer is not JSON"
-            + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
-        ) from exc
+    parsed = json_from_reply(payload, prefix=prefix, redact=redact)
     if accept_bare_string and isinstance(parsed, str):
         return normalize_transcript_text(parsed)
     value = parsed.get(field) if isinstance(parsed, dict) else None
     if not isinstance(value, str):
-        error_text = reply_error_text(parsed, redact)
-        if error_text:
-            raise TranscriptionError(
-                f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
-            )
-        keys = (
-            ", ".join(sorted(str(key) for key in parsed)[:8])
-            if isinstance(parsed, dict)
-            else type(parsed).__name__
-        )
-        raise TranscriptionError(
-            f"{prefix}: the answer has no '{field}' field "
-            f"(it holds: {keys or 'nothing'})."
-        )
+        raise missing_field_error(parsed, prefix=prefix, field=field, redact=redact)
     return normalize_transcript_text(value)
 
 
@@ -313,7 +398,7 @@ def nested_error_text(value: object) -> str:
     return ""
 
 
-def reply_error_text(parsed: object, redact: Redactor = _unredacted) -> str:
+def reply_error_text(parsed: object, redact: Redactor) -> str:
     """The text of an `error` member of a reply that answered HTTP 200, or "".
 
     Some gateways report a failed backend call inside a 200 reply
@@ -329,9 +414,7 @@ def reply_error_text(parsed: object, redact: Redactor = _unredacted) -> str:
     return redact(text)[:300]
 
 
-def read_http_error_detail(
-    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
-) -> str:
+def read_http_error_detail(exc: urllib.error.HTTPError, redact: Redactor) -> str:
     """Return what the provider actually said, or "" when it said nothing.
 
     `HTTPError.reason` is only the status phrase -- "Bad Request" -- so a
@@ -399,9 +482,7 @@ def read_http_error_detail(
     return raw.strip()[:300]
 
 
-def http_error_suffix(
-    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
-) -> str:
+def http_error_suffix(exc: urllib.error.HTTPError, redact: Redactor) -> str:
     """`": <what the provider said>"`, falling back to the status phrase."""
     detail = read_http_error_detail(exc, redact)
     return f": {detail}" if detail else f": {exc.reason}"
