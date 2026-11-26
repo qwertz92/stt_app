@@ -18,6 +18,7 @@ from stt_app.config import (
     OVERLAY_STATE_COLORS,
     OVERLAY_WARNING_CHECK_WINDOW,
     OVERLAY_WARNING_LABELS,
+    OVERLAY_WARNING_NO_SIGNAL,
     OVERLAY_WARNING_NOT_INSERTED,
     QUEUE_ROW_KIND_TRANSCRIPTION,
     QUEUE_ROW_KIND_UNDELIVERED,
@@ -646,6 +647,10 @@ class _FakeZOrderUser32:
         self.foreground_exstyle = foreground_exstyle
         self.foreground_iconic = foreground_iconic
         self.positions: list[int] = []
+        # The window each `positions` entry was placed, to tell one overlay's
+        # placements from another's (an overlay of an earlier test that was
+        # never closed still hears the application's focus changes).
+        self.targets: list[int] = []
         # Insert-after handles SetWindowPos refuses, as it does with
         # ERROR_ACCESS_DENIED behind an elevated window (Task Manager).
         self.refused: set[int] = set()
@@ -655,11 +660,12 @@ class _FakeZOrderUser32:
         self.window_at = 0
         self.roots: dict[int, int] = {}
 
-    def SetWindowPos(self, _hwnd, insert_after, _x, _y, _cx, _cy, flags):
+    def SetWindowPos(self, hwnd, insert_after, _x, _y, _cx, _cy, flags):
         # SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE on every call: the overlay
         # never takes the focus from the window being dictated into.
         assert flags & 0x0013 == 0x0013
         self.positions.append(int(insert_after))
+        self.targets.append(int(hwnd))
         return 0 if int(insert_after) in self.refused else 1
 
     def GetForegroundWindow(self):
@@ -732,6 +738,260 @@ def test_dropping_topmost_keeps_a_floating_overlay_on_top_of_the_normal_band(
     app.processEvents()
     assert user32.positions == [_HWND_TOPMOST, _HWND_NOTOPMOST]
     overlay.hide()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_focus_window(monkeypatch):
+    """No own window is active unless a test says so.
+
+    `OverlayUI` reads the process's real `QGuiApplication.focusWindow()`; a
+    window an earlier test of the run left open would otherwise decide where a
+    pinned overlay is placed.
+    """
+    monkeypatch.setattr(OverlayUI, "_active_own_window_handle", lambda self: None)
+
+
+def _wait_until(condition, timeout_ms: int = 3000) -> bool:
+    """Run the event loop until `condition()` holds (PySide6 has no qWaitFor)."""
+    waited = 0
+    while not condition() and waited < timeout_ms:
+        QtTest.QTest.qWait(10)
+        waited += 10
+    return bool(condition())
+
+
+def _placements(user32, overlay) -> list[int]:
+    """What `SetWindowPos` was given as insert-after for this overlay, in order."""
+    hwnd = int(overlay.winId())
+    return [
+        after
+        for target, after in zip(user32.targets, user32.positions, strict=True)
+        if target == hwnd
+    ]
+
+
+def _pinned_overlay_with_an_own_dialog(monkeypatch, user32):
+    """A shown pinned overlay, a shown dialog of the same application and the
+    knob that tells the overlay which window is active."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    overlay = OverlayUI()
+    overlay.show()
+    dialog = QtWidgets.QDialog()
+    dialog.show()
+    app.processEvents()
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+    active: list[QtGui.QWindow | None] = [None]
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: active[0])
+    user32.positions.clear()
+    user32.targets.clear()
+
+    def activate(window: QtGui.QWindow | None) -> None:
+        active[0] = window
+        QtGui.QGuiApplication.instance().focusWindowChanged.emit(window)
+
+    return overlay, dialog, activate
+
+
+def test_a_pinned_overlay_steps_behind_an_own_window_being_worked_in(monkeypatch):
+    # The overlay is topmost above other applications, but it covered the
+    # Settings window where they overlap (owner, 2026-11-24). While one of this
+    # application's windows is active it goes directly behind that window;
+    # when activation leaves, it is topmost again.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+    assert _HWND_TOPMOST not in _placements(user32, overlay)
+
+    user32.positions.clear()
+    user32.targets.clear()
+    activate(None)  # another application, or the last own window closed
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_live_session_stays_topmost_over_an_own_window(monkeypatch):
+    # The recording indicator is the application's main feedback: it must not
+    # vanish behind Settings while the user dictates into one of its fields.
+    # Only an idle pinned overlay steps behind; when the session ends it does.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    for state in ("Listening", "Processing", "Done", "Error"):
+        overlay.set_state(state, "x")
+        assert _placements(user32, overlay)[-1] == _HWND_TOPMOST, state
+        overlay.set_state("Idle", "ready")
+        assert _placements(user32, overlay)[-1] == dialog_hwnd, state
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_waiting_row_keeps_the_idle_overlay_topmost_over_an_own_window(monkeypatch):
+    # A "Not inserted" row with its Insert/Dismiss button, a transcription in
+    # the queue and the not-inserted badge wait for the user and are shown
+    # nowhere else; behind Settings or History they would be invisible.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    undelivered = overlay_ui_module.QUEUE_ROW_KIND_UNDELIVERED
+    overlay.set_transcription_queue([(7, "Not inserted", undelivered)])
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+    overlay.set_transcription_queue([])
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    overlay.set_not_inserted_badge("1 not inserted")
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+    overlay.set_not_inserted_badge("")
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+
+    overlay.set_transcription_queue([(8, "Transcribing", "transcription")])
+    overlay.set_not_inserted_badge("1 not inserted")
+    overlay.set_transcription_queue([])
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST, "the badge still waits"
+    overlay.set_not_inserted_badge("")
+    assert _placements(user32, overlay)[-1] == dialog_hwnd, "the last one went away"
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_reveal_while_an_own_window_is_active_is_topmost(monkeypatch):
+    # A reveal the user asked for (tray click, a recording's reveal) must be
+    # visible; when it ends the idle pinned overlay steps behind again.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    dialog_hwnd = int(dialog.winId())
+    activate(dialog.windowHandle())
+
+    overlay.reveal_temporarily(duration_ms=20)
+    assert overlay.isVisible()
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+
+    assert _wait_until(lambda: not overlay._temporary_foreground_active)
+    assert _placements(user32, overlay)[-1] == dialog_hwnd
+    overlay.hide()
+    dialog.close()
+
+
+def test_opening_an_own_window_after_a_reveal_ends_the_reveal(monkeypatch):
+    # The tray's double-click: the first click reveals, the second opens
+    # Settings, which then gets the front.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.reveal_temporarily(duration_ms=60_000)
+    # A pinned overlay's reveal is a real reveal now (it was a no-op before):
+    # it holds the topmost state and has a timer to end it.
+    assert overlay._temporary_foreground_active is True
+    assert overlay._temporary_foreground_timer.isActive()
+    assert _placements(user32, overlay)[-1] == _HWND_TOPMOST
+
+    activate(dialog.windowHandle())
+
+    assert overlay._temporary_foreground_active is False
+    assert not overlay._temporary_foreground_timer.isActive()
+    assert _placements(user32, overlay)[-1] == int(dialog.winId())
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_floating_overlay_reveals_and_runs_sessions_as_before(monkeypatch):
+    # With the setting off nothing differs: a reveal is topmost, its end is
+    # NOTOPMOST, and no own window is ever a reference.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.set_always_on_top(False)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+
+    overlay.reveal_temporarily(duration_ms=20)
+    overlay.set_state("Listening", "x")
+    assert _wait_until(lambda: not overlay._temporary_foreground_active)
+
+    assert set(_placements(user32, overlay)) <= {_HWND_TOPMOST, _HWND_NOTOPMOST}
+    assert _placements(user32, overlay)[0] == _HWND_TOPMOST
+    assert _placements(user32, overlay)[-1] == _HWND_NOTOPMOST
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_stale_own_window_falls_back_to_topmost_for_that_call_only(monkeypatch):
+    # The own window closed meanwhile, so SetWindowPos refuses it as a
+    # reference. The overlay is plain topmost then, and the failure must not
+    # switch the Qt window-flag fallback on (permanently topmost over everything,
+    # window recreated).
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    user32.refused.add(int(dialog.winId()))
+
+    activate(dialog.windowHandle())
+
+    assert _placements(user32, overlay) == [int(dialog.winId()), _HWND_TOPMOST]
+    assert overlay._topmost_uses_window_flag is False
+    overlay.hide()
+    dialog.close()
+
+
+def test_the_overlay_state_follows_activation_not_a_count_of_events(monkeypatch):
+    # A missed event cannot strand the overlay out of the topmost band: the
+    # next placement asks which window is active instead of remembering.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: None)
+
+    overlay._apply_window_flags()  # no focus event was delivered
+
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_missed_focus_event_is_repaired_by_the_periodic_recheck(monkeypatch):
+    # Measured with real windows: after the own dialog closed, no focus event
+    # reached the overlay and it stayed out of the topmost band.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    activate(dialog.windowHandle())
+    user32.positions.clear()
+    user32.targets.clear()
+    overlay._recheck_own_window()
+    assert _placements(user32, overlay) == [], "nothing changed: nothing is placed"
+
+    monkeypatch.setattr(overlay, "_active_own_window_handle", lambda: None)
+    overlay._recheck_own_window()  # the dialog closed, no event was delivered
+
+    assert _placements(user32, overlay) == [_HWND_TOPMOST]
+    overlay.hide()
+    dialog.close()
+
+
+def test_a_floating_overlay_ignores_the_activation_of_own_windows(monkeypatch):
+    # With the setting off nothing changes: not topmost, so there is nothing
+    # to step back from.
+    user32 = _FakeZOrderUser32(foreground=_OTHER_HWND)
+    overlay, dialog, activate = _pinned_overlay_with_an_own_dialog(monkeypatch, user32)
+    overlay.set_always_on_top(False)
+    user32.positions.clear()
+    user32.targets.clear()
+
+    activate(dialog.windowHandle())
+    activate(None)
+
+    assert _placements(user32, overlay) == []
+    overlay.hide()
+    dialog.close()
 
 
 def _floating_overlay_above_the_editor(monkeypatch, user32):
@@ -3707,6 +3967,37 @@ def test_a_not_inserted_transcript_is_a_warning_and_a_failure_without_one_stays_
     overlay.close()
 
 
+def test_a_recording_without_signal_is_a_warning_that_keeps_recording():
+    """A microphone that sends nothing during a recording (2026-11-24): the
+    overlay says "No signal" in the warning colour, and the recording's
+    controls stay those of Listening (Stop, Cancel), so the user can stop it."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    QtWidgets.QApplication.processEvents()
+    listening = _control_state(overlay)
+
+    overlay.set_state(
+        "Listening",
+        "The microphone delivered no signal.",
+        compact=True,
+        warning=OVERLAY_WARNING_NO_SIGNAL,
+    )
+    QtWidgets.QApplication.processEvents()
+
+    assert overlay._state_label.text() == OVERLAY_WARNING_NO_SIGNAL
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Warning"]
+    assert overlay.state == "Listening"
+    assert _control_state(overlay) == listening
+    assert overlay._record_button.text() == overlay_ui_module.RECORD_BUTTON_STOP_TEXT
+
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    assert overlay._state_label.text() == "Listening"
+    assert overlay._state_background == OVERLAY_STATE_COLORS["Listening"]
+    overlay.close()
+
+
 def test_the_warning_keeps_its_text_readable_and_the_badge_apart_from_it():
     """White text and the amber row labels stay readable (WCAG AA, 4.5:1) on
     the burnt-orange fill, and the not-inserted badge keeps a luminance
@@ -3767,6 +4058,7 @@ _STATE_WORD_CASES = [
             "warning": OVERLAY_WARNING_CHECK_WINDOW,
         },
     ),
+    ("Listening", {"warning": OVERLAY_WARNING_NO_SIGNAL}),
 ]
 
 

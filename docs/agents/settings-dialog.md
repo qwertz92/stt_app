@@ -9,6 +9,61 @@ tabs, sizing, save/merge and unsaved-changes logic. Entry order is kept, so
 
 Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md` (original AGENTS.md: `df2642a`).
 
+- **Owner's clarification of the stability rules (2026-11-24)**: "nothing may
+  jump" was never meant strictly. The goal is best-practice UI/UX: prevent
+  UNEXPECTED movement; small shifts and movement the user caused are fine;
+  stability is never bought with empty reserved space or with forced
+  over-engineering; when stability and usability pull apart, usability wins
+  and the trade-off is named. Read every "never moves", "reserves" and
+  "retains" rule below in that light. Reservations that exist today stay until
+  the code around them is touched for another reason; when one is touched,
+  first ask whether what appears is below what the user is pointing at (then
+  it needs no reserved room) and whether the reserved area is visible empty
+  space on every visit (then it is paid for more often than the shift it
+  prevents). The Models tab's group was the first one measured against this.
+- **The Models tab's group is as tall as its content** (2026-11-24, owner:
+  "there is a scrollbar although everything would fit; the 'Local models' area
+  is too tall and has empty space"). Measured on a copy of his data at the
+  default 860 x 960: the page scrolled (content 864 px, viewport 829) and the
+  group, 577 px, had about 100 px of empty space under its buttons. Cause: the
+  group had `Expanding` policy and stretch 1 and the list stretched inside it,
+  and the status line (two reserved lines), the progress bar and the queue line
+  kept their size while hidden. Now: the three status widgets take no room while
+  hidden; the group (`ContentCappedGroupBox`) is no taller than its content (its
+  maximum is its preferred height with the list at all its rows, recomputed on
+  every layout request); and **the list is the flexible part**
+  (`MinimumHeightHintListWidget`): minimum six rows (fewer if the roster is
+  shorter), maximum all rows, preferred height = the minimum, stretch 1 in the
+  page. The preferred height has to be the minimum because a settings page is
+  a `QScrollArea` whose content never gets less than its layout's preferred
+  height (wrapped labels make the layout height-for-width): a list preferring
+  all rows made the page scroll before the list gave up any. Measured on his
+  data: idle at 860 x 960 the group is 481 px with no page scroll bar; a
+  download's status line, bar and queue line (+47 px) and a four-line error path
+  (+63 px) shrink the list instead (860 x 900: 306 -> 260 -> 244 px, the list
+  scrolls inside itself) and create no page scroll bar, so the page keeps its
+  834 px width; only below six rows does the page scroll (860 x 700: 822 px
+  wide). Nothing depends on 15 rows. **The button row (Refresh, Download
+  Selected, Download All Missing, Cancel Downloads, Delete Selected) sits above
+  the list** (2026-11-25): the status line, bar and queue line below the list take
+  their height from the list, so only the list's lower edge moves and nothing
+  clickable does. With the buttons below the list they moved 25-111 px under a
+  resting pointer (860 x 960: 788 -> 738 with a four-line error; 40 rows: 849 ->
+  802 -> 738; back when the area collapsed). Measured after, in idle, download,
+  four-line-error and collapsed states (15 and 40 rows at 860 x 960, 15 rows at
+  1600 x 1200): button row at y = 478 / 478 / 448 in every state, the Local
+  runtime group at 174 in every state. Arrow keys on a page too short for the list
+  also scroll the page to the current row (`_keep_current_model_row_in_the_page`;
+  without it the selection moved out of sight at 801 x 400). Tests:
+  `test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar`,
+  `test_arrow_keys_keep_the_current_model_row_in_view_on_a_short_page`,
+  `test_the_download_area_moves_nothing_above_it_from_start_to_finish`. The first
+  version (list fixed at all its rows) scrolled the page as soon as a download
+  started in a dialog with little spare height: a page scroll bar narrows the
+  page and reflows it sideways, which is the movement worth preventing. To
+  revert the whole group: `git revert` the commits "fix(settings): size the
+  Models tab's group to its content" and its follow-up.
+
 - **`SettingsDialog` is a mixin facade** composed in `settings_dialog.py` from
   `_GeneralTabMixin`, `_AudioTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
   `_RemoteProvidersMixin`, `_HistoryTabMixin`, `_ImportTabMixin`,
@@ -194,7 +249,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   switches never move fields; delayed paint/prewarm uses dialog-owned
   `QTimer`s.
 - **A changing status line is reserved or elided, never left to grow**
-  (growing lines moved buttons under the cursor).
+  (growing lines moved buttons under the cursor). Exception since 2026-11-24: a
+  line below the controls it reports on (the Models tab's status line) takes no
+  room while empty (`CollapsingStatusLabel`), because nothing above it moves
+  when it appears.
   - Wrapping lines (the Providers tab's shared connection-test line, the
     Run Benchmark window status) use the two-line
     `_reserve_dynamic_hint_height` with the message as tooltip.
@@ -205,8 +263,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     with stretch 1 (not beside an `addStretch(1)`), right-aligned. Ctrl+C and
     the context-menu Copy go through `copy_message`, yielding the full
     message unless a part is selected.
-- **A widget that appears mid-interaction keeps its space while hidden**
-  (`retainSizeWhenHidden`, e.g. the Models download bar).
+- **A widget that appears mid-interaction keeps its space while hidden only
+  when its appearance would move something the user is pointing at**
+  (`retainSizeWhenHidden`). The Models tab's download bar, queue line and
+  status line are below the buttons and no longer keep any (2026-11-24, see
+  "The Models tab's group is as tall as its content" at the top).
 - **Multi-select lists use ExtendedSelection**, never `MultiSelection`.
   Exception: the Run Benchmark model list has checkboxes and no selection;
   Space toggles; a rebuild keeps check states (first fill all checked, later

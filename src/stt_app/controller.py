@@ -27,8 +27,13 @@ from .clipboard_owner import RECEIPT_UNREAD
 from .config import (
     AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+    AUDIO_CAPTURE_HEALTH_POLL_MS,
+    AUDIO_CAPTURE_HEALTH_SUSPEND_S,
     AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
+    AUDIO_NO_SIGNAL_AFTER_SOUND_S,
+    AUDIO_NO_SIGNAL_HINT_S,
+    AUDIO_NO_SIGNAL_LEVEL,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -62,6 +67,7 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_WARNING_CHECK_WINDOW,
+    OVERLAY_WARNING_NO_SIGNAL,
     OVERLAY_WARNING_NOT_INSERTED,
     PASTE_TARGET_CHECK_TIMEOUT_MS,
     QUEUE_ROW_KIND_TRANSCRIPTION,
@@ -175,6 +181,25 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = "The model returned no text for this recording
 # recording) is reported as failed when history refused its entry.
 _TRANSCRIPT_NOT_SAVED_REASON = (
     "The transcript could not be saved to history (see the log)."
+)
+
+# The clock the capture health poll measures a suspension with; tests replace
+# it. The same clock `AudioCapture` stamps its blocks with.
+_health_clock = time.perf_counter
+
+# The live overlay's line while the microphone sends digital silence
+# (`AUDIO_NO_SIGNAL_LEVEL`). True whatever the cause -- muted, a dead
+# endpoint, or a headset whose noise gate sends exact zeros in a pause -- so
+# it claims no lost speech and gives no instruction to stop.
+_NO_SOUND_LIVE_TEXT = (
+    "No sound is arriving from the microphone. Check that it is not muted."
+)
+
+# What a finished recording says when the microphone sent no signal at all
+# (`AUDIO_NO_SIGNAL_LEVEL`): a device problem, not a setting.
+_NO_SIGNAL_TEXT = (
+    "The microphone delivered no signal (digital silence): it is muted, "
+    "disconnected or not working."
 )
 
 # The last-recording error for a transcript with a gap marker whose audio no
@@ -326,6 +351,11 @@ class _TranscriptionJob:
     # and so does one whose text did not get delivered either
     # (`_mark_last_recording_completed`).
     history_refused: bool = False
+    # The recording's audio from the moment its result arrived until its
+    # History write was tried: the delivery retires the request audio first,
+    # and a refused write must still secure the recording
+    # (`_secure_audio_of_an_unsaved_transcript`).
+    delivery_audio: bytes = b""
     future: object | None = None
     # The provider handshake thread, when this job finalizes a stream that may
     # still be connecting. The worker joins it before calling `stop_stream()`.
@@ -828,6 +858,13 @@ class DictationController(QtCore.QObject):
         # the recordings it writes. The retry slot holds audio and an id only,
         # and the job that recorded it is gone by the time it is retried.
         self._recorded_language_by_recording_id: dict[str, str] = {}
+        # Recordings without a transcript yet that this session wrote to the
+        # unfinished store before the managed slot was overwritten (D4 of
+        # 2026-11-24), by recording id: deleted once the transcript is in
+        # History or the user cancelled the recording
+        # (`_release_secured_recording`), kept otherwise -- a crash or a quit
+        # leaves them for the next start's notice.
+        self._secured_recordings: dict[str, Path] = {}
 
         self._settings: AppSettings = self._settings_store.load()
         self._warm_up_speech_check()
@@ -1074,6 +1111,25 @@ class DictationController(QtCore.QObject):
         # True once the first timeout found a stream PortAudio still runs and
         # re-armed for the hard limit (`_on_audio_callback_watchdog_timeout`).
         self._audio_callback_watchdog_extended = False
+        # Mid-recording health of the running capture
+        # (`_on_capture_health_tick`): a stream that stopped calling back, or
+        # one that sends digital silence only.
+        self._capture_health_timer = QtCore.QTimer(self)
+        self._capture_health_timer.setInterval(AUDIO_CAPTURE_HEALTH_POLL_MS)
+        self._capture_health_timer.timeout.connect(self._on_capture_health_tick)
+        self._capture_health_capture: AudioCapture | None = None
+        self._capture_health_last_tick_at = 0.0
+        # Where the stall clock counts from: the arm, or the first tick after
+        # the process was suspended (system sleep).
+        self._capture_health_counted_from = 0.0
+        # The warning the overlay shows now: "stall", "no_signal" or None.
+        self._capture_warning: str | None = None
+        # Audio files a queued or running transcription will read (Import,
+        # History's Retranscribe), by normalized path with a count: the
+        # recordings count never prunes them (`_prune_recordings`). Written
+        # from the import's own thread, so under a lock.
+        self._audio_files_in_use: dict[str, int] = {}
+        self._audio_files_in_use_lock = threading.Lock()
         # The capture `stop_recording` is stopping: its stop may wait for the
         # backlog of a starved callback thread, and those blocks must still
         # reach the streaming transcriber (`_on_stream_audio_chunk`).
@@ -1339,35 +1395,18 @@ class DictationController(QtCore.QObject):
         candidates: list[tuple[bytes, str, datetime, str]] = []
         if capture_wav:
             candidates.append((capture_wav, "", now, capture_language))
-        for job in self._jobs.values():
-            if job.aborting or job.insertion_deferred:
-                continue
-            payload = self._request_audio_by_token.get(job.token)
-            if payload is not None:
-                candidates.append(
-                    (
-                        payload[0],
-                        job.source_recording_id,
-                        job.created_at,
-                        # The language the recording was made in, where known:
-                        # a retry that fell back to the selected language ran
-                        # under that one (`_pin_recorded_language`), and the
-                        # next start would pin the fallback for good. The
-                        # job's own for a recording this process never named.
-                        self._recorded_language_by_recording_id.get(
-                            job.source_recording_id
-                        )
-                        or job.settings.language_mode,
-                    )
+        for job in list(self._jobs.values()):
+            # A stop of the slot wrote these earlier; the user cancelled one,
+            # the other's transcript is in History (unless that write was
+            # refused): neither is offered at the next start.
+            if job.aborting or (job.insertion_deferred and not job.history_refused):
+                self._release_secured_recording(
+                    job.source_recording_id,
+                    still_needed_for_retry=self._recording_still_pending(
+                        job.source_recording_id, excluding=job.token
+                    ),
                 )
-        for wav_bytes, recording_id in (
-            (self._last_failed_wav_bytes, self._last_failed_recording_id),
-            *self._older_failed_audio,
-        ):
-            if wav_bytes:
-                recorded_at = self._recorded_at_by_recording_id.get(recording_id, now)
-                language = self._recorded_language_by_recording_id.get(recording_id, "")
-                candidates.append((wav_bytes, recording_id, recorded_at, language))
+        candidates.extend(self._recordings_without_transcript())
         seen_ids: set[str] = set()
         seen_unnamed: list[bytes] = []
         kept = failed = 0
@@ -1402,6 +1441,184 @@ class DictationController(QtCore.QObject):
                 failed,
                 self._unfinished_recording_store.directory,
             )
+
+    def _recordings_without_transcript(
+        self,
+    ) -> list[tuple[bytes, str, datetime, str]]:
+        """(audio, recording id, recorded at, language) of every recording
+        this process holds in memory without a transcript in History: each
+        job still transcribing (its request audio) and the failures held for
+        Retry. Not a finished result waiting for its paste (its text is in
+        History) and not an aborting job (the user stopped it); a result
+        whose History write was refused counts as without a transcript (its
+        text is only in memory; review 2026-11-25). Each comes
+        with the language it was made in where this process knows it -- a
+        retry that fell back to the selected language ran under that one
+        (`_pin_recorded_language`) and the next start would pin the fallback
+        for good --, a job's own selection for a recording it never named,
+        "" for a failure held without either."""
+        now = datetime.now()  # noqa: DTZ005 (local wall clock, as the queue rows show it)
+        found: list[tuple[bytes, str, datetime, str]] = []
+        for job in self._jobs.values():
+            if job.aborting or (job.insertion_deferred and not job.history_refused):
+                continue
+            payload = self._request_audio_by_token.get(job.token)
+            if payload is not None:
+                found.append(
+                    (
+                        payload[0],
+                        job.source_recording_id,
+                        job.created_at,
+                        self._recorded_language_by_recording_id.get(
+                            job.source_recording_id
+                        )
+                        or job.settings.language_mode,
+                    )
+                )
+        for wav_bytes, recording_id in (
+            (self._last_failed_wav_bytes, self._last_failed_recording_id),
+            *self._older_failed_audio,
+        ):
+            if wav_bytes:
+                found.append(
+                    (
+                        wav_bytes,
+                        recording_id,
+                        self._recorded_at_by_recording_id.get(recording_id, now),
+                        self._recorded_language_by_recording_id.get(recording_id, ""),
+                    )
+                )
+        return found
+
+    def _secure_recordings_without_transcript(self) -> None:
+        """Write every recording without a transcript to the unfinished store
+        before the managed slot is overwritten (D4 of 2026-11-24).
+
+        The slot holds one recording; a job still transcribing an older one,
+        or a failure held for Retry, had its audio only in memory once the
+        next recording replaced the slot, so a crash lost it. Each is written
+        once per session (`_secured_recordings`); the next start's notice
+        offers what a crash or a quit left, and `_release_secured_recording`
+        deletes a file once its transcript is in History. A recording without
+        an id (the store refused its bytes) is not written here: it never was
+        in the slot, and the quit still keeps it under a fresh id. A write
+        that fails leaves the audio where it was (memory and, for the slot's
+        own recording, the slot until this persist) and tells the tray once:
+        a crash before the transcript loses it."""
+        started = time.perf_counter()
+        written = 0
+        failed = 0
+        for (
+            wav_bytes,
+            recording_id,
+            recorded_at,
+            language,
+        ) in self._recordings_without_transcript():
+            if not recording_id or recording_id in self._secured_recordings:
+                continue
+            path = self._write_unfinished_recording(
+                wav_bytes, recording_id, recorded_at, language
+            )
+            if path is not None:
+                self._secured_recordings[recording_id] = path
+                written += 1
+            else:
+                failed += 1
+        if failed:
+            self.busy_overlay_error.emit(
+                f"{failed} recording(s) still waiting for a transcript could "
+                f"not be saved to {self._unfinished_recording_store.directory} "
+                "(see the log). They stay in memory until transcribed; a crash "
+                "before then loses them."
+            )
+        if written:
+            self._logger.info(
+                "recordings_secured count=%d elapsed_ms=%.1f dir=%s",
+                written,
+                (time.perf_counter() - started) * 1000,
+                self._unfinished_recording_store.directory,
+            )
+
+    def _write_unfinished_recording(
+        self,
+        wav_bytes: bytes,
+        recording_id: str,
+        recorded_at: datetime,
+        language: str,
+    ) -> Path | None:
+        """Where the unfinished store holds this recording now (a file it
+        already held under the id counts), None when the write failed."""
+        store = self._unfinished_recording_store
+        try:
+            path = store.save(
+                wav_bytes,
+                recording_id=recording_id,
+                recorded_at=recorded_at,
+                language_mode=language,
+            )
+            if path is None:
+                kept = store.find(recording_id)
+                path = kept.path if kept is not None else None
+        except (OSError, ValueError):
+            self._logger.exception(
+                "Failed to keep a recording without a transcript. recording_id=%s",
+                recording_id,
+            )
+            return None
+        return path
+
+    def _release_secured_recording(
+        self,
+        recording_id: str,
+        *,
+        still_needed_for_retry: bool = False,
+        linked_path: str = "",
+    ) -> None:
+        """Delete the unfinished-store copy `_secure_recordings_without_transcript`
+        wrote for this recording: its complete transcript is in History with
+        no audio linked, or the user cancelled it. Kept while a failure of the
+        same recording waits for Retry (`still_needed_for_retry`), and never
+        deleted when it is the file History links (`linked_path`). A copy a
+        gap or fallback transcript took over left this registry when it was
+        taken (`_keep_audio_in_recordings_folder`), moved or not."""
+        path = self._secured_recordings.get(recording_id) if recording_id else None
+        if path is None or still_needed_for_retry:
+            return
+        if linked_path and os.path.normcase(os.path.abspath(path)) == os.path.normcase(
+            os.path.abspath(linked_path)
+        ):
+            del self._secured_recordings[recording_id]
+            return
+        del self._secured_recordings[recording_id]
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            # Offered once more by the next start; nothing is lost.
+            self._logger.exception(
+                "Failed to delete a recording copy that is no longer needed. path=%s",
+                path,
+            )
+
+    def _recording_still_pending(self, recording_id: str, *, excluding: int) -> bool:
+        """Whether this recording still waits for a transcript elsewhere than
+        job `excluding`: held for Retry, or another live job of it."""
+        if not recording_id:
+            return False
+        if any(
+            held_id == recording_id and wav_bytes
+            for wav_bytes, held_id in (
+                (self._last_failed_wav_bytes, self._last_failed_recording_id),
+                *self._older_failed_audio,
+            )
+        ):
+            return True
+        return any(
+            job.token != excluding
+            and job.source_recording_id == recording_id
+            and not job.aborting
+            and not job.insertion_deferred
+            for job in self._jobs.values()
+        )
 
     def has_active_session(self) -> bool:
         """True while a recording or its foreground transcription runs: what
@@ -1609,10 +1826,10 @@ class DictationController(QtCore.QObject):
         deleted): with "Archive every recording" it joins the archive under
         the archive's name, counts as its newest file and the retention
         count applies (`_prune_recordings`); with only "Keep last recording
-        after successful transcription" it goes to the recordings folder
-        under its own name, which no count prunes -- the managed last
-        recording is one slot that holds the newest dictation and must not be
-        overwritten by an older recording. A move that fails leaves the file
+        after successful transcription" it goes to the recordings folder as a
+        kept copy (`kept_...`, which "Keep Recordings" never deletes) -- the
+        managed last recording is one slot that holds the newest dictation and
+        must not be overwritten by an older recording. A move that fails leaves the file
         where it was and answers that path (logged): the entry points at it,
         and the next start deletes no file an entry points at. Nothing after
         a successful move may stop the history write (the notice no longer
@@ -1652,7 +1869,9 @@ class DictationController(QtCore.QObject):
             try:
                 return os.path.abspath(
                     self._unfinished_recording_store.move_to(
-                        recording, Path(self._resolve_recordings_dir())
+                        recording,
+                        Path(self._resolve_recordings_dir()),
+                        as_kept_copy=True,
                     )
                 )
             except OSError:
@@ -2890,6 +3109,7 @@ class DictationController(QtCore.QObject):
         return (now_ms - press) % TICK_COUNT_MODULUS
 
     def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
+        self._arm_capture_health(capture)
         self._audio_callback_watchdog_capture = capture
         self._audio_callback_watchdog_extended = False
         self._audio_callback_watchdog_timer.start(
@@ -2900,6 +3120,8 @@ class DictationController(QtCore.QObject):
         self,
         capture: AudioCapture | None = None,
     ) -> None:
+        if capture is None or self._capture_health_capture is capture:
+            self._disarm_capture_health()
         if capture is not None and self._audio_callback_watchdog_capture is not capture:
             return
         self._audio_callback_watchdog_timer.stop()
@@ -3043,6 +3265,198 @@ class DictationController(QtCore.QObject):
             self.request_audio_device_refresh()
         else:
             self._maybe_resume_pending_audio_device_refresh()
+
+    def _arm_capture_health(self, capture: AudioCapture) -> None:
+        now = _health_clock()
+        self._capture_health_capture = capture
+        self._capture_health_last_tick_at = now
+        self._capture_health_counted_from = now
+        self._capture_warning = None
+        self._capture_health_timer.start()
+
+    def _disarm_capture_health(self) -> None:
+        self._capture_health_timer.stop()
+        self._capture_health_capture = None
+        self._capture_warning = None
+
+    def _on_capture_health_tick(self) -> None:
+        """A running recording's microphone: still delivering, and signal?
+
+        The first-callback watchdog covers the start; this covers the rest
+        of the recording, for every engine and both modes. Two conditions:
+
+        - **No block for a while** (a device unplugged, a driver stalled, a
+          stream that died): past `AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS`
+          the overlay shows the "No signal" warning, and a stream PortAudio
+          reports stopped ends the recording at once; past
+          `AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS` any stream does.
+          A starved callback thread delivers late, not never, and its audio
+          waits in the 20 s buffer, so a burst before the hard limit clears
+          the warning and loses nothing. The recording ends through the
+          normal stop (`_end_stalled_recording`), so what was captured is
+          transcribed and delivered like any other recording.
+        - **Digital silence** (`CaptureHealth.no_signal_s`: consecutive
+          blocks below `AUDIO_NO_SIGNAL_LEVEL`) for `AUDIO_NO_SIGNAL_HINT_S`
+          from the start, or for `AUDIO_NO_SIGNAL_AFTER_SOUND_S` once sound
+          had been seen -- a muted or dead endpoint, or a noise gate in a
+          pause. The line says only that no sound arrives; the recording
+          runs on, and the line clears once a block carries signal (the live
+          text comes back in streaming).
+
+        The stall clock restarts at a tick that came
+        `AUDIO_CAPTURE_HEALTH_SUSPEND_S` late (system sleep, a held Qt
+        thread), so time the process did not run never counts as a stall.
+        Reads one snapshot under the capture's lock; never waits.
+        """
+        capture = self._capture_health_capture
+        if (
+            capture is None
+            or capture is not self._audio_capture
+            or self._shutdown_started
+        ):
+            self._disarm_capture_health()
+            return
+        if self._recording_stop_in_progress:
+            return
+        now = _health_clock()
+        late_s = now - self._capture_health_last_tick_at
+        self._capture_health_last_tick_at = now
+        if late_s > AUDIO_CAPTURE_HEALTH_SUSPEND_S:
+            self._capture_health_counted_from = now
+            self._logger.info(
+                "audio_capture_health_resumed tick_late_s=%.1f: the app did not "
+                "run (system sleep or a busy UI); the stall clock restarts",
+                late_s,
+            )
+        try:
+            health = capture.health()
+        except Exception:
+            self._logger.exception("Failed to read the capture's health")
+            self._disarm_capture_health()
+            return
+        stalled_s = (
+            None
+            if health.silent_s is None
+            else min(health.silent_s, now - self._capture_health_counted_from)
+        )
+        if stalled_s is not None and stalled_s * 1000 >= (
+            AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+        ):
+            try:
+                stream_active = capture.stream_is_active()
+            except (AttributeError, RuntimeError):
+                stream_active = None
+            if (
+                stalled_s * 1000 >= AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS
+                or stream_active is False
+            ):
+                self._end_stalled_recording(capture, stalled_s, stream_active)
+                return
+            self._show_capture_warning(
+                "stall",
+                "The microphone stopped sending audio. If it does not resume "
+                f"within {AUDIO_CAPTURE_FIRST_CALLBACK_HARD_TIMEOUT_MS // 1000} s, "
+                "the recording ends and what was recorded is transcribed.",
+                stalled_s=stalled_s,
+                stream_active=stream_active,
+            )
+            return
+        no_signal_limit_s = (
+            AUDIO_NO_SIGNAL_AFTER_SOUND_S
+            if health.signal_seen
+            else AUDIO_NO_SIGNAL_HINT_S
+        )
+        if health.no_signal_s >= no_signal_limit_s:
+            self._show_capture_warning(
+                "no_signal",
+                _NO_SOUND_LIVE_TEXT,
+                no_signal_s=health.no_signal_s,
+                after_sound=health.signal_seen,
+            )
+            return
+        if self._capture_warning is not None:
+            self._logger.info(
+                "audio_capture_warning_cleared kind=%s", self._capture_warning
+            )
+            self._capture_warning = None
+            live_text = (
+                self._current_streaming_partial_text()
+                if self._streaming_recording
+                else ""
+            )
+            with self._overlay_batch():
+                if live_text:
+                    # What the live partials showed before the warning; the
+                    # next partial carries on from it.
+                    if len(live_text) > STREAMING_OVERLAY_MAX_CHARS:
+                        live_text = (
+                            f"...{live_text[-STREAMING_OVERLAY_MAX_CHARS:]}".strip()
+                        )
+                    self._overlay.set_state("Listening", f"Live: {live_text}")
+                else:
+                    self._set_listening_overlay(
+                        "The microphone delivers audio again. Speak now."
+                    )
+
+    def _show_capture_warning(self, kind: str, detail: str, **figures) -> None:
+        """Paint the recording's "No signal" warning; logged when it starts.
+
+        Repainted on every tick while it holds: a streaming partial painted
+        meanwhile would otherwise hide it for good. Identical paints move
+        nothing."""
+        if self._capture_warning != kind:
+            self._capture_warning = kind
+            self._logger.warning(
+                "audio_capture_warning kind=%s mode=%s %s",
+                kind,
+                self._active_session_mode,
+                " ".join(
+                    f"{name}={value:.1f}"
+                    if isinstance(value, float)
+                    else f"{name}={value}"
+                    for name, value in figures.items()
+                ),
+            )
+        with self._overlay_batch():
+            self._overlay.set_state(
+                "Listening",
+                detail,
+                compact=True,
+                warning=OVERLAY_WARNING_NO_SIGNAL,
+            )
+            self._overlay.ensure_compact_size()
+
+    def _end_stalled_recording(
+        self, capture: AudioCapture, stalled_s: float, stream_active: bool | None
+    ) -> None:
+        """The microphone stopped delivering mid-recording: end the recording
+        through the normal stop, so the audio captured so far is persisted,
+        archived, transcribed and delivered (or kept for Retry) like any
+        other recording, and tell the tray, which outlasts the overlay's
+        Processing and Done. No backlog wait: the stall outlasted the hard
+        limit, or PortAudio says the stream stopped, so nothing is owed. A
+        warm stream is restarted afterwards, as the first-callback watchdog
+        does, so the next recording opens the device afresh."""
+        warm_stream, callback_count = self._audio_capture_runtime_context(capture)
+        self._logger.error(
+            "audio_capture_stalled mode=%s stalled_s=%.1f stream_active=%s "
+            "warm_stream=%s callback_count=%d: ending the recording and "
+            "transcribing what was captured",
+            self._active_session_mode,
+            stalled_s,
+            stream_active,
+            warm_stream,
+            callback_count,
+        )
+        self._disarm_capture_health()
+        self.busy_overlay_error.emit(
+            "The microphone stopped sending audio during the recording "
+            "(disconnected or not responding), so the recording was ended. "
+            "What was recorded until then is being transcribed."
+        )
+        self.stop_recording(drain=False)
+        if warm_stream:
+            self.request_audio_device_refresh()
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
         vad = None
@@ -3328,7 +3742,12 @@ class DictationController(QtCore.QObject):
             self._pending_audio_device_refresh = False
             self._audio_device_change_timer.start()
 
-    def stop_recording(self) -> None:
+    def stop_recording(self, *, drain: bool = True) -> None:
+        """End the recording and transcribe it.
+
+        `drain` False skips the wait for a starved callback thread's backlog
+        (`AudioCapture.stop`): the stall detector's stop, whose stream owes
+        nothing any more."""
         if self._recording_stop_in_progress:
             return
         capture = self._audio_capture
@@ -3356,7 +3775,7 @@ class DictationController(QtCore.QObject):
             # through which the overlay kept saying "Speak now". Painted
             # directly: `processEvents` would deliver queued signals (a
             # stream abort, a finished job) into the middle of this stop.
-            waits = capture.backlog_wait_expected()
+            waits = drain and capture.backlog_wait_expected()
             if waits:
                 self._logger.info("audio_capture_stop_waits_for_backlog")
                 self._overlay.set_state(
@@ -3364,7 +3783,7 @@ class DictationController(QtCore.QObject):
                 )
                 self._overlay.paint_now()
             try:
-                wav_bytes = capture.stop()
+                wav_bytes = capture.stop(drain=drain)
             except Exception as exc:
                 self._logger.exception(
                     "Audio capture failed to stop mode=%s warm_stream=%s "
@@ -3567,7 +3986,20 @@ class DictationController(QtCore.QObject):
             if persisted
             else "the recording could not be kept as the last recording (see the log)"
         )
-        if peak_level < threshold:
+        if peak_level < AUDIO_NO_SIGNAL_LEVEL:
+            # Not a quiet room: the microphone sent zeros (muted, or a dead
+            # endpoint -- the owner's six such recordings followed an output
+            # device change). Lowering the gate cannot help, so the text
+            # names the device instead.
+            reason = "no_signal"
+            store_text = "Recording skipped: the microphone delivered no signal."
+            detail = (
+                f"{_NO_SIGNAL_TEXT} Nothing was transcribed. Check that the "
+                "microphone is connected, not muted, and selected in the "
+                "overlay's microphone menu or Settings -> Audio, then record "
+                "again."
+            )
+        elif peak_level < threshold:
             reason = "level"
             store_text = "Recording skipped by the silence gate."
             detail = (
@@ -3597,9 +4029,9 @@ class DictationController(QtCore.QObject):
             reason,
             peak_level,
             threshold,
-            "unavailable"
-            if speech is None
-            else f"{speech.natural.max_probability:.3f}",
+            # The level gate decides before the speech check is asked, so it
+            # did not run (`not_run`), which is not a failed model.
+            speech_note if speech is None else f"{speech.natural.max_probability:.3f}",
         )
         if persisted:
             try:
@@ -3808,6 +4240,10 @@ class DictationController(QtCore.QObject):
         self._last_persisted_recording_id = ""
         if not wav_bytes:
             return False
+        # The slot is about to hold this recording: whatever it held, and
+        # every other recording still waiting for its transcript, goes to a
+        # durable file first.
+        self._secure_recordings_without_transcript()
         try:
             state = self._last_recording_store.save_recording(
                 wav_bytes,
@@ -3847,6 +4283,16 @@ class DictationController(QtCore.QObject):
         if not self._settings.save_all_recordings:
             return ""
 
+        if self._holds_no_signal(wav_bytes):
+            # A muted or dead microphone recorded nothing worth keeping
+            # (owner, 2026-11-24); the managed last recording still holds it.
+            # A quiet recording with signal is archived, because the silence
+            # gate can be wrong about quiet speech.
+            self._logger.info(
+                "recording_not_archived reason=no_signal bytes=%d", len(wav_bytes)
+            )
+            return ""
+
         try:
             root = self._resolve_recordings_dir()
             target_dir = os.path.abspath(root)
@@ -3860,7 +4306,69 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to archive recording")
             return ""
 
+    def _holds_no_signal(self, wav_bytes: bytes) -> bool:
+        """Whether a recording is digital silence throughout: its loudest
+        100 ms below `AUDIO_NO_SIGNAL_LEVEL`. Unmeasurable audio holds
+        signal, so a recording is never dropped on a failed measurement."""
+        try:
+            level = measure_peak_windowed_rms(wav_bytes)
+        except Exception:
+            self._logger.exception("Failed to measure recording peak level")
+            return False
+        return level is not None and level < AUDIO_NO_SIGNAL_LEVEL
+
+    @contextlib.contextmanager
+    def _audio_file_in_use(self, path: str):
+        """Keep the recordings count away from `path` while a transcription
+        will read it (D2 of 2026-11-24): History's Retranscribe and Import
+        wait in the one transcription lane, and a dictation ending meanwhile
+        pruned the very file they were about to read."""
+        key = os.path.normcase(os.path.abspath(path))
+        with self._audio_files_in_use_lock:
+            self._audio_files_in_use[key] = self._audio_files_in_use.get(key, 0) + 1
+        try:
+            yield
+        finally:
+            with self._audio_files_in_use_lock:
+                left = self._audio_files_in_use.get(key, 1) - 1
+                if left > 0:
+                    self._audio_files_in_use[key] = left
+                else:
+                    self._audio_files_in_use.pop(key, None)
+
+    def _audio_paths_still_needed(self) -> set[str]:
+        """Normalized paths no prune may delete: files a queued or running
+        import reads, and the file a live job's History entry will link."""
+        with self._audio_files_in_use_lock:
+            needed = set(self._audio_files_in_use)
+        # The startup notice's worker prunes too; a copy of the registry, and
+        # a retry when a job came or went during the copy.
+        jobs: list[_TranscriptionJob] = []
+        for _attempt in range(3):
+            try:
+                jobs = list(self._jobs.values())
+                break
+            except RuntimeError:
+                continue
+        for job in jobs:
+            if job.source_audio_path and not job.aborting:
+                needed.add(os.path.normcase(os.path.abspath(job.source_audio_path)))
+        return needed
+
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
+        """Keep the newest `keep_count` archived recordings in `directory`.
+
+        Only the archive's own `recording_*.wav` files are counted and
+        deleted, oldest first. Kept copies (`kept_*.wav`: the audio of a
+        transcript with a gap or in a fallback language, which History links)
+        and `unfinished_*` files are never touched: part of a kept copy was
+        never transcribed, and an unfinished file may be a recording nobody
+        transcribed (lead's decision 2026-11-25, taking back D3 of
+        2026-11-24, which counted kept copies: with the limit at 1 the next
+        recording deleted a gap's audio). A file a queued or running
+        transcription still needs is skipped and stays counted, so the next
+        oldest goes instead (`_audio_paths_still_needed`).
+        """
         keep = int(keep_count or RECORDINGS_MAX_COUNT_UNLIMITED)
         if keep <= RECORDINGS_MAX_COUNT_UNLIMITED:
             # 0 is "keep every recording", so nothing is deleted at all. A
@@ -3871,6 +4379,7 @@ class DictationController(QtCore.QObject):
             names = os.listdir(directory)
         except OSError:
             return
+        needed = self._audio_paths_still_needed()
         aged = []
         for name in names:
             if not ARCHIVED_RECORDING_NAME_RE.fullmatch(name):
@@ -3884,12 +4393,24 @@ class DictationController(QtCore.QObject):
                 continue
         aged.sort()
         files = [path for _mtime, path in aged]
-        while len(files) > keep:
-            oldest = files.pop(0)
-            try:
-                os.remove(oldest)
-            except OSError:
+        excess = len(files) - keep
+        for path in files:
+            if excess <= 0:
                 break
+            if os.path.normcase(os.path.abspath(path)) in needed:
+                self._logger.info("recording_prune_skipped_in_use path=%s", path)
+                continue
+            try:
+                os.remove(path)
+            except OSError as exc:
+                # Open in another program, say: skipped and still counted, so
+                # the next oldest goes instead (a `break` here pruned nothing
+                # at all while the oldest file was locked).
+                self._logger.warning(
+                    "recording_prune_failed path=%s error=%s", path, exc
+                )
+                continue
+            excess -= 1
 
     def _reset_streaming_state(self, *, keep_session_text: bool = False) -> None:
         """Clear the streaming session. `keep_session_text` spares two fields.
@@ -4556,11 +5077,12 @@ class DictationController(QtCore.QObject):
         next dictation replaces, and the next start completes -- deleting the
         WAV -- when its transcript is already in History. The copy goes where
         retained audio goes, the recordings folder: saved as an unfinished
-        recording and moved there under its own name, the way
-        `_retain_unfinished_audio` keeps one, which no recordings count prunes.
-        It is made even when "Archive every recording" already linked the
-        archive's file, because `_prune_recordings` deletes archive files after
-        enough newer recordings. `job.source_audio_path` carries the copy into
+        recording and moved there as a kept copy (`kept_...`), the way
+        `_retain_unfinished_audio` keeps one. It is made even when "Archive
+        every recording" already linked the archive's file (owner's decision
+        2026-10-23); "Keep Recordings" never deletes a kept copy, because part
+        of its recording returned no text. `job.source_audio_path` carries the
+        copy into
         every History write of the delivery, and History's Retranscribe takes
         a language. A job with no recording id -- the store refused its bytes
         -- gets one of its own, as the quit road's copies do, because the
@@ -4607,9 +5129,63 @@ class DictationController(QtCore.QObject):
         without an entry, and tell the tray about a fallback retry."""
         if job is not None:
             job.history_refused = entry is None
+            delivery_audio, job.delivery_audio = job.delivery_audio, b""
             if entry is None and job.audio_copied:
                 self._settle_the_audio_copy_of_an_unsaved_transcript(job)
+            if entry is None:
+                self._secure_audio_of_an_unsaved_transcript(job, delivery_audio)
+            needs_audio = (
+                bool(job.language_fallback_from or transcript_has_gap(entry.text))
+                if entry is not None
+                else True
+            )
+            if entry is not None and not needs_audio and not job.audio_copied:
+                # The complete transcript is in History and needs no audio:
+                # the durable copy written when the slot moved on is no
+                # longer the only way back to it. Kept otherwise: a refused
+                # write (the text is only in memory), a gap or fallback
+                # transcript whose copy could not be made (the secured file
+                # may be its only audio), and a copy History links, which
+                # left the registry when it was taken.
+                self._release_secured_recording(
+                    job.source_recording_id, linked_path=entry.source_audio_path
+                )
         self._announce_language_fallback(job, entry)
+
+    def _secure_audio_of_an_unsaved_transcript(
+        self, job: _TranscriptionJob, wav_bytes: bytes
+    ) -> None:
+        """A refused History write leaves the text only in memory (a paste,
+        perhaps still waiting), so the recording counts as not transcribed:
+        its audio goes to the unfinished store now, before the next stop can
+        overwrite the managed slot that still holds it (review 2026-11-25: a
+        gap transcript pasted while History refused it kept no audio
+        anywhere once the slot moved on). Skipped where a file already holds
+        it (secured earlier, or a copy that stayed). The next start offers
+        it; nothing in the session releases it."""
+        recording_id = job.source_recording_id
+        if not recording_id or not wav_bytes:
+            return
+        if recording_id in self._secured_recordings or (
+            job.audio_copied and job.source_audio_path
+        ):
+            return
+        path = self._write_unfinished_recording(
+            wav_bytes,
+            recording_id,
+            job.created_at,
+            self._recorded_language_by_recording_id.get(recording_id)
+            or job.settings.language_mode,
+        )
+        if path is None:
+            self.busy_overlay_error.emit(
+                "A recording whose transcript could not be saved to History "
+                "could not be saved to "
+                f"{self._unfinished_recording_store.directory} either (see the "
+                "log); a crash or the next recordings lose its audio."
+            )
+            return
+        self._secured_recordings[recording_id] = path
 
     def _settle_the_audio_copy_of_an_unsaved_transcript(
         self, job: _TranscriptionJob
@@ -4620,33 +5196,46 @@ class DictationController(QtCore.QObject):
         of the copy depends on the store's answer to that mark
         (`_drop_unlinked_audio_copy`)."""
         marked = self._mark_last_recording_failed(job, _TRANSCRIPT_NOT_SAVED_REASON)
-        if self._drop_unlinked_audio_copy(
+        job.source_audio_path = self._drop_unlinked_audio_copy(
             job.source_audio_path, slot_keeps_audio=marked
-        ):
-            job.audio_copied = False
-            job.source_audio_path = ""
+        )
+        job.audio_copied = bool(job.source_audio_path)
 
     def _drop_unlinked_audio_copy(
         self, copy_path: str, *, slot_keeps_audio: bool
-    ) -> bool:
+    ) -> str:
         """What to do with a copy of a transcript's audio that no History entry
-        links, because its write was refused. True when the copy was deleted.
+        links, because its write was refused. Where the copy is now, "" when
+        it was deleted.
 
-        Nothing in the app leads to such a file and no recordings count prunes
-        it, so it would stay as an unknown file (and a later import of the same
+        Nothing in the app leads to such a file and it waits for the recordings
+        count, so it would stay as an unknown file (and a later import of the same
         recording adds a numbered second one). Where the managed recording
         keeps the audio (`slot_keeps_audio`: the store took the failed mark)
         the copy is deleted, as `_return_unfinished_audio` undoes the copy of
         the unfinished-recordings road. Where it does not -- a newer
         recording replaced it in the slot, or the job has no recording id --
-        the copy is the only audio left and stays, its path in the log."""
+        the copy is the only audio left and stays, its path in the log -- as
+        an unfinished recording (`UnfinishedRecordingStore.take_back`), which
+        the next start offers: its transcript is in no History entry, so it
+        is no kept copy (lead's decision 2026-11-25)."""
         if not slot_keeps_audio:
+            try:
+                copy_path = os.path.abspath(
+                    self._unfinished_recording_store.take_back(Path(copy_path))
+                )
+            except OSError:
+                self._logger.exception(
+                    "Failed to return a recording copy to the unfinished "
+                    "recordings folder. path=%s",
+                    copy_path,
+                )
             self._logger.warning(
                 "The only copy of a recording whose transcript could not be "
                 "saved to History is kept. path=%s",
                 copy_path,
             )
-            return False
+            return copy_path
         try:
             Path(copy_path).unlink(missing_ok=True)
         except OSError:
@@ -4655,9 +5244,9 @@ class DictationController(QtCore.QObject):
                 "not be saved to History. path=%s",
                 copy_path,
             )
-            return False
+            return copy_path
         self._logger.info("transcript_audio_copy_dropped path=%s", copy_path)
-        return True
+        return ""
 
     def _announce_language_fallback(
         self, job: _TranscriptionJob | None, entry: TranscriptHistoryEntry | None
@@ -4724,33 +5313,44 @@ class DictationController(QtCore.QObject):
     ) -> str:
         """Where this recording's audio now lives, "" when it could not be kept.
 
-        Saved as an unfinished recording and moved to the recordings folder
-        under that name, which no recordings count prunes. The file's language
-        tag is `language_mode`, else the language the recording was made in. A
-        move that fails leaves the file in the unfinished recordings folder
-        and answers that path (logged): the next start offers it there.
+        Saved as an unfinished recording and moved to the recordings folder as
+        a kept copy (`kept_...`), which "Keep Recordings" never deletes. The
+        file's language tag is `language_mode`, else the language the
+        recording was made in. A move that fails leaves the file in the
+        unfinished recordings folder and answers that path (logged): History
+        links it there. Either way the file leaves `_secured_recordings`, so
+        the release after the History write never deletes it (review
+        2026-11-25: a failed move under a secured copy unlinked the only
+        audio of a gap).
 
         Never raises, whatever the store or the folder does: it runs inside the
         delivery of a finished transcript, before its History entry is written,
         and an exception out of it would discard that transcript."""
         store = self._unfinished_recording_store
         try:
-            store.save(
-                wav_bytes,
-                recording_id=recording_id,
-                recorded_at=recorded_at,
-                language_mode=(
-                    language_mode
-                    or self._recorded_language_by_recording_id.get(recording_id, "")
-                ),
-            )
+            # The copy written when the slot moved on
+            # (`_secure_recordings_without_transcript`) is taken over: it is
+            # this audio already, and taking it needs no write.
             recording = store.find(recording_id)
+            if recording is None:
+                store.save(
+                    wav_bytes,
+                    recording_id=recording_id,
+                    recorded_at=recorded_at,
+                    language_mode=(
+                        language_mode
+                        or self._recorded_language_by_recording_id.get(recording_id, "")
+                    ),
+                )
+                recording = store.find(recording_id)
         except Exception:
             self._logger.exception(
                 "Failed to keep the audio of a transcript. recording_id=%s",
                 recording_id,
             )
             return ""
+        if recording is not None:
+            self._secured_recordings.pop(recording_id, None)
         if recording is None:
             self._logger.warning(
                 "The saved audio of a transcript could not be found again, so "
@@ -4761,7 +5361,11 @@ class DictationController(QtCore.QObject):
             return ""
         try:
             return os.path.abspath(
-                store.move_to(recording, Path(self._resolve_recordings_dir()))
+                store.move_to(
+                    recording,
+                    Path(self._resolve_recordings_dir()),
+                    as_kept_copy=True,
+                )
             )
         except Exception:
             self._logger.exception(
@@ -4852,17 +5456,49 @@ class DictationController(QtCore.QObject):
         older = [entry for entry in self._older_failed_audio if entry != held]
         if replaced[0] and replaced != held:
             older.append(replaced)
+        unsaved = []
         while len(older) > RETRY_OLDER_FAILURES_MAX:
             dropped = older.pop(0)
+            kept_at = self._keep_dropped_failure(*dropped)
+            if not kept_at:
+                # Not written: dropping it from memory would lose it, so it
+                # stays held past the limit, and the tray says why.
+                unsaved.append(dropped)
             self._logger.warning(
-                "retry_failure_dropped bytes=%d recording_id=%s: more than %d "
-                "failed recordings are waiting for Retry",
+                "retry_failure_dropped bytes=%d recording_id=%s kept=%s: more "
+                "than %d failed recordings are waiting for Retry",
                 len(dropped[0]),
                 dropped[1] or "n/a",
+                kept_at or "no, held in memory",
                 RETRY_OLDER_FAILURES_MAX + 1,
             )
-        self._older_failed_audio = older
+        if unsaved:
+            self.busy_overlay_error.emit(
+                f"{len(unsaved)} failed recording(s) could not be saved to "
+                f"{self._unfinished_recording_store.directory} (see the log). "
+                "They stay in memory for Retry; a crash before then loses them."
+            )
+        self._older_failed_audio = unsaved + older
         self._last_failed_wav_bytes, self._last_failed_recording_id = held
+
+    def _keep_dropped_failure(self, wav_bytes: bytes, recording_id: str) -> str:
+        """A failure pushed out of the in-memory Retry list goes to the
+        unfinished store instead of being lost (D4 of 2026-11-24); the next
+        start offers it. Taken out of `_secured_recordings`, so no later
+        delivery or cancel deletes it: nothing in this session leads to it
+        any more. Where it is now, "" when the write failed."""
+        identity = recording_id or uuid4().hex
+        path = (
+            self._secured_recordings.pop(recording_id, None) if recording_id else None
+        )
+        if path is None or not path.exists():
+            path = self._write_unfinished_recording(
+                wav_bytes,
+                identity,
+                self._recorded_at_by_recording_id.get(recording_id) or datetime.now(),  # noqa: DTZ005 (local wall clock, as the file names are)
+                self._recorded_language_by_recording_id.get(recording_id, ""),
+            )
+        return str(path) if path is not None else ""
 
     def _drop_request_audio(self, request_token: int) -> None:
         self._request_audio_by_token.pop(request_token, None)
@@ -7515,6 +8151,9 @@ class DictationController(QtCore.QObject):
                 request_token=request_token,
             )
             return
+        if job is not None:
+            payload = self._request_audio_by_token.get(job.token)
+            job.delivery_audio = payload[0] if payload is not None else b""
         if job is not None and (job.language_fallback_from or transcript_has_gap(text)):
             # Before either road writes its History entry: the entry links it.
             self._keep_audio_of_a_delivery(job)
@@ -8939,6 +9578,16 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             return
         self._drop_request_audio(request_token)
+        job = self._jobs.get(request_token)
+        if job is not None:
+            # Cancelled: the user discarded it, unless a failure of the same
+            # recording still waits for Retry (a cancelled retry).
+            self._release_secured_recording(
+                job.source_recording_id,
+                still_needed_for_retry=self._recording_still_pending(
+                    job.source_recording_id, excluding=request_token
+                ),
+            )
         if self._active_request_token == request_token:
             self._active_request_token = None
             self._last_transcribe_settings = None
@@ -10890,6 +11539,17 @@ class DictationController(QtCore.QObject):
         path = str(file_path or "").strip()
         if not path:
             return False, "No file path provided."
+        with self._audio_file_in_use(path):
+            return self._transcribe_audio_file_in_use(
+                path, settings_override, progress_callback
+            )
+
+    def _transcribe_audio_file_in_use(
+        self,
+        path: str,
+        settings_override: AppSettings | None,
+        progress_callback: Callable[[str], None] | None,
+    ) -> tuple[bool, str]:
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
         managed_last_recording = self._last_recording_store.is_managed_audio_path(path)

@@ -599,14 +599,14 @@ def _create_tray_icon(
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
     # One double-click on the icon arrives as Trigger, DoubleClick, Trigger
-    # (0, 93 and 94 ms, measured with this app's own icon on Windows 11), so a
-    # Trigger is only a single click once a double-click interval has passed
-    # without a DoubleClick, and the Trigger that trails a DoubleClick is the
-    # second click's release. Acting on every Trigger raised the overlay before
-    # Settings opened and again right after, over the dialog.
-    surface_overlay_timer = QtCore.QTimer(menu)
-    surface_overlay_timer.setSingleShot(True)
-    surface_overlay_timer.timeout.connect(controller.bring_overlay_to_front)
+    # (0, 93 and 94 ms, measured with this app's own icon on Windows 11). The
+    # first Trigger acts at once, as the notification-area guidance asks of a
+    # single click (a delay of the double-click interval made it feel broken):
+    # it surfaces the overlay, which is idempotent, so a double-click ends in
+    # the state one click produces plus an open Settings dialog. The Trigger
+    # that trails the DoubleClick is the second click's release and is dropped
+    # for one double-click interval: surfacing again would raise the overlay
+    # over the dialog that just opened.
     last_double_click = QtCore.QElapsedTimer()
 
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
@@ -617,7 +617,6 @@ def _create_tray_icon(
         # way to find out what was there.
         controller.note_foreground_window()
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
-            surface_overlay_timer.stop()
             last_double_click.start()
             open_settings_dialog()
             return
@@ -631,7 +630,7 @@ def _create_tray_icon(
                 interval
             ):
                 return
-            surface_overlay_timer.start(interval)
+            controller.bring_overlay_to_front()
             return
         if reason == QtWidgets.QSystemTrayIcon.MiddleClick and bool(
             getattr(controller.settings, "tray_middle_click_toggle", True)
@@ -1147,9 +1146,13 @@ def _without_transcribed_recordings(
     (`transcribe_unfinished_recording` and the Import tab write mode
     "import"): a dictation entry under the same id can be a partial
     transcript (`_is_partial_transcript`), and offering a recording twice
-    costs a second transcript, deleting it costs the recording. An
-    unreadable history answers no entries, and every recording is offered:
-    nothing is deleted on a guess.
+    costs a second transcript, deleting it costs the recording. A file that
+    any entry links, whatever its mode, is neither offered nor deleted: a
+    dictation's gap copy whose move failed stays in this folder as the only
+    audio of its entry (review 2026-11-25), and the notice's Delete or
+    Transcribe would remove or move it under that entry. An unreadable
+    history answers no entries, and every recording is offered: nothing is
+    deleted on a guess.
     """
     try:
         entries = history_store.load() if history_store is not None else []
@@ -1158,21 +1161,21 @@ def _without_transcribed_recordings(
     texts_by_id: dict[str, list[str]] = {}
     linked_audio: set[str] = set()
     for entry in entries:
+        audio = str(getattr(entry, "source_audio_path", "") or "").strip()
+        if audio:
+            linked_audio.add(_path_key(audio))
         recording_id = str(getattr(entry, "source_recording_id", "") or "").strip()
         if recording_id and str(getattr(entry, "mode", "") or "") == "import":
             texts_by_id.setdefault(recording_id, []).append(str(entry.text or ""))
-            audio = str(getattr(entry, "source_audio_path", "") or "").strip()
-            if audio:
-                linked_audio.add(_path_key(audio))
     offered = []
     for recording in recordings:
+        if _path_key(recording.path) in linked_audio:
+            # An entry links to this very file (a gap transcript, or one whose
+            # move to the recordings folder failed): the only audio.
+            continue
         texts = texts_by_id.get(recording.recording_id)
         if texts is None:
             offered.append(recording)
-            continue
-        if _path_key(recording.path) in linked_audio:
-            # Its entry links to this very file (a gap transcript, or one
-            # whose move to the recordings folder failed): the only audio.
             continue
         if not any(transcript_has_gap(text) for text in texts):
             try:
@@ -1190,6 +1193,19 @@ def _last_recording_already_transcribed(
     *,
     state=None,
 ) -> bool:
+    """Whether the managed last recording's transcript is in History, told
+    by its recording id alone; a match completes the slot (unless the
+    transcript has a gap marker).
+
+    No id, or no entry with it, answers False, and the caller offers the
+    recording in the unfinished-recordings notice: a second transcript costs
+    less than a lost recording. Until 2026-11-24 a recording with no id
+    match counted as transcribed when any History entry was written 0-180 s
+    after the audio file's modification time -- a guess from 2026-03-29,
+    when History entries began to carry the recording id and older entries
+    had none. It deleted untranscribed audio: a recording stopped while the
+    previous one's transcript was being written, then a crash, matched that
+    other transcript by time (D5 of 2026-11-24)."""
     if history_store is None:
         return False
 
@@ -1212,25 +1228,6 @@ def _last_recording_already_transcribed(
                 continue
             _complete_unless_gap(last_recording_store, entry)
             return True
-
-    path = last_recording_store.selectable_path()
-    if path is None:
-        return False
-    try:
-        audio_mtime = path.stat().st_mtime
-    except OSError:
-        return False
-
-    for entry in recent_entries:
-        try:
-            history_ts = datetime.fromisoformat(entry.created_at).timestamp()
-        except Exception:
-            continue
-        if 0 <= (history_ts - audio_mtime) <= 180:
-            _complete_unless_gap(last_recording_store, entry)
-            return True
-        if history_ts < audio_mtime:
-            break
     return False
 
 

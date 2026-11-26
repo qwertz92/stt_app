@@ -133,8 +133,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   Deleting an entry never touches audio
   (`TranscriptHistoryStore.delete_entries`, logs `history_entries_deleted`):
   a retranscription links the same file as the entry it repeats, and only the
-  archive retention removes recordings (its known gap is in
-  `known-limitations.md`). Tests:
+  recordings count removes recordings (it skips files a queued run still
+  needs since 2026-11-24, D2 in the last entry of this file). Tests:
   `test_a_closed_retranscribe_dialog_is_not_kept_alive_by_its_run`,
   `test_a_retranscription_closed_mid_run_reaches_history_and_its_list`,
   `tests/test_gui_thread.py`. Any other worker that captures a dialog which
@@ -207,7 +207,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   retention count (`_prune_recordings`, run right after) counts it as the
   newest file and does not delete it under its new entry; with only "Keep
   last recording after successful transcription" it is moved to the
-  recordings folder under its own name (the managed slot holds the newest
+  recordings folder as a kept copy, `kept_<stamp>_<id>[.<language>].wav`
+  since 2026-11-24 (never deleted by "Keep Recordings"; the managed slot holds the newest
   dictation and is never overwritten by an older recording); otherwise it
   is deleted, only after the entry exists. The entry points at the kept
   file. A gap transcript's file stays in the unfinished folder, never in
@@ -225,8 +226,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   2026-10-17: no insert was ever attempted), and the notice's text and
   final status say so. "Keep files and close"
   moves files to the recordings folder under their own name, which the
-  archive prune (`recording_<stamp>.wav` only) never deletes and "Use last
-  recording" never picks (both go by `app_paths.ARCHIVED_RECORDING_NAME_RE`,
+  recordings count (`recording_*` only,
+  `app_paths.ARCHIVED_RECORDING_NAME_RE`) never deletes -- they are
+  untranscribed -- and "Use last recording" never picks (it goes by
+  `app_paths.ARCHIVED_RECORDING_NAME_RE`,
   `LastRecordingStore.selectable_path`; 2026-10-23: a newer `unfinished_*` file
   was answered instead of the newest dictation's archive file); a move never
   replaces an existing file. The notice is 680x500 at 96 dpi in every state.
@@ -259,3 +262,107 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   and every exit goes through `_close_handle`** (the only remover, also from
   `release()`'s early return); the reverse order stranded the key, so every
   `acquire` raised `LockHeldInThisProcess` until restart.
+- **Audio retention: the count deletes archived recordings only, and
+  nothing deletes audio that is not fully transcribed** (lead's decisions
+  D1-D5 of 2026-11-24, corrected 2026-11-25, after the owner's "never delete
+  a recording that has not been transcribed, above all one that was just
+  made"):
+  - **D1 -- no signal, no archive file**: `_save_recording_artifacts` skips a
+    recording whose loudest 100 ms is below `AUDIO_NO_SIGNAL_LEVEL` (muted
+    or dead microphone, `docs/agents/audio-capture.md`), logged
+    `recording_not_archived reason=no_signal`. A recording with signal that
+    the silence gate rejects is archived as before (the gate can be wrong
+    about quiet speech); the managed slot keeps every recording as before.
+    Cost: one more level scan at the stop with the archive on (0.7 / 5.6 /
+    26 ms for 10 s / 60 s / 5 min, measured 2026-11-24 on HomeBase).
+  - **D2 -- the count never deletes a file still needed**:
+    `_prune_recordings` skips a path in `_audio_paths_still_needed()` -- the
+    files `transcribe_audio_file` holds for its whole run
+    (`_audio_file_in_use`, a counted, locked registry: History's
+    Retranscribe and Import wait in the one lane, and a dictation ending
+    meanwhile pruned the file they were about to read) and the
+    `source_audio_path` of every live job. A skipped file stays counted, so
+    the next oldest goes instead and the folder stays at the count.
+  - **D3 -- kept copies are never counted or pruned** (taken back
+    2026-11-25; the 2026-11-24 version counted them): the audio of a gap or
+    fallback transcript and of a transcribed unfinished recording ("Keep
+    last recording" only) is moved into the recordings folder as
+    `kept_*.wav` (`UnfinishedRecordingStore.move_to(as_kept_copy=True)`,
+    `app_paths.KEPT_RECORDING_NAME_RE`), and `_prune_recordings` counts and
+    deletes only `recording_*.wav`, as before 2026-11-24, keeping D2's
+    protection; a file it cannot remove (open in another program) is
+    skipped and logged `recording_prune_failed`, and the next oldest goes
+    instead (it used to stop the whole prune). Why: part of a gap's recording returned no text, and the
+    review showed that with the limit at 1 the next recording deleted a gap
+    copy and that lowering the limit wiped all of them -- the deletion of
+    not fully transcribed audio the owner forbade. `unfinished_*` files are
+    never pruned either. Audio whose History write was refused while the
+    slot had moved on is no kept copy: `_drop_unlinked_audio_copy` returns it
+    to the unfinished store under its `unfinished_` name
+    (`UnfinishedRecordingStore.take_back`), and the next start offers it. A
+    History entry whose archived audio was pruned stays; it can no longer be
+    retranscribed (the "Keep Recordings" hint says so, and that kept copies
+    and untranscribed recordings are never deleted automatically).
+    Accepted cost: kept copies pile up (`known-limitations.md`; idea in
+    `docs/ROADMAP.md`).
+  - **D4 -- a recording without a transcript is in a durable file before the
+    slot is overwritten**: `_persist_last_recording_audio` first calls
+    `_secure_recordings_without_transcript`, which writes every job still
+    transcribing and every failure held for Retry
+    (`_recordings_without_transcript`, shared with the quit's
+    `_keep_unfinished_recordings`) to the unfinished store once per session
+    (`_secured_recordings`). A secured file is deleted only once its audio
+    demonstrably exists elsewhere or its complete text is in History with no
+    audio needed: `_after_the_history_write` releases it only for an entry
+    without a gap marker or language fallback whose job linked no audio copy
+    (a gap transcript whose copy failed keeps it: it may be the only audio),
+    never the file the entry links (`linked_path`), and a refused write
+    keeps it (the text is only in memory). A gap or fallback copy that takes the secured file
+    over removes it from the registry, moved or not: the review of
+    2026-11-25 reproduced a move that failed (recordings folder not
+    writable), History linking the file in the unfinished folder, and the
+    release then unlinking it. A cancel deletes it unless the recording still waits elsewhere
+    (Retry, another live job: `_recording_still_pending`), and so does the
+    quit for an aborting job and a finished one waiting for its paste. A failure pushed out of the in-memory Retry list
+    (`RETRY_OLDER_FAILURES_MAX`) is written there instead of dropped
+    (`_keep_dropped_failure`, logged `retry_failure_dropped ... kept=<path>`)
+    and leaves the registry, so nothing in the session deletes it; when that
+    write fails it stays in memory past the limit instead of being dropped.
+    A secure write or a dropped failure's write that fails tells the tray,
+    naming the unfinished recordings folder and the count, at every stop or
+    failure that leaves a recording unsaved: each is a new failure (five
+    recordings into an unwritable folder give four notices; `busy_overlay_error`,
+    the generic tray warning: the "Transcription failed" title of
+    `background_transcription_failed` would be wrong). A crash
+    now leaves the slot plus every older pending recording; the next start's
+    notice offers them. A result whose History write was refused counts as
+    without a transcript and is secured too, also while its paste waits
+    (review 2026-11-25: such a gap transcript was pasted with no audio left
+    anywhere). The startup notice never offers, deletes or moves a file
+    that any History entry links, whatever the entry's mode
+    (`main._without_transcribed_recordings`; it matched only import entries,
+    so a dictation's gap copy whose move failed was offered and its Delete
+    removed the entry's only audio). `take_back` renames a kept copy also
+    in the store's own folder (the recordings folder set to it) and picks a
+    free name (`<id>-<n>`) when the name is taken. A gap or fallback copy of the same recording takes
+    the secured file over (`_keep_audio_in_recordings_folder` asks `find`
+    first and moves what it finds, so it needs no write: a full disk that
+    refused the fresh copy left the retry's audio unkept before). Cost: one
+    WAV write on the Qt thread per pending recording, once, only when a
+    previous recording is still pending at the stop: 11 / 15 / 21 ms for
+    10 s / 60 s / 5 min (median of 5 on HomeBase's SSD, my 2026-11-24
+    measurement), and about 40 ms for one 10-minute recording (19.2 MB) or
+    206 ms for five of them through `atomic_write_bytes` (reviewer,
+    2026-11-25). Kept on the Qt thread: five 10-minute recordings pending at
+    once is rare, and a write off the thread would race the slot write it
+    must precede.
+  - **D5 -- the startup slot check matches by recording id only**
+    (`main._last_recording_already_transcribed`). The 0-180 s timestamp
+    guess (from 2026-03-29, when entries began carrying the id) completed a
+    slot whose recording stopped while the previous transcript was written,
+    then a crash: with "keep last recording" off its audio was deleted
+    untranscribed. A slot without an id match is now adopted into the
+    unfinished notice: the user may see a recording offered whose
+    transcript is in History under no id (entries written before
+    2026-03-29, or a write the store refused), and transcribing it again
+    costs a second entry.

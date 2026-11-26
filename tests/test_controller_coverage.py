@@ -10483,7 +10483,9 @@ def test_an_imported_last_recording_whose_entry_was_refused_keeps_the_copy_the_s
     monkeypatch, tmp_path, caplog
 ):
     """The slot holds another recording by now (its mark does not take), so the
-    copy is the only audio: it stays, and the log names it."""
+    copy is the only audio: it stays -- as an unfinished recording the next
+    start offers, since its transcript is in no History entry (2026-11-25) --
+    and the log names it."""
     caplog.set_level(logging.WARNING)
     controller, app, last_recording_store, recordings, last_path = (
         _import_the_last_recording_with_a_gap(monkeypatch, tmp_path)
@@ -10494,9 +10496,10 @@ def test_an_imported_last_recording_whose_entry_was_refused_keeps_the_copy_the_s
     ok, _text = controller.transcribe_audio_file(str(last_path))
 
     assert ok is False
-    [kept] = list(recordings.iterdir())
-    assert kept.read_bytes() == b"RIFF"
-    assert str(kept) in caplog.text
+    assert not recordings.exists() or not any(recordings.iterdir())
+    [kept] = controller._unfinished_recording_store.list_recordings()
+    assert kept.path.read_bytes() == b"RIFF"
+    assert str(kept.path) in caplog.text
     controller.shutdown()
     _ = app
 

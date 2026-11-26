@@ -22,6 +22,17 @@ taking it out of this list; deleting one needs no ceremony.
   windows, which Electron apps share with the browsers, so the split between the
   two is unknown. Worth another look when a browser exposes which element took the
   paste (UI Automation's focused element after the keystroke is the untried road).
+
+- **Remove a kept copy together with its History entry** (2026-11-25). The
+  `kept_*.wav` audio of a gap or fallback transcript is never deleted
+  automatically (`docs/agents/known-limitations.md`, "Kept copies are never
+  deleted automatically"), so the recordings folder grows. Deleting a History
+  entry, or clearing History, could offer to delete the kept copy it links.
+  Gain: the folder shrinks with the user's own decision about the transcript,
+  never behind it. Why it waits: the owner's rule is that no not fully
+  transcribed audio is deleted unasked, and the offer needs a dialog in both
+  History views.
+
 - **Vocabulary profiles** (2026-09-27). Several named custom-vocabulary sets
   (for example "work", "private", "programming") with a quick switch, instead of the
   one list on the Transcription tab. Gain: domain terms without a list so long that
