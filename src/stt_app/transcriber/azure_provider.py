@@ -35,7 +35,6 @@ from ..config import (
     language_modes_for_selection,
     remote_batch_part_limit,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts, wav_seconds
 from ._http_utils import (
@@ -43,6 +42,7 @@ from ._http_utils import (
     format_ssl_error_message,
     multipart_form_data,
     normalize_transcript_text,
+    open_request,
     read_http_error_detail,
 )
 from ._pcm_audio import pcm16_wav_bytes
@@ -261,7 +261,6 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
                 filename = path.name or "audio.wav"
 
             req = self._build_request(audio_bytes, filename)
-            ssl_ctx = create_ssl_context()
             self._emit_progress(progress_text)
             # The answer comes once the whole recording is transcribed, and
             # Microsoft documents only that this runs "faster than real-time":
@@ -269,7 +268,9 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             # of the base timeout (an hour-long part is what the 120 s alone
             # cut off). Audio whose duration cannot be read keeps the base.
             timeout = self._request_timeout_s + wav_seconds(audio_source)
-            with urllib.request.urlopen(req, timeout=timeout, context=ssl_ctx) as resp:
+            with open_request(
+                req, timeout=timeout, provider_name="Azure LLM Speech"
+            ) as resp:
                 payload = resp.read()
 
             body = json.loads(payload.decode("utf-8", errors="replace"))
@@ -346,8 +347,9 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         """
         try:
             req = self._build_request(_silent_wav_bytes(), "connection-test.wav")
-            ssl_ctx = create_ssl_context()
-            with urllib.request.urlopen(req, timeout=20, context=ssl_ctx) as resp:
+            with open_request(
+                req, timeout=20, provider_name="Azure LLM Speech"
+            ) as resp:
                 if 200 <= resp.status < 300:
                     return True, "Connection OK — endpoint and key are valid."
                 return False, f"Unexpected response: HTTP {resp.status}."

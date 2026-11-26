@@ -37,7 +37,7 @@ class _Recorder:
         )
         self.requests = []
 
-    def __call__(self, request, timeout=None, context=None):
+    def __call__(self, request, timeout=None, context=None, **_kwargs):
         self.requests.append(request)
         if isinstance(self.answer, Exception):
             raise self.answer
@@ -47,7 +47,7 @@ class _Recorder:
 @pytest.fixture
 def recorder(monkeypatch):
     fake = _Recorder()
-    monkeypatch.setattr(provider_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(provider_module, "open_request", fake)
     return fake
 
 

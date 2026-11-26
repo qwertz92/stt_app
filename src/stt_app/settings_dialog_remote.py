@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
@@ -24,6 +25,7 @@ from .settings_dialog_helpers import (
     _REMOTE_PROVIDERS,
     _REMOTE_REGION_CHOICES,
     _THREAD_START_ERRORS,
+    OPENROUTER_AUDIO_NOTE,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
@@ -41,6 +43,14 @@ _REGION_ROW_LABEL = "Region"
 _AZURE_ENDPOINT_ROW_LABEL = "Endpoint"
 _CUSTOM_ENDPOINT_ROW_LABELS = ("Base URL", "API Style", "Key Command")
 _CUSTOM_KEY_ROW_LABEL = "API Key"
+# A row whose provider needs a sentence beside its name and key field.
+_PROVIDER_ROW_TOOLTIPS: dict[str, str] = {
+    "openrouter": (
+        f"{OPENROUTER_AUDIO_NOTE} One OpenRouter key works for every model in its list."
+    ),
+}
+# Engines whose import takes WAV files only (the picker offers more formats).
+_WAV_ONLY_IMPORT_ENGINES = ("meta",)
 _TEST_OK_MARK = "✓"
 _TEST_FAILED_MARK = "✗"
 _TEST_OK_COLOR = "#1b5e20"
@@ -131,6 +141,18 @@ def _mistral_transcriber_factory(**kwargs: object) -> object:
     return MistralTranscriber(**kwargs)
 
 
+def _meta_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.meta_provider import MetaTranscriber
+
+    return MetaTranscriber(**kwargs)
+
+
+def _openrouter_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.openrouter_provider import OpenRouterTranscriber
+
+    return OpenRouterTranscriber(**kwargs)
+
+
 # Maps provider name to (lazy transcriber factory, extra snapshot fields the
 # factory needs besides api_key and model).
 _CONNECTION_TESTER_FACTORIES: dict[
@@ -153,6 +175,8 @@ _CONNECTION_TESTER_FACTORIES: dict[
         ("language_mode", "region"),
     ),
     "mistral": (_mistral_transcriber_factory, ("language_mode",)),
+    "meta": (_meta_transcriber_factory, ("language_mode",)),
+    "openrouter": (_openrouter_transcriber_factory, ("language_mode",)),
     "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
@@ -287,6 +311,8 @@ class _RemoteProvidersMixin:
         self.funasr_key_edit = self._provider_key_edits["funasr"]
         self.speechmatics_key_edit = self._provider_key_edits["speechmatics"]
         self.mistral_key_edit = self._provider_key_edits["mistral"]
+        self.meta_key_edit = self._provider_key_edits["meta"]
+        self.openrouter_key_edit = self._provider_key_edits["openrouter"]
 
         layout.addWidget(self._build_custom_endpoint_group(label_width, badge_width))
 
@@ -444,6 +470,10 @@ class _RemoteProvidersMixin:
         )
 
         title_label = QtWidgets.QLabel(title)
+        row_tooltip = _PROVIDER_ROW_TOOLTIPS.get(provider, "")
+        if row_tooltip:
+            title_label.setToolTip(row_tooltip)
+            key_field.setToolTip(row_tooltip)
         title_label.setFixedWidth(label_width)
         title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         grid.addWidget(
@@ -885,9 +915,42 @@ class _RemoteProvidersMixin:
             return None
         return f"No API key configured for {self._provider_label(engine_name)}."
 
+    def _import_file_issue(self, engine: str) -> str | None:
+        """Why the selected file cannot go to this engine, known before Start.
+
+        Meta takes WAV only (`_wav_for_meta` refuses anything else, but only
+        once the job has started); the file picker offers more formats.
+        """
+        path = getattr(self, "_selected_import_file_path", "")
+        if engine not in _WAV_ONLY_IMPORT_ENGINES or not path:
+            return None
+        if Path(path).suffix.lower() == ".wav":
+            return None
+        return (
+            f"{self._provider_label(engine)} takes WAV files only; convert this "
+            "file or pick another engine."
+        )
+
+    def _import_start_allowed(self) -> bool:
+        """Whether Start may run: a file that exists, and an engine that takes it."""
+        path = getattr(self, "_selected_import_file_path", "")
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        return (
+            bool(path)
+            and Path(path).is_file()
+            and self._import_file_issue(engine) is None
+        )
+
     def _update_import_engine_note(self) -> None:
+        """The status line under the Import Service, and Start with it."""
         if not hasattr(self, "import_engine_combo"):
             return
+        self._write_import_engine_note()
+        # Never while an import runs: Start is disabled for its duration.
+        if not self._import_progress_timer.isActive():
+            self.import_start_button.setEnabled(self._import_start_allowed())
+
+    def _write_import_engine_note(self) -> None:
         engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
         selected_model = (
             str(self.import_model_combo.currentData() or "")
@@ -901,6 +964,12 @@ class _RemoteProvidersMixin:
             self.import_engine_note.setText("")
             return
         credential_issue = self._import_engine_credential_issue(engine)
+        file_issue = self._import_file_issue(engine)
+        if file_issue is not None:
+            # No key makes the file acceptable, so this comes first.
+            self.import_engine_note.setStyleSheet("color: #b71c1c;")
+            self.import_engine_note.setText(file_issue)
+            return
         if credential_issue is None:
             self.import_engine_note.setStyleSheet("color: #555;")
             model_text = f" using model '{selected_model}'." if selected_model else "."

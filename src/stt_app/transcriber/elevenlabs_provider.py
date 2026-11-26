@@ -21,7 +21,6 @@ from ..config import (
     ELEVENLABS_MODELS,
     language_modes_for_selection,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import (
     audio_content_type,
@@ -29,6 +28,7 @@ from ._http_utils import (
     http_error_suffix,
     multipart_form_data,
     normalize_transcript_text,
+    open_request,
     read_http_error_detail,
 )
 from .base import (
@@ -245,12 +245,11 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                 filename = path.name or "audio.wav"
 
             req = self._build_request(audio_bytes, filename)
-            ssl_ctx = create_ssl_context()
             self._emit_progress(
                 "Uploading audio to ElevenLabs and waiting for transcription..."
             )
-            with urllib.request.urlopen(
-                req, timeout=self._request_timeout_s, context=ssl_ctx
+            with open_request(
+                req, timeout=self._request_timeout_s, provider_name="ElevenLabs"
             ) as resp:
                 payload = resp.read()
 
@@ -301,8 +300,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
         )
         req.add_header("xi-api-key", self._auth_header())
         try:
-            ssl_ctx = create_ssl_context()
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
+            with open_request(req, timeout=10, provider_name="ElevenLabs") as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

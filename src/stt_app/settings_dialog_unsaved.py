@@ -129,6 +129,7 @@ class _UnsavedChangesMixin:
     # an `id()` like the others: the tuple is replaced on every Refresh, so
     # its id would differ from the baseline's even for an identical list.
     _CUSTOM_MODELS_KEY = "custom_models"
+    _OPENROUTER_MODELS_KEY = "openrouter_models"
 
     def _unsaved_state_values(self) -> dict[int | str, object]:
         """The fingerprint: every watched widget, plus three pending states
@@ -149,6 +150,7 @@ class _UnsavedChangesMixin:
         )
         # A Refresh that changed the list is written by Save.
         values[self._CUSTOM_MODELS_KEY] = self._custom_fetched_models
+        values[self._OPENROUTER_MODELS_KEY] = self._openrouter_fetched_models
         return values
 
     def has_unsaved_changes(self) -> bool:

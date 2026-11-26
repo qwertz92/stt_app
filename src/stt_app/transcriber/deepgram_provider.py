@@ -36,9 +36,8 @@ from ..config import (
     normalize_deepgram_region,
     parse_custom_vocabulary,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import audio_content_type, http_error_suffix
+from ._http_utils import audio_content_type, http_error_suffix, open_request
 from .base import (
     AudioInput,
     ITranscriber,
@@ -357,11 +356,10 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             req.add_header("Authorization", f"Token {self._api_key}")
             req.add_header("Content-Type", audio_content_type(filename))
 
-            ssl_ctx = create_ssl_context()
             self._emit_progress(
                 "Uploading audio to Deepgram and waiting for transcription..."
             )
-            with urllib.request.urlopen(req, timeout=120, context=ssl_ctx) as resp:
+            with open_request(req, timeout=120, provider_name="Deepgram") as resp:
                 body = json.loads(resp.read().decode("utf-8"))
 
             # Extract transcript from response.
@@ -431,8 +429,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         req.add_header("Authorization", f"Token {self._api_key}")
 
         try:
-            ssl_ctx = create_ssl_context()
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
+            with open_request(req, timeout=10, provider_name="Deepgram") as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

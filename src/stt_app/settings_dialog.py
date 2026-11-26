@@ -81,7 +81,7 @@ from .settings_dialog_local import _LocalModelsMixin
 from .settings_dialog_persistence import _PersistenceMixin
 from .settings_dialog_remote import _RemoteProvidersMixin
 from .settings_dialog_unsaved import _UnsavedChangesMixin
-from .settings_store import SettingsStore, listed_custom_models
+from .settings_store import SettingsStore, listed_custom_models, listed_models
 from .transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     delete_cached_model,
@@ -138,7 +138,7 @@ class SettingsDialog(
 ):
     connection_test_finished = QtCore.Signal(int, bool, str)
     # fetch id, ok, model ids (tuple) or the error text
-    custom_models_fetch_finished = QtCore.Signal(int, bool, object)
+    models_fetch_finished = QtCore.Signal(int, bool, object)
     import_transcription_finished = QtCore.Signal(bool, str)
     import_transcription_progress = QtCore.Signal(str)
     local_model_scan_finished = QtCore.Signal(int, str, object)
@@ -282,11 +282,20 @@ class SettingsDialog(
             self._loaded_settings
         )
         self._custom_models_by_endpoint: dict[str, tuple[str, ...]] = {}
-        self._custom_models_fetch_endpoint = ""
-        self._custom_model_note = ""
-        self._custom_model_note_error = False
-        self._custom_models_fetch_id = 0
-        self._active_custom_models_fetch_thread: threading.Thread | None = None
+        # OpenRouter's list (`AppSettings.openrouter_models`): its URL is
+        # fixed, so there is one list and no per-URL bookkeeping.
+        self._openrouter_fetched_models: tuple[str, ...] = listed_models(
+            self._loaded_settings, "openrouter"
+        )
+        # The engine the running (or last) Refresh was started for, and the
+        # note and its error flag under the Model row, per engine of
+        # `LISTED_MODEL_ENGINES`: a Refresh of one engine must not paint its
+        # note under the other's picker.
+        self._models_fetch_engine = "custom"
+        self._models_fetch_endpoint = ""
+        self._model_list_notes: dict[str, tuple[str, bool]] = {}
+        self._models_fetch_id = 0
+        self._active_models_fetch_thread: threading.Thread | None = None
         self._import_model_values: dict[str, str] = {
             "local": self._loaded_settings.model_size,
             **self._remote_model_values,
@@ -345,7 +354,7 @@ class SettingsDialog(
         self.resize(self._default_dialog_size)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
-        self.custom_models_fetch_finished.connect(self._on_custom_models_fetched)
+        self.models_fetch_finished.connect(self._on_models_fetched)
         self.import_transcription_progress.connect(
             self._on_import_transcription_progress
         )
@@ -1004,7 +1013,7 @@ class SettingsDialog(
             or self._local_model_download_is_running()
             or self._active_benchmark_thread is not None
             or self._active_connection_test_thread is not None
-            or self._active_custom_models_fetch_thread is not None
+            or self._active_models_fetch_thread is not None
             or self._active_update_check_thread is not None
             or self._import_progress_started_at is not None
         )

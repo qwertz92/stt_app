@@ -5,7 +5,7 @@ For every clip given on the command line:
 
   * one batch request for EVERY remote engine the app offers (AssemblyAI,
     Groq, OpenAI, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR,
-    Speechmatics, Mistral and the custom endpoint), each with the engine's
+    Speechmatics, Mistral, Meta, OpenRouter and the custom endpoint), each with the engine's
     default model and through the app's own transcriber,
   * one streaming session for each engine that has streaming (AssemblyAI and
     Deepgram): the clip is pushed at real-time pace (100 ms of audio every

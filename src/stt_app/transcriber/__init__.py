@@ -30,8 +30,10 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
         LocalFasterWhisperTranscriber as LocalFasterWhisperTranscriber,
     )
     from .local_faster_whisper import find_cached_models as find_cached_models
+    from .meta_provider import MetaTranscriber as MetaTranscriber
     from .mistral_provider import MistralTranscriber as MistralTranscriber
     from .openai_provider import OpenAITranscriber as OpenAITranscriber
+    from .openrouter_provider import OpenRouterTranscriber as OpenRouterTranscriber
     from .speechmatics_provider import (
         SpeechmaticsTranscriber as SpeechmaticsTranscriber,
     )
@@ -46,8 +48,10 @@ _LAZY_ATTRIBUTES = {
     "GroqTranscriber": ".groq_provider",
     "ITranscriber": ".base",
     "LocalFasterWhisperTranscriber": ".local_faster_whisper",
+    "MetaTranscriber": ".meta_provider",
     "MistralTranscriber": ".mistral_provider",
     "OpenAITranscriber": ".openai_provider",
+    "OpenRouterTranscriber": ".openrouter_provider",
     "SpeechmaticsTranscriber": ".speechmatics_provider",
     "TranscriptionError": ".base",
     "create_transcriber": ".factory",

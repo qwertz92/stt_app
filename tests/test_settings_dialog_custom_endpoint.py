@@ -47,13 +47,13 @@ def test_the_fields_are_populated_and_the_model_row_is_editable():
         assert dialog.custom_api_mode_combo.currentData() == "chat"
         assert dialog.remote_model_combo.isEditable()
         assert dialog.remote_model_combo.currentText() == "whisper-1"
-        assert not dialog.custom_fetch_models_button.isHidden()
+        assert not dialog.fetch_models_button.isHidden()
         # The key command alone makes the endpoint testable.
         assert dialog._provider_test_buttons["custom"].isEnabled()
 
         dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("openai"))
         assert not dialog.remote_model_combo.isEditable()
-        assert dialog.custom_fetch_models_button.isHidden()
+        assert dialog.fetch_models_button.isHidden()
     finally:
         dialog.deleteLater()
 
@@ -115,7 +115,7 @@ def test_fetch_models_fills_the_combo_from_the_typed_fields(monkeypatch):
         dialog.custom_endpoint_edit.setText("http://localhost:8000/v1")
         monkeypatch.setattr(threading, "Thread", _ImmediateThread)
 
-        dialog._fetch_custom_models()
+        dialog._fetch_models()
 
         assert seen == [
             {
@@ -133,7 +133,7 @@ def test_fetch_models_fills_the_combo_from_the_typed_fields(monkeypatch):
         # The typed model is kept.
         assert dialog.remote_model_combo.currentText() == "whisper-1"
         assert "offers 2 models" in dialog.remote_model_note_label.text()
-        assert dialog.custom_fetch_models_button.isEnabled()
+        assert dialog.fetch_models_button.isEnabled()
         assert dialog._background_work_active() is False
         # The list is saved with the settings, in the endpoint's order, so
         # the combo offers it again after a restart.
@@ -201,7 +201,7 @@ def test_a_refresh_that_changed_the_list_is_an_unsaved_change(monkeypatch):
     )
     try:
         monkeypatch.setattr(threading, "Thread", _ImmediateThread)
-        dialog._fetch_custom_models()
+        dialog._fetch_models()
         assert dialog._custom_fetched_models == ("new-model",)
         assert dialog.has_unsaved_changes()
 
@@ -252,7 +252,7 @@ def test_picking_the_current_list_entry_after_typing_replaces_the_typed_text(
     )
     try:
         monkeypatch.setattr(threading, "Thread", _ImmediateThread)
-        dialog._fetch_custom_models()
+        dialog._fetch_models()
         combo = dialog.remote_model_combo
         assert [combo.itemData(i) for i in range(combo.count())] == ["B", "A"]
         dialog.show()
@@ -299,11 +299,11 @@ def test_a_failed_fetch_is_reported_in_the_note(monkeypatch):
     dialog, _store = _dialog()
     try:
         monkeypatch.setattr(threading, "Thread", _ImmediateThread)
-        dialog._fetch_custom_models()
+        dialog._fetch_models()
         assert "Could not fetch models: HTTP 401 refused" in (
             dialog.remote_model_note_label.text()
         )
-        assert dialog.custom_fetch_models_button.isEnabled()
+        assert dialog.fetch_models_button.isEnabled()
     finally:
         dialog.deleteLater()
 
@@ -320,10 +320,10 @@ def test_a_fetch_that_cannot_start_gives_the_button_back(monkeypatch, error):
     dialog, _store = _dialog()
     try:
         monkeypatch.setattr(threading, "Thread", _RefusingThread)
-        dialog._fetch_custom_models()
-        assert dialog._active_custom_models_fetch_thread is None
+        dialog._fetch_models()
+        assert dialog._active_models_fetch_thread is None
         assert dialog._background_work_active() is False
-        assert dialog.custom_fetch_models_button.isEnabled()
+        assert dialog.fetch_models_button.isEnabled()
         assert "Could not start the model fetch" in (
             dialog.remote_model_note_label.text()
         )
@@ -351,10 +351,8 @@ def _settings_with_a_list_from_a() -> AppSettings:
         )
     )
     try:
-        dialog._custom_models_fetch_endpoint = _ENDPOINT_A
-        dialog._on_custom_models_fetched(
-            dialog._custom_models_fetch_id, True, ("a-model", "a-other")
-        )
+        dialog._models_fetch_endpoint = _ENDPOINT_A
+        dialog._on_models_fetched(dialog._models_fetch_id, True, ("a-model", "a-other"))
         dialog._save()
         assert store.saved is not None
         return store.saved
@@ -424,12 +422,217 @@ def test_a_refresh_that_lists_nothing_keeps_the_saved_list():
     stored = _settings_with_a_list_from_a()
     dialog, _store = _dialog(stored)
     try:
-        dialog._custom_models_fetch_endpoint = _ENDPOINT_A
-        dialog._on_custom_models_fetched(dialog._custom_models_fetch_id, True, ())
+        dialog._models_fetch_endpoint = _ENDPOINT_A
+        dialog._on_models_fetched(dialog._models_fetch_id, True, ())
 
         assert "a-other" in _listed_models(dialog)
         note = dialog.remote_model_note_label.text()
         assert "listed no models" in note and "kept" in note
         assert not dialog.has_unsaved_changes()
+    finally:
+        dialog.deleteLater()
+
+
+# -- OpenRouter: the same editable model row and Refresh, its own list --------
+
+_OPENROUTER = AppSettings(engine="openrouter", has_openrouter_key=True)
+
+
+def _openrouter_dialog(
+    settings: AppSettings = _OPENROUTER, secrets: dict[str, str] | None = None
+):
+    return _dialog(settings, secrets if secrets is not None else {"openrouter": "k"})
+
+
+def _fake_openrouter(monkeypatch, seen: list[dict], ids=("b/model", "a/model")):
+    from stt_app.transcriber import openrouter_provider
+
+    class _FakeTranscriber:
+        def __init__(self, **kwargs):
+            seen.append(kwargs)
+
+        def list_models(self):
+            return [CustomEndpointModel(model_id) for model_id in ids]
+
+    monkeypatch.setattr(openrouter_provider, "OpenRouterTranscriber", _FakeTranscriber)
+
+
+def test_openrouter_shows_the_editable_model_row_with_its_default():
+    dialog, _store = _openrouter_dialog()
+    try:
+        assert dialog.remote_model_combo.isEditable()
+        assert dialog.remote_model_combo.currentText() == "openai/gpt-transcribe"
+        assert not dialog.fetch_models_button.isHidden()
+        assert "OpenRouter" in dialog.fetch_models_button.toolTip()
+        assert "output_modalities=transcription" in dialog.fetch_models_button.toolTip()
+        placeholder = dialog.remote_model_combo.lineEdit().placeholderText()
+        assert "openai/gpt-transcribe" in placeholder
+        # Its note is its own: it names OpenRouter and needs no base URL.
+        assert "OpenRouter" in dialog.remote_model_note_label.text()
+        assert "Providers tab" not in dialog.remote_model_note_label.text()
+        assert dialog._provider_test_buttons["openrouter"].isEnabled()
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_refresh_of_openrouter_lists_the_models_without_the_custom_fields(
+    monkeypatch,
+):
+    seen: list[dict] = []
+    _fake_openrouter(monkeypatch, seen)
+    dialog, store = _openrouter_dialog(secrets={})
+    try:
+        monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+
+        dialog._fetch_models()
+
+        # Public list: built to list only, with whatever key is entered (none).
+        assert seen == [{"api_key": "", "listing_only": True}]
+        combo = dialog.remote_model_combo
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            "openai/gpt-transcribe",
+            "b/model",
+            "a/model",
+        ]
+        # Without a key the note under the row is the missing-key warning (it
+        # takes precedence); the Refresh result is kept behind it.
+        assert "No OpenRouter API key yet" in dialog.remote_model_note_label.text()
+        assert (
+            "OpenRouter offers 2 models, but not 'openai/gpt-transcribe'"
+            in (dialog._model_list_notes["openrouter"][0])
+        )
+        assert dialog.fetch_models_button.isEnabled()
+        assert dialog.has_unsaved_changes()
+
+        dialog._save()
+
+        assert store.saved is not None
+        assert store.saved.openrouter_models == ("b/model", "a/model")
+        assert store.saved.openrouter_model == "openai/gpt-transcribe"
+        # The custom endpoint's own list is not touched.
+        assert store.saved.custom_models == ()
+        assert not dialog.has_unsaved_changes()
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_saved_openrouter_list_is_offered_after_a_restart():
+    dialog, store = _openrouter_dialog(
+        AppSettings(
+            engine="openrouter",
+            has_openrouter_key=True,
+            openrouter_model="b/model",
+            openrouter_models=("b/model", "a/model"),
+        )
+    )
+    try:
+        combo = dialog.remote_model_combo
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            "b/model",
+            "a/model",
+        ]
+        assert "2 models listed at the last Refresh" in (
+            dialog.remote_model_note_label.text()
+        )
+        assert not dialog.has_unsaved_changes()
+        dialog._save()
+        assert store.saved is None, "an untouched Save rewrote the file"
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_typed_openrouter_model_is_saved_and_an_empty_one_is_the_default():
+    dialog, store = _openrouter_dialog()
+    try:
+        dialog.remote_model_combo.lineEdit().textEdited.emit("google/chirp-3")
+        assert dialog.has_unsaved_changes()
+        dialog._save()
+        assert store.saved is not None
+        assert store.saved.openrouter_model == "google/chirp-3"
+        assert store.saved.custom_model == ""
+
+        dialog.remote_model_combo.lineEdit().textEdited.emit("   ")
+        assert dialog._remote_model_value_for_provider("openrouter") == (
+            "openai/gpt-transcribe"
+        )
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_two_listed_engines_keep_their_own_lists_and_notes(monkeypatch):
+    """A Refresh of one engine paints neither its list nor its note under the
+    other's picker."""
+    seen: list[dict] = []
+    _fake_openrouter(monkeypatch, seen)
+    dialog, _store = _dialog(
+        AppSettings(
+            engine="openrouter",
+            custom_endpoint="http://x/v1",
+            custom_model="whisper-1",
+            custom_models=("custom-only",),
+            custom_models_endpoint="http://x/v1",
+            custom_key_command="print-token",
+        ),
+        secrets={"openrouter": "k"},
+    )
+    try:
+        monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+        dialog._fetch_models()
+        assert dialog._openrouter_fetched_models == ("b/model", "a/model")
+        assert dialog._custom_fetched_models == ("custom-only",)
+
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("custom"))
+        combo = dialog.remote_model_combo
+        assert [combo.itemData(i) for i in range(combo.count())] == [
+            "whisper-1",
+            "custom-only",
+        ]
+        assert "OpenRouter" not in dialog.remote_model_note_label.text()
+        assert dialog.fetch_models_button.toolTip().startswith(
+            "Ask the custom endpoint"
+        )
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_refresh_that_lists_nothing_keeps_openrouters_saved_list():
+    dialog, _store = _openrouter_dialog(
+        AppSettings(
+            engine="openrouter",
+            has_openrouter_key=True,
+            openrouter_models=("a/model",),
+        )
+    )
+    try:
+        dialog._models_fetch_engine = "openrouter"
+        dialog._on_models_fetched(dialog._models_fetch_id, True, ())
+
+        assert dialog._openrouter_fetched_models == ("a/model",)
+        note = dialog.remote_model_note_label.text()
+        assert "OpenRouter listed no models" in note and "kept" in note
+        assert not dialog.has_unsaved_changes()
+    finally:
+        dialog.deleteLater()
+
+
+def test_a_failed_refresh_of_openrouter_says_why(monkeypatch):
+    from stt_app.transcriber import openrouter_provider
+
+    class _Failing:
+        def __init__(self, **_kwargs):
+            pass
+
+        def list_models(self):
+            raise RuntimeError("network down")
+
+    monkeypatch.setattr(openrouter_provider, "OpenRouterTranscriber", _Failing)
+    dialog, _store = _openrouter_dialog()
+    try:
+        monkeypatch.setattr(threading, "Thread", _ImmediateThread)
+        dialog._fetch_models()
+        assert "Could not fetch models: network down" in (
+            dialog.remote_model_note_label.text()
+        )
+        assert dialog.fetch_models_button.isEnabled()
     finally:
         dialog.deleteLater()

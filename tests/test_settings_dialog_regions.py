@@ -81,7 +81,12 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
     dialog, store, app = _dialog(
         tmp_path,
         AppSettings(),
-        secrets={"speechmatics": "sm-key", "mistral": "mi-key"},
+        secrets={
+            "speechmatics": "sm-key",
+            "mistral": "mi-key",
+            "meta": "me-key",
+            "openrouter": "or-key",
+        },
     )
     try:
         dialog.completion_beep_checkbox.setChecked(
@@ -92,6 +97,8 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
         saved = store.load()
         assert saved.has_speechmatics_key is True
         assert saved.has_mistral_key is True
+        assert saved.has_meta_key is True
+        assert saved.has_openrouter_key is True
     finally:
         dialog.deleteLater()
     _ = app
@@ -103,6 +110,8 @@ def test_the_new_engines_have_a_label_models_and_a_key_row(tmp_path):
         for engine, label in (
             ("speechmatics", "Speechmatics"),
             ("mistral", "Mistral (Voxtral)"),
+            ("meta", "Meta (Muse Voice)"),
+            ("openrouter", "OpenRouter"),
         ):
             index = dialog.engine_combo.findData(engine)
             assert index >= 0, engine
@@ -244,6 +253,50 @@ def test_mistral_connection_test_builds_the_mistral_transcriber(tmp_path):
 
         assert error is None
         assert type(tester.__self__).__name__ == "MistralTranscriber"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_meta_connection_test_builds_the_meta_transcriber(tmp_path):
+    dialog, _store, app = _dialog(tmp_path, AppSettings(), secrets={"meta": "k"})
+    try:
+        snapshot = dialog._connection_test_snapshot(
+            "meta", dialog._provider_key_edits["meta"]
+        )
+
+        tester, error = remote_module._build_connection_tester("meta", snapshot)
+
+        assert error is None
+        assert type(tester.__self__).__name__ == "MetaTranscriber"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_openrouter_connection_test_builds_the_openrouter_transcriber(tmp_path):
+    dialog, _store, app = _dialog(tmp_path, AppSettings(), secrets={"openrouter": "k"})
+    try:
+        snapshot = dialog._connection_test_snapshot(
+            "openrouter", dialog._provider_key_edits["openrouter"]
+        )
+
+        tester, error = remote_module._build_connection_tester("openrouter", snapshot)
+
+        assert error is None
+        assert type(tester.__self__).__name__ == "OpenRouterTranscriber"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_the_openrouter_row_says_where_the_audio_goes(tmp_path):
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        tooltip = dialog._provider_key_edits["openrouter"].toolTip()
+        assert "sent to OpenRouter" in tooltip
+        assert "forwards it to the vendor of the model" in tooltip
+        assert dialog._provider_key_edits["meta"].toolTip() == ""
     finally:
         dialog.deleteLater()
     _ = app

@@ -6,8 +6,10 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 from stt_app import clipboard_copy
 from stt_app.config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
+    ENGINE_LANGUAGE_MODES,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    language_modes_for_selection,
 )
 from stt_app.dialog_style import make_label_selectable
 from stt_app.settings_dialog import SettingsDialog
@@ -388,6 +390,8 @@ def test_dynamic_notes_fit_their_reserved_area(
             "funasr",
             "speechmatics",
             "mistral",
+            "meta",
+            "openrouter",
             "custom",
         ):
             dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
@@ -823,6 +827,59 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
             f"{point_size} pt and General needs {needed} px plus {chrome} px"
         )
     assert needed + chrome <= design_height, (needed, chrome, design_height)
+
+
+@pytest.mark.parametrize("engine", ["meta", "openrouter"])
+def test_a_batch_only_new_engine_offers_no_streaming_and_its_own_languages(
+    dialog: SettingsDialog, engine: str
+) -> None:
+    """Meta and OpenRouter are batch-only. The Mode picker keeps its Streaming
+    entry (Mode is chosen first and filters the engine list), so the engine's
+    row is hidden once Streaming is picked, and in batch mode the language
+    picker lists exactly what the engine accepts."""
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
+    QtWidgets.QApplication.processEvents()
+
+    languages = tuple(
+        dialog.language_combo.itemData(i) for i in range(dialog.language_combo.count())
+    )
+    assert languages == language_modes_for_selection(engine)
+    assert languages == ENGINE_LANGUAGE_MODES[engine]
+
+    # The selected engine's own row stays visible; leave it, then Streaming mode
+    # hides the batch-only engine.
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("assemblyai"))
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
+    QtWidgets.QApplication.processEvents()
+    index = dialog.engine_combo.findData(engine)
+    assert dialog.engine_combo.view().isRowHidden(index)
+
+
+def test_providers_tab_fits_the_default_dialog_height_without_scrolling(
+    dialog: SettingsDialog,
+) -> None:
+    """Meta and OpenRouter made the Providers tab 877 px tall (818 with nine
+    rows), more than the 829 px viewport of the old 960 px default, so it
+    scrolled by 48 px; the default height was raised to 1010. Measured against
+    the design height, as for General above."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    _switch_to_tab(dialog, "Providers")
+    for _ in range(5):
+        app.processEvents()
+
+    page = dialog.tabs.currentWidget()
+    needed = page.widget().minimumSizeHint().height()
+    chrome = dialog.height() - page.viewport().height()
+    point_size = app.font().pointSizeF()
+    if point_size != 9.0:
+        pytest.skip(f"the height budget was measured at 9 pt, not {point_size} pt")
+    assert needed + chrome <= _DEFAULT_SETTINGS_DIALOG_SIZE.height(), (
+        needed,
+        chrome,
+        _DEFAULT_SETTINGS_DIALOG_SIZE.height(),
+    )
 
 
 def test_audio_values_are_greyed_out_while_their_checkbox_is_off(
@@ -2142,6 +2199,79 @@ def test_the_import_service_combo_stays_put_when_its_note_comes_and_goes(
     app.processEvents()
     assert dialog.import_engine_note.isVisibleTo(dialog)
     assert combo_y() == local_y
+
+
+def test_meta_import_of_a_file_that_is_not_wav_is_refused_before_start(
+    dialog: SettingsDialog, tmp_path
+) -> None:
+    """Meta takes WAV only, but the picker offers mp3, m4a, flac and more; the
+    refusal used to come after the job had started."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    mp3 = tmp_path / "talk.mp3"
+    mp3.write_bytes(b"ID3")
+    wav = tmp_path / "talk.wav"
+    wav.write_bytes(b"RIFF")
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("groq")
+    )
+    dialog._set_selected_import_file(str(mp3))
+    assert dialog.import_start_button.isEnabled()
+
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("meta")
+    )
+    app.processEvents()
+    assert not dialog.import_start_button.isEnabled()
+    assert dialog.import_engine_note.text() == (
+        "Meta (Muse Voice) takes WAV files only; convert this file or pick "
+        "another engine."
+    )
+
+    dialog._set_selected_import_file(str(wav))
+    assert dialog.import_start_button.isEnabled()
+    assert "takes WAV files only" not in dialog.import_engine_note.text()
+
+    dialog._set_selected_import_file(str(mp3))
+    assert not dialog.import_start_button.isEnabled()
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("local")
+    )
+    app.processEvents()
+    assert dialog.import_start_button.isEnabled()
+
+
+def test_the_openrouter_note_says_where_the_audio_goes(
+    dialog: SettingsDialog,
+) -> None:
+    """The sentence was only a tooltip on the Providers row; it is now in the
+    note under the model row where the engine is chosen, and that note stays
+    inside its two reserved lines at the dialog's minimum width."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.tabs.setCurrentIndex(0)
+    # With a key; without one the note is the red "No OpenRouter API key yet".
+    dialog.openrouter_key_edit.setText("sk-or-v1-test")
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("openrouter"))
+    app.processEvents()
+
+    label = dialog.remote_model_note_label
+    assert "forwards it to the vendor of the model you pick" in label.text()
+    dialog.resize(dialog.minimumWidth(), dialog.height())
+    app.processEvents()
+    assert label.heightForWidth(label.width()) <= label.height()
+
+    # The note's row is the same size as another batch-only engine's, so the
+    # sentence moves nothing below it and adds no scrollbar.
+    openrouter_height = label.height()
+    openrouter_below = dialog.engine_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
+    app.processEvents()
+    assert label.height() == openrouter_height
+    assert (
+        dialog.engine_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y() == openrouter_below
+    )
 
 
 def test_the_audio_tab_needs_no_scrollbar_when_the_dialog_can_show_it(

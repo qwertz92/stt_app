@@ -1316,6 +1316,40 @@ MISTRAL_LANGUAGE_MODES = (
     "uk",
     "vi",
 )
+# The 25 languages Muse Voice Transcribe lists, with the English names its
+# `languageBias` field takes ("a list of language names, such as
+# ["English", "French"]"; https://dev.meta.ai/docs/speech-to-text, read
+# 2026-11-26). The page lists no ISO codes, so the app's code -> Meta's name is
+# this table; the model is "trained on 70+ languages" but only these are
+# validated, and a code outside the table is sent as Auto.
+META_LANGUAGE_NAMES: dict[str, str] = {
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "nl": "Dutch",
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "he": "Hebrew",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "kn": "Kannada",
+    "ko": "Korean",
+    "ms": "Malay",
+    "zh": "Mandarin Chinese",
+    "mr": "Marathi",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "tl": "Tagalog",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "th": "Thai",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+}
+META_LANGUAGE_MODES = ("auto", *META_LANGUAGE_NAMES)
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
     "local",
@@ -1329,6 +1363,8 @@ VALID_ENGINES = (
     "custom",
     "speechmatics",
     "mistral",
+    "meta",
+    "openrouter",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1342,9 +1378,14 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # A bring-your-own endpoint: which languages work is the served model's
     # business, so every code the app knows is offered and sent as a hint.
     "custom": VALID_LANGUAGE_MODES,
+    # OpenRouter forwards to whichever model is picked; its `language` is "an
+    # ISO-639-1 code", so every code the app knows is offered as a hint, as for
+    # the custom endpoint.
+    "openrouter": VALID_LANGUAGE_MODES,
     # The default model's list; Enhanced has its own.
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
+    "meta": META_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
 LOCAL_BATCH_ONLY_MODELS = (
@@ -1445,7 +1486,9 @@ def language_modes_for_selection(
 # query parameter, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
 # entries (Enhanced), Mistral as repeated `context_bias`
-# fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
+# fields, Meta as the `keywords` list of its request part, OpenRouter as the
+# multipart `prompt` (honoured by the providers behind it that support
+# contextual prompting, ignored by the rest). ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
@@ -1455,6 +1498,8 @@ CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "custom",
     "speechmatics",
     "mistral",
+    "meta",
+    "openrouter",
 )
 # A model of one of those engines that has no biasing input. Melia 1:
 # "Custom Dictionary: ... Not yet."
@@ -1473,7 +1518,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced, Mistral, and a custom endpoint"
+    "Enhanced, Mistral, Meta, OpenRouter, and a custom endpoint"
 )
 
 
@@ -1581,6 +1626,8 @@ ENGINE_LABELS: dict[str, str] = {
     "funasr": "Fun-ASR / Alibaba",
     "speechmatics": "Speechmatics",
     "mistral": "Mistral (Voxtral)",
+    "meta": "Meta (Muse Voice)",
+    "openrouter": "OpenRouter",
     "custom": "Custom endpoint",
 }
 
@@ -1828,6 +1875,25 @@ def normalize_speechmatics_region(value: object) -> str:
 MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3")
 DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 
+# Meta Muse Voice Transcribe (launched 2026-09-01), the one model of Meta's
+# speech API: `model` is "muse-voice-transcribe-1.0" in the batch request's
+# example (https://dev.meta.ai/docs/speech-to-text, read 2026-11-26).
+META_MODELS = ("muse-voice-transcribe-1.0",)
+DEFAULT_META_MODEL = "muse-voice-transcribe-1.0"
+
+# OpenRouter's transcription endpoint (https://openrouter.ai/docs/api/
+# api-reference/stt/create-transcription.md, read 2026-11-26). The base URL is
+# fixed. The model is free text with a list the user refreshes
+# (`OPENROUTER_MODELS_QUERY`: the public list of models with a transcription
+# output, 30 on 2026-11-26, against 469 chat models in the plain list); no
+# roster is kept here, because the list moves faster than a release (the
+# research of 2026-11-24 found two vendors' new models missing a week or two
+# after launch). The default is OpenAI's current model, `openai/gpt-transcribe`,
+# which is in that list on 2026-11-26 and costs $0.27/h there.
+OPENROUTER_API_BASE = "https://openrouter.ai/api/v1"
+OPENROUTER_MODELS_QUERY = "output_modalities=transcription"
+DEFAULT_OPENROUTER_MODEL = "openai/gpt-transcribe"
+
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The
 # base URL, the model and the API style are the user's; nothing is validated
@@ -1921,6 +1987,24 @@ SPEECHMATICS_MAX_REQUEST_BYTES = 999_000_000
 # one request well inside its socket timeout.
 MISTRAL_MAX_PART_SECONDS = 1800.0
 MISTRAL_MAX_REQUEST_BYTES = 500_000_000
+# Meta: "Maximum duration: 10 minutes" and "Maximum request body: 32 MB"
+# (https://dev.meta.ai/docs/speech-to-text, read 2026-11-26); a longer
+# recording is a 400, a larger body a 413. The bound sits 10 s under the
+# documented one, since the page does not say whether the limit is read
+# inclusively, and the bytes are read as decimal megabytes, the smaller of the
+# two readings. 590 s of the app's 16 kHz WAV is 18.9 MB, of a 24 kHz one 28.3.
+META_MAX_PART_SECONDS = 590.0
+META_MAX_REQUEST_BYTES = 32_000_000
+# OpenRouter's transcription endpoint (docs read 2026-11-26): "Max 25 MB" for
+# an uploaded file, and "Upstream providers time out after 60 seconds per
+# request ... Split recordings that take more than about a minute to
+# process". How long a model needs per minute of audio is not stated, so the
+# parts are the custom endpoint's chat style's 300 s (9.6 MB of the app's WAV):
+# short enough that a part is a fraction of a minute of work for a speech
+# model, long enough that a dictation is rarely split. The bytes are the
+# documented 25 MB, read as decimal megabytes.
+OPENROUTER_MAX_PART_SECONDS = CUSTOM_CHAT_MAX_PART_SECONDS
+OPENROUTER_MAX_REQUEST_BYTES = 25_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
@@ -1928,6 +2012,8 @@ REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "custom": CUSTOM_MAX_PART_SECONDS,
     "speechmatics": SPEECHMATICS_MAX_PART_SECONDS,
     "mistral": MISTRAL_MAX_PART_SECONDS,
+    "meta": META_MAX_PART_SECONDS,
+    "openrouter": OPENROUTER_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
@@ -1936,6 +2022,8 @@ REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "custom": CUSTOM_MAX_REQUEST_BYTES,
     "speechmatics": SPEECHMATICS_MAX_REQUEST_BYTES,
     "mistral": MISTRAL_MAX_REQUEST_BYTES,
+    "meta": META_MAX_REQUEST_BYTES,
+    "openrouter": OPENROUTER_MAX_REQUEST_BYTES,
 }
 # An API style whose limit differs from its engine's: (engine, api_mode) ->
 # (seconds, bytes). Only the custom endpoint has more than one style.

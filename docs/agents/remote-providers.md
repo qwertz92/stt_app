@@ -151,10 +151,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `<`) stays the test for a 200 reply that should have been JSON. The
   title is searched in the first 4 KB only: the lazy regex was quadratic on
   64 KB of unclosed `<title>` (3.95 s).
-- **Every REST call passes `create_ssl_context()`**: `urllib` ignores
-  `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
-  proxy while the SDK worked. `format_ssl_error_message` is the shared text
-  (names `SSL_CERT_FILE` too).
+- **Every REST request that carries a key is opened by
+  `_http_utils.open_request`** (2026-11-26; review finding: Meta sent its key
+  to another host on a redirect, and the OpenAI, Mistral, Deepgram,
+  ElevenLabs, Azure, Speechmatics and AssemblyAI-check requests did the same,
+  because `urllib.request.urlopen` follows redirects and copies
+  `Authorization` / `xi-api-key` to the new host: reproduced with a fake
+  vendor answering 301, 302, 303, 307 or 308 to a second localhost port). The
+  helper does three things. It passes `create_ssl_context()` (`urllib` ignores
+  `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` once failed behind a
+  TLS proxy while the SDK worked; `format_ssl_error_message` is the shared
+  text, naming `SSL_CERT_FILE` too). It installs `RedirectGuard`: **an upload
+  (a request with a body) is never redirected** -- urllib would re-send it as a
+  GET without the audio, which the vendor answers with a 405 that names
+  nothing the user can act on -- and **a GET (a key check, a poll, a model
+  list) follows a redirect only inside its origin**: the same scheme, host
+  and port, or http -> https on the default ports of one host
+  (`redirect_keeps_origin`). A same-origin redirect is followed because the
+  key then goes only to the host the user already trusts with it (a vendor
+  moving a route inside its own host); another host, another port or
+  https -> http is refused. The refusal names the engine, the HTTP status and
+  the target's scheme, host, port and path (no query), says the key was not
+  sent there, and names a likely cause: a TLS-intercepting proxy answering with
+  its sign-in page is the realistic trigger. Third, it refuses a header value
+  that cannot be sent (a key with a line break, a non-breaking space or a
+  non-ASCII letter) before any request, with a sentence that does not print
+  it; `http.client` would put the whole `Bearer <key>` into its `ValueError`.
+  Call sites (`grep -rn "open_request" src`): OpenAI x2 (upload, key check),
+  Mistral x2, ElevenLabs x2, Deepgram x2, Azure x2 (upload; the key check is a
+  one-second upload too), Speechmatics (`_request`: job upload, polls and
+  transcript fetch), Meta (upload and key check), AssemblyAI (key check
+  only), the custom endpoint and OpenRouter (upload, model list, key check).
+  Not covered: AssemblyAI's and Groq's SDK calls (their redirect handling is
+  the SDK's and was not checked); the AssemblyAI, Deepgram and Fun-ASR
+  WebSockets (not urllib); `update_checker` and `update_installer` (GitHub,
+  no key); `modelscope_mirror` (its own https-only handler, no key);
+  `_job_poll` (opens nothing itself; its callers use `open_request`).
+  Tests: `tests/test_provider_redirects.py` (every REST engine x the five
+  codes, upload and key check, and the unsafe keys).
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing
@@ -323,6 +357,189 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Parts**: 1800 s and 500,000,000 bytes ("60 minutes", "500 MB"), with a
     300 s socket timeout for the synchronous request.
   - **Not verified live**: no Mistral key exists here.
+- **Meta Muse Voice Transcribe is one synchronous multipart request
+  (`meta_provider.py`, 2026-11-26; page read that day:
+  https://dev.meta.ai/docs/speech-to-text).** `POST
+  https://api.meta.ai/v1/asr/transcribe`, `Authorization: Bearer <key>`,
+  `Accept: application/json`; multipart parts `request` (JSON, sent with
+  `Content-Type: application/json`) and `audio` (the WAV). The page gives the
+  `audio` part no content type; the app sends `audio/wav`. Engine `meta`, label
+  "Meta (Muse Voice)", one model `muse-voice-transcribe-1.0` (the page's
+  example value; the launch was 2026-09-01 per the research of 2026-11-24),
+  key under `meta`, no region. Rules:
+  - **The `request` part carries `model`, `mode`, `audioEncoding`, and
+    optionally `languageBias` and `keywords`.** `mode` is sent as
+    `PUSH_TO_TALK` (the page's default; `ENDPOINTING` and `DIARIZATION` are
+    not used) and `audioEncoding` as `WAV`, so no vendor default decides. The
+    answer is JSON: `transcript` (string), `sessionId`, `audioDurationMs`,
+    `turns` (empty in PUSH_TO_TALK); `"transcript": ""` is a valid empty
+    answer, any other shape is an error (`transcript_from_json(field=
+    "transcript")`).
+  - **Language is `languageBias`, a list of English language names** ("a list
+    of language names, such as `["English", "French"]` ... steers recognition
+    but does not force a language"). The page lists no ISO codes, so
+    `config.META_LANGUAGE_NAMES` maps the app's code to the name; the page's
+    25 languages are offered (`META_LANGUAGE_MODES`), Auto sends no field, a
+    code outside the table is sent as Auto. The model is "trained on 70+
+    languages" but only these 25 are validated, so no more are offered.
+    Differs from the research: the research said "a `languageBias` hint"
+    without the value format.
+  - **The custom vocabulary is `keywords`** (the page: a list of terms that
+    "biases recognition but does not guarantee exact spelling"), up to the
+    app's 100 terms. The page states no limit on the list; **unverified**
+    whether a long list is refused. `meta` is in
+    `config.CUSTOM_VOCABULARY_ENGINES` and its summary sentence.
+  - **WAV only, mono 16-bit, 16 or 24 kHz, 10 minutes, 32 MB.** The app's own
+    16 kHz recording goes out byte for byte. An imported **16-bit PCM** WAV in
+    another rate or in stereo is mixed down and resampled to 16 kHz mono
+    (`_wav_for_meta`, the resampler the local models use) instead of coming
+    back as a 400. **Anything else is refused before sending** with one
+    sentence, "Meta (Muse Voice) takes 16-bit PCM WAV; <file> is <what it is>.
+    Convert it to 16-bit PCM WAV first.": an 8-bit or 24-bit WAV ("8-bit WAV
+    audio"), a WAV with a float or other non-PCM format, or a file that is not
+    a WAV (MP3, M4A). The app ships no decoder for them and Meta takes nothing
+    else. (Until 2026-11-26 this paragraph said 24-bit was converted; it was
+    refused with the local models' wording, "Only 16-bit PCM WAV audio is
+    supported by this local model", and a float WAV was called "not a WAV".)
+  - **The Import Audio tab says it before Start** (2026-11-26, review): with
+    Meta chosen as the Import Service and a file whose extension is not
+    `.wav` selected, the status line under the service reads "Meta (Muse
+    Voice) takes WAV files only; convert this file or pick another engine."
+    (before any key hint) and Start stays off, until the file or the engine
+    changes (`_import_file_issue`, `_import_start_allowed`,
+    `_WAV_ONLY_IMPORT_ENGINES`). The check is the extension only: a `.wav`
+    that is not 16-bit PCM is still refused at the start, with the sentence
+    above.
+  - **The connection test has the 15 s bound** of the other key checks
+    (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
+    keeps the transcription timeout (up to 300 s).
+  - **Parts**: `META_MAX_PART_SECONDS` 590 and `META_MAX_REQUEST_BYTES`
+    32,000,000 through `remote_batch_part_limit("meta", ...)` and
+    `transcribe_in_parts`. 590, not 600: the page does not say whether "10
+    minutes" is inclusive. Socket timeout 300 s (the page gives no processing
+    time; it says only that a request that "exceeded the server budget" is a
+    500 to retry once).
+  - **Errors** go through the shared readers: 401 and 429 have fixed
+    sentences; any other status shows the vendor's message capped at 300
+    characters (`read_http_error_detail`), an HTML page (a proxy's) by its
+    title, never pasted. The page defines no JSON error body; the live 401 of
+    2026-11-26 (below) is `{"sessionId": ..., "error": {"code":
+    "invalid_api_key", "type": "authentication_error", "message":
+    "Unauthorized"}}`, which the reader unwraps. The key is scrubbed from every
+    message and every echoed body (`_scrub`, before the cut).
+  - **Test** sends one second of digital silence through the request code:
+    the page documents no endpoint that only checks a key, and "requests that
+    fail before producing a transcript, and 429 requests, are not billed", so
+    a wrong key costs nothing and a right one one second ($0.00005).
+  - **Live, without a key (2026-11-26)**: an unauthenticated `POST` of a
+    one-second WAV to the batch URL answered HTTP 401 with the body above, so
+    the host and path exist. Nothing else is verified: **unverified live, no
+    key**: that a real transcript has the documented shape, that `keywords`
+    and `languageBias` are accepted as written, the `audio` content type, and
+    German quality.
+  - **Streaming is not built**: `wss://api.meta.ai/v1/asr/realtime` cannot be
+    checked without a key; the protocol and the effort are in
+    `docs/ROADMAP.md`.
+  - **Revert**: remove `meta` from `VALID_ENGINES` and the entries beside the
+    `META_*` constants; a saved `engine: "meta"` then falls to local.
+- **OpenRouter is an engine of its own on the custom endpoint's code
+  (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
+  own entry and key, so "Custom endpoint" stays free for something else).**
+  Pages read that day: `openrouter.ai/docs/api/api-reference/stt/
+  create-transcription.md`, `.../docs/guides/overview/multimodal/stt.md`,
+  `.../docs/api-reference/limits`. `OpenRouterTranscriber` is a subclass of
+  `CustomEndpointTranscriber` that changes class attributes only (engine id,
+  name, model-list route, missing-key text, URL-advice sentences) and the key
+  check; the request, the part splitting, the error readers, the key scrub and
+  the redirect guard are that class's. Engine `openrouter`, label
+  "OpenRouter", key under `openrouter`. Rules:
+  - **Fixed base URL, transcription style only**: `POST
+    https://openrouter.ai/api/v1/audio/transcriptions`, multipart `model`,
+    `file`, optional `language`, `prompt`, `response_format=json`; the answer
+    is `{text, usage}`. No editable URL, no chat style, no key command (the
+    constructor passes `key_command=""` and the transcriptions mode), so none
+    of the custom endpoint's fields is in the OpenRouter identity
+    (`_transcriber_identity` reads them for `custom` only; pinned). Sentences
+    that tell a custom-endpoint user to "check the base URL" are replaced by
+    ones that do not point at a field that does not exist.
+  - **Model is free text with a list** (default `openai/gpt-transcribe`,
+    `config.DEFAULT_OPENROUTER_MODEL`, in the live list on 2026-11-26 at
+    $0.27/h per the research). No roster in `config.py`: the research of
+    2026-11-24 found Scribe v3 and STT-3.7 missing from OpenRouter's list a
+    week or two after launch, and dead ids still in it. A blank model is the
+    default. **No prices in the picker** (the list's price fields use
+    inconsistent units: per second for most, per hour for MAI, tokens for
+    Gemini).
+  - **The model list is `GET /models?output_modalities=transcription`**
+    (public; 30 models on 2026-11-26, shape `{"data": [{"id", "name",
+    "architecture", "pricing", ...}], "total_count", "links"}`, no `mode`
+    field), the plain `/models` being 469 chat models. The query is part of
+    the class's `_models_path`, so the base-URL validation that refuses a
+    query (right for the custom endpoint) is not in the way. **Both listed
+    engines share one fetch**: `SettingsDialog._fetch_models` (worker thread,
+    bounded: 15 s, 2 MB) builds the transcriber of the selected engine from a
+    snapshot taken on the GUI thread; `settings_store.LISTED_MODEL_ENGINES`
+    names them and `listed_models(settings, engine)` reads each one's saved
+    list (`custom_models` + `custom_models_endpoint` for the custom endpoint,
+    keyed by its URL; `openrouter_models` for OpenRouter, which has one URL).
+    The note under the Model row and the pick of the placeholder and the
+    Refresh tooltip are per engine, so a Refresh of one never paints under the
+    other's picker. **Refresh needs no key**: the dialog builds the instance
+    with `listing_only=True`, which sends no `Authorization` header unless a
+    key was entered (the live GET of 2026-11-26 carried none and answered 200).
+  - **The connection test is `GET /key`**, not the model list: the list is
+    public, so any key would pass it. The limits page says "To check the rate
+    limit or credits left on an API key, make a GET request to
+    `https://openrouter.ai/api/v1/key`" with the key as Bearer; a success is a
+    `data` object. It does not say what an invalid key returns, so any HTTP
+    error is reported through the shared reader and a 200 without a `data`
+    object is "unexpected". **Unverified live** (a valid key was never sent;
+    the unauthenticated 401 below is not this route).
+    **Credit (page read 2026-11-26)**: the `data` object documents
+    `limit_remaining` ("Remaining credits for the key, or null if
+    unlimited": the key's own cap) and `usage`, and no account balance. When
+    `limit_remaining` is 0 or below the test says "the key is valid, but its
+    own credit limit is used up" (the page names the `openrouter_key_limit`
+    error for it). **A valid key on an account without credit still passes**
+    and its first dictation fails with HTTP 402: the balance is in
+    `GET /credits` (`total_credits`, `total_usage`), which the page says needs
+    a management key, so the app cannot read it and says nothing about it.
+  - **Parts: 300 s and 25,000,000 bytes** (`OPENROUTER_MAX_PART_SECONDS`, the
+    chat style's value, and `OPENROUTER_MAX_REQUEST_BYTES`). The page says
+    "Max 25 MB" for an upload, "Upstream providers time out after 60 seconds
+    per request" and to "split recordings that take more than about a minute
+    to process"; it states no processing time per minute of audio, so 300 s
+    (9.6 MB of the app's WAV) is a judgement: a speech model needs a fraction
+    of a minute for five. A 504 or 524 shows OpenRouter's own message; the
+    413 sentence names the part size. Matches the research.
+  - **Custom vocabulary is the multipart `prompt`**, comma-joined as the custom
+    endpoint sends it. The create-transcription page lists the field ("Context
+    to guide transcription on providers that support contextual prompting")
+    and the guide says it is "forwarded on OpenAI, Azure OpenAI, Groq, and
+    Together", mapped by Alibaba, used by AssemblyAI only with prompted
+    pricing, and "other providers ignore it". So the Transcription tab's note
+    says only some models behind OpenRouter use it. `keyterms[]` was not used:
+    a model that cannot use it answers 400 ("Requests fail with 400 if the
+    model can't use keyterms").
+  - **Language** is the app's ISO code as `language` ("An ISO-639-1 code"), or
+    no field for Auto; every code the app knows is offered, as for the custom
+    endpoint.
+  - **Data**: the Providers row's tooltip says that the audio is sent to
+    OpenRouter, which forwards it to the vendor of the model picked. The
+    research found the privacy page silent on audio; no region or retention
+    claim is made.
+  - **Live, without a key (2026-11-26)**: the model list answered 200 with 30
+    models (reply saved in the lead's scratch folder, not in the repository);
+    `openai/gpt-transcribe` is among them. An unauthenticated `POST` of a
+    one-second WAV to `/audio/transcriptions` answered HTTP 401
+    `{"error": {"message": "No cookie auth credentials found", "code": 401}}`,
+    so host and path exist. **Unverified live, no key**: a real transcript, the
+    `prompt` and `language` behaviour per model, the `/key` check, a part over
+    60 s on a slow model.
+  - **Revert**: remove `openrouter` from `VALID_ENGINES` and the entries beside
+    the `OPENROUTER_*` constants, `openrouter_provider.py`, the factory branch
+    and the settings fields; the custom endpoint is unchanged by it (the
+    refactor commit only moved literals into class attributes).
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
   16 kHz WAV). `config.remote_batch_part_limit(engine, model, api_mode)`
@@ -676,14 +893,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     its `ValueError`, which reached the overlay and the log. Such a key is
     refused at construction without being echoed, and `_other_error`
     replaces any "invalid header" message.
-  - **Redirects go through `_RedirectGuard`** (2026-10-01): urllib's own
-    handler copies `Authorization` to whatever host `Location` names
-    (reproduced 127.0.0.1:A -> localhost:B; https -> http would send it
-    in clear) and turns a redirected POST into a bodiless GET answered
-    with a 405. An upload is never redirected; a model list only within
-    its origin (same scheme, host and port, or http -> https on the
-    default ports, `_redirect_keeps_origin`). A refusal names the target
-    without its query. `_open` builds the opener; tests patch `_open`.
+  - **Redirects go through `_http_utils.RedirectGuard`** (2026-10-01, moved
+    to the shared helper 2026-11-26, see "Every REST request that carries a
+    key" above); tests patch the module's `open_request`.
   - **An answer that is not a transcript is an error** (2026-10-01): an
     HTML page (a proxy's sign-in or block page answering 200) used to be
     returned as the transcript and pasted; JSON without a string `text`
@@ -731,7 +943,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     configured" target and the Import tab's credential check treat a typed
     command the same way.
   - **Model ids are free text**: the Transcription tab's remote combo is
-    editable only for `custom`, "Refresh" lists `GET {base}/models` on a
+    editable only for the engines of `LISTED_MODEL_ENGINES` (`custom` and, since
+    2026-11-26, `openrouter`, whose own entry above describes what differs),
+    "Refresh" lists `GET {base}/models` on a
     worker thread with the typed (unsaved) fields and rolls back if
     `Thread.start` fails. The list is saved by Save as `custom_models`
     (2026-10-03; in the unsaved-changes fingerprint, a list in the JSON --

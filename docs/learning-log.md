@@ -3,6 +3,66 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: no REST engine follows a redirect with its API key
+
+Structurally: one `_http_utils.open_request` (the custom endpoint's redirect guard, moved) is how
+every REST provider opens a request that carries a key.
+
+- **The defect** (review of the Meta engine): `urllib.request.urlopen` follows a 301, 302, 303, 307
+  or 308 to another host and copies `Authorization` / `xi-api-key` with it. A fake vendor redirecting
+  to a second localhost port got the key in all six cases and its JSON came back as the transcript. A
+  TLS-intercepting proxy that redirects to its sign-in page is the realistic trigger. The custom
+  endpoint had been guarded since 2026-10-01; OpenAI, Mistral, Deepgram, ElevenLabs, Azure,
+  Speechmatics, AssemblyAI's key check and the new Meta engine had not.
+- **Policy**: an upload is never redirected; a GET only inside its origin; the refusal names the
+  engine and the target host. A key with a line break or a non-ASCII character is refused before
+  the request without being printed (Meta showed `Invalid header value b'Bearer <key>...'`).
+- SDK-based engines (AssemblyAI batch, Groq) were not changed or checked.
+
+## 2026-11-26: OpenRouter as the `openrouter` engine
+
+Structurally: a second engine on the custom endpoint's code, with its own key and a fixed URL, so the
+user's "Custom endpoint" stays free; the model fetch behind the Refresh button now serves both.
+
+- **Why not a preset of the custom endpoint** (the research's recommendation of 2026-11-24): the lead
+  decided on an engine of its own. `OpenRouterTranscriber` subclasses `CustomEndpointTranscriber`;
+  the first commit moved the custom endpoint's literals into class attributes (no behaviour change),
+  the second added the engine.
+- **The model list's query string** (`?output_modalities=transcription`, 30 models against 469) was
+  the research's blocker, because the custom endpoint's base-URL validation refuses a query; it is
+  part of the subclass's route instead, and the base class keeps the validation.
+- **A trap avoided**: the filtered model list is public, so using it as the connection test would
+  have passed every key, a wrong one included. The test asks `GET /key`.
+- **Refresh needs no key** (public list): the dialog builds a `listing_only` instance that sends no
+  `Authorization` header unless a key was typed.
+- **Checked live without a key**: the list (200, 30 models, `openai/gpt-transcribe` in it) and an
+  unauthenticated POST of a one-second WAV to `/audio/transcriptions` (401, `{"error": {"message":
+  "No cookie auth credentials found", "code": 401}}`). Never seen: a transcript, `/key`.
+- **Page versus research**: all the figures held (25 MB, 60 s upstream timeout); the create page lists
+  `prompt` ("Context to guide transcription on providers that support contextual prompting"), so the
+  vocabulary is sent, with a note that only some models honour it.
+- **Side effect on the dialog**: Meta and OpenRouter made two more Providers rows, so the tab needs
+  877 px (818 with nine rows) against the 829 px viewport of a 960 px dialog and scrolled 48 px. The
+  default dialog height is now 1010 px (measured offscreen at 9 pt and confirmed on the real platform plugin, 2026-11-26; the
+  12-failure summary line still fits its two reserved lines, 42 of 42 px).
+
+## 2026-11-26: Meta Muse Voice Transcribe as the `meta` engine
+
+Structurally: a new batch-only remote engine, `meta`, built to Meta's own docs page
+(https://dev.meta.ai/docs/speech-to-text, read that day) rather than to the research of 2026-11-24.
+
+- **Where the page and the research differed**: the page gives `languageBias` as a list of English
+  language names (the research had no format) and lists a `keywords` field (the research did not), so
+  the custom vocabulary is wired. It names no ISO codes, no region and no retention rule.
+- **Live, no key**: one unauthenticated POST of a one-second WAV to `https://api.meta.ai/v1/asr/
+  transcribe` answered 401 with `{"sessionId", "error": {"code": "invalid_api_key", "message":
+  "Unauthorized"}}`: the host and path exist. A real transcript has never been seen (no key).
+- **Consequences built in**: WAV imports in other formats are converted to 16 kHz mono (Meta takes
+  nothing else); the connection test sends one second of silence because no key-check endpoint is
+  documented; parts are 590 s, not 600, because the page does not say whether its 10 minutes is
+  inclusive. `multipart_form_data` gained fields that carry their own `Content-Type` (the JSON part).
+- Streaming is on the roadmap with the protocol the page documents.
+
 ## 2026-11-26: the retranscribe dialog's empty status band is accepted
 
 Checked that the band still exists: the status label is 16 px high (24 px with

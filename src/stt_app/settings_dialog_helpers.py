@@ -27,14 +27,17 @@ from .config import (
     DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_META_MODEL,
     DEFAULT_MISTRAL_MODEL,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OPENROUTER_MODEL,
     DEFAULT_SPEECHMATICS_MODEL,
     ELEVENLABS_MODELS,
     ENGINE_LABELS,
     FUNASR_MODELS,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
+    META_MODELS,
     MISTRAL_MODELS,
     MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
@@ -44,7 +47,11 @@ from .config import (
     streaming_is_experimental,
 )
 from .local_benchmark import _format_seconds
-from .settings_store import _REMOTE_MODEL_FIELDS, remote_move_line
+from .settings_store import (
+    _REMOTE_MODEL_FIELDS,
+    LISTED_MODEL_ENGINES,
+    remote_move_line,
+)
 
 # What `Thread.start()` raises when the worker cannot be created: the OS refuses
 # the thread (`RuntimeError`) or the interpreter cannot allocate its
@@ -343,6 +350,7 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "voxtral-small-transcribe-3": (
         "voxtral-small-transcribe-3 (slightly more accurate, $0.24/hr)"
     ),
+    "muse-voice-transcribe-1.0": "muse-voice-transcribe-1.0 ($0.18/hr, 25 languages)",
 }
 
 
@@ -373,6 +381,9 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "mistral": tuple(
         (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in MISTRAL_MODELS
+    ),
+    "meta": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in META_MODELS
     ),
 }
 
@@ -742,20 +753,28 @@ def model_choices_for_engine(
 ) -> tuple[tuple[str, str], ...]:
     """``(value, label)`` pairs of the models ``engine`` can transcribe with.
 
-    The custom endpoint has no roster: the endpoint decides what it offers,
-    so its choices are ``custom_models`` -- the stored model and whatever was
-    fetched from the endpoint -- in order, blanks and repeats dropped.
+    The custom endpoint and OpenRouter have no roster: the service decides what
+    it offers, so their choices are ``custom_models`` -- the stored model and
+    whatever the last Refresh fetched -- in order, blanks and repeats dropped.
     """
     normalized = str(engine or "").strip().lower()
     if normalized == DEFAULT_ENGINE:
         return tuple((value, local_model_label(value)) for value in VALID_MODEL_SIZES)
-    if normalized == "custom":
+    if normalized in LISTED_MODEL_ENGINES:
         values = dict.fromkeys(str(model or "").strip() for model in custom_models)
         return tuple((value, value) for value in values if value)
     return _REMOTE_MODEL_CHOICES.get(normalized, ())
 
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 960)
+# Said where the engine is chosen (the Transcription tab's model note) and in
+# the Providers row's tooltip: the user's audio reaches the vendor of whichever
+# model they type, through OpenRouter.
+OPENROUTER_AUDIO_NOTE = (
+    "Audio is sent to OpenRouter, which forwards it to the vendor of the model "
+    "you pick."
+)
+
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 1010)
 
 
 _DIALOG_SCREEN_MARGIN = 48
@@ -874,6 +893,10 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "funasr": DEFAULT_FUNASR_MODEL,
     "speechmatics": DEFAULT_SPEECHMATICS_MODEL,
     "mistral": DEFAULT_MISTRAL_MODEL,
+    "meta": DEFAULT_META_MODEL,
+    # Free text, but with a default so that the engine works before the first
+    # Refresh.
+    "openrouter": DEFAULT_OPENROUTER_MODEL,
     # Free text: there is no default model for an endpoint the app does not
     # know.
     "custom": "",
@@ -921,6 +944,8 @@ _REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
     _RemoteProviderInfo("funasr", "Fun-ASR", "Fun-ASR (Alibaba)"),
     _RemoteProviderInfo("speechmatics", "Speechmatics", "Speechmatics"),
     _RemoteProviderInfo("mistral", "Mistral", "Mistral (Voxtral)"),
+    _RemoteProviderInfo("meta", "Meta", "Meta (Muse Voice)"),
+    _RemoteProviderInfo("openrouter", "OpenRouter", "OpenRouter"),
     _RemoteProviderInfo("custom", "Custom", "Custom endpoint"),
 )
 

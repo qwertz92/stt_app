@@ -193,7 +193,7 @@ The Transcription tab's **Custom vocabulary** field biases transcription
 toward names, product terms, and jargon you type in — but only some engines
 and models read it. It is sent to the Whisper models (`small` through
 `distil-large-v3.5`), OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics
-Enhanced, Mistral, and a custom endpoint. It is **ignored**
+Enhanced, Mistral, Meta, OpenRouter (only some of the models behind it), and a custom endpoint. It is **ignored**
 by Parakeet, Canary, Nemotron, Cohere, every Granite model (Granite Speech 5.0
 2B and 470M TurboCTC), ElevenLabs, Azure LLM Speech, Fun-ASR, and
 Speechmatics Melia 1 — those runtimes, providers and models expose no

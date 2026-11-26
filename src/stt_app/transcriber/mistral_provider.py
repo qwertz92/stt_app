@@ -22,7 +22,6 @@ from ..config import (
     parse_custom_vocabulary,
     remote_batch_part_limit,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
@@ -30,6 +29,7 @@ from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
     multipart_form_data,
+    open_request,
     transcript_from_json,
 )
 from .base import (
@@ -129,8 +129,8 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
             request.add_header("Authorization", f"Bearer {self._api_key}")
             request.add_header("Content-Type", content_type)
             self._emit_progress(progress_text)
-            with urllib.request.urlopen(
-                request, timeout=self._request_timeout_s, context=create_ssl_context()
+            with open_request(
+                request, timeout=self._request_timeout_s, provider_name="Mistral"
             ) as resp:
                 payload = resp.read()
         except urllib.error.HTTPError as exc:
@@ -170,9 +170,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
         request = urllib.request.Request(f"{MISTRAL_API_BASE}/models", method="GET")
         request.add_header("Authorization", f"Bearer {self._api_key}")
         try:
-            with urllib.request.urlopen(
-                request, timeout=10, context=create_ssl_context()
-            ) as resp:
+            with open_request(request, timeout=10, provider_name="Mistral") as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

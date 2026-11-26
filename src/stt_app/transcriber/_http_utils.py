@@ -12,10 +12,13 @@ import json
 import re
 import secrets
 import urllib.error
-from collections.abc import Callable
+import urllib.parse
+import urllib.request
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
+from ..ssl_utils import create_ssl_context
 from .base import TranscriptionError
 
 _AUDIO_CONTENT_TYPE_BY_SUFFIX = {
@@ -47,24 +50,33 @@ def _quoted_header_parameter(value: str, *, label: str) -> str:
 
 def multipart_form_data(
     *,
-    fields: list[tuple[str, str]],
+    fields: Sequence[tuple[str, str] | tuple[str, str, str]],
     file_field: tuple[str, str, bytes, str],
 ) -> tuple[bytes, str]:
     """Encode a multipart/form-data request body.
 
+    A field is ``(name, value)`` or, for a part that carries its own
+    ``Content-Type`` (a JSON settings part), ``(name, value, content_type)``.
     ``file_field`` is ``(form_field_name, filename, file_bytes, content_type)``.
     Returns ``(body_bytes, content_type_header_value)``.
     """
     boundary = f"stt-app-{secrets.token_hex(24)}"
     lines: list[bytes] = []
 
-    for name, value in fields:
+    for name, value, *part_type in fields:
         quoted_name = _quoted_header_parameter(name, label="field name")
+        type_line = ""
+        if part_type:
+            field_type = str(part_type[0]).strip()
+            if not field_type or "\r" in field_type or "\n" in field_type:
+                raise ValueError("Multipart content type must be a single line.")
+            type_line = f"Content-Type: {field_type}\r\n"
         lines.extend(
             [
                 f"--{boundary}\r\n".encode(),
                 (
-                    f'Content-Disposition: form-data; name="{quoted_name}"\r\n\r\n'
+                    f'Content-Disposition: form-data; name="{quoted_name}"\r\n'
+                    f"{type_line}\r\n"
                 ).encode(),
                 f"{value}\r\n".encode(),
             ]
@@ -182,8 +194,12 @@ def transcript_from_json(
     prefix: str,
     accept_bare_string: bool = False,
     redact: Redactor = _unredacted,
+    field: str = "text",
 ) -> str:
     """The ``text`` of a transcription answer, or an error naming what came.
+
+    ``field`` names the member that holds the transcript (``transcript`` for
+    Meta; every other provider's is ``text``).
 
     For providers asked for JSON. ``"text": ""`` is a valid answer (nothing
     said). An HTML page, a body that is not JSON (a plain "Internal Server
@@ -208,7 +224,7 @@ def transcript_from_json(
         ) from exc
     if accept_bare_string and isinstance(parsed, str):
         return normalize_transcript_text(parsed)
-    value = parsed.get("text") if isinstance(parsed, dict) else None
+    value = parsed.get(field) if isinstance(parsed, dict) else None
     if not isinstance(value, str):
         error_text = reply_error_text(parsed, redact)
         if error_text:
@@ -221,7 +237,8 @@ def transcript_from_json(
             else type(parsed).__name__
         )
         raise TranscriptionError(
-            f"{prefix}: the answer has no 'text' field (it holds: {keys or 'nothing'})."
+            f"{prefix}: the answer has no '{field}' field "
+            f"(it holds: {keys or 'nothing'})."
         )
     return normalize_transcript_text(value)
 
@@ -398,3 +415,132 @@ def format_ssl_error_message(provider_name: str) -> str:
         "Set SSL_CERT_FILE or REQUESTS_CA_BUNDLE to your corporate CA .pem. "
         f"See {DOC_SSL_PROXY_PATH} for details."
     )
+
+
+# -- opening a request that carries a key -----------------------------------
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+_DISPLAY_URL_MAX_CHARS = 200
+DEFAULT_REDIRECT_HINT = (
+    "A network proxy or a changed service address can cause this; check the "
+    "proxy settings or try again later."
+)
+
+
+def header_value_unsafe(value: str) -> bool:
+    """Whether a header value holds a character an HTTP header cannot carry.
+
+    Printable ASCII only: `http.client` refuses a line break with the whole
+    header value in its message (the key included), and encodes the rest as
+    Latin-1, so a pasted key with a stray newline, a non-breaking space or a
+    typographic quote fails in a way that would print the key.
+    """
+    return any(not ("\x20" <= character <= "\x7e") for character in value)
+
+
+def _origin(url: str) -> tuple[str, str, int | None]:
+    parts = urllib.parse.urlsplit(url)
+    scheme = parts.scheme.lower()
+    return (
+        scheme,
+        (parts.hostname or "").lower(),
+        parts.port or _DEFAULT_PORTS.get(scheme),
+    )
+
+
+def redirect_keeps_origin(old_url: str, new_url: str) -> bool:
+    """Whether a redirect stays where the key may go.
+
+    The same scheme, host and port, or the upgrade from http to https on the
+    default ports of one host. Anything else -- another host, another port, or
+    https to http, which would send the key in clear -- is another origin.
+    """
+    try:
+        old_scheme, old_host, old_port = _origin(old_url)
+        new_scheme, new_host, new_port = _origin(new_url)
+    except ValueError:
+        return False
+    if not old_host or old_host != new_host:
+        return False
+    if (old_scheme, old_port) == (new_scheme, new_port):
+        return True
+    return (old_scheme, old_port, new_scheme, new_port) == ("http", 80, "https", 443)
+
+
+def _display_url(url: str) -> str:
+    """Scheme, host, port and path of a URL the server named; no query."""
+    try:
+        parts = urllib.parse.urlsplit(url)
+        host = parts.hostname or ""
+        port = f":{parts.port}" if parts.port else ""
+    except ValueError:
+        return "an invalid URL"
+    return f"{parts.scheme}://{host}{port}{parts.path}"[:_DISPLAY_URL_MAX_CHARS]
+
+
+class RedirectGuard(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect only where it cannot leak the key or drop the audio.
+
+    urllib's own handler copies every header, `Authorization` included, to
+    whatever host `Location` names (reproduced: 127.0.0.1:A -> localhost:B
+    received the Bearer key), and turns a redirected POST into a GET without
+    its body, which the server answers with an HTTP 405 that names nothing
+    the user can act on. An upload is therefore never redirected, and a GET
+    only within its origin (a redirect inside one origin sends the key to the
+    host the user already trusts with it).
+    """
+
+    def __init__(self, provider_name: str, hint: str = DEFAULT_REDIRECT_HINT) -> None:
+        super().__init__()
+        self._provider_name = provider_name
+        self._hint = hint
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = _display_url(newurl)
+        if req.data is not None:
+            refusal = (
+                f"{self._provider_name}: the server redirected the upload (HTTP "
+                f"{code}) to {target}. It was not followed, so the API key and "
+                f"the audio stay where they were. {self._hint}"
+            )
+        elif not redirect_keeps_origin(req.full_url, newurl):
+            refusal = (
+                f"{self._provider_name}: the server redirected (HTTP {code}) to "
+                f"another origin, {target}; the API key is not sent there. "
+                f"{self._hint}"
+            )
+        else:
+            return super().redirect_request(req, fp, code, msg, headers, newurl)
+        try:
+            fp.close()
+        except Exception:
+            pass
+        raise TranscriptionError(refusal)
+
+
+def open_request(
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+    provider_name: str,
+    redirect_hint: str = DEFAULT_REDIRECT_HINT,
+):
+    """The one way a REST provider opens a request that carries a key.
+
+    Uses the system trust store and `RedirectGuard`, and refuses a header value
+    that cannot be sent (a key pasted with a line break or a non-ASCII
+    character) before anything goes out, without printing it.
+    """
+    for _name, value in request.header_items():
+        if header_value_unsafe(str(value)):
+            raise TranscriptionError(
+                f"{provider_name}: the API key contains a line break or a "
+                "character that cannot be sent in an HTTP header (such as a "
+                "non-breaking space or a typographic quote). Remove it and "
+                "paste the key again."
+            )
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=create_ssl_context()),
+        RedirectGuard(provider_name, redirect_hint),
+    )
+    return opener.open(request, timeout=timeout)

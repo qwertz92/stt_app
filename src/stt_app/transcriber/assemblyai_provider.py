@@ -34,9 +34,8 @@ from ..config import (
     parse_custom_vocabulary,
 )
 from ..dependency_check import installed_version, version_at_least
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import format_ssl_error_message, http_error_suffix
+from ._http_utils import format_ssl_error_message, http_error_suffix, open_request
 from ._job_poll import MAX_CONSECUTIVE_FETCH_FAILURES, SHUTDOWN_POLL_S, poll_job
 from .base import (
     AudioInput,
@@ -464,13 +463,12 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         req.add_header("Authorization", self._api_key)
 
         try:
-            # Every other provider's REST call passes this; this one did not,
-            # so behind a TLS-intercepting proxy the connection test failed
-            # while transcription itself worked -- the SDK goes through
-            # `requests`, which reads REQUESTS_CA_BUNDLE, whereas urllib does
-            # not. The test then reported a broken key that was fine.
-            ssl_ctx = create_ssl_context()
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
+            # `open_request` hands urllib the system trust store: behind a
+            # TLS-intercepting proxy this test once failed while transcription
+            # itself worked -- the SDK goes through `requests`, which reads
+            # REQUESTS_CA_BUNDLE, whereas urllib does not -- and reported a
+            # broken key that was fine.
+            with open_request(req, timeout=10, provider_name="AssemblyAI") as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

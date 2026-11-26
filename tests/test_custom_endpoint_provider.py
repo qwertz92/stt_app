@@ -19,6 +19,7 @@ from stt_app.config import (
     remote_batch_part_limit,
 )
 from stt_app.transcriber import custom_endpoint_provider as provider_module
+from stt_app.transcriber._http_utils import redirect_keeps_origin
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.custom_endpoint_provider import (
     CustomEndpointModel,
@@ -58,7 +59,7 @@ class _Server:
         self.answers = list(answers)
         self.requests: list[object] = []
 
-    def __call__(self, request, timeout=None, context=None):
+    def __call__(self, request, timeout=None, context=None, **_kwargs):
         self.requests.append(request)
         answer = self.answers.pop(0)
         if isinstance(answer, BaseException):
@@ -74,7 +75,7 @@ class _Server:
 def server(monkeypatch):
     def install(*answers: object) -> _Server:
         fake = _Server(*answers)
-        monkeypatch.setattr(provider_module, "_open", fake)
+        monkeypatch.setattr(provider_module, "open_request", fake)
         return fake
 
     return install
@@ -1509,7 +1510,7 @@ def test_a_redirected_upload_is_refused_rather_than_resent_as_a_get(loopback):
     ],
 )
 def test_which_redirects_may_carry_the_key(old, new, allowed):
-    assert provider_module._redirect_keeps_origin(old, new) is allowed
+    assert redirect_keeps_origin(old, new) is allowed
 
 
 # -- a key a header cannot carry --------------------------------------------

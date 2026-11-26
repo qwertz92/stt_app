@@ -20,7 +20,6 @@ from ..config import (
     parse_custom_vocabulary,
     remote_batch_part_limit,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
@@ -29,6 +28,7 @@ from ._http_utils import (
     http_error_suffix,
     multipart_form_data,
     normalize_transcript_text,
+    open_request,
 )
 from .base import (
     AudioInput,
@@ -182,10 +182,9 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             req.add_header("Authorization", self._auth_header())
             req.add_header("Content-Type", content_type)
 
-            ssl_ctx = create_ssl_context()
             self._emit_progress(progress_text)
-            with urllib.request.urlopen(
-                req, timeout=self._request_timeout_s, context=ssl_ctx
+            with open_request(
+                req, timeout=self._request_timeout_s, provider_name="OpenAI"
             ) as resp:
                 payload = resp.read()
 
@@ -230,8 +229,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         )
         req.add_header("Authorization", self._auth_header())
         try:
-            ssl_ctx = create_ssl_context()
-            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
+            with open_request(req, timeout=10, provider_name="OpenAI") as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

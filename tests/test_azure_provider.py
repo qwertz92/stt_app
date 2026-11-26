@@ -255,7 +255,7 @@ class TestAzureModelRoster:
 
 
 class TestAzureBatchTranscription:
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_transcribe_combined_phrases(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             json.dumps({"combinedPhrases": [{"text": "Hallo Welt"}]})
@@ -291,7 +291,7 @@ class TestAzureBatchTranscription:
         assert '"de"' in body
         assert 'name="audio"' in body
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_auto_language_omits_locales(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             json.dumps({"combinedPhrases": [{"text": "ok"}]})
@@ -305,7 +305,7 @@ class TestAzureBatchTranscription:
         body = mock_urlopen.call_args[0][0].data.decode("utf-8", errors="ignore")
         assert "locales" not in body
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_multiple_combined_phrases_joined(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             json.dumps({"combinedPhrases": [{"text": "Hello"}, {"text": "world"}]})
@@ -314,7 +314,7 @@ class TestAzureBatchTranscription:
 
         assert t.transcribe_batch(b"RIFF fake") == "Hello world"
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             json.dumps({"combinedPhrases": [{"text": "done"}]})
@@ -330,28 +330,28 @@ class TestAzureBatchTranscription:
             "Uploading audio to Azure LLM Speech and waiting for transcription..."
         ]
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(401)
         t = AzureLlmSpeechTranscriber(api_key="bad", endpoint=_ENDPOINT)
         with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_http_404_maps_to_endpoint_error(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(404)
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
         with pytest.raises(TranscriptionError, match=r"Endpoint not found.*404"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_http_429_maps_to_rate_limit(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(429)
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
         with pytest.raises(TranscriptionError, match=r"Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_http_400_surfaces_detail(self, mock_urlopen):
         body = json.dumps(
             {"error": {"message": "Enhanced mode is currently not supported yet"}}
@@ -361,7 +361,7 @@ class TestAzureBatchTranscription:
         with pytest.raises(TranscriptionError, match="Enhanced mode is currently"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
@@ -432,7 +432,7 @@ class TestAzureRequestTimeout:
     take. The 120 s socket timeout was sized for a dictation, and an hour-long
     part (the engine's bound) hit it before an answer was due."""
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_an_hour_of_audio_waits_its_duration_plus_the_base_timeout(
         self, mock_urlopen
     ):
@@ -443,7 +443,7 @@ class TestAzureRequestTimeout:
 
         assert mock_urlopen.call_args.kwargs["timeout"] == 3600 + 120
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_a_dictation_and_an_unreadable_file_keep_the_base_timeout(
         self, mock_urlopen
     ):
@@ -468,7 +468,7 @@ class TestAzureLongRecordings:
 
         monkeypatch.setitem(config.REMOTE_BATCH_MAX_PART_SECONDS, "azure", 20.0)
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_every_part_is_sent_with_the_same_definition(self, mock_urlopen):
         mock_urlopen.side_effect = _phrases("eins", "zwei")
         progress: list[str] = []
@@ -499,7 +499,7 @@ class TestAzureLongRecordings:
             for index in (1, 2)
         ]
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_a_short_recording_is_sent_byte_identical_in_one_request(
         self, mock_urlopen
     ):
@@ -512,7 +512,7 @@ class TestAzureLongRecordings:
         assert mock_urlopen.call_count == 1
         assert _sent_parts(mock_urlopen.call_args.args[0])[1] == recording
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_a_cancel_between_parts_sends_no_further_request(self, mock_urlopen):
         mock_urlopen.side_effect = _phrases("eins", "zwei")
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
@@ -525,7 +525,7 @@ class TestAzureLongRecordings:
 
 
 class TestAzureConnectionTest:
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_connection_success(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(
             json.dumps({"combinedPhrases": []}), status=200
@@ -537,7 +537,7 @@ class TestAzureConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.azure_provider.open_request")
     def test_connection_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(401)
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)

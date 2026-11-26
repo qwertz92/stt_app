@@ -1757,6 +1757,69 @@ def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     assert (damaged.assemblyai_region, damaged.deepgram_region) == ("auto", "global")
 
 
+def test_the_meta_fields_round_trip(tmp_path):
+    """Model and key flag of Meta's engine: an older file carries neither (no
+    schema bump), and a model this build does not offer falls back to the
+    default."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="meta", meta_model="muse-voice-transcribe-1.0", has_meta_key=True
+    )
+    store.save(saved)
+    assert store.load() == saved
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert older.meta_model == "muse-voice-transcribe-1.0"
+    assert not older.has_meta_key
+    assert AppSettings.from_dict({"meta_model": "muse-2"}).meta_model == (
+        "muse-voice-transcribe-1.0"
+    )
+
+
+def test_the_openrouter_fields_round_trip(tmp_path):
+    """Model, listed models and key flag of the OpenRouter engine: an older
+    file carries none of them (no schema bump); the model is free text with a
+    default, and the list is a JSON list (a tuple never equals one, which
+    rewrote the file on every load)."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="openrouter",
+        openrouter_model="google/chirp-3",
+        openrouter_models=("openai/gpt-transcribe", "google/chirp-3"),
+        has_openrouter_key=True,
+    )
+    store.save(saved)
+    assert store.load() == saved
+    raw = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert raw["openrouter_models"] == ["openai/gpt-transcribe", "google/chirp-3"]
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert older.openrouter_model == "openai/gpt-transcribe"
+    assert older.openrouter_models == ()
+    assert not older.has_openrouter_key
+
+    damaged = AppSettings.from_dict(
+        {"openrouter_model": "  ", "openrouter_models": ["a/b", 3, "", None, "a/b"]}
+    )
+    assert damaged.openrouter_model == "openai/gpt-transcribe"
+    assert damaged.openrouter_models == ("a/b",)
+    assert AppSettings.from_dict({"openrouter_models": "x"}).openrouter_models == ()
+
+
+def test_listed_models_reads_each_engines_own_list():
+    from stt_app.settings_store import listed_models
+
+    settings = AppSettings(
+        custom_endpoint="http://x/v1",
+        custom_models=("c1",),
+        custom_models_endpoint="http://x/v1",
+        openrouter_models=("o1", "o2"),
+    )
+    assert listed_models(settings, "custom") == ("c1",)
+    assert listed_models(settings, "openrouter") == ("o1", "o2")
+    assert listed_models(settings, "openai") == ()
+
+
 def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     """Model, region and key flag of the two engines added on 2026-10-01: an
     older file carries none of them (no schema bump), and a value this build
@@ -1801,6 +1864,8 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     [
         ("speechmatics", "speechmatics_model", "enhanced"),
         ("mistral", "mistral_model", "voxtral-small-transcribe-3"),
+        ("meta", "meta_model", "muse-voice-transcribe-1.0"),
+        ("openrouter", "openrouter_model", "google/chirp-3"),
     ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):
@@ -1813,11 +1878,19 @@ def test_the_new_engines_take_a_model_selection(engine, field, model):
 def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.save(
-        AppSettings(), extra={"speechmatics_api_key": "s", "mistral_api_key": "m"}
+        AppSettings(),
+        extra={
+            "speechmatics_api_key": "s",
+            "mistral_api_key": "m",
+            "meta_api_key": "x",
+            "openrouter_api_key": "y",
+        },
     )
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
+    assert "meta_api_key" not in raw
+    assert "openrouter_api_key" not in raw
 
 
 _RETIRED = {"openai": {"gpt-4o-transcribe": "gpt-transcribe"}}

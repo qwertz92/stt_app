@@ -298,7 +298,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
 - **The Providers tab is one compact grid per group** (2026-10-03, UX
   review item 5). Columns: name, key field (the only stretch, minimum
   140 px), Test, Remove, a fixed-width last-test mark, the key-source badge.
-  "Cloud providers" holds the nine key providers; a provider's region
+  "Cloud providers" holds the eleven key providers (Meta and OpenRouter
+  joined 2026-11-26; the OpenRouter row's tooltip says that audio goes to
+  OpenRouter, which forwards it to the model's vendor); a provider's region
   (`_REMOTE_REGION_CHOICES`, each choice's vendor guarantee as an item
   tooltip) or Azure's endpoint is an indented sub-row right under it.
   **One width rule (2026-10-03): a field in a grid starts and ends where the
@@ -322,7 +324,20 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   combo is gone (a row's Test, or "Test All Configured"). The former visible
   hints (region note, Azure endpoint, "status badges") moved into tooltips.
   Measured: content height 1338 -> 818 px at 9 pt (the tab scrolled 219 px,
-  now not at all; 1764 -> 1016 px at 13.5 pt).
+  now not at all; 1764 -> 1016 px at 13.5 pt). With Meta and OpenRouter the
+  content is 877 px (9 pt) against the 829 px viewport of a 960 px dialog, so
+  the tab scrolled 48 px and cut the Save API Keys row; **the default dialog
+  height is now 1010 px** (`_DEFAULT_SETTINGS_DIALOG_SIZE`, bounded by the
+  screen as before; on a screen with under about 1060 px of available height
+  the tab scrolls a little; the nine-row version did so below about 950 px).
+  Measured on the real platform plugin (not offscreen) on 2026-11-26, 2560 x
+  1392 screen, Segoe UI 9 pt: at 960 px content 877 against viewport 829
+  (scroll 48 px); at 1010 px content and viewport are both 879 px, no
+  scrollbar. Pinned by
+  `test_providers_tab_fits_the_default_dialog_height_without_scrolling`.
+  **Not built**: moving each region picker into its provider's own row would
+  save about 90 px and let the default go back to 960; it was left because it
+  changes the row grid (region pickers are indented sub-rows by design).
 - **Connection test results persist in `provider_connection_tests.json`**,
   not `settings.json`; restored on open, overwritten only for tested
   providers, cleared when that provider's key is saved or deleted. Each row
@@ -331,10 +346,27 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   just run, or -- on opening and after a clear -- the most recent stored
   result, naming the provider. The per-row "Last test" lines it replaced
   reserved two lines each. The summary of a multi-provider test names only
-  the failures, by short row titles (`0/10 provider tests passed. Failed:
+  the failures, by short row titles (`0/12 provider tests passed. Failed:
   AssemblyAI, ...`); the old `Name: Fail | ...` over the long labels needed
-  three lines against the two reserved. Ten failures need 32 / 40 / 48 of
-  42 / 50 / 58 px at 9 / 11.25 / 13.5 pt at the minimum width.
+  three lines against the two reserved. Twelve failures (the ten above plus
+  Meta and OpenRouter) need 42 of 42 px at 9 pt at the minimum width
+  (measured 2026-11-26; the 11.25 / 13.5 pt figures were not re-measured).
+- **One model-list fetch serves the custom endpoint and OpenRouter**
+  (2026-11-26). The Transcription tab's Refresh button (`fetch_models_button`,
+  `_run_models_fetch`) asks the selected engine's list endpoint; the result is
+  kept per engine (`custom_models` / `openrouter_models`, `listed_models`) and
+  the status note per engine (`_model_list_notes`). OpenRouter's list is
+  public, so its Refresh needs no key (`listing_only`). **OpenRouter's model
+  note starts with where the audio goes** ("Audio is sent to OpenRouter, which
+  forwards it to the vendor of the model you pick.",
+  `OPENROUTER_AUDIO_NOTE`, also the first sentence of the Providers row's
+  tooltip), so it is read where the engine is chosen and not only on hover
+  (2026-11-26, review). It stays inside the note's two reserved lines at the
+  minimum width and the row has the height of any other engine's, so nothing
+  below it moves and the tab gets no scrollbar (pinned by
+  `test_the_openrouter_note_says_where_the_audio_goes`). A Refresh result or
+  error replaces the model text but keeps the sentence; a red setup issue
+  (no key) replaces everything, as for every engine.
 - **A remote engine that cannot dictate says so on the Transcription tab**
   (2026-10-03, UX review item 6d). `_remote_engine_setup_issue` (remote
   mixin) names the first gap: the custom endpoint's base URL, then the key

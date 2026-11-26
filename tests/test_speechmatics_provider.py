@@ -51,7 +51,7 @@ class _FakeService:
         self.transcript_errors: list[Exception] = []
         self.list_answer = None
 
-    def __call__(self, request, timeout=None, context=None):
+    def __call__(self, request, timeout=None, context=None, **_kwargs):
         self.requests.append(request)
         url = request.full_url
         method = request.get_method()
@@ -93,7 +93,7 @@ class _FakeService:
 @pytest.fixture
 def service(monkeypatch):
     fake = _FakeService()
-    monkeypatch.setattr(provider_module.urllib.request, "urlopen", fake)
+    monkeypatch.setattr(provider_module, "open_request", fake)
     return fake
 
 
@@ -279,11 +279,11 @@ class TestSpeechmaticsErrors:
         assert _JOB_ID in str(caught.value)
 
     def test_a_submit_answer_without_an_id_fails_at_once(self, service, monkeypatch):
-        def no_id(request, timeout=None, context=None):
+        def no_id(request, timeout=None, context=None, **_kwargs):
             service.requests.append(request)
             return json_response({"status": "ok"}, status=201)
 
-        monkeypatch.setattr(provider_module.urllib.request, "urlopen", no_id)
+        monkeypatch.setattr(provider_module, "open_request", no_id)
         with pytest.raises(TranscriptionError, match="no job id"):
             _transcriber().transcribe_batch(wav_seconds(1.0))
         assert len(service.requests) == 1
