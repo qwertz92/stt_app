@@ -3,6 +3,39 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: the retranscribe dialog's empty status band is accepted
+
+Checked that the band still exists: the status label is 16 px high (24 px with
+the layout spacing) and empty until a run starts. Removal was estimated at about
+150 lines plus layout tests for a dialog open for seconds; recorded in
+`docs/agents/known-limitations.md` instead of built.
+
+## 2026-11-26: AssemblyAI streaming now receives the chosen language
+
+Structurally: in Streaming the language picker offers the 32 languages of
+STT-3.7-Realtime (it was locked to Auto) and `start_stream` sends the choice as
+`language_codes=[code]`. Found by reading the streaming WebSocket spec: the
+realtime model has no `language` parameter but takes `language_codes` as
+steering, unset it code-switches by itself. Before, a German dictation could not
+tell the model it was German. A saved language outside the 32 streams in Auto,
+logs a warning and is named in the picker's note. An existing user notices one
+change: a language that was already saved (used only by batch until now, because
+streaming was locked to Auto) steers streaming too and shows in the picker;
+choosing Auto brings the model's own code-switching back. Not verified against
+the live service (no key). Tests pin the offered list, the request field and the fallback.
+
+## 2026-11-26: "Experimental" only where streaming still is
+
+Structurally: the Mode picker reads "Streaming" for local + Nemotron and
+"Streaming (Experimental)" for faster-whisper, AssemblyAI and Deepgram, decided
+by `config.streaming_is_experimental` and following the selection. The reason
+is the 2026-11-25 measurement (11 clips, CPU): Nemotron streaming 10.5 % WER
+equal to its batch mode, faster-whisper rolling window 22.0 to 44.0 % against
+4.5 to 15.4 % in batch; the cloud engines were not measured. README (feature
+list, settings table, status table), quick-start and models.md say which
+streaming is experimental. The picker is as wide as its form column (673 px in
+both states), so the text change moves nothing.
+
 ## 2026-11-26: a queued job counts from its recording's start, not from its submission
 
 Second review of the doubtful-row rule (the 2026-11-25 entry below).

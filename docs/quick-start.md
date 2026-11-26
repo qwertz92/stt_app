@@ -73,7 +73,7 @@ Common settings to adjust:
 |---------|-------------|---------|
 | **Model size** | Which local model transcribes. `parakeet-tdt-0.6b-v3` is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
 | **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR`, `Speechmatics`, `Mistral (Voxtral)`, `Custom endpoint` | `Local` |
-| **Mode** | `Batch` (transcribe after stop) or `Streaming` (live, experimental) | `Batch` |
+| **Mode** | `Batch` (transcribe after stop) or `Streaming` (live; experimental except with local Nemotron) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |
 | **Paste mode** | How text is inserted into the target app | Auto |
 | **VAD auto-stop** | Energy-based auto stop after speech + silence | Off |

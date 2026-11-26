@@ -31,7 +31,8 @@ The app has five local runtime families:
   manner". That is how the model was trained, not something the app strips.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
-  experimental rolling-window streaming mode.
+  experimental rolling-window streaming mode (document word error rate 22 to 44 % against 4.5 to
+  15 % in batch mode on the 2026-11-24 test clips; Nemotron streaming is not experimental).
 
 Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
 Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0.

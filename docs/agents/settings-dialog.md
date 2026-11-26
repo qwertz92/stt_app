@@ -136,6 +136,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   Mode hint's two texts (`_MODE_HINTS`) are kept about as long so a switch
   does not change the row height. Rule and reasons:
   `docs/agents/streaming.md`, "In Settings the mode is chosen first".
+- **The Mode picker says "Experimental" only where it is true** (2026-11-26):
+  `config.streaming_is_experimental(engine, model)` is the one decision (not
+  experimental only for local + Nemotron, whose streaming reached its batch
+  word error rate on 2026-11-25), `settings_dialog_helpers.mode_label` turns it
+  into the picker text and `_update_mode_labels` re-applies it on every engine,
+  model or mode change and on populate. Only the text changes; the stored
+  value stays `streaming`. The combo is as wide as its form column (673 px in
+  the test dialog in both states), so a text change moves nothing.
+  Figures: `docs/agents/streaming.md`, "Which streaming is experimental".
 - **Model selection is on the Transcription tab; Models only manages.** One
   "Model" row hosts `model_selector_stack`: page 0 `model_combo` +
   `local_model_runtime_warning_label`, page 1 `remote_model_combo` /
