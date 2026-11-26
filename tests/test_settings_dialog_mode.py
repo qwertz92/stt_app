@@ -2113,8 +2113,13 @@ def test_a_long_path_in_the_models_status_line_wraps_inside_the_group(monkeypatc
     assert needed.width() <= label.width(), (needed.width(), label.width())
     assert label.text() == message
     assert label.toolTip() == message
+    copied: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_helpers.copy_text",
+        lambda text: copied.append(text) or True,
+    )
     label.copy_message()
-    assert QtWidgets.QApplication.clipboard().text() == message
+    assert copied == [message]
     dialog.deleteLater()
     _ = app
 
