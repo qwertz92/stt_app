@@ -116,7 +116,7 @@ class TestDeepgramTranscriberInit:
 
 
 class TestDeepgramTranscribeBatch:
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_transcribe_bytes(self, mock_urlopen):
         """Transcription with raw WAV bytes."""
         mock_urlopen.return_value = _make_fake_response(
@@ -127,7 +127,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake wav data")
         assert result == "Hallo Welt"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_transcribe_file_path(self, mock_urlopen, tmp_path):
         """Transcription with a file path reads the file."""
         mock_urlopen.return_value = _make_fake_response(
@@ -141,7 +141,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(str(wav))
         assert result == "hello world"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("done"))
         progress: list[str] = []
@@ -155,7 +155,7 @@ class TestDeepgramTranscribeBatch:
             "Uploading audio to Deepgram and waiting for transcription..."
         ]
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_transcribe_path_object(self, mock_urlopen, tmp_path):
         """Transcription with a Path object."""
         mock_urlopen.return_value = _make_fake_response(
@@ -169,7 +169,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(wav)
         assert result == "test output"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_transcribe_empty_result(self, mock_urlopen):
         """Empty transcript text returns empty string."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response(""))
@@ -177,7 +177,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake")
         assert result == ""
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_transcribe_strips_whitespace(self, mock_urlopen):
         """Result text is stripped of whitespace."""
         mock_urlopen.return_value = _make_fake_response(
@@ -187,7 +187,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake")
         assert result == "trimmed text"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_auto_language_sends_detect_language(self, mock_urlopen):
         """Auto language mode sends detect_language=true query param."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -199,7 +199,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert "detect_language=true" in req.full_url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_explicit_language_sends_language_param(self, mock_urlopen):
         """Explicit language mode sends language=<code> query param."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -211,7 +211,7 @@ class TestDeepgramTranscribeBatch:
         assert "language=de" in req.full_url
         assert "detect_language" not in req.full_url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_model_sent_in_query_params(self, mock_urlopen):
         """The selected model is sent as a query parameter."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -222,7 +222,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert "model=nova-3-medical" in req.full_url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_custom_vocabulary_sends_keyterm_for_nova_3(self, mock_urlopen):
         """nova-3 uses the repeated keyterm query parameter."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -255,7 +255,7 @@ class TestDeepgramTranscribeBatch:
         assert kept == short
         assert dropped == 1
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_batch_request_stays_under_the_keyterm_limit_and_logs_once(
         self, mock_urlopen, caplog
     ):
@@ -288,7 +288,7 @@ class TestDeepgramTranscribeBatch:
         assert urllib.parse.parse_qs(query)["keyterm"] == terms[:80]
         t.abort_stream()
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_empty_custom_vocabulary_omits_vocabulary_params(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key", model="nova-3")
@@ -298,7 +298,7 @@ class TestDeepgramTranscribeBatch:
         assert "keyterm" not in req.full_url
         assert "keywords" not in req.full_url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_authorization_header_set(self, mock_urlopen):
         """Authorization header uses 'Token <key>' format."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -309,7 +309,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert req.get_header("Authorization") == "Token my-secret-key"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_content_type_header_set(self, mock_urlopen):
         """Content-Type header is set to audio/wav."""
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
@@ -320,7 +320,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert req.get_header("Content-type") == "audio/wav"
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_imported_flac_uses_matching_content_type(self, mock_urlopen, tmp_path):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         audio_path = tmp_path / "recording.flac"
@@ -369,7 +369,7 @@ class TestDeepgramResponseParsing:
 
 
 class TestDeepgramErrorHandling:
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_http_401_gives_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -378,7 +378,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_http_402_gives_credits_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=402, msg="Payment Required", hdrs={}, fp=None
@@ -387,7 +387,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match=r"Insufficient credits.*402"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_http_429_gives_rate_limit_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
@@ -396,7 +396,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match=r"Rate limit.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_http_500_gives_generic_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=500, msg="Internal Server Error", hdrs={}, fp=None
@@ -405,7 +405,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="HTTP 500"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_ssl_error_gives_actionable_message(self, mock_urlopen):
         """SSL errors produce a message mentioning Zscaler/proxy."""
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
@@ -413,7 +413,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match=r"SSL.*Zscaler"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_generic_exception_wrapped(self, mock_urlopen):
         mock_urlopen.side_effect = ConnectionError("Network unreachable")
         t = DeepgramTranscriber(api_key="key")
@@ -427,7 +427,7 @@ class TestDeepgramErrorHandling:
 
 
 class TestDeepgramConnectionTest:
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_successful_connection(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response({"projects": []}, status=200)
         t = DeepgramTranscriber(api_key="key")
@@ -435,7 +435,7 @@ class TestDeepgramConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -445,7 +445,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "401" in msg
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_connection_error(self, mock_urlopen):
         mock_urlopen.side_effect = ConnectionError("timeout")
         t = DeepgramTranscriber(api_key="key")
@@ -453,7 +453,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "timeout" in msg.lower()
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_ssl_error_in_connection_test(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("certificate_verify_failed")
         t = DeepgramTranscriber(api_key="key")
@@ -461,7 +461,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "ssl" in msg.lower()
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_connection_test_url(self, mock_urlopen):
         """Connection test uses the /projects endpoint."""
         mock_urlopen.return_value = _make_fake_response({"projects": []})
@@ -472,7 +472,7 @@ class TestDeepgramConnectionTest:
         req = call_args[0][0]
         assert "/projects" in req.full_url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_connection_test_auth_header(self, mock_urlopen):
         """Connection test sends correct Authorization header."""
         mock_urlopen.return_value = _make_fake_response({"projects": []})
@@ -1875,7 +1875,7 @@ class TestDeepgramRegion:
     ("api.eu.deepgram.com"; regional endpoints "use the same API keys").
     """
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_batch_goes_to_the_eu_host(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key", region="eu")
@@ -1883,14 +1883,14 @@ class TestDeepgramRegion:
         url = mock_urlopen.call_args[0][0].full_url
         assert url.startswith("https://api.eu.deepgram.com/v1/listen?"), url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_batch_keeps_the_default_host(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         DeepgramTranscriber(api_key="key").transcribe_batch(b"RIFF....WAVE")
         url = mock_urlopen.call_args[0][0].full_url
         assert url.startswith("https://api.deepgram.com/v1/listen?"), url
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_the_connection_test_asks_the_eu_host(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response({"projects": []})
         DeepgramTranscriber(api_key="key", region="eu").test_connection()
@@ -1909,7 +1909,7 @@ class TestDeepgramRegion:
             "eu": "api.eu.deepgram.com",
         }
 
-    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.open_request")
     def test_an_unknown_region_falls_back_to_the_default_host(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response({"projects": []})
         DeepgramTranscriber(api_key="key", region="EU-west-9").test_connection()

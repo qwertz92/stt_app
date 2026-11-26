@@ -25,6 +25,7 @@ from stt_app.config import (
     supports_custom_vocabulary,
 )
 from stt_app.transcriber import custom_endpoint_provider as provider_module
+from stt_app.transcriber._http_utils import RedirectGuard
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.openrouter_provider import OpenRouterTranscriber
 
@@ -61,7 +62,7 @@ class _Server:
         self.answers = list(answers)
         self.requests: list[object] = []
 
-    def __call__(self, request, timeout=None, provider_name=None):
+    def __call__(self, request, timeout=None, **_kwargs):
         self.requests.append(request)
         answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]
         if isinstance(answer, BaseException):
@@ -77,7 +78,7 @@ class _Server:
 def server(monkeypatch):
     def install(*answers: object) -> _Server:
         fake = _Server(*answers)
-        monkeypatch.setattr(provider_module, "_open", fake)
+        monkeypatch.setattr(provider_module, "open_request", fake)
         return fake
 
     return install
@@ -402,7 +403,7 @@ def test_user_visible_messages_of_the_shared_code_name_the_selected_engine(engin
     other = ENGINE_LABELS["custom" if engine == "openrouter" else "openrouter"]
     transcriber = _engine_transcriber(engine)
 
-    guard = provider_module._RedirectGuard(transcriber._name)
+    guard = RedirectGuard(transcriber._name)
     with pytest.raises(TranscriptionError) as upload:
         guard.redirect_request(
             urllib.request.Request("https://gw.example.com/v1/x", data=b"audio"),

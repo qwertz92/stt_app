@@ -27,6 +27,7 @@ from ..config import (
     OPENROUTER_MODELS_QUERY,
     remote_batch_part_limit,
 )
+from ._http_utils import DEFAULT_REDIRECT_HINT
 from .base import TranscriptionError
 from .custom_endpoint_provider import CustomEndpointTranscriber
 
@@ -38,6 +39,7 @@ _MAX_KEY_RESPONSE_BYTES = 64 * 1024
 class OpenRouterTranscriber(CustomEndpointTranscriber):
     _engine = "openrouter"
     _name = ENGINE_LABELS["openrouter"]
+    _redirect_hint = DEFAULT_REDIRECT_HINT
     _upload_progress = (
         f"Uploading audio to {ENGINE_LABELS['openrouter']} and waiting for "
         "transcription..."

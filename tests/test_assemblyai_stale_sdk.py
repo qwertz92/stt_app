@@ -52,7 +52,7 @@ def test_streaming_names_both_versions_and_both_commands(stale):
 
 
 def test_the_connection_test_says_it_without_calling_the_service(stale):
-    with patch("urllib.request.urlopen") as urlopen:
+    with patch("stt_app.transcriber.assemblyai_provider.open_request") as urlopen:
         ok, message = AssemblyAITranscriber(api_key="k").test_connection()
     assert ok is False
     _assert_one_clear_sentence(message)

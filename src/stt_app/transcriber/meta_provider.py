@@ -25,19 +25,20 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_META_MODEL,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    ENGINE_LABELS,
     META_LANGUAGE_NAMES,
     META_MODELS,
     language_modes_for_selection,
     parse_custom_vocabulary,
     remote_batch_part_limit,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
     multipart_form_data,
+    open_request,
     transcript_from_json,
 )
 from ._pcm_audio import pcm16_wav_bytes, resample_linear
@@ -53,8 +54,9 @@ from .local_onnx_asr import _read_wav_float32
 META_API_BASE = "https://api.meta.ai/v1"
 _TRANSCRIBE_URL = f"{META_API_BASE}/asr/transcribe"
 _UPLOAD_PROGRESS = "Uploading audio to Meta and waiting for transcription..."
-_PROVIDER_NAME = "Meta"
-# "Sample rate: 16 kHz or 24 kHz", mono, 16-bit integer PCM.
+_PROVIDER_NAME = ENGINE_LABELS[
+    "meta"
+]  # "Sample rate: 16 kHz or 24 kHz", mono, 16-bit integer PCM.
 _ACCEPTED_SAMPLE_RATES = (16_000, 24_000)
 _TARGET_SAMPLE_RATE = 16_000
 _SCRUBBED = "[hidden]"
@@ -180,8 +182,10 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
             request.add_header("Accept", "application/json")
             request.add_header("Content-Type", content_type)
             self._emit_progress(progress_text)
-            with urllib.request.urlopen(
-                request, timeout=self._request_timeout_s, context=create_ssl_context()
+            with open_request(
+                request,
+                timeout=self._request_timeout_s,
+                provider_name=_PROVIDER_NAME,
             ) as resp:
                 payload = resp.read()
         except urllib.error.HTTPError as exc:

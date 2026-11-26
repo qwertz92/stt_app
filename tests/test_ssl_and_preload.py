@@ -1037,7 +1037,10 @@ class TestAssemblyAITestConnection:
         mock_resp.__enter__ = MagicMock(return_value=mock_resp)
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        with patch("urllib.request.urlopen", return_value=mock_resp):
+        with patch(
+            "stt_app.transcriber.assemblyai_provider.open_request",
+            return_value=mock_resp,
+        ):
             ok, msg = t.test_connection()
         assert ok is True
         assert "OK" in msg
@@ -1050,7 +1053,7 @@ class TestAssemblyAITestConnection:
         t = AssemblyAITranscriber(api_key="bad-key")
 
         with patch(
-            "urllib.request.urlopen",
+            "stt_app.transcriber.assemblyai_provider.open_request",
             side_effect=urllib.error.HTTPError(
                 url="", code=401, msg="Unauthorized", hdrs={}, fp=None
             ),
@@ -1067,7 +1070,9 @@ class TestAssemblyAITestConnection:
         ssl_exc = Exception(
             "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
         )
-        with patch("urllib.request.urlopen", side_effect=ssl_exc):
+        with patch(
+            "stt_app.transcriber.assemblyai_provider.open_request", side_effect=ssl_exc
+        ):
             ok, msg = t.test_connection()
         assert ok is False
         assert "SSL" in msg

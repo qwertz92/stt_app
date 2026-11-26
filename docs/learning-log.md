@@ -3,6 +3,22 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: no REST engine follows a redirect with its API key
+
+Structurally: one `_http_utils.open_request` (the custom endpoint's redirect guard, moved) is how
+every REST provider opens a request that carries a key.
+
+- **The defect** (review of the Meta engine): `urllib.request.urlopen` follows a 301, 302, 303, 307
+  or 308 to another host and copies `Authorization` / `xi-api-key` with it. A fake vendor redirecting
+  to a second localhost port got the key in all six cases and its JSON came back as the transcript. A
+  TLS-intercepting proxy that redirects to its sign-in page is the realistic trigger. The custom
+  endpoint had been guarded since 2026-10-01; OpenAI, Mistral, Deepgram, ElevenLabs, Azure,
+  Speechmatics, AssemblyAI's key check and the new Meta engine had not.
+- **Policy**: an upload is never redirected; a GET only inside its origin; the refusal names the
+  engine and the target host. A key with a line break or a non-ASCII character is refused before
+  the request without being printed (Meta showed `Invalid header value b'Bearer <key>...'`).
+- SDK-based engines (AssemblyAI batch, Groq) were not changed or checked.
+
 ## 2026-11-26: OpenRouter as the `openrouter` engine
 
 Structurally: a second engine on the custom endpoint's code, with its own key and a fixed URL, so the

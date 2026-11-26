@@ -63,7 +63,7 @@ class TestElevenLabsInit:
 
 
 class TestElevenLabsBatchTranscription:
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_imported_m4a_uses_matching_multipart_content_type(
         self, mock_urlopen, tmp_path
     ):
@@ -76,7 +76,7 @@ class TestElevenLabsBatchTranscription:
         request = mock_urlopen.call_args[0][0]
         assert b"Content-Type: audio/mp4\r\n" in request.data
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_transcribe_json_payload(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "Hallo Welt"}))
         t = ElevenLabsTranscriber(
@@ -99,7 +99,7 @@ class TestElevenLabsBatchTranscription:
         assert 'name="language_code"' in body
         assert "deu" in body
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_transcribe_plain_text_fallback(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("plain transcript")
         t = ElevenLabsTranscriber(api_key="xi-key")
@@ -108,7 +108,7 @@ class TestElevenLabsBatchTranscription:
 
         assert result == "plain transcript"
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "done"}))
         progress: list[str] = []
@@ -122,7 +122,7 @@ class TestElevenLabsBatchTranscription:
             "Uploading audio to ElevenLabs and waiting for transcription..."
         ]
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -131,7 +131,7 @@ class TestElevenLabsBatchTranscription:
         with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_http_429_maps_to_rate_limit(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
@@ -140,7 +140,7 @@ class TestElevenLabsBatchTranscription:
         with pytest.raises(TranscriptionError, match=r"Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = ElevenLabsTranscriber(api_key="key")
@@ -154,7 +154,7 @@ class TestElevenLabsBatchTranscription:
 
 
 class TestElevenLabsConnectionTest:
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_connection_success(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("{}", status=200)
         t = ElevenLabsTranscriber(api_key="k")
@@ -164,7 +164,7 @@ class TestElevenLabsConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.elevenlabs_provider.open_request")
     def test_connection_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None

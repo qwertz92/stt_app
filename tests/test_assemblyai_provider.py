@@ -944,8 +944,7 @@ def test_the_connection_test_uses_an_ssl_context_like_every_other_provider(
     dictation with that same key worked -- and its advice named only
     REQUESTS_CA_BUNDLE, which could not fix what had just failed.
     """
-    import urllib.request
-
+    from stt_app.transcriber import _http_utils
     from stt_app.transcriber import assemblyai_provider as provider
 
     seen: dict[str, object] = {}
@@ -960,13 +959,23 @@ def test_the_connection_test_uses_an_ssl_context_like_every_other_provider(
         def __exit__(self, *_args):
             return False
 
-    def _fake_urlopen(req, timeout=None, context=None):
-        seen["context"] = context
-        seen["timeout"] = timeout
-        return _Resp()
+    class _Opener:
+        def open(self, req, timeout=None):
+            seen["timeout"] = timeout
+            return _Resp()
 
-    monkeypatch.setattr(provider, "create_ssl_context", lambda: sentinel)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    def _fake_build_opener(*handlers):
+        seen["handlers"] = handlers
+        return _Opener()
+
+    class _FakeHTTPS:
+        def __init__(self, context=None):
+            seen["context"] = context
+
+    monkeypatch.setattr(_http_utils, "create_ssl_context", lambda: sentinel)
+    monkeypatch.setattr(_http_utils.urllib.request, "HTTPSHandler", _FakeHTTPS)
+    monkeypatch.setattr(_http_utils.urllib.request, "build_opener", _fake_build_opener)
+    assert provider.open_request is _http_utils.open_request
 
     ok, message = AssemblyAITranscriber(
         api_key="key", aai_module=_make_fake_aai()
@@ -979,11 +988,10 @@ def test_the_connection_test_uses_an_ssl_context_like_every_other_provider(
 def test_a_failed_connection_test_reports_what_the_api_said(monkeypatch):
     """`exc.reason` is the status phrase; the body says which key is wrong."""
     import urllib.error
-    import urllib.request
 
     from stt_app.transcriber import assemblyai_provider as provider
 
-    def _fake_urlopen(req, timeout=None, context=None):
+    def _fake_open(req, timeout=None, **_kwargs):
         raise urllib.error.HTTPError(
             "https://api.assemblyai.com/v2/transcript",
             402,
@@ -992,8 +1000,7 @@ def test_a_failed_connection_test_reports_what_the_api_said(monkeypatch):
             io.BytesIO(b'{"error": "This account has run out of credits"}'),
         )
 
-    monkeypatch.setattr(provider, "create_ssl_context", lambda: None)
-    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+    monkeypatch.setattr(provider, "open_request", _fake_open)
 
     ok, message = AssemblyAITranscriber(
         api_key="key", aai_module=_make_fake_aai()
@@ -1817,7 +1824,9 @@ class TestAssemblyAIRegion:
 
     def test_the_connection_test_asks_the_eu_host(self):
         t = AssemblyAITranscriber(api_key="k", aai_module=_make_fake_aai(), region="eu")
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch(
+            "stt_app.transcriber.assemblyai_provider.open_request"
+        ) as mock_urlopen:
             mock_urlopen.return_value.__enter__.return_value.status = 200
             ok, _message = t.test_connection()
         assert ok is True
@@ -1828,7 +1837,9 @@ class TestAssemblyAIRegion:
 
     def test_the_connection_test_keeps_the_us_host_by_default(self):
         t = AssemblyAITranscriber(api_key="k", aai_module=_make_fake_aai())
-        with patch("urllib.request.urlopen") as mock_urlopen:
+        with patch(
+            "stt_app.transcriber.assemblyai_provider.open_request"
+        ) as mock_urlopen:
             mock_urlopen.return_value.__enter__.return_value.status = 200
             t.test_connection()
         request = mock_urlopen.call_args[0][0]

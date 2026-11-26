@@ -31,7 +31,6 @@ from ..config import (
     parse_custom_vocabulary,
     remote_batch_part_limit,
 )
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
@@ -40,6 +39,7 @@ from ._http_utils import (
     http_error_suffix,
     multipart_form_data,
     normalize_transcript_text,
+    open_request,
 )
 from ._job_poll import fetch_with_retries, poll_job
 from .base import (
@@ -146,8 +146,8 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         request.add_header("Authorization", f"Bearer {self._api_key}")
         if content_type:
             request.add_header("Content-Type", content_type)
-        return urllib.request.urlopen(
-            request, timeout=self._request_timeout_s, context=create_ssl_context()
+        return open_request(
+            request, timeout=self._request_timeout_s, provider_name=_PROVIDER
         )
 
     def _format_error(self, exc: Exception) -> str:

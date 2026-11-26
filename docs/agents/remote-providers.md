@@ -151,10 +151,44 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `<`) stays the test for a 200 reply that should have been JSON. The
   title is searched in the first 4 KB only: the lazy regex was quadratic on
   64 KB of unclosed `<title>` (3.95 s).
-- **Every REST call passes `create_ssl_context()`**: `urllib` ignores
-  `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` failed behind a TLS
-  proxy while the SDK worked. `format_ssl_error_message` is the shared text
-  (names `SSL_CERT_FILE` too).
+- **Every REST request that carries a key is opened by
+  `_http_utils.open_request`** (2026-11-26; review finding: Meta sent its key
+  to another host on a redirect, and the OpenAI, Mistral, Deepgram,
+  ElevenLabs, Azure, Speechmatics and AssemblyAI-check requests did the same,
+  because `urllib.request.urlopen` follows redirects and copies
+  `Authorization` / `xi-api-key` to the new host: reproduced with a fake
+  vendor answering 301, 302, 303, 307 or 308 to a second localhost port). The
+  helper does three things. It passes `create_ssl_context()` (`urllib` ignores
+  `REQUESTS_CA_BUNDLE`, so AssemblyAI's `test_connection` once failed behind a
+  TLS proxy while the SDK worked; `format_ssl_error_message` is the shared
+  text, naming `SSL_CERT_FILE` too). It installs `RedirectGuard`: **an upload
+  (a request with a body) is never redirected** -- urllib would re-send it as a
+  GET without the audio, which the vendor answers with a 405 that names
+  nothing the user can act on -- and **a GET (a key check, a poll, a model
+  list) follows a redirect only inside its origin**: the same scheme, host
+  and port, or http -> https on the default ports of one host
+  (`redirect_keeps_origin`). A same-origin redirect is followed because the
+  key then goes only to the host the user already trusts with it (a vendor
+  moving a route inside its own host); another host, another port or
+  https -> http is refused. The refusal names the engine, the HTTP status and
+  the target's scheme, host, port and path (no query), says the key was not
+  sent there, and names a likely cause: a TLS-intercepting proxy answering with
+  its sign-in page is the realistic trigger. Third, it refuses a header value
+  that cannot be sent (a key with a line break, a non-breaking space or a
+  non-ASCII letter) before any request, with a sentence that does not print
+  it; `http.client` would put the whole `Bearer <key>` into its `ValueError`.
+  Call sites (`grep -rn "open_request" src`): OpenAI x2 (upload, key check),
+  Mistral x2, ElevenLabs x2, Deepgram x2, Azure x2 (upload; the key check is a
+  one-second upload too), Speechmatics (`_request`: job upload, polls and
+  transcript fetch), Meta (upload and key check), AssemblyAI (key check
+  only), the custom endpoint and OpenRouter (upload, model list, key check).
+  Not covered: AssemblyAI's and Groq's SDK calls (their redirect handling is
+  the SDK's and was not checked); the AssemblyAI, Deepgram and Fun-ASR
+  WebSockets (not urllib); `update_checker` and `update_installer` (GitHub,
+  no key); `modelscope_mirror` (its own https-only handler, no key);
+  `_job_poll` (opens nothing itself; its callers use `open_request`).
+  Tests: `tests/test_provider_redirects.py` (every REST engine x the five
+  codes, upload and key check, and the unsafe keys).
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing
@@ -833,14 +867,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     its `ValueError`, which reached the overlay and the log. Such a key is
     refused at construction without being echoed, and `_other_error`
     replaces any "invalid header" message.
-  - **Redirects go through `_RedirectGuard`** (2026-10-01): urllib's own
-    handler copies `Authorization` to whatever host `Location` names
-    (reproduced 127.0.0.1:A -> localhost:B; https -> http would send it
-    in clear) and turns a redirected POST into a bodiless GET answered
-    with a 405. An upload is never redirected; a model list only within
-    its origin (same scheme, host and port, or http -> https on the
-    default ports, `_redirect_keeps_origin`). A refusal names the target
-    without its query. `_open` builds the opener; tests patch `_open`.
+  - **Redirects go through `_http_utils.RedirectGuard`** (2026-10-01, moved
+    to the shared helper 2026-11-26, see "Every REST request that carries a
+    key" above); tests patch the module's `open_request`.
   - **An answer that is not a transcript is an error** (2026-10-01): an
     HTML page (a proxy's sign-in or block page answering 200) used to be
     returned as the transcript and pasted; JSON without a string `text`

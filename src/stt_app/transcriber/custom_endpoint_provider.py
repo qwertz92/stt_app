@@ -51,17 +51,18 @@ from ..config import (
     remote_batch_part_limit,
 )
 from ..process_tree import run_bounded
-from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     audio_content_type,
     body_excerpt,
     format_ssl_error_message,
+    header_value_unsafe,
     http_error_suffix,
     is_markup_page,
     multipart_form_data,
     normalize_transcript_text,
+    open_request,
     read_http_error_detail,
     reply_error_text,
     transcript_from_json,
@@ -169,98 +170,6 @@ def normalize_custom_endpoint(endpoint: str) -> str:
     return value
 
 
-_DEFAULT_PORTS = {"http": 80, "https": 443}
-_DISPLAY_URL_MAX_CHARS = 200
-
-
-def _origin(url: str) -> tuple[str, str, int | None]:
-    parts = urllib.parse.urlsplit(url)
-    scheme = parts.scheme.lower()
-    return (
-        scheme,
-        (parts.hostname or "").lower(),
-        parts.port or _DEFAULT_PORTS.get(scheme),
-    )
-
-
-def _redirect_keeps_origin(old_url: str, new_url: str) -> bool:
-    """Whether a redirect stays where the key may go.
-
-    The same scheme, host and port, or the upgrade from http to https on the
-    default ports of one host. Anything else -- another host, another port, or
-    https to http, which would send the key in clear -- is another origin.
-    """
-    try:
-        old_scheme, old_host, old_port = _origin(old_url)
-        new_scheme, new_host, new_port = _origin(new_url)
-    except ValueError:
-        return False
-    if not old_host or old_host != new_host:
-        return False
-    if (old_scheme, old_port) == (new_scheme, new_port):
-        return True
-    return (old_scheme, old_port, new_scheme, new_port) == ("http", 80, "https", 443)
-
-
-def _display_url(url: str) -> str:
-    """Scheme, host, port and path of a URL the server named; no query."""
-    try:
-        parts = urllib.parse.urlsplit(url)
-        host = parts.hostname or ""
-        port = f":{parts.port}" if parts.port else ""
-    except ValueError:
-        return "an invalid URL"
-    return f"{parts.scheme}://{host}{port}{parts.path}"[:_DISPLAY_URL_MAX_CHARS]
-
-
-class _RedirectGuard(urllib.request.HTTPRedirectHandler):
-    """Follows a redirect only where it cannot leak the key or drop the audio.
-
-    urllib's own handler copies every header, `Authorization` included, to
-    whatever host `Location` names (reproduced: 127.0.0.1:A -> localhost:B
-    received the Bearer key), and turns a redirected POST into a GET without
-    its body, which the endpoint answers with an HTTP 405 that names nothing
-    the user can act on. An upload is therefore never redirected, and a model
-    list only within its origin.
-    """
-
-    def __init__(self, provider_name: str) -> None:
-        super().__init__()
-        self._provider_name = provider_name
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        target = _display_url(newurl)
-        if req.data is not None:
-            refusal = (
-                f"{self._provider_name}: the endpoint redirected the upload (HTTP "
-                f"{code}) to {target}. Enter the base URL the server redirects "
-                "to in Settings -> Providers."
-            )
-        elif not _redirect_keeps_origin(req.full_url, newurl):
-            refusal = (
-                f"{self._provider_name}: the endpoint redirected (HTTP {code}) to "
-                f"another origin, {target}; the key is not sent there. Enter "
-                "that base URL in Settings -> Providers if it is the right "
-                "server."
-            )
-        else:
-            return super().redirect_request(req, fp, code, msg, headers, newurl)
-        try:
-            fp.close()
-        except Exception:
-            pass
-        raise TranscriptionError(refusal)
-
-
-def _open(request: urllib.request.Request, *, timeout: float, provider_name: str):
-    """`urlopen` with the system trust store and `_RedirectGuard`."""
-    opener = urllib.request.build_opener(
-        urllib.request.HTTPSHandler(context=create_ssl_context()),
-        _RedirectGuard(provider_name),
-    )
-    return opener.open(request, timeout=timeout)
-
-
 def _names_a_speech_recognizer(model_id: str) -> bool:
     return bool(_SPEECH_MODEL_NAME.search(model_id)) and not bool(
         _SPEECH_SYNTHESIS_NAME.search(model_id)
@@ -268,14 +177,10 @@ def _names_a_speech_recognizer(model_id: str) -> bool:
 
 
 def _header_unsafe(value: str) -> bool:
-    """Whether a Bearer value holds a character an HTTP header cannot carry.
-
-    Visible ASCII only: `http.client` refuses a line break with the whole
-    header value in its message, and encodes the rest as Latin-1, so a
-    pasted key with a stray newline, a non-breaking space or a typographic
-    quote fails in a way that would name the key.
-    """
-    return any(not ("\x21" <= character <= "\x7e") for character in value)
+    """Whether a Bearer value (a key or token, never a whole header) cannot be
+    sent: a space is as wrong inside one as the characters
+    `header_value_unsafe` names."""
+    return header_value_unsafe(value) or " " in value
 
 
 def _split_windows_command(command: str) -> list[str]:
@@ -483,6 +388,10 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     _engine = "custom"
     _name = _PROVIDER_NAME
     _upload_progress = _UPLOAD_PROGRESS
+    _redirect_hint = (
+        "Enter the base URL the server redirects to in Settings -> Providers "
+        "if it is the right server."
+    )
     _models_path = "/models"
     # An instance made only to list models, where the list is public: no key
     # is needed to build it and none is sent. Never true for a transcriber.
@@ -635,7 +544,12 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def _read(
         self, request: urllib.request.Request, timeout: float, max_bytes: int
     ) -> bytes:
-        with _open(request, timeout=timeout, provider_name=self._name) as resp:
+        with open_request(
+            request,
+            timeout=timeout,
+            provider_name=self._name,
+            redirect_hint=self._redirect_hint,
+        ) as resp:
             payload = resp.read(max_bytes + 1)
         if len(payload) > max_bytes:
             raise TranscriptionError(

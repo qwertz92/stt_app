@@ -84,7 +84,7 @@ class TestOpenAIProviderInit:
 
 
 class TestOpenAIBatchTranscription:
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_imported_mp3_uses_matching_multipart_content_type(
         self, mock_urlopen, tmp_path
     ):
@@ -97,7 +97,7 @@ class TestOpenAIBatchTranscription:
         request = mock_urlopen.call_args[0][0]
         assert b"Content-Type: audio/mpeg\r\n" in request.data
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_transcribe_json_response(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"text": "hello world"}.__str__())
         t = OpenAITranscriber(api_key="key")
@@ -106,14 +106,14 @@ class TestOpenAIBatchTranscription:
         result = t.transcribe_batch(b"RIFF fake")
         assert isinstance(result, str)
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_transcribe_plain_text_fallback(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("plain transcript")
         t = OpenAITranscriber(api_key="key")
         result = t.transcribe_batch(b"RIFF fake")
         assert result == "plain transcript"
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_transcribe_json_payload(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "Hallo Welt"}))
         t = OpenAITranscriber(api_key="key", language_mode="de")
@@ -129,7 +129,7 @@ class TestOpenAIBatchTranscription:
         assert "gpt-transcribe" in body
         assert "de" in body
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "done"}))
         progress: list[str] = []
@@ -143,7 +143,7 @@ class TestOpenAIBatchTranscription:
             "Uploading audio to OpenAI and waiting for transcription..."
         ]
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -152,7 +152,7 @@ class TestOpenAIBatchTranscription:
         with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_http_429_maps_to_rate_limit(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
@@ -161,7 +161,7 @@ class TestOpenAIBatchTranscription:
         with pytest.raises(TranscriptionError, match=r"Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = OpenAITranscriber(api_key="key")
@@ -224,14 +224,14 @@ class TestGptTranscribeRequestFields:
         assert transcriber.transcribe_batch(b"RIFF fake") == "ok"
         return _sent_fields(mock_urlopen.call_args[0][0])
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_auto_language_sends_no_language_field_at_all(self, mock_urlopen):
         assert self._fields(mock_urlopen) == [
             ("model", "gpt-transcribe"),
             ("response_format", "json"),
         ]
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_a_selected_language_goes_out_as_the_array_field(self, mock_urlopen):
         fields = self._fields(mock_urlopen, language_mode="de")
 
@@ -242,7 +242,7 @@ class TestGptTranscribeRequestFields:
         ]
         assert ("language", "de") not in fields
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_each_vocabulary_term_is_its_own_keywords_field(self, mock_urlopen):
         fields = self._fields(
             mock_urlopen,
@@ -261,7 +261,7 @@ class TestGptTranscribeRequestFields:
         # Never the comma-joined prompt beside them.
         assert [name for name, _ in fields].count("prompt") == 0
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_no_vocabulary_sends_no_keywords_field(self, mock_urlopen):
         fields = self._fields(mock_urlopen, custom_vocabulary="   ")
 
@@ -271,7 +271,7 @@ class TestGptTranscribeRequestFields:
         "term",
         ["<angle>", "less < than", "greater > than", "carriage\rreturn"],
     )
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_a_term_openai_would_refuse_is_dropped_and_the_rest_are_sent(
         self, mock_urlopen, term, caplog
     ):
@@ -297,7 +297,7 @@ class TestGptTranscribeRequestFields:
         # The count, never the user's own text.
         assert not any(term in text for text in messages)
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_nothing_is_logged_when_no_term_was_dropped(self, mock_urlopen, caplog):
         with caplog.at_level(
             logging.INFO, logger="stt_app.transcriber.openai_provider"
@@ -350,7 +350,7 @@ class TestOpenAILongRecordings:
     """
 
     @pytest.mark.parametrize(("seconds", "requests"), [(181.0, 1), (601.0, 2)])
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_the_bound_is_ten_minutes(self, mock_urlopen, seconds, requests):
         mock_urlopen.side_effect = _answers("eins", "zwei")
 
@@ -361,7 +361,7 @@ class TestOpenAILongRecordings:
         assert all(_seconds_of(part) <= OPENAI_MAX_PART_SECONDS for part in sent)
         assert sum(_seconds_of(part) for part in sent) == pytest.approx(seconds)
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_every_part_carries_the_language_and_the_vocabulary(self, mock_urlopen):
         mock_urlopen.side_effect = _answers("erster teil", "zweiter teil")
         progress: list[str] = []
@@ -389,7 +389,7 @@ class TestOpenAILongRecordings:
             for index in (1, 2)
         ]
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_a_short_recording_is_sent_byte_identical_in_one_request(
         self, mock_urlopen
     ):
@@ -401,7 +401,7 @@ class TestOpenAILongRecordings:
         assert mock_urlopen.call_count == 1
         assert _sent_audio(mock_urlopen.call_args.args[0]) == recording
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_a_failed_part_names_itself_and_carries_the_text_before_it(
         self, mock_urlopen
     ):
@@ -421,7 +421,7 @@ class TestOpenAILongRecordings:
         assert "Rate limit exceeded (HTTP 429)" in message
         assert 'Received before the failure: "erster teil"' in message
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_a_cancel_between_parts_sends_no_further_request(self, mock_urlopen):
         mock_urlopen.side_effect = _answers("erster teil", "zweiter teil")
         transcriber = OpenAITranscriber(api_key="key")
@@ -434,7 +434,7 @@ class TestOpenAILongRecordings:
 
 
 class TestOpenAIConnectionTest:
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_connection_success(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("{}", status=200)
         t = OpenAITranscriber(api_key="k")
@@ -442,7 +442,7 @@ class TestOpenAIConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.open_request")
     def test_connection_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
