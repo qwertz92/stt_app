@@ -277,12 +277,18 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
 
             prefix = "Azure transcription failed"
             body = json_from_reply(payload, prefix=prefix)
-            if not isinstance(body, dict) or not (
-                isinstance(body.get("combinedPhrases"), list)
-                or isinstance(body.get("text"), str)
+            if not isinstance(body, dict) or not any(
+                (
+                    isinstance(body.get("combinedPhrases"), list),
+                    isinstance(body.get("text"), str),
+                    # Microsoft marks no member of the result as required and
+                    # does not say what a silent recording returns: a reply
+                    # that is recognisably a transcription result is silence
+                    # even without `combinedPhrases`, as it always was.
+                    "durationMilliseconds" in body,
+                    "phrases" in body,
+                )
             ):
-                # `{"combinedPhrases": []}` is silence; an answer with neither
-                # member is not an answer to this request.
                 raise missing_field_error(body, prefix=prefix, field="combinedPhrases")
             return self._extract_transcript(body)
         except FileNotFoundError as exc:

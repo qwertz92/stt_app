@@ -524,6 +524,36 @@ class TestAzureLongRecordings:
         assert mock_urlopen.call_count == 1
 
 
+class TestAzureSilentRecording:
+    """Microsoft does not document what a silent recording returns, so a reply
+    that is recognisably a transcription result is silence, not an error."""
+
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            {"durationMilliseconds": 1000, "phrases": []},
+            {"durationMilliseconds": 1000},
+            {"phrases": []},
+            {"combinedPhrases": None, "durationMilliseconds": 0},
+            {"combinedPhrases": [], "phrases": []},
+        ],
+    )
+    @patch("stt_app.transcriber.azure_provider.open_request")
+    def test_a_transcription_result_without_text_is_silence(self, mock_urlopen, reply):
+        mock_urlopen.return_value = _fake_response(json.dumps(reply))
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+        assert t.transcribe_batch(_wav_seconds(1.0)) == ""
+
+    @patch("stt_app.transcriber.azure_provider.open_request")
+    def test_a_reply_with_none_of_the_documented_members_is_an_error(
+        self, mock_urlopen
+    ):
+        mock_urlopen.return_value = _fake_response(json.dumps({"unrelated": 1}))
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+        with pytest.raises(TranscriptionError, match=r"Azure.*no 'combinedPhrases'"):
+            t.transcribe_batch(_wav_seconds(1.0))
+
+
 class TestAzureConnectionTest:
     @patch("stt_app.transcriber.azure_provider.open_request")
     def test_connection_success(self, mock_urlopen):

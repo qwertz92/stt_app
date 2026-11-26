@@ -207,6 +207,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `channels` or `alternatives`; an answer without Deepgram's `results`, or
   without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
   names the job in these errors too, since the job already runs.
+- **Azure: a transcription result without text is silence** (2026-11-26,
+  review; deliberate and **unverified live**, no key exists to try it).
+  Microsoft's reference marks no member of the result as required and does not
+  say what a silent recording returns; the first version of the guard raised
+  when `combinedPhrases` was missing or null, which would have turned silence
+  (and the connection test's one second of silence) into an error. A reply
+  that has `combinedPhrases` as a list, a string `text`, `durationMilliseconds`
+  or `phrases` is accepted as a result and yields "" when it holds no text;
+  only a reply with none of those is an error. **Deepgram stays strict**: its
+  response schema documents `results` as required (and silence still arrives
+  as `results.channels[0].alternatives[0].transcript == ""`), so an answer
+  without `results` is not a Deepgram transcription answer.
 - **Speechmatics' plain-text transcript is refused only when it is an HTML page
   or a JSON object** (2026-11-26, review): `format=txt` answers text, and a
   dictation may begin with anything (`<b> is the bold tag.`, `< 5 items`,
