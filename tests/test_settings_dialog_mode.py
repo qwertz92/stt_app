@@ -5713,3 +5713,68 @@ def test_a_language_the_user_picks_replaces_the_remembered_one():
 
     assert store.saved is not None and store.saved.language_mode == "de"
     _ = app
+
+
+@pytest.mark.parametrize(
+    ("engine", "model_size", "expected"),
+    [
+        ("local", NEMOTRON_MODEL_SIZE, "Streaming"),
+        ("local", "small", "Streaming (Experimental)"),
+        ("local", "large-v3-turbo", "Streaming (Experimental)"),
+        ("assemblyai", "", "Streaming (Experimental)"),
+        ("deepgram", "", "Streaming (Experimental)"),
+    ],
+)
+def test_the_streaming_label_says_experimental_only_where_it_is_true(
+    engine, model_size, expected
+):
+    """Measured 2026-11-25: Nemotron streaming reaches its batch word error
+    rate; faster-whisper's rolling window does not and the cloud engines were
+    not measured. The stored value stays "streaming"."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine=engine, model_size=model_size))
+
+    index = dialog.mode_combo.findData("streaming")
+    assert dialog.mode_combo.itemText(index) == expected
+    assert dialog.mode_combo.itemText(dialog.mode_combo.findData("batch")) == "Batch"
+    _ = app
+
+
+def test_the_streaming_label_follows_the_selected_engine_and_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(AppSettings(engine="local", model_size="small"))
+    index = dialog.mode_combo.findData("streaming")
+    assert dialog.mode_combo.itemText(index) == "Streaming (Experimental)"
+
+    dialog.model_combo.setCurrentIndex(dialog.model_combo.findData(NEMOTRON_MODEL_SIZE))
+    assert dialog.mode_combo.itemText(index) == "Streaming"
+
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
+    assert dialog.mode_combo.itemText(index) == "Streaming (Experimental)"
+    assert dialog.mode_combo.itemData(index) == "streaming"
+    _ = app
+
+
+def test_the_mode_picker_keeps_its_width_when_the_label_changes():
+    """The combo is sized once, on first show, from its items: a shorter text
+    must not shrink it and the longer one must not widen it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _dialog_for(
+        AppSettings(engine="local", model_size=NEMOTRON_MODEL_SIZE, mode="streaming")
+    )
+    dialog.show()
+    app.processEvents()
+    index = dialog.mode_combo.findData("streaming")
+    try:
+        short = (dialog.mode_combo.itemText(index), dialog.mode_combo.width())
+        dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("deepgram"))
+        app.processEvents()
+        long = (dialog.mode_combo.itemText(index), dialog.mode_combo.width())
+        assert short[0] == "Streaming"
+        assert long[0] == "Streaming (Experimental)"
+        assert short[1] == long[1], (short, long)
+        # The widest label fits without eliding.
+        assert dialog.mode_combo.fontMetrics().horizontalAdvance(long[0]) < long[1]
+    finally:
+        dialog.close()
+        app.processEvents()

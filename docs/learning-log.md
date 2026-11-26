@@ -3,6 +3,18 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: "Experimental" only where streaming still is
+
+Structurally: the Mode picker reads "Streaming" for local + Nemotron and
+"Streaming (Experimental)" for faster-whisper, AssemblyAI and Deepgram, decided
+by `config.streaming_is_experimental` and following the selection. The reason
+is the 2026-11-25 measurement (11 clips, CPU): Nemotron streaming 10.5 % WER
+equal to its batch mode, faster-whisper rolling window 22.0 to 44.0 % against
+4.5 to 15.4 % in batch; the cloud engines were not measured. README (feature
+list, settings table, status table), quick-start and models.md say which
+streaming is experimental. The picker is as wide as its form column (673 px in
+both states), so the text change moves nothing.
+
 ## 2026-11-25: review corrections to the retention and no-signal work
 
 Structurally: kept copies left the "Keep Recordings" count again, a secured
