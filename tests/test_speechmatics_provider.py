@@ -304,6 +304,11 @@ class TestSpeechmaticsErrors:
             '"Hello"',
             "[1, 2]",
             "{ this is not json",
+            "<html> is the root element.",
+            "<body> tag goes here",
+            "<title> of the page",
+            "  <head> first",
+            "<!doctype html> starts a page",
         ],
     )
     def test_a_transcript_that_starts_like_markup_or_json_is_still_a_transcript(
@@ -312,7 +317,7 @@ class TestSpeechmaticsErrors:
         """`format=txt` is plain text: what was dictated may begin with `<`,
         a digit, a bracket. Only a real HTML page or a JSON object is refused."""
         service.transcript = text
-        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == text
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == text.strip()
 
     @pytest.mark.parametrize(
         ("body", "shows"),

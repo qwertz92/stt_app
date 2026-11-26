@@ -238,8 +238,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `<3 you`, a number, `true`, `[1, 2]`). The first version refused every body
   starting with `<` ("an HTML page") and every body that parsed as a JSON
   object, so those transcripts were lost. Now `is_html_page` (a doctype or an
-  `<html`/`<head`/`<body`/`<title` tag at the start) and a body that parses as
-  a JSON object are errors, each with the job id and the 7-day retention note;
+  `<html`/`<head`/`<body`/`<title` tag at the start) **and a closing tag `</`
+  somewhere in the body** ("<html> is the root element." is dictation), and a
+  body that parses as a JSON object, are errors, each with the job id and the 7-day retention note;
   everything else is the transcript, as before the change. A plain-text body
   such as "Internal Server Error" cannot be told from a transcript and is
   returned.

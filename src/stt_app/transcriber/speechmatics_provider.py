@@ -298,7 +298,9 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         # JSON object (a gateway's, which the text endpoint never sends) are
         # refused; every other body is the transcript.
         text = payload.decode("utf-8", errors="replace")
-        if is_html_page(payload):
+        # A dictated sentence can start with a tag name too ("<html> is the
+        # root element."), so a page also holds a closing tag.
+        if is_html_page(payload) and b"</" in payload:
             raise TranscriptionError(
                 "Speechmatics: the transcript answer is an HTML page instead of "
                 "text -- typically a proxy's sign-in or block page. "
