@@ -62,7 +62,9 @@ _DRAIN_TIMEOUT_S = 2.0
 _FINAL_COMMIT_WAIT_S = 3.0
 # The wait ends once an answer arrived, no partial is pending and no transcript
 # message came for this long: a VAD commit for earlier audio can land before the
-# answer to the final commit. A guess; no live call has confirmed the gap.
+# answer to the final commit. A guess, and not a proof: an answer later than
+# this after a commit for earlier audio is lost (docs/agents/remote-providers.md,
+# "Also unverified or undocumented", the last item).
 _FINAL_QUIET_S = 0.3
 _SEND_TIMEOUT_S = 1.0
 _CLOSE_TIMEOUT_S = 1.0
@@ -156,6 +158,10 @@ class ElevenLabsRealtimeSession:
         self._ready = threading.Event()
         # Set by abort and by a failure: the sender writes nothing more.
         self._halted = threading.Event()
+        # Set just before this session closes the socket itself: from then on a
+        # socket error or close is our own doing. Before that, during a stop, one
+        # is a real failure.
+        self._closing = threading.Event()
         self._closed = threading.Event()
         # The final wait (`_await_final_answer`): `_awaiting_answer` is set when
         # the final commit is sent, `_answered` once a commit answer arrived after.
@@ -275,20 +281,49 @@ class ElevenLabsRealtimeSession:
                     "ElevenLabs streaming error callback failed; the failure was not reported."
                 )
 
+    @staticmethod
+    def _close_code(error) -> int | None:
+        status = getattr(error, "status_code", None)
+        if isinstance(status, int) and 1000 <= status <= 4999:
+            return status
+        return None
+
     def _on_socket_error(self, _ws, error) -> None:
+        if self._closing.is_set():
+            # Our own close (websocket-client reports a close frame here before
+            # `on_close`): not a failure.
+            return
         with self._lock:
-            if self._state == "retiring":
-                # Our own stop or abort closed the socket (websocket-client
-                # reports a close frame here before `on_close`): not a failure.
-                return
-        self._fail(self._describe_socket_error(error))
+            stopping = self._state == "retiring"
+        if not stopping:
+            self._fail(self._describe_socket_error(error))
+            return
+        if self._close_code(error) in (1000, 1001):
+            return  # a normal close; `on_close` ends the final wait
+        # A real failure during the drain, the final commit or the final wait:
+        # recorded for `finish`, which raises it or returns the text with a
+        # warning; `on_error` is gone, the stop reports it.
+        message = self._describe_socket_error(error)
+        logger.warning(
+            "ElevenLabs streaming: %s The last words may be missing from the text.",
+            message,
+        )
+        self._fail(message)
 
     def _on_close(self, _ws, status, reason) -> None:
         # Also ends the final wait of a stop.
         self._closed.set()
+        if self._closing.is_set():
+            return
         with self._lock:
-            if self._state == "retiring":
-                return
+            stopping = self._state == "retiring"
+        if stopping:
+            if status not in (None, 1000, 1001):
+                self._fail(
+                    f"{_PROVIDER} failed: the connection was closed by the service "
+                    f"(code {status}: {self._clip(reason or '', 100)})."
+                )
+            return
         detail = f" (code {status}: {self._clip(reason, 100)})" if status else ""
         self._fail(
             f"{_PROVIDER} failed: the connection was closed by the service{detail}."
@@ -302,9 +337,11 @@ class ElevenLabsRealtimeSession:
         if isinstance(status, int) and 1000 <= status <= 4999:
             # websocket-client reports a server's close frame as an exception
             # whose `status_code` is the close code, not an HTTP status.
+            reason = getattr(error, "reason", None)
+            detail = f": {self._clip(reason, 100)}" if reason else ""
             return (
                 f"{_PROVIDER} failed: the connection was closed by the service "
-                f"(code {status})."
+                f"(code {status}{detail})."
             )
         if status in (401, 403):
             return f"{_PROVIDER} failed: authentication failed (HTTP {status}). The API key is invalid or expired."
@@ -592,6 +629,7 @@ class ElevenLabsRealtimeSession:
             ws, thread, sender = self._ws, self._thread, self._sender
         self._halted.set()
         self._ready.set()
+        self._closing.set()
         if ws is not None:
             self._close_socket()
         try:
@@ -606,6 +644,7 @@ class ElevenLabsRealtimeSession:
         ws = self._ws
         if ws is None:
             return
+        self._closing.set()
         error = _bounded(ws.close, timeout_s=_CLOSE_TIMEOUT_S, name="close")
         if error is not None:
             logger.warning(

@@ -462,3 +462,91 @@ def test_audio_not_sent_before_the_stop_is_logged_when_text_is_returned(
         t.push_audio_chunk(b"\x01\x00" * 8)
     assert t.stop_stream() == "early"
     assert "could not be sent before the stop" in caplog.text
+
+
+def _reset_then_close(sock):
+    sock.on_error(sock, ConnectionResetError("connection reset by peer"))
+    sock.on_close(sock, None, None)
+
+
+def test_a_connection_reset_during_the_final_wait_without_text_raises():
+    t = _transcriber()
+    errors: list[str] = []
+    t.start_stream(on_error=errors.append)
+    _FakeSocket.on_commit = staticmethod(_reset_then_close)
+    with pytest.raises(TranscriptionError, match="connection reset"):
+        t.stop_stream()
+    assert errors == []  # the stop reports it, not on_error
+
+
+def test_a_connection_reset_during_the_final_wait_with_text_returns_it_and_warns(
+    caplog,
+):
+    caplog.set_level(logging.WARNING)
+    t = _transcriber()
+    t.start_stream(on_error=lambda _m: None)
+    _FakeSocket.instances[-1].say(message_type="committed_transcript", text="said")
+    _FakeSocket.on_commit = staticmethod(_reset_then_close)
+    assert t.stop_stream() == "said"
+    assert "last words may be missing" in caplog.text
+
+
+def test_a_normal_server_close_during_the_final_wait_without_text_returns_empty():
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(lambda sock: sock.server_closes(1001, "away"))
+    assert t.stop_stream() == ""
+
+
+def test_an_abnormal_server_close_during_the_final_wait_without_text_raises():
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(
+        lambda sock: sock.server_closes(1011, "internal")
+    )
+    with pytest.raises(TranscriptionError, match=r"closed by the service \(code 1011"):
+        t.stop_stream()
+
+
+def test_a_close_frame_error_keeps_the_servers_reason_in_the_sentence():
+    t = _transcriber()
+    errors: list[str] = []
+    t.start_stream(on_error=errors.append)
+    ws = _FakeSocket.instances[-1]
+    error = ConnectionError("Connection closed (code 1011): too busy")
+    error.status_code, error.reason = 1011, "too busy"
+    ws.on_error(ws, error)
+    assert "code 1011: too busy" in errors[0]
+    t.abort_stream()
+
+
+def test_an_error_delivered_after_our_own_close_began_is_ignored():
+    t = _transcriber()
+    t.start_stream(on_error=lambda _m: None)
+    session = t._stream_session
+    ws = _FakeSocket.instances[-1]
+    _FakeSocket.on_commit = staticmethod(
+        lambda sock: sock.say(message_type="committed_transcript", text="done")
+    )
+    original_close = ws.close
+
+    def close_with_late_noise():
+        original_close()
+        ws.on_error(ws, ConnectionResetError("late reset"))
+        ws.on_close(ws, 1006, "late")
+
+    ws.close = close_with_late_noise
+    assert t.stop_stream() == "done"
+    assert session._error is None
+
+
+def test_abort_ignores_everything_after_it():
+    t = _transcriber()
+    errors: list[str] = []
+    t.start_stream(on_error=errors.append)
+    session = t._stream_session
+    ws = _FakeSocket.instances[-1]
+    t.abort_stream()
+    ws.on_error(ws, ConnectionResetError("after abort"))
+    ws.on_close(ws, 1011, "after abort")
+    assert errors == [] and session._error is None

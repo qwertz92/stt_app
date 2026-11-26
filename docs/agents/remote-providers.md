@@ -372,7 +372,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     failure. websocket-client 1.9.2 reports a server's close frame to `on_error`
     first, as an exception whose `status_code` is the close code, then to
     `on_close`; a code in 1000-4999 reads "closed by the service (code N)",
-    never as an HTTP status. Without that answer the last partial is the tail, so a
+    never as an HTTP status. While stopping (before the session closes the
+    socket itself, the `_closing` flag), a close code 1000 or 1001 only ends the
+    wait; any other close code or a non-close error (connection reset, TLS) is
+    recorded for the stop: without text it raises, with text the text is returned
+    and a WARNING says the last words may be missing. The server's close reason
+    stays in the sentence (scrubbed, cut to 100 characters). Without that answer the last partial is the tail, so a
     stop never loses text and never waits unboundedly. Not documented, so
     guessed: whether an empty final commit is answered when nothing is
     pending (a stop then costs the 3 s bound), and the close codes.
@@ -392,6 +397,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     strategy); what an unsupported `language_code` does (it may end the session
     with `invalid_request`); the vendor's error-messages page could not be read
     (HTTP 403 on 2026-11-26), so the error list comes from the API reference.
+  - A commit for earlier audio followed more than 0.3 s later by the real answer to
+    the final commit, with no partial in between, ends the stop early and the last words
+    are lost; the protocol has no correlation between a commit and its answer, so the
+    quiet gap (`_FINAL_QUIET_S`) is a guess. The first live check must measure the
+    answer latency after the final commit, also after a burst of backlog audio, and set
+    `_FINAL_QUIET_S` from it.
   - **Silence**: the server closes a session without client messages for 15 s,
     so the sender writes 0.1 s of silence when its queue stayed empty for 5 s,
     and ends the stream with a sentence after 30 s without audio (the same cap

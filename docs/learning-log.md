@@ -15,6 +15,12 @@ Structurally: the final wait of a stop is now "answered, no partial pending, 0.3
   silence into an error. Socket errors and closes while stopping are now ignored, a close code is
   described as such, and `on_close` always ends the final wait. The fake socket now delivers the
   library's order.
+- Second round: ignoring every socket error once the stop began also swallowed a real
+  connection reset during the final wait, so `finish()` returned "" and the controller dropped an
+  untranscribed dictation as "no speech". Errors are ignored only after the session itself began
+  closing the socket (`_closing`); before that a normal close (1000/1001) ends the wait and anything
+  else is recorded for the stop. The quiet gap is still not a proof of the final answer (listed as
+  unverified).
 - The key was scrubbed after the text was cut, so a key crossing the cut survived as a prefix; it is
   scrubbed first now.
 - "Silence is billed" was not on the pricing page (per second, no minimum, nothing on silence);
