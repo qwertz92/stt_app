@@ -9,10 +9,12 @@ Structurally: the two sentences that tell a user which engines stream are built 
 `STREAMING_ENGINES` and `ENGINE_LABELS` (`config.streaming_engines_phrase`), not written by hand.
 
 - The ElevenLabs branch left both sentences at "Local, AssemblyAI or Deepgram"; the Soniox branch
-  added Soniox to them. Merged, ElevenLabs was still missing. No test read either sentence; two do now.
-- Both branches imported a test fake named `_FakeModule` into `test_sdk_key_scrub.py`. Git merged the
-  two import lines without a conflict and the second silently replaced the first, so the ElevenLabs
-  cases would have run against the Soniox fake. Only the linter's F811 showed it.
+  added Soniox to them. Merged, ElevenLabs was still missing. No test read either sentence; two
+  do now. Seven batch-only providers' `start_stream` stubs carried the same list; they say "an
+  engine that streams" now.
+- Both branches imported a test fake named `_FakeModule` into `test_sdk_key_scrub.py`. Git merged
+  the two import lines without a conflict and the second silently replaced the first, so the
+  ElevenLabs cases would have run against the Soniox fake. Only the linter's F811 showed it.
 - A Soniox test read the log before the cleanup thread had written to it and failed under load.
 
 ## 2026-11-26: Deepgram streaming reported the server's normal close as an error

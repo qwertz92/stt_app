@@ -125,8 +125,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
 - **Streaming availability**: `config.supports_streaming()` is the single
   source. Every local model in `LOCAL_BATCH_ONLY_MODELS` (Cohere, Granite
   ONNX/WebGPU, Parakeet, Fluid Speech Pro, Granite CTC) is batch-only; Nemotron and
-  the faster-whisper sizes stream; a local model never disables
-  AssemblyAI/Deepgram streaming.
+  the faster-whisper sizes stream; a local model never disables a cloud
+  engine's streaming.
 - **In Settings the mode is chosen first and filters the lists below it**
   (2026-11-24, owner's request): the Mode row heads the Transcription tab;
   in Streaming, engines and local models that cannot stream are hidden and

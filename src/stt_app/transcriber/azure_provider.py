@@ -394,7 +394,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
         raise NotImplementedError(
             "Azure LLM Speech streaming is not implemented in this app. "
-            "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
+            "Use batch mode, or use an engine that streams."
         )
 
     def push_audio_chunk(

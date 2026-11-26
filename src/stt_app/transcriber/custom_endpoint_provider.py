@@ -1005,7 +1005,7 @@ class CustomEndpointTranscriber(ProgressReporter, ITranscriber):
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
         raise NotImplementedError(
             f"{self._name} is batch-only. Use batch mode, or use "
-            "local/AssemblyAI/Deepgram for streaming."
+            "an engine that streams."
         )
 
     def push_audio_chunk(

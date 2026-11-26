@@ -702,7 +702,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
         raise NotImplementedError(
             "Fun-ASR streaming is not implemented in this app. Use batch mode, "
-            "or use local/AssemblyAI/Deepgram for streaming."
+            "or use an engine that streams."
         )
 
     def push_audio_chunk(

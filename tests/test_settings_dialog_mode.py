@@ -6024,6 +6024,7 @@ def test_a_language_the_user_picks_replaces_the_remembered_one():
         ("assemblyai", "", "Streaming (Experimental)"),
         ("deepgram", "", "Streaming (Experimental)"),
         ("elevenlabs", "", "Streaming (Experimental)"),
+        ("soniox", "", "Streaming (Experimental)"),
     ],
 )
 def test_the_streaming_label_says_experimental_only_where_it_is_true(

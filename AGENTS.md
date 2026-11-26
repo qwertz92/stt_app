@@ -282,7 +282,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 1. Global hotkey toggles recording.
 2. Overlay: `Idle → Listening → Processing → Done/Error`.
 3. Batch mode: recorded WAV transcribed on stop.
-4. Streaming mode (local, AssemblyAI, Deepgram, Soniox): live chunks with partial text
+4. Streaming mode (local, AssemblyAI, Deepgram, ElevenLabs, Soniox): live chunks with partial text
    and append-only stable insertion. Nemotron local streaming is cache-aware;
    faster-whisper local streaming uses rolling windows.
 5. Text inserted at caret via clipboard-safe paste; clipboard restored.

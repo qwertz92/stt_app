@@ -354,7 +354,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
         raise NotImplementedError(
             "Speechmatics streaming is not implemented in this project. "
-            "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
+            "Use batch mode, or use an engine that streams."
         )
 
     def push_audio_chunk(

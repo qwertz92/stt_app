@@ -1487,7 +1487,7 @@ def streaming_is_experimental(engine: str, model_size: str = "") -> bool:
 
     Only local streaming with Nemotron is not: measured on 2026-11-25 it
     reaches its batch mode's word error rate, while faster-whisper's rolling
-    window and the three cloud streaming engines (not measured) stay
+    window and the cloud streaming engines (not measured) stay
     experimental (docs/agents/streaming.md).
     """
     normalized_engine = str(engine or "").strip().lower()
