@@ -137,13 +137,14 @@ def is_ssl_error(exc: BaseException) -> bool:
     re-raises inside a bare ``except`` and therefore only sets ``__context__``
     instead of ``__cause__``).
 
-    A link is recognised by its type first: ``ssl.SSLError`` and its subclass
-    ``ssl.SSLCertVerificationError``. With ``truststore`` active (the running
-    app) Windows verifies the chain and its own text reaches the user ("A
+    A link is recognised by its type first: ``ssl.SSLCertVerificationError``.
+    With ``truststore`` active (the running app) Windows verifies the chain and its own text reaches the user ("A
     certificate chain processed, but terminated in a root certificate which is
     not trusted by the trust provider."), which holds none of OpenSSL's words.
     The message markers stay for libraries that wrap the failure in a plain
-    exception.
+    exception. Any other ``ssl.SSLError`` (a handshake abort, a protocol
+    mismatch) is not a certificate problem and is recognised only by those
+    markers, as before.
     """
     seen: set[int] = set()
     pending: list[BaseException | object] = [exc]
@@ -152,7 +153,7 @@ def is_ssl_error(exc: BaseException) -> bool:
         if not isinstance(current, BaseException) or id(current) in seen:
             continue
         seen.add(id(current))
-        if isinstance(current, ssl.SSLError):
+        if isinstance(current, ssl.SSLCertVerificationError):
             return True
         msg = str(current).lower()
         if any(marker in msg for marker in _SSL_MARKERS):

@@ -209,8 +209,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   names the job in these errors too, since the job already runs.
 - **A certificate failure is recognised by type, then by text** (2026-11-26):
   `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
-  `reason` and answers True for any `ssl.SSLError` (which includes
-  `ssl.SSLCertVerificationError`) before it looks at words. With `truststore`
+  `reason` and answers True for any `ssl.SSLCertVerificationError` before it looks at
+  words. With `truststore`
   active, as in the running app, Windows verifies the chain and its own text
   reaches urllib: "A certificate chain processed, but terminated in a root
   certificate which is not trusted by the trust provider." (reproduced on
@@ -218,10 +218,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `SSLCertVerificationError` whose message holds none of OpenSSL's words). The
   word list alone did not match it, so every engine showed that raw text
   instead of `format_ssl_error_message`. The markers stay for libraries that
-  wrap the failure in a plain exception. Trade-off: any `ssl.SSLError` (a
-  handshake the server aborted, a protocol mismatch) now gets the proxy
-  guidance too, which is the right first suggestion behind a TLS-intercepting
-  proxy and a harmless one otherwise.
+  wrap the failure in a plain exception. Any other `ssl.SSLError` (a handshake abort, a protocol mismatch) is not a
+  certificate problem: it is recognised only by the markers, as before, so the
+  user is not told to install a certificate for it.
 - **A refusal of `open_request` during a poll names the job** (2026-11-26):
   `speechmatics_provider._job_request` appends "Job id ..." to the
   `TranscriptionError` that `open_request` raises for a refused redirect or an

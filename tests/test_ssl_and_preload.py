@@ -118,6 +118,13 @@ class TestIsSSLError:
         assert wrapped.__cause__ is None and wrapped.__context__ is None
         assert _is_ssl_error(wrapped) is True
 
+    def test_a_plain_sslerror_without_a_marker_is_not_a_certificate_failure(self):
+        import ssl
+
+        # A protocol abort is not an untrusted certificate: no guidance.
+        exc = ssl.SSLError("EOF occurred in violation of protocol")
+        assert _is_ssl_error(exc) is False
+
     def test_an_unrelated_oserror_is_not_a_certificate_failure(self):
         import urllib.error
 
