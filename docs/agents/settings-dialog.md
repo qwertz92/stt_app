@@ -467,3 +467,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   was last used for that pair or the Transcription tab's language. Tests:
   `test_use_last_recording_*` and `test_a_preselected_language_*` in
   `tests/test_settings_dialog_mode.py`.
+
+- **ElevenLabs in Streaming shows only its live model** (2026-11-26): like AssemblyAI the
+  engine streams with one fixed model, but the Model row lists that model ("Scribe v3 Live",
+  disabled) instead of the stored batch choice, and the note under it says so. The combo's signals
+  are blocked while it is rebuilt, so the stored `elevenlabs_model` stays the batch model and the
+  Batch view lists `scribe_v3` only (`_elevenlabs_streaming_selected`).

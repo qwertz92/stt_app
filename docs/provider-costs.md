@@ -54,7 +54,7 @@ Notes:
   Fun-ASR-realtime hourly figure as the best available estimate, not a
   confirmed Singapore-region price.
 - In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
-- ElevenLabs also offers `scribe_v3_live` (and the older `scribe_v2_realtime`) publicly, but the current app integration remains batch-only.
+- ElevenLabs streaming uses `scribe_v3_live` at $0.22 per hour (batch Scribe v3 is $0.20; ElevenLabs bills silence in both), pricing page read 2026-11-26. The older `scribe_v2_realtime` is not used.
 - Azure LLM Speech (enhanced mode, backed by the MAI-Transcribe models) is a synchronous file/"fast transcription" API and is **batch-only** in this app. It is in **public preview** (no SLA). It needs both a resource key *and* a per-resource endpoint, and the resource region must support LLM Speech.
 - Fun-ASR (Alibaba) is driven over the DashScope **real-time WebSocket** API in a batch fashion (the batch file API requires an OSS public URL). Key-only (Singapore region). German is supported per the vendor docs read 2026-11-24 (unverified live).
 

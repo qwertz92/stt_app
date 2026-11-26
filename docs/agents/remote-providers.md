@@ -324,8 +324,69 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   newest-generation rule: nothing in it is better or cheaper. A saved
   `scribe_v2` moves to v3 with a notice; `scribe_v1` (removed 2026-07-09)
   falls to the default and is never sent. `scribe_v3_live` (realtime,
-  $0.22/h) is not built. **Not verified live**: no key, so the v3 batch answer
-  is read as v2's (`text`).
+  $0.22/h) is the streaming model (next entry). **Not verified live**: no key,
+  so the v3 batch answer is read as v2's (`text`).
+- **ElevenLabs realtime streaming (2026-11-26, `elevenlabs_realtime.py`).**
+  Streaming always runs `scribe_v3_live` (`config.ELEVENLABS_STREAMING_MODEL`),
+  whatever the batch model is; it is not in `ELEVENLABS_MODELS`, so the batch
+  picker never offers it, and in Streaming the Model row shows only "Scribe v3
+  Live", disabled (the stored batch choice is untouched). **Unverified live**:
+  there is no key; the tests use a fake socket, and the paid release check
+  (`scripts/release_check_providers.py` runs `streaming_case` for every engine
+  in `STREAMING_ENGINES`) is the first real call. Pages read 2026-11-26:
+  - https://elevenlabs.io/docs/api-reference/speech-to-text/v-1-speech-to-text-realtime
+    (URL, query parameters, both message directions, error types)
+  - https://elevenlabs.io/docs/developers/guides/cookbooks/speech-to-text/realtime/transcripts-and-commit-strategies
+    (commit strategies, VAD range, 15 s inactivity close, 16 kHz chunks of
+    0.1 to 1 s)
+  - https://elevenlabs.io/docs/developers/guides/cookbooks/speech-to-text/realtime/server-side-streaming
+    (the final `commit: true` chunk with empty audio)
+  - https://elevenlabs.io/docs/eleven-api/guides/how-to/speech-to-text/realtime/language-options
+    (`language_code` takes ISO 639-1 or 639-3; omitted means auto-detect)
+  - https://elevenlabs.io/docs/overview/models (Scribe v3 Live succeeds
+    Scribe v2 Realtime, 90+ languages, concurrency by plan: Free 6, Starter 9,
+    Creator 15, Pro 30, Scale 45) and https://elevenlabs.io/pricing/api
+    ($0.22/h live, $0.20/h batch; silence is billed).
+  - **Wire format as built**: `wss://api.elevenlabs.io/v1/speech-to-text/realtime`
+    with the query `model_id=scribe_v3_live`, `audio_format=pcm_16000`,
+    `commit_strategy=vad`, `vad_silence_threshold_secs=1.0` (documented range
+    0.192 to 3.0; one second keeps a thinking pause in one segment; not
+    measured) and `language_code` when a language is chosen (Auto sends
+    none: the vendor detects it; the same 3-letter table as batch is used).
+    The key is the handshake header `xi-api-key`, never the URL (the vendor
+    also offers a single-use `token` query parameter for browsers; not needed
+    here). Client to server, one message type: `input_audio_chunk`
+    `{message_type, audio_base_64, commit, sample_rate}`, one per 100 ms
+    microphone block. Server to client: `session_started` (the handshake is
+    complete only on it), `partial_transcript` and `committed_transcript`
+    (`text`), errors `{message_type, error}`.
+  - **Stop**: the vendor documents no end-of-session message. The sender
+    drains its queue, then one `input_audio_chunk` with empty audio and
+    `commit: true` (the vendor's own example), then the last
+    `committed_transcript` is awaited for at most 3 s, then the socket is
+    closed (bounded). Without that answer the last partial is the tail, so a
+    stop never loses text and never waits unboundedly. Not documented, so
+    guessed: whether an empty final commit is answered when nothing is
+    pending (a stop then costs the 3 s bound), and the close codes.
+  - **Errors** (each ends the session with a sentence, once, through
+    `on_error`): `auth_error`, `unaccepted_terms`, `quota_exceeded`,
+    `rate_limited`, `queue_overflow`, `resource_exhausted`,
+    `session_time_limit_exceeded` (the limit is not documented),
+    `chunk_size_exceeded`, `input_error`, `invalid_request`,
+    `transcriber_error`, `error`. `insufficient_audio_activity` and
+    `commit_throttled` are logged only (an answer to a commit). A refused
+    handshake (HTTP 401/403/429) and a close by the service get their own
+    sentence; a transcript message without a string `text` is an error. The
+    key is scrubbed from every text (`key_redactor`), a certificate failure
+    gets `format_ssl_error_message`.
+  - **Silence**: the server closes a session without client messages for 15 s,
+    so the sender writes 0.1 s of silence when its queue stayed empty for 5 s,
+    and ends the stream with a sentence after 30 s without audio (the same cap
+    as Deepgram's, `docs/agents/streaming.md`).
+  - Not used on purpose: `turn_prediction` (v3 Live only; VAD is the
+    documented recommendation for a microphone), `keyterms` (billed as an
+    add-on, $0.05/h), timestamps, diarization, `multilang_mode`, the data
+    residency hosts (`api.eu.residency.elevenlabs.io`; no region setting yet).
 - **Azure LLM Speech offers `mai-transcribe-2` only (2026-11-24; Microsoft's
   MAI-Transcribe page, updated 2026-11-20, and microsoft.ai/news/
   mai-transcribe-2, read that day).** One engine (no MAI API outside Azure).

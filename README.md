@@ -12,7 +12,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter (one key for about 30 speech models), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
-- **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI and Deepgram streaming are experimental)
+- **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI, Deepgram and ElevenLabs streaming are experimental)
 
 ## Requirements
 
@@ -196,6 +196,7 @@ uv run python -m pytest
 | Deepgram cloud transcription (batch) | Stable |
 | Deepgram streaming | Experimental |
 | ElevenLabs cloud transcription (batch) | Stable |
+| ElevenLabs streaming (Scribe v3 Live) | Experimental, not yet verified against the live service |
 | Azure LLM Speech / MAI-Transcribe (batch) | Stable (model in public preview) |
 | Fun-ASR / Alibaba (batch) | Stable |
 | Speechmatics (batch; EU, US or Australian region) | New, not yet verified against the live service |

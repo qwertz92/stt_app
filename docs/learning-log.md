@@ -3,6 +3,22 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: ElevenLabs streams (Scribe v3 Live), built from the documentation only
+
+Structurally: `elevenlabs` joined `STREAMING_ENGINES`; the WebSocket session lives in its own module
+(`transcriber/elevenlabs_realtime.py`) and `ElevenLabsTranscriber` delegates the four streaming
+methods to it. The protocol and the vendor pages are in `docs/agents/remote-providers.md`.
+
+- No key was available, so nothing ran against the live service. The tests drive a fake socket that
+  speaks the documented messages; the paid release check covers the real call because
+  `release_check_providers.py` already runs every engine in `STREAMING_ENGINES`.
+- The first test of a stop found a real bug: the sender thread quit when the session was retired, so
+  the chunks still queued behind the stop were never written and the final commit went out first. The
+  sender now stops only when the session failed or was aborted.
+- The vendor documents no end-of-session message. The built stop (drain, an empty chunk with
+  `commit: true`, wait at most 3 s for the last committed segment, close) follows its example script;
+  whether an empty commit is answered when nothing is pending is a guess.
+
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 
 The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,

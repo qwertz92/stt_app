@@ -86,6 +86,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   an overlay that stays on "Listening" -- independent of what Deepgram does
   with the socket (`docs/agents/remote-providers.md` has the vendor facts,
   the reasons, and why the sender and not a timer).
+- **ElevenLabs realtime (Scribe v3 Live)** is a fourth streaming engine
+  (`elevenlabs_realtime.py`, 2026-11-26; unverified live, protocol in
+  `remote-providers.md`). One `ElevenLabsRealtimeSession` per dictation is the
+  generation scope: a retired socket's callbacks can only reach their own
+  session. The handshake ends on `session_started` and runs on the connect
+  worker, never the Qt thread. The sender thread checks `_halted`, not the
+  state, because a stop retires the session first and still needs every
+  queued chunk written before its final commit (found by the first test). A
+  stop is bounded: 2 s drain, 1 s send, 3 s for the last committed segment,
+  1 s close; a session that already failed or closed skips the commit and the
+  wait. The text is the committed segments plus the current partial, so the
+  tail survives a missing answer. Its mode label stays "Streaming
+  (Experimental)": nothing was measured.
 - **Deepgram streaming language**: the WebSocket rejects `detect_language`;
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single
@@ -363,5 +376,5 @@ Rule (2026-11-26): the Settings mode picker and the docs call streaming
 most Nemotron dictations never reached the document") Nemotron's streaming
 document WER is 10.5 % against 10.5 % in its own batch mode, while
 faster-whisper's rolling window gives 22.0 to 44.0 % (tiny 30.4, base 22.0,
-small 44.0, turbo 26.2) against 4.5 to 15.4 % in batch. AssemblyAI and Deepgram
+small 44.0, turbo 26.2) against 4.5 to 15.4 % in batch. AssemblyAI, Deepgram and ElevenLabs
 streaming were not measured, so they keep the label until someone does.

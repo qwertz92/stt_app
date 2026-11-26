@@ -14,10 +14,12 @@ import logging
 import pytest
 from _rest_fakes import wav_seconds
 from test_assemblyai_provider import FakeStreamingClient, _make_fake_aai
+from test_elevenlabs_realtime import _FakeModule, _FakeSocket
 from test_funasr_provider import FakeWS, _event, _wav_bytes
 
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.elevenlabs_provider import ElevenLabsTranscriber
 from stt_app.transcriber.funasr_provider import FunAsrTranscriber
 from stt_app.transcriber.groq_provider import GroqTranscriber
 
@@ -167,3 +169,44 @@ def test_funasr_never_shows_the_key(monkeypatch, caplog, key):
     ok, text = t.test_connection()
     assert not ok
     _assert_clean(text, key, caplog)
+
+
+@pytest.mark.parametrize("key", _KEYS, ids=["plain", "escaped"])
+def test_elevenlabs_streaming_never_shows_the_key(caplog, key):
+    caplog.set_level(logging.DEBUG)
+    message = _echo(key)
+
+    def make():
+        t = ElevenLabsTranscriber(api_key=key)
+        t._get_websocket_module = lambda: _FakeModule
+        return t
+
+    # The server echoes the key in a refused handshake, in an error message
+    # and in a close reason; a failed send echoes it in the socket error.
+    _FakeSocket.on_run = staticmethod(
+        lambda ws: ws.on_error(ws, ConnectionError(message))
+    )
+    t = make()
+    with pytest.raises(TranscriptionError) as raised:
+        t.start_stream()
+    _assert_clean(str(raised.value), key, caplog)
+
+    _FakeSocket.on_run = staticmethod(lambda ws: ws.say(message_type="session_started"))
+    t = make()
+    errors: list[str] = []
+    t.start_stream(on_error=errors.append)
+    _FakeSocket.instances[-1].say(message_type="invalid_request", error=message)
+    assert errors
+    _assert_clean(errors[0], key, caplog)
+    with pytest.raises(TranscriptionError) as raised:
+        t.stop_stream()
+    _assert_clean(str(raised.value), key, caplog)
+
+    t = make()
+    errors = []
+    t.start_stream(on_error=errors.append)
+    ws = _FakeSocket.instances[-1]
+    ws.on_close(ws, 1008, message)
+    assert errors
+    _assert_clean(errors[0], key, caplog)
+    t.abort_stream()

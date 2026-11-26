@@ -110,7 +110,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   470M TurboCTC (INT8, English only, batch only)
 - Remote providers: AssemblyAI (SDK batch AssemblyAI-STT-3.7 + STT-3.7-Realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
-  ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
+  ElevenLabs (REST batch + Scribe v3 Live WebSocket streaming), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only),
   Speechmatics (REST batch jobs, polled; EU/US/AU regions),
   Mistral Voxtral (REST, batch-only),
@@ -145,7 +145,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
-| `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
+| `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API; streaming delegated to `elevenlabs_realtime.py` |
+| `transcriber/elevenlabs_realtime.py` | One Scribe v3 Live WebSocket session per dictation: `session_started` handshake, base64 PCM chunks, VAD commits, bounded stop with a final commit |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only) |
 | `transcriber/speechmatics_provider.py` | Batch via Speechmatics' job API: upload, poll, fetch the text transcript; Melia 1 (default, Auto), Enhanced; region `eu1`/`us1`/`au1` |
@@ -287,7 +288,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
   azure, funasr, speechmatics, mistral, meta, openrouter, custom
-- **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
+- **STREAMING_ENGINES**: local, assemblyai, deepgram, elevenlabs (others are batch-only)
 - **OpenAI** offers `gpt-transcribe` only; `whisper-1`, `gpt-4o-transcribe` and
   `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.

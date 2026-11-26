@@ -50,6 +50,15 @@ def test_the_local_engine_is_not_a_remote_choice():
     assert set(STREAMING_ENGINES) - {DEFAULT_ENGINE} <= set(REMOTE)
 
 
+def test_elevenlabs_realtime_is_part_of_the_paid_streaming_check():
+    """The script runs `streaming_case` for every streaming engine that is
+    selected, so a streaming engine must be one the plan can select and skip."""
+    assert "elevenlabs" in STREAMING_ENGINES
+    assert plan.select_engines(["elevenlabs"], REMOTE) == ["elevenlabs"]
+    assert plan.skip_reason("elevenlabs", True, {}) is None
+    assert "elevenlabs" in plan.skip_reason("elevenlabs", False, {})
+
+
 def test_an_engine_without_a_key_is_skipped_with_the_reason():
     reason = plan.skip_reason("openai", False, {})
     assert reason is not None and "openai" in reason and "key" in reason
