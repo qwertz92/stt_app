@@ -25,7 +25,7 @@ from ..config import (
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._audio_parts import transcribe_in_parts
-from ._http_utils import errors_scrubbed, key_redactor
+from ._http_utils import errors_scrubbed, is_page_instead_of_text, key_redactor
 from .base import (
     AudioInput,
     ITranscriber,
@@ -196,6 +196,11 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
 
             # response_format="text" returns a string directly.
             if isinstance(transcription, str):
+                if is_page_instead_of_text(transcription.encode("utf-8")):
+                    raise TranscriptionError(
+                        "Groq: an HTML page came instead of the transcript -- "
+                        "typically a proxy's sign-in or block page."
+                    )
                 return transcription.strip()
 
             # Fallback: object with .text attribute (json response format).

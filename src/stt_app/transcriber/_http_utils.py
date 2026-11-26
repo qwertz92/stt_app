@@ -222,6 +222,17 @@ def is_html_page(payload: bytes) -> bool:
     return _HTML_START.match(head.lstrip()) is not None
 
 
+def is_page_instead_of_text(payload: bytes) -> bool:
+    """Whether a body that should be plain text is a proxy's HTML page.
+
+    For the engines whose transcript is plain text (Speechmatics' `format=txt`,
+    Groq's `response_format="text"`), where a dictation may itself start with a
+    tag name ("<html> is the root element."): a page starts like HTML
+    (`is_html_page`) and also holds a closing tag.
+    """
+    return is_html_page(payload) and b"</" in payload
+
+
 def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> str:
     """What to say about an HTML page that came where JSON was expected.
 

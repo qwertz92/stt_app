@@ -37,7 +37,7 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
-    is_html_page,
+    is_page_instead_of_text,
     json_from_reply,
     key_redactor,
     multipart_form_data,
@@ -298,9 +298,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         # JSON object (a gateway's, which the text endpoint never sends) are
         # refused; every other body is the transcript.
         text = payload.decode("utf-8", errors="replace")
-        # A dictated sentence can start with a tag name too ("<html> is the
-        # root element."), so a page also holds a closing tag.
-        if is_html_page(payload) and b"</" in payload:
+        if is_page_instead_of_text(payload):
             raise TranscriptionError(
                 "Speechmatics: the transcript answer is an HTML page instead of "
                 "text -- typically a proxy's sign-in or block page. "

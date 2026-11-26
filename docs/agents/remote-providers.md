@@ -249,6 +249,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   response schema documents `results` as required (and silence still arrives
   as `results.channels[0].alternatives[0].transcript == ""`), so an answer
   without `results` is not a Deepgram transcription answer.
+- **Groq refuses a proxy's page the same way** (2026-11-26, review): it asks
+  for `response_format="text"`, so the SDK hands the body back as a string and
+  a 200 page was returned (and pasted) as the transcript. The request is
+  unchanged (it cannot be tested live here); a string that starts like HTML
+  and holds a closing tag is refused with "Groq: an HTML page came instead of
+  the transcript -- typically a proxy's sign-in or block page." The test is
+  `_http_utils.is_page_instead_of_text`, shared with the Speechmatics fetch.
+  Engines that refuse a page at status 200: all of them now (the JSON engines
+  through `json_from_reply`, the two plain-text ones through this helper).
 - **Speechmatics' plain-text transcript is refused only when it is an HTML page
   or a JSON object** (2026-11-26, review): `format=txt` answers text, and a
   dictation may begin with anything (`<b> is the bold tag.`, `< 5 items`,

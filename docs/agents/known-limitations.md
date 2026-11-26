@@ -779,3 +779,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     from the Models tab (`shutil.rmtree` refuses it; the row stays), and when
     the second of a model's two folders cannot be deleted the message does
     not say that the first one is already gone.
+- **Gaps of the remote answer guards** (accepted 2026-11-26, P3/P4,
+  `transcriber/_http_utils.py`, `groq_provider.py`, `speechmatics_provider.py`):
+  - A dictation that starts with one of the tag names `<html`, `<head`, `<body`,
+    `<title` or `<!doctype html` and also holds a closing tag ("<html> and
+    </html> wrap a page") is refused as a proxy's HTML page at the Speechmatics
+    text fetch and at Groq; the user reads that an HTML page came and loses the
+    text (the audio is kept for Retry). Hypothetical today: no speech model has
+    been seen writing angle brackets. Closing it would need a second signal
+    (a content type, or the page's `<title>`); about an hour, with a real key.
+  - On Groq a 200 answer that is plain text but not a transcript (a proxy's
+    one-line message) is still pasted, because the app asks Groq for plain text
+    and cannot tell the two apart. Hypothetical today (proxies answer with
+    pages). Closing it means asking for JSON (`response_format="json"` and
+    treating a string answer as an error), which changes a request shape that
+    could not be tested here without a key; about 30 lines and a live check.
+  - A redirect whose target path contains the API key shows the key in the
+    refusal text, because `_display_url` drops only the query. A server would
+    have to write the key into its own `Location` header. Hypothetical; the
+    fix is one scrub of the shown address (about 5 lines).

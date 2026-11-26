@@ -190,6 +190,32 @@ class TestGroqTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake")
         assert result == ""
 
+    def test_a_proxy_page_is_not_a_transcript(self):
+        """`response_format="text"` hands the body back as a string, so a 200
+        page from a company proxy was returned (and pasted) as the text."""
+        page = "<html><head><title>Denied</title></head><body>No</body></html>"
+        t = GroqTranscriber(
+            api_key="test-key", groq_client_class=_make_fake_groq_class(text=page)
+        )
+        with pytest.raises(TranscriptionError, match=r"Groq.*HTML page") as raised:
+            t.transcribe_batch(b"RIFF fake")
+        assert "Denied" not in str(raised.value)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "<html> is the root element.",
+            "<body> tag goes here",
+            "<!doctype html> starts a page",
+            "An ordinary sentence.",
+        ],
+    )
+    def test_a_sentence_about_markup_is_a_transcript(self, text):
+        t = GroqTranscriber(
+            api_key="test-key", groq_client_class=_make_fake_groq_class(text=text)
+        )
+        assert t.transcribe_batch(b"RIFF fake") == text
+
     def test_transcribe_strips_whitespace(self):
         """Result text is stripped of whitespace."""
         cls = _make_fake_groq_class(text="  trimmed text  ")
