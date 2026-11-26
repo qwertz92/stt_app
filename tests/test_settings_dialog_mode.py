@@ -1713,9 +1713,11 @@ def test_remote_provider_key_fields_align_with_azure_endpoint():
     endpoint_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
     assert abs(key_x - endpoint_x) <= 2
     # The custom endpoint's group uses the same columns, so its key field and
-    # its row buttons line up with the cloud providers' above it.
+    # its row buttons line up with the cloud providers' above it. (OpenAI has
+    # no region picker, so its key field spans the whole key column; a
+    # provider with one shares the column with it.)
     for cloud, custom in (
-        (dialog.assemblyai_key_edit, dialog.custom_key_edit),
+        (dialog._provider_key_edits["openai"], dialog.custom_key_edit),
         (
             dialog._provider_test_buttons["assemblyai"],
             dialog._provider_test_buttons["custom"],

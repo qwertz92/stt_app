@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from _rest_fakes import fake_response, json_response, wav_seconds
+from _rest_fakes import fake_response, json_response, soniox_job_reply, wav_seconds
 
 from stt_app.transcriber import azure_provider as azure_module
 from stt_app.transcriber import custom_endpoint_provider as custom_module
@@ -22,6 +22,7 @@ from stt_app.transcriber import elevenlabs_provider as elevenlabs_module
 from stt_app.transcriber import meta_provider as meta_module
 from stt_app.transcriber import mistral_provider as mistral_module
 from stt_app.transcriber import openai_provider as openai_module
+from stt_app.transcriber import soniox_provider as soniox_module
 from stt_app.transcriber import speechmatics_provider as speechmatics_module
 from stt_app.transcriber.azure_provider import AzureLlmSpeechTranscriber
 from stt_app.transcriber.base import TranscriptionError
@@ -32,6 +33,7 @@ from stt_app.transcriber.meta_provider import MetaTranscriber
 from stt_app.transcriber.mistral_provider import MistralTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
 from stt_app.transcriber.openrouter_provider import OpenRouterTranscriber
+from stt_app.transcriber.soniox_provider import SonioxTranscriber
 from stt_app.transcriber.speechmatics_provider import SpeechmaticsTranscriber
 
 _PROXY_PAGE = (
@@ -68,6 +70,12 @@ _ENGINES = [
     ),
     ("meta", meta_module, "Meta", lambda key: MetaTranscriber(key)),
     (
+        "soniox",
+        soniox_module,
+        "Soniox",
+        lambda key: SonioxTranscriber(key, poll_interval_s=0.0),
+    ),
+    (
         "custom-transcriptions",
         custom_module,
         "Custom endpoint",
@@ -91,11 +99,15 @@ _ENGINES = [
 
 
 def _service(body: str):
-    """Answers every request with `body`; Speechmatics' job is created and
-    done first, so that its transcript fetch is what carries the body."""
+    """Answers every request with `body`; the job of Speechmatics and of Soniox
+    is created and done first, so that its transcript fetch is what carries
+    the body."""
 
     def answer(request, timeout=None, **_kwargs):
         url = request.full_url
+        soniox = soniox_job_reply(request, body)
+        if soniox is not None:
+            return soniox
         if "speechmatics" in url and request.get_method() == "POST":
             return json_response({"id": "job-1"}, status=201)
         if "speechmatics" in url and not url.endswith("/transcript?format=txt"):

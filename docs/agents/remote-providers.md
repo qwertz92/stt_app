@@ -180,7 +180,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   Call sites (`grep -rn "open_request" src`): OpenAI x2 (upload, key check),
   Mistral x2, ElevenLabs x2, Deepgram x2, Azure x2 (upload; the key check is a
   one-second upload too), Speechmatics (`_request`: job upload, polls and
-  transcript fetch), Meta (upload and key check), AssemblyAI (key check
+  transcript fetch), Meta (upload and key check), Soniox (`_request`: upload,
+  job, polls, transcript, deletions, key check), AssemblyAI (key check
   only), the custom endpoint and OpenRouter (upload, model list, key check).
   Not covered: AssemblyAI's and Groq's SDK calls (their redirect handling is
   the SDK's and was not checked); the AssemblyAI, Deepgram and Fun-ASR
@@ -378,13 +379,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     formats). The schema-25 adoption (an OpenAI file without a key took the
     default) is gone: every retired id moves, with or without a key.
   - **Not verified live** (no OpenAI key).
-- **Soniox was not added (2026-09-21)**: a new provider must be both more
-  accurate and cheaper than what is offered (MAI-Transcribe-2 and ElevenLabs
-  Scribe v2 lead). Open argument: Soniox's $0.12/h realtime. Figures:
-  `docs/provider-costs.md`, `docs/local-asr-model-candidates-2026.md`.
-  Speechmatics and Mistral were assessed the same way and are integrated
-  anyway, on request (2026-10-01, entries below); neither beats both leaders
-  on the 2026-09-21 reading.
+- **Soniox was not added on 2026-09-21 and is integrated since 2026-11-26**
+  (entry "Soniox is a polled batch job" below): on 2026-09-21 a new provider
+  had to be both more accurate and cheaper than what was offered
+  (MAI-Transcribe-2 and ElevenLabs Scribe v2 led), and Soniox's accuracy did
+  not clear that bar; it is added on the owner's request for v0.15.0, like
+  Speechmatics and Mistral on 2026-10-01 (neither beat both leaders on the
+  2026-09-21 reading either). Figures: `docs/provider-costs.md`,
+  `docs/local-asr-model-candidates-2026.md`. German accuracy is still not
+  measured here: run a German A/B before recommending it.
 - **Speechmatics is a polled batch job (`speechmatics_provider.py`,
   2026-10-01).** `POST /v2/jobs/` with `data_file` and a JSON `config`, then
   `GET /v2/jobs/{id}` until the status is terminal, then `GET
@@ -574,6 +577,110 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     `docs/ROADMAP.md`.
   - **Revert**: remove `meta` from `VALID_ENGINES` and the entries beside the
     `META_*` constants; a saved `engine: "meta"` then falls to local.
+- **Soniox is a polled batch job (`soniox_provider.py`, 2026-11-26).** Engine
+  `soniox`, label "Soniox", key under `soniox`, key-only. Pages read
+  2026-11-26 (all under https://docs.soniox.com/): `openapi.yaml` (paths,
+  schemas, statuses, error bodies), `stt/async/async-transcription`,
+  `stt/async/limits-and-quotas.mdx`, `stt/async/error-handling.mdx`,
+  `api-reference/errors.mdx`, `api-reference.mdx` (base URLs),
+  `data-residency.mdx`, `stt/models.mdx`, `stt/concepts/supported-languages.mdx`,
+  `stt/concepts/context.mdx`. The older `soniox.com/docs/...` links answer 308 to
+  these. **Live, without a key (2026-11-26)**: `GET /v1/models` without a key
+  answers HTTP 401 on all four REST hosts (`api`, `api.eu`, `api.jp`,
+  `api.in`), so the hosts and the route exist; a real transcript has never
+  been seen (**unverified live, no key**). Protocol, in the order the code
+  calls it, every request `Authorization: Bearer <key>` through
+  `open_request`:
+  1. `POST {base}/files`, multipart `file` -> 201 `{"id", "filename", "size",
+     "created_at"}`. 2. `POST {base}/transcriptions`, JSON `model`
+     (`stt-async-v6`), `file_id`, optional `language_hints` (list of ISO 639-1
+     codes), `language_hints_strict`, `context` -> 201 `{"id", "status":
+     "queued", ...}`. 3. `GET {base}/transcriptions/{id}` until `status` is
+     `completed`, `error` or `failed`: the schema's enum is `queued`,
+     `processing`, `completed`, `error`, while the error-handling reference
+     says `failed`; both end the wait (a status added later is waited out). A
+     failed job carries `error_type` and `error_message`
+     (`invalid_audio_file`, `file_not_found`, `transcription_output_too_long`,
+     a 402 budget type). 4. `GET {base}/transcriptions/{id}/transcript` ->
+     `{"id", "text", "tokens": [...]}`; the app reads `text` (a string; `""`
+     is silence) through `transcript_from_json`. 5. `DELETE
+     {base}/transcriptions/{id}` and `DELETE {base}/files/{file_id}` (204).
+     Base is `https://api.soniox.com/v1`, or `https://api.<region>.soniox.com/v1`.
+  - **The vendor's error body** is `{"status_code", "error_type", "message",
+    "validation_errors", "request_id", "more_info"}`; `read_http_error_detail`
+    unwraps `message`. 401 and 403 say the key is invalid, expired or "from a
+    project in another region than the one selected" (a key works in its own
+    region's project only); 402 (balance, monthly or project budget) and 429
+    (`limit_exceeded`: rate, file count, file size, transcription count, pending
+    count) quote the vendor's sentence.
+  - **What stays on Soniox's side** (the API keeps uploads and jobs until they
+    are deleted, "automatically deleted after 30 days"; limits of 10 GB, 1,000
+    files, 2,000 transcriptions make leftovers a real cost): the transcription
+    and the file are deleted, best effort, as soon as the job ended with a
+    transcript or an `error`. **The file must outlive the job** ("deleting it
+    earlier fails the transcription with `file_not_found`"), so: a job that
+    could not be created deletes its file; a wait that gave up (the 30 minute
+    budget, a quit, a final HTTP answer while polling) deletes **nothing**,
+    because the job may still complete; a completed job whose transcript could
+    not be fetched keeps both, and the error names the job id and the 30 days.
+    So **when the app quits during a job, that recording's audio and transcript
+    stay on Soniox for up to 30 days**. A refused deletion is only logged
+    (`soniox_cleanup_failed`, key scrubbed), never an error of the dictation.
+  - **The loop is `_job_poll.poll_job`, the transcript fetch
+    `fetch_with_retries`** (`SONIOX_BATCH_MAX_WAIT_S` 1800 s, one poll per
+    second, three consecutive failed fetches, the shutdown flag, the job id in
+    every message, 401/403/404 end the wait at once; a refusal of
+    `open_request` during a poll names the job). A status answer that is not
+    JSON or has no status is a failed fetch, as for Speechmatics.
+  - **Language**: the 60 codes of the supported-languages page, all of them
+    in both APIs, are `SONIOX_LANGUAGE_MODES` (plus Auto, which sends no hint).
+    A chosen language is sent as `language_hints: [code]` with
+    `language_hints_strict: true` ("rely more on language hints"), because
+    choosing German in the app means German; **unverified live** how strict
+    changes the result. Chinese is `zh`.
+  - **Custom vocabulary** is `context.terms` (up to 8,000 tokens, about
+    10,000 characters for the whole context, else `invalid_request`):
+    `soniox_provider.fit_terms` keeps the terms that fit 8,000 characters in
+    order. `soniox` is in `config.CUSTOM_VOCABULARY_ENGINES`.
+  - **Model**: `stt-async-v6` only (released 2026-11-03, $0.10/h on the
+    pricing page of the research); `stt-async-v5` is deprecated and "will be
+    removed on Dec 15, 2026", so it is not offered. The model setting is
+    `soniox_model`; saved values outside the roster fall to the default.
+  - **Region** `soniox_region`: `us` (default), `eu`, `jp`, `in`, read through
+    `config.normalize_soniox_region`; hosts in `config.SONIOX_API_HOSTS`. The
+    data-residency page guarantees that "audio and transcripts stay in the
+    selected region for both processing and storage" and that content is never
+    used for training; account and usage metadata "may be processed outside the
+    selected region". Region access must be requested in the Console, a
+    project is created in a region and its keys work there only, so **the
+    default is the US host, which every account has** (the vendor names no
+    default), and the EU label says what it needs, not only what it
+    guarantees. Every region picker, this one included, sits **inside its
+    provider's row** beside the key field; see `docs/agents/settings-dialog.md`.
+  - **Parts**: Soniox's duration limit is 300 minutes per file (fixed), no
+    per-file size limit is published, and the request is built in memory, so
+    `SONIOX_MAX_PART_SECONDS` 3600 and `SONIOX_MAX_REQUEST_BYTES` 250,000,000
+    through `remote_batch_part_limit("soniox", ...)`: a dictation never reaches
+    it, a long import is cut at quiet points; each part is its own job.
+  - **The key check is `GET {base}/models`** (documented, key-protected, spends
+    no audio): 200 with a `models` list is "Connection OK", a 401/403 says the
+    key is invalid or from another region, a proxy page or an answer without
+    `models` is not a valid key. 15 s bound.
+  - **Guards** (the binding rules of this file): every request through
+    `open_request`; every JSON answer through `json_from_reply` /
+    `transcript_from_json` / `missing_field_error` with `redact=key_redactor(key)`;
+    an upload or job answer without an `id` is an error. Tests:
+    `tests/test_soniox_provider.py`, and Soniox is an engine in
+    `test_rest_reply_guard.py`, `test_rest_key_scrub.py` and
+    `test_provider_redirects.py` (the shared fake is `_rest_fakes.soniox_job_reply`).
+    The release check (`scripts/release_check_providers.py`) calls Soniox
+    automatically (it iterates `VALID_ENGINES`) and reads `soniox_region` from the
+    saved settings (`REAL_SETTINGS_FIELDS`), so the owner's paid check covers it.
+  - **Unverified live**: everything above that only a key could show (the
+    shapes of the real answers, `language_hints_strict`, whether a WAV needs
+    a content type, the part limit, German quality).
+  - **Revert**: remove `soniox` from `VALID_ENGINES` and the entries beside the
+    `SONIOX_*` constants; a saved `engine: "soniox"` falls to local.
 - **OpenRouter is an engine of its own on the custom endpoint's code
   (`openrouter_provider.py`, 2026-11-26; owner's decision of the round: its
   own entry and key, so "Custom endpoint" stays free for something else).**

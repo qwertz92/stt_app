@@ -361,6 +361,7 @@ def test_a_missing_key_points_at_the_providers_tab(engine):
         "mistral",
         "meta",
         "openrouter",
+        "soniox",
     ],
 )
 def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
@@ -380,6 +381,7 @@ def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
             "speechmatics": "stt_app.transcriber.speechmatics_provider",
             "mistral": "stt_app.transcriber.mistral_provider",
             "meta": "stt_app.transcriber.meta_provider",
+            "soniox": "stt_app.transcriber.soniox_provider",
             # The same request code as the custom endpoint (a subclass).
             "openrouter": "stt_app.transcriber.custom_endpoint_provider",
         }[engine]
@@ -463,6 +465,33 @@ def test_the_speechmatics_region_and_model_reach_the_provider(region):
     assert built._base_url == f"https://{region}.asr.api.speechmatics.com/v2"
     assert built._model == "enhanced"
     assert built._language_mode == "fr"
+
+
+@pytest.mark.parametrize(
+    ("region", "host"),
+    [
+        ("us", "api.soniox.com"),
+        ("eu", "api.eu.soniox.com"),
+        ("jp", "api.jp.soniox.com"),
+        ("in", "api.in.soniox.com"),
+    ],
+)
+def test_the_soniox_region_model_language_and_vocabulary_reach_the_provider(
+    region, host
+):
+    built = create_transcriber(
+        AppSettings(
+            engine="soniox",
+            soniox_region=region,
+            language_mode="de",
+            custom_vocabulary="Kubernetes, Grafana",
+        ),
+        secret_store=_AnyKeyStore(),
+    )
+    assert built._base_url == f"https://{host}/v1"
+    assert built._model == "stt-async-v6"
+    assert built._language_mode == "de"
+    assert built._vocabulary == ["Kubernetes", "Grafana"]
 
 
 def test_the_meta_model_language_and_vocabulary_reach_the_provider():

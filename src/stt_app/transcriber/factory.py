@@ -31,6 +31,7 @@ from .meta_provider import MetaTranscriber
 from .mistral_provider import MistralTranscriber
 from .openai_provider import OpenAITranscriber
 from .openrouter_provider import OpenRouterTranscriber
+from .soniox_provider import SonioxTranscriber
 from .speechmatics_provider import SpeechmaticsTranscriber
 
 
@@ -227,6 +228,15 @@ def create_transcriber(
             api_key=_api_key(secret_store, "meta"),
             language_mode=settings.language_mode,
             model=settings.meta_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_threshold=_part_silence_threshold(settings),
+        )
+    if settings.engine == "soniox":
+        return SonioxTranscriber(
+            api_key=_api_key(secret_store, "soniox"),
+            language_mode=settings.language_mode,
+            model=settings.soniox_model,
+            region=settings.soniox_region,
             custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
             silence_gate_threshold=_part_silence_threshold(settings),
         )

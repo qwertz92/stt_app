@@ -743,6 +743,7 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "mistral": "has_mistral_key",
     "meta": "has_meta_key",
     "openrouter": "has_openrouter_key",
+    "soniox": "has_soniox_key",
 }
 
 # `_ENGINE_MODEL_FIELDS` and `_ENGINE_REGION_FIELDS` (imported from the

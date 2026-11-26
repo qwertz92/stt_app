@@ -9,7 +9,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
 - **GPU-accelerated models** — optional Cohere and IBM Granite Speech 5.0 models run on your GPU (WebGPU). On the app's own test (25 German and 25 English FLEURS clips, [report](docs/benchmarks/local-model-roster-2026-11-25.md)) Whisper large-v3-turbo had the lowest error rate (2.6 % German, 3.4 % English), followed by Fluid Speech Pro (3.3 % and 3.6 %, CPU) and Granite 5.0 2B (3.5 % and 4.9 %); see [docs/models.md](docs/models.md#which-model-should-i-use) for which to pick
-- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter (one key for about 30 speech models), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
+- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), Meta (Muse Voice), Soniox, OpenRouter (one key for about 30 speech models), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
 - **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI and Deepgram streaming are experimental)
@@ -80,7 +80,7 @@ Right-click the **system tray icon** → **Settings**.
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
-| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter, Custom endpoint (OpenAI-compatible) | Local |
+| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter, Soniox, Custom endpoint (OpenAI-compatible) | Local |
 | Mode | Batch (after stop) or Streaming (live; experimental except local Nemotron) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |
@@ -202,6 +202,7 @@ uv run python -m pytest
 | Mistral Voxtral Mini / Small Transcribe 3 (batch) | New, not yet verified against the live service |
 | Meta Muse Voice Transcribe (batch) | New, not yet verified against the live service |
 | OpenRouter transcription models (batch) | New, not yet verified against the live service |
+| Soniox stt-async-v6 (batch; US, EU, Japan or India region) | New, not yet verified against the live service |
 | Custom OpenAI-compatible endpoint (batch) | Stable (not verified against every server) |
 
 ## License

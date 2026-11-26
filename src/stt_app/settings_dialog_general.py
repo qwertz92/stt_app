@@ -107,6 +107,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "English (batch only)."
     ),
     "meta": "{name} uses the custom vocabulary as its keywords (batch only).",
+    "soniox": ("{name} uses the custom vocabulary as its context terms (batch only)."),
     "openrouter": (
         "{name} uses the custom vocabulary as the request prompt, which only "
         "some of the models behind it honour (batch only)."

@@ -148,6 +148,10 @@ def _build(engine: str, key: str):
         from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 
         return "assemblyai_provider", AssemblyAITranscriber(api_key=key)
+    if engine == "soniox":
+        from stt_app.transcriber.soniox_provider import SonioxTranscriber
+
+        return "soniox_provider", SonioxTranscriber(api_key=key)
     if engine == "openrouter":
         from stt_app.transcriber.openrouter_provider import OpenRouterTranscriber
 
@@ -169,6 +173,7 @@ ENGINES = (
     "speechmatics",
     "assemblyai",
     "openrouter",
+    "soniox",
     "custom",
 )
 # AssemblyAI's batch transcription goes through its SDK, which is not covered.
@@ -184,6 +189,7 @@ NAMES = {
     "speechmatics": "Speechmatics",
     "assemblyai": "AssemblyAI",
     "openrouter": ENGINE_LABELS["openrouter"],
+    "soniox": ENGINE_LABELS["soniox"],
     "custom": ENGINE_LABELS["custom"],
 }
 

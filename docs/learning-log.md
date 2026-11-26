@@ -3,6 +3,33 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: Soniox as the `soniox` engine (batch first)
+
+Structurally: a new cloud engine, `soniox`, built to Soniox's own documentation and OpenAPI schema
+(`https://docs.soniox.com/openapi.yaml`, read that day), not to the research of 2026-11-24. Batch
+is committed first and stands alone; realtime streaming is a separate commit.
+
+- **Where the documentation and the research differed**: the research said `stt-async-v6`,
+  `stt-rt-v6`, about $0.10 and $0.12 per hour, 60+ languages. All four held (the pricing page
+  quotes the two prices), and the research's "EU region not stated" was wrong: the data-residency
+  page lists US, EU, Japan and India hosts, but a region needs a project created in it with its own
+  key, and region access is requested in the Console, so the default is US and the picker says
+  what each other region needs.
+- **The vendor's own pages disagree on one word**: the OpenAPI enum for a job's status is
+  `queued`, `processing`, `completed`, `error`; the error-handling reference says a failed job
+  has `status: "failed"`. Both end the wait.
+- **Data hygiene is part of the protocol**: Soniox keeps an upload and a transcription until they
+  are deleted (30 days at the latest), and "deleting the file earlier fails the transcription".
+  The provider deletes both after the text arrived, and deliberately deletes nothing when the wait
+  gave up (the job may still complete). A quit in between leaves that recording on Soniox for up
+  to 30 days; the docs say so.
+- **Live, without a key**: `GET /v1/models` without a key answered 401 on all four REST hosts.
+  A real transcript has never been seen.
+- **Providers tab**: one more row made the tab scroll 28 px at the default 860 x 1010 dialog
+  (measured numbers in `docs/agents/settings-dialog.md`); every region picker (AssemblyAI,
+  Deepgram, Speechmatics, Soniox) therefore sits inside its provider's row beside the key
+  field, which won the height back with 62 px to spare.
+
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 
 The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,

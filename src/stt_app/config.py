@@ -1350,6 +1350,74 @@ META_LANGUAGE_NAMES: dict[str, str] = {
     "vi": "Vietnamese",
 }
 META_LANGUAGE_MODES = ("auto", *META_LANGUAGE_NAMES)
+# The 60 languages of Soniox's supported-languages page (read 2026-11-26,
+# https://docs.soniox.com/stt/concepts/supported-languages.mdx): "all languages
+# are available" in the async and the real-time API alike, written as ISO 639-1
+# codes, which `language_hints` takes as they are. The app's German and English
+# come first, as in every other list; Auto sends no hint.
+SONIOX_LANGUAGE_MODES = (
+    "auto",
+    "de",
+    "en",
+    "af",
+    "sq",
+    "ar",
+    "az",
+    "eu",
+    "be",
+    "bn",
+    "bs",
+    "bg",
+    "ca",
+    "zh",
+    "hr",
+    "cs",
+    "da",
+    "nl",
+    "et",
+    "fi",
+    "fr",
+    "gl",
+    "el",
+    "gu",
+    "he",
+    "hi",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "kn",
+    "kk",
+    "ko",
+    "lv",
+    "lt",
+    "mk",
+    "ms",
+    "ml",
+    "mr",
+    "no",
+    "fa",
+    "pl",
+    "pt",
+    "pa",
+    "ro",
+    "ru",
+    "sr",
+    "sk",
+    "sl",
+    "es",
+    "sw",
+    "sv",
+    "tl",
+    "ta",
+    "te",
+    "th",
+    "tr",
+    "uk",
+    "ur",
+    "vi",
+    "cy",
+)
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
     "local",
@@ -1365,6 +1433,7 @@ VALID_ENGINES = (
     "mistral",
     "meta",
     "openrouter",
+    "soniox",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1386,6 +1455,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
     "meta": META_LANGUAGE_MODES,
+    "soniox": SONIOX_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
 LOCAL_BATCH_ONLY_MODELS = (
@@ -1488,7 +1558,8 @@ def language_modes_for_selection(
 # entries (Enhanced), Mistral as repeated `context_bias`
 # fields, Meta as the `keywords` list of its request part, OpenRouter as the
 # multipart `prompt` (honoured by the providers behind it that support
-# contextual prompting, ignored by the rest). ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
+# contextual prompting, ignored by the rest), Soniox as `context.terms`.
+# ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
@@ -1500,6 +1571,7 @@ CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "mistral",
     "meta",
     "openrouter",
+    "soniox",
 )
 # A model of one of those engines that has no biasing input. Melia 1:
 # "Custom Dictionary: ... Not yet."
@@ -1518,7 +1590,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced, Mistral, Meta, OpenRouter, and a custom endpoint"
+    "Enhanced, Mistral, Meta, OpenRouter, Soniox, and a custom endpoint"
 )
 
 
@@ -1628,6 +1700,7 @@ ENGINE_LABELS: dict[str, str] = {
     "mistral": "Mistral (Voxtral)",
     "meta": "Meta (Muse Voice)",
     "openrouter": "OpenRouter",
+    "soniox": "Soniox",
     "custom": "Custom endpoint",
 }
 
@@ -1854,6 +1927,10 @@ def normalize_speechmatics_region(value: object) -> str:
     return _known_region(value, SPEECHMATICS_REGIONS, DEFAULT_SPEECHMATICS_REGION)
 
 
+def normalize_soniox_region(value: object) -> str:
+    return _known_region(value, SONIOX_REGIONS, DEFAULT_SONIOX_REGION)
+
+
 # Voxtral 3 (announced 2026-10-20; mistral.ai/news/voxtral-3 and the model
 # cards on docs.mistral.ai, read 2026-11-24). The dated ids, not the
 # `-latest` aliases, so the model does not change under the user. Mini is
@@ -1880,6 +1957,42 @@ DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 # example (https://dev.meta.ai/docs/speech-to-text, read 2026-11-26).
 META_MODELS = ("muse-voice-transcribe-1.0",)
 DEFAULT_META_MODEL = "muse-voice-transcribe-1.0"
+
+# Soniox (pages and OpenAPI schema read 2026-11-26; `docs/agents/
+# remote-providers.md` lists each URL). Two models, one per API: `stt-async-v6`
+# for batch (the `soniox_model` setting, the only one offered) and `stt-rt-v6`
+# for realtime streaming (`SONIOX_REALTIME_MODEL`, fixed, as AssemblyAI's
+# streaming model is). Both released 2026-11-03; the v5 ids are deprecated and
+# "will be removed on Dec 15, 2026", so they are not offered.
+SONIOX_MODELS = ("stt-async-v6",)
+DEFAULT_SONIOX_MODEL = "stt-async-v6"
+SONIOX_REALTIME_MODEL = "stt-rt-v6"
+# One host pair per project region (https://docs.soniox.com/data-residency.mdx):
+# REST for the async API, a WebSocket host for realtime. A project's key works
+# in its own region only, and regions other than the US need access requested
+# in the Soniox Console, so the US host (the one a plain account has) is the
+# default, as the vendor names no default of its own.
+SONIOX_API_HOSTS = {
+    "us": "api.soniox.com",
+    "eu": "api.eu.soniox.com",
+    "jp": "api.jp.soniox.com",
+    "in": "api.in.soniox.com",
+}
+SONIOX_REALTIME_HOSTS = {
+    "us": "stt-rt.soniox.com",
+    "eu": "stt-rt.eu.soniox.com",
+    "jp": "stt-rt.jp.soniox.com",
+    "in": "stt-rt.in.soniox.com",
+}
+SONIOX_REGIONS = tuple(SONIOX_API_HOSTS)
+DEFAULT_SONIOX_REGION = "us"
+# A job's total wait and the pause between status requests, as Speechmatics.
+SONIOX_BATCH_MAX_WAIT_S = 1800.0
+SONIOX_POLL_INTERVAL_S = 1.0
+# "The whole context can be up to 8,000 tokens (about 10,000 characters)", else
+# `invalid_request` (https://docs.soniox.com/stt/concepts/context.mdx). The
+# terms are kept under 8,000 characters, a margin for the JSON around them.
+SONIOX_CONTEXT_MAX_CHARS = 8000
 
 # OpenRouter's transcription endpoint (https://openrouter.ai/docs/api/
 # api-reference/stt/create-transcription.md, read 2026-11-26). The base URL is
@@ -2005,6 +2118,15 @@ META_MAX_REQUEST_BYTES = 32_000_000
 # documented 25 MB, read as decimal megabytes.
 OPENROUTER_MAX_PART_SECONDS = CUSTOM_CHAT_MAX_PART_SECONDS
 OPENROUTER_MAX_REQUEST_BYTES = 25_000_000
+# Soniox: "File duration: 300 minutes. This is fixed and can't be increased"
+# (https://docs.soniox.com/stt/async/limits-and-quotas.mdx, read 2026-11-26); a
+# longer file fails the job with `invalid_audio_file`. No per-file size limit
+# is published (the upload's 400 names one without a figure), and the request
+# is built in memory, so a part is one hour and 250 MB (130 minutes of the
+# app's WAV): a dictation never reaches it, a long import is cut at quiet
+# points well inside both documented bounds.
+SONIOX_MAX_PART_SECONDS = 3600.0
+SONIOX_MAX_REQUEST_BYTES = 250_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
@@ -2014,6 +2136,7 @@ REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "mistral": MISTRAL_MAX_PART_SECONDS,
     "meta": META_MAX_PART_SECONDS,
     "openrouter": OPENROUTER_MAX_PART_SECONDS,
+    "soniox": SONIOX_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
@@ -2024,6 +2147,7 @@ REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "mistral": MISTRAL_MAX_REQUEST_BYTES,
     "meta": META_MAX_REQUEST_BYTES,
     "openrouter": OPENROUTER_MAX_REQUEST_BYTES,
+    "soniox": SONIOX_MAX_REQUEST_BYTES,
 }
 # An API style whose limit differs from its engine's: (engine, api_mode) ->
 # (seconds, bytes). Only the custom endpoint has more than one style.

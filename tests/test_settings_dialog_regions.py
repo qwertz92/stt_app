@@ -86,6 +86,7 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
             "mistral": "mi-key",
             "meta": "me-key",
             "openrouter": "or-key",
+            "soniox": "so-key",
         },
     )
     try:
@@ -99,6 +100,7 @@ def test_a_save_records_the_keys_of_the_new_providers(tmp_path):
         assert saved.has_mistral_key is True
         assert saved.has_meta_key is True
         assert saved.has_openrouter_key is True
+        assert saved.has_soniox_key is True
     finally:
         dialog.deleteLater()
     _ = app
@@ -112,6 +114,7 @@ def test_the_new_engines_have_a_label_models_and_a_key_row(tmp_path):
             ("mistral", "Mistral (Voxtral)"),
             ("meta", "Meta (Muse Voice)"),
             ("openrouter", "OpenRouter"),
+            ("soniox", "Soniox"),
         ):
             index = dialog.engine_combo.findData(engine)
             assert index >= 0, engine
@@ -285,6 +288,44 @@ def test_openrouter_connection_test_builds_the_openrouter_transcriber(tmp_path):
 
         assert error is None
         assert type(tester.__self__).__name__ == "OpenRouterTranscriber"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_soniox_connection_test_builds_the_soniox_transcriber_for_its_region(
+    tmp_path,
+):
+    dialog, _store, app = _dialog(
+        tmp_path, AppSettings(soniox_region="eu"), secrets={"soniox": "k"}
+    )
+    try:
+        snapshot = dialog._connection_test_snapshot(
+            "soniox", dialog._provider_key_edits["soniox"]
+        )
+
+        tester, error = remote_module._build_connection_tester("soniox", snapshot)
+
+        assert error is None
+        assert type(tester.__self__).__name__ == "SonioxTranscriber"
+        assert tester.__self__._base_url == "https://api.eu.soniox.com/v1"
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_soniox_region_is_saved_and_shown_in_the_providers_row(tmp_path):
+    """The region picker sits beside the key field, not in a row of its own
+    (a row more would make the tab scroll at the default size), and a save
+    keeps the pick."""
+    dialog, store, app = _dialog(tmp_path, AppSettings(soniox_region="jp"))
+    try:
+        combo = dialog._provider_region_combos["soniox"]
+        assert combo.currentData() == "jp"
+        key_edit = dialog._provider_key_edits["soniox"]
+        assert combo.parentWidget() is key_edit.parentWidget()
+        dialog._save()
+        assert store.load().soniox_region == "jp"
     finally:
         dialog.deleteLater()
     _ = app

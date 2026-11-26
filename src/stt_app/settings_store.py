@@ -65,6 +65,8 @@ from .config import (
     DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_SILENCE_GATE_ENABLED,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    DEFAULT_SONIOX_MODEL,
+    DEFAULT_SONIOX_REGION,
     DEFAULT_SPEECHMATICS_MODEL,
     DEFAULT_SPEECHMATICS_REGION,
     DEFAULT_START_BEEP_ENABLED,
@@ -93,6 +95,7 @@ from .config import (
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
+    SONIOX_MODELS,
     SPEECHMATICS_MELIA_MODEL,
     SPEECHMATICS_MODELS,
     VAD_ENERGY_THRESHOLD_MAX,
@@ -110,6 +113,7 @@ from .config import (
     effective_preferred_device,
     normalize_assemblyai_region,
     normalize_deepgram_region,
+    normalize_soniox_region,
     normalize_speechmatics_region,
     onnx_auto_device_order,
     order_with_preferred_device,
@@ -193,6 +197,7 @@ DEFAULTS = {
     "has_mistral_key": False,
     "has_meta_key": False,
     "has_openrouter_key": False,
+    "has_soniox_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -215,6 +220,8 @@ DEFAULTS = {
     "meta_model": DEFAULT_META_MODEL,
     "openrouter_model": DEFAULT_OPENROUTER_MODEL,
     "openrouter_models": (),
+    "soniox_model": DEFAULT_SONIOX_MODEL,
+    "soniox_region": DEFAULT_SONIOX_REGION,
 }
 
 
@@ -451,6 +458,7 @@ class AppSettings:
     has_mistral_key: bool = False
     has_meta_key: bool = False
     has_openrouter_key: bool = False
+    has_soniox_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -495,6 +503,10 @@ class AppSettings:
     # the URL is fixed, so no URL is stored beside it).
     openrouter_model: str = DEFAULT_OPENROUTER_MODEL
     openrouter_models: tuple[str, ...] = ()
+    # Soniox's batch model (the realtime model is fixed) and its project
+    # region: us, eu, jp or in. Added 2026-11-26 without a schema bump.
+    soniox_model: str = DEFAULT_SONIOX_MODEL
+    soniox_region: str = DEFAULT_SONIOX_REGION
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppSettings:
@@ -667,6 +679,12 @@ class AppSettings:
             _text_setting(merged.get("meta_model")),
             META_MODELS,
             DEFAULT_META_MODEL,
+        )
+        soniox_model = _current_remote_model(
+            "soniox",
+            _text_setting(merged.get("soniox_model")),
+            SONIOX_MODELS,
+            DEFAULT_SONIOX_MODEL,
         )
         # Free text: a blank is no choice, anything else is the user's.
         openrouter_model = (
@@ -920,6 +938,7 @@ class AppSettings:
             has_mistral_key=parse_json_bool(merged.get("has_mistral_key")),
             has_meta_key=parse_json_bool(merged.get("has_meta_key")),
             has_openrouter_key=parse_json_bool(merged.get("has_openrouter_key")),
+            has_soniox_key=parse_json_bool(merged.get("has_soniox_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -946,6 +965,8 @@ class AppSettings:
             meta_model=meta_model,
             openrouter_model=openrouter_model,
             openrouter_models=normalize_custom_models(merged.get("openrouter_models")),
+            soniox_model=soniox_model,
+            soniox_region=normalize_soniox_region(merged.get("soniox_region")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -1000,6 +1021,7 @@ _REMOTE_MODEL_FIELDS: dict[str, str] = {
     "mistral": "mistral_model",
     "meta": "meta_model",
     "openrouter": "openrouter_model",
+    "soniox": "soniox_model",
 }
 
 # Which field carries each remote engine's data-residency region; an engine
@@ -1009,6 +1031,7 @@ _REMOTE_REGION_FIELDS: dict[str, str] = {
     "assemblyai": "assemblyai_region",
     "deepgram": "deepgram_region",
     "speechmatics": "speechmatics_region",
+    "soniox": "soniox_region",
 }
 
 
@@ -1172,6 +1195,7 @@ class SettingsStore:
             "mistral_api_key",
             "meta_api_key",
             "openrouter_api_key",
+            "soniox_api_key",
         ):
             payload.pop(secret_key, None)
         return payload

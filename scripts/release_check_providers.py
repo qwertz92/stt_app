@@ -5,8 +5,8 @@ For every clip given on the command line:
 
   * one batch request for EVERY remote engine the app offers (AssemblyAI,
     Groq, OpenAI, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR,
-    Speechmatics, Mistral, Meta, OpenRouter and the custom endpoint), each with the engine's
-    default model and through the app's own transcriber,
+    Speechmatics, Mistral, Meta, OpenRouter, Soniox and the custom endpoint), each with the
+    engine's default model and through the app's own transcriber,
   * one streaming session for each engine that has streaming (AssemblyAI and
     Deepgram): the clip is pushed at real-time pace (100 ms of audio every
     100 ms, exactly as the microphone delivers it), partials are counted, and
@@ -46,7 +46,7 @@ WHAT IT TOUCHES
   never printed, never logged and never written to the report.
 * The user's real `settings.json`, READ-ONLY and only for the non-secret
   routing fields in `_release_check_provider_plan.REAL_SETTINGS_FIELDS`: the
-  AssemblyAI, Deepgram and Speechmatics regions, the Azure endpoint and the
+  AssemblyAI, Deepgram, Speechmatics and Soniox regions, the Azure endpoint and the
   custom endpoint with its model and API style. A check against another host
   than the one the user's keys work on would prove nothing, and the Azure
   endpoint and the custom base URL exist nowhere else. The file is read

@@ -298,11 +298,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
 - **The Providers tab is one compact grid per group** (2026-10-03, UX
   review item 5). Columns: name, key field (the only stretch, minimum
   140 px), Test, Remove, a fixed-width last-test mark, the key-source badge.
-  "Cloud providers" holds the eleven key providers (Meta and OpenRouter
-  joined 2026-11-26; the OpenRouter row's tooltip says that audio goes to
-  OpenRouter, which forwards it to the model's vendor); a provider's region
-  (`_REMOTE_REGION_CHOICES`, each choice's vendor guarantee as an item
-  tooltip) or Azure's endpoint is an indented sub-row right under it.
+  "Cloud providers" holds the twelve key providers (Meta and OpenRouter
+  joined 2026-11-26, then Soniox; the OpenRouter row's tooltip says that
+  audio goes to OpenRouter, which forwards it to the model's vendor). **A
+  provider's region picker sits in its own row, right of the key field,
+  inside the key column** (`_REMOTE_REGION_CHOICES`, each choice's vendor
+  guarantee as an item tooltip; since 2026-11-26, it was an indented
+  "Region" sub-row under the row before); Azure's endpoint is still an
+  indented sub-row.
   **One width rule (2026-10-03): a field in a grid starts and ends where the
   key fields do** -- Azure's endpoint and the custom endpoint's Base URL,
   API Style and Key Command take the key field's column only (they used to
@@ -310,10 +313,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   width, 9 pt; now 342 / 390 / 447 px at 9 / 11.25 / 13.5 pt, the
   longest placeholder needs 252 / 310 / 372). The API Style combo's minimum
   contents length is 8, not 24, or it would raise the column. The region
-  combo is left-aligned at its own width, always visible and enabled, so a
-  pick moves nothing; it raises the page minimum by at most its own width
-  (Providers page 583 / 674 / 757 px, was 573 / 636 / 693; the dialog
-  minimum 801 / 912 / 1026 is the tab bar and did not move). "Custom
+  combo is always visible and enabled, so a pick moves nothing; its row
+  is key field plus combo, so the key field is narrower than OpenAI's
+  (which spans the column) by the combo's width, and the combo ends where
+  the column does (`test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge`).
+  The page's minimum width was measured with the picker in a sub-row (583 /
+  674 / 757 px at 9 / 11.25 / 13.5 pt, 2026-10-03); it was not re-measured
+  with the combo beside the key field, but the dialog minimum (801 / 912 /
+  1026, the tab bar) is pinned by tests that pass. "Custom
   endpoint (OpenAI-compatible)" holds Base URL, API Style, Key Command and
   the endpoint's own key row; both groups use `_new_provider_grid` and the
   same captions, so their columns line up (a test pins it). Test is enabled
@@ -335,9 +342,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   (scroll 48 px); at 1010 px content and viewport are both 879 px, no
   scrollbar. Pinned by
   `test_providers_tab_fits_the_default_dialog_height_without_scrolling`.
-  **Not built**: moving each region picker into its provider's own row would
-  save about 90 px and let the default go back to 960; it was left because it
-  changes the row grid (region pickers are indented sub-rows by design).
+  **Soniox (2026-11-26) forced the move of the region pickers into the
+  provider rows.** With a twelfth row and its picker as a sub-row the page
+  would have been about 29 px taller. Measured on the real platform plugin,
+  9 pt, 860 x 1010 dialog, viewport 879 px (`measure.py`, kept in the
+  session scratchpad): Soniox row with its picker inline and the other three
+  pickers still sub-rows, content 907 px, scroll range 28 px, scroll bar
+  visible (cloud group 543 px); **every picker inline: content 879 px, no
+  scroll bar, minimum hint 817 px, 62 px spare** (cloud group 453 px, 90 px
+  less). The default stays 1010 px: the 62 px spare would allow about 950
+  px on this tab, but the other tabs were not measured at a smaller
+  default, so that is a candidate, not a decision.
 - **Connection test results persist in `provider_connection_tests.json`**,
   not `settings.json`; restored on open, overwritten only for tested
   providers, cleared when that provider's key is saved or deleted. Each row
@@ -351,6 +366,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   three lines against the two reserved. Twelve failures (the ten above plus
   Meta and OpenRouter) need 42 of 42 px at 9 pt at the minimum width
   (measured 2026-11-26; the 11.25 / 13.5 pt figures were not re-measured).
+  Soniox makes it thirteen names; the test of the summary's two reserved
+  lines passes with it (its figure in px was not re-measured).
 - **One model-list fetch serves the custom endpoint and OpenRouter**
   (2026-11-26). The Transcription tab's Refresh button (`fetch_models_button`,
   `_run_models_fetch`) asks the selected engine's list endpoint; the result is

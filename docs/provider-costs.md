@@ -28,6 +28,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Mistral | Batch | `voxtral-mini-transcribe-3-0` (default) or `voxtral-small-transcribe-3` (was `voxtral-mini-2602`) | Mini $0.0035/min, Small $0.0040/min ([announcement](https://mistral.ai/news/voxtral-3/), read 2026-11-24); was $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
 | Meta | Batch | `muse-voice-transcribe-1.0` | "$0.18 per hour" of audio, billed per whole second; failed requests and 429s are not billed; batch and streaming cost the same ([speech-to-text docs](https://dev.meta.ai/docs/speech-to-text), read 2026-11-26) | $0.18/hour |
 | OpenRouter | Batch | Any model of its public transcription list (30 on 2026-11-26), default `openai/gpt-transcribe` | Priced per model, per second of audio for most ([model list](https://openrouter.ai/api/v1/models?output_modalities=transcription), read 2026-11-26; the price fields use different units across models, so the app shows none). OpenRouter adds no markup on its own key; a bring-your-own-key setup carries a 5 % fee after an allowance (privacy/BYOK pages, research of 2026-11-24, not re-read) | varies by model; `openai/gpt-transcribe` $0.27/hour |
+| Soniox | Batch | `stt-async-v6` (streaming, once built: `stt-rt-v6`) | "$0.10/hour for async (file uploads)" and "$0.12/hour for real-time (streaming)", also quoted as token rates; no minimum spend ([pricing](https://soniox.com/pricing), read 2026-11-26) | $0.10/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -78,6 +79,7 @@ All figures below were re-read from the vendor's own pricing page on
 | Speechmatics | Yes | $100 in free credit to start, no credit card required ([pricing](https://www.speechmatics.com/pricing), read 2026-09-21) |
 | Mistral | **Not verified** | Not read this session |
 | Meta | **Not verified** | The docs page read 2026-11-26 names no free tier |
+| Soniox | **Not verified** | The pricing page read 2026-11-26 mentions no free credit or tier |
 | OpenRouter | Partly | Models whose id ends in `:free` have limits (20 requests/minute, 50/day under 10 credits purchased, 1,000/day from 10; [limits page](https://openrouter.ai/docs/api-reference/limits), read 2026-11-26); none of the 30 transcription models read that day is a `:free` variant |
 | Fun-ASR (Alibaba) | Likely yes, amount **not verified** | Alibaba grants new users a free quota per model, valid 90 days, and only for models in the Singapore region with the International deployment scope, which is the endpoint this app uses ([free-quota page](https://www.alibabacloud.com/help/en/model-studio/new-free-quota), read 2026-09-21); that page does not state the amount for Fun-ASR specifically. The "36,000 audio seconds (10 hours)" this document stated before could not be re-confirmed this session; check the Model Studio console for the current figure before relying on it |
 

@@ -115,6 +115,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Speechmatics (REST batch jobs, polled; EU/US/AU regions),
   Mistral Voxtral (REST, batch-only),
   Meta Muse Voice Transcribe (REST, batch-only),
+  Soniox (REST batch jobs, polled; US/EU/JP/IN regions),
   OpenRouter transcription endpoint (REST, batch-only),
   Custom endpoint (any OpenAI-compatible REST API, batch-only)
 - keyring for secret storage
@@ -152,6 +153,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/mistral_provider.py` | Batch via Mistral's `/v1/audio/transcriptions` (Voxtral Transcribe 3); custom vocabulary as `context_bias` |
 | `transcriber/meta_provider.py` | Batch via Meta's `/v1/asr/transcribe` (Muse Voice Transcribe): a JSON `request` part (`languageBias`, `keywords`) and a WAV `audio` part; imports converted to 16 kHz mono |
 | `transcriber/openrouter_provider.py` | Batch via OpenRouter's `/audio/transcriptions`: `CustomEndpointTranscriber` with a fixed base URL, transcription style only, its own key, model list from `/models?output_modalities=transcription`, key check through `GET /key` |
+| `transcriber/soniox_provider.py` | Batch via Soniox's async API: upload a file, create a transcription, poll, fetch the text, then delete both; custom vocabulary as `context.terms`; region `us`/`eu`/`jp`/`in` |
 | `transcriber/_job_poll.py` | Bounded polling of a remote batch job (`poll_job`) and retried result fetch (`fetch_with_retries`): total budget, shutdown flag, job id in every error |
 | `transcriber/custom_endpoint_provider.py` | Batch via a bring-your-own OpenAI-compatible endpoint: `/audio/transcriptions` or chat completions with audio input, static key or a key command, `/models` listing |
 | `process_tree.py` | `run_bounded` (a subprocess with a hard timeout that kills the whole process tree -- a job object on Windows -- and returns once the child exited even if a grandchild holds its pipes) and `kill_process_tree`, shared by the custom endpoint's key command and the benchmark worker |
@@ -286,7 +288,7 @@ Short forms of rules that recur across areas; the area files hold the detail.
 ## Engines
 
 - **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
-  azure, funasr, speechmatics, mistral, meta, openrouter, custom
+  azure, funasr, speechmatics, mistral, meta, openrouter, soniox, custom
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - **OpenAI** offers `gpt-transcribe` only; `whisper-1`, `gpt-4o-transcribe` and
   `gpt-4o-mini-transcribe` (removed by OpenAI 2027-02-26) are retired and moved.
@@ -310,9 +312,14 @@ Short forms of rules that recur across areas; the area files hold the detail.
   transcription style only, own key, model free text (default `openai/gpt-transcribe`)
   with a Refresh list (`openrouter_models`, `listed_models`); parts of at most 300 s
   (`docs/agents/remote-providers.md`). The custom endpoint stays free for another service.
+- **Soniox** (`soniox`): key-only; `stt-async-v6` for batch (`soniox_model`, the
+  only one), `stt-rt-v6` fixed for streaming. A batch job is upload, create,
+  poll, fetch, then both objects are deleted (kept when the wait gave up);
+  `soniox_region` `us` (default), `eu`, `jp`, `in`, picked inside the Soniox row
+  (`docs/agents/remote-providers.md`; unverified live).
 - **Regions**: `assemblyai_region` (`auto` default, `us`, `eu`),
-  `deepgram_region` (`global` default, `eu`) and `speechmatics_region` are
-  picked on the Providers tab; a label claims only what the vendor
+  `deepgram_region` (`global` default, `eu`), `speechmatics_region` and
+  `soniox_region` are picked on the Providers tab; a label claims only what the vendor
   guarantees (`docs/agents/remote-providers.md`); the field map is
   `settings_store._REMOTE_REGION_FIELDS`.
 - **Local roster changes** follow one pattern: a retired model is listed in

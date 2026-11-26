@@ -392,6 +392,7 @@ def test_dynamic_notes_fit_their_reserved_area(
             "mistral",
             "meta",
             "openrouter",
+            "soniox",
             "custom",
         ):
             dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))
@@ -829,7 +830,7 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
     assert needed + chrome <= design_height, (needed, chrome, design_height)
 
 
-@pytest.mark.parametrize("engine", ["meta", "openrouter"])
+@pytest.mark.parametrize("engine", ["meta", "openrouter", "soniox"])
 def test_a_batch_only_new_engine_offers_no_streaming_and_its_own_languages(
     dialog: SettingsDialog, engine: str
 ) -> None:
@@ -1607,8 +1608,8 @@ def test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge(
     622 px against the key field's 342 at the minimum width (9 pt), which made
     it look out of place; the custom endpoint's Base URL, API Style and Key
     Command did the same. One rule now: a field in a Providers grid starts and
-    ends where the key fields do (a region combo keeps its own, narrower
-    width, left-aligned)."""
+    ends where the key fields do (a region combo sits in its provider's key
+    column, right of the key field, and ends where the column does)."""
     with _AppFont(point_size) as app:
         dialog = _dialog_at(monkeypatch, tmp_path)
         try:
@@ -1632,9 +1633,14 @@ def test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge(
             ):
                 assert span(widget) == key, widget
             for provider, combo in dialog._provider_region_combos.items():
+                # A region picker shares its provider's key column: the key
+                # field starts where every key field does and the picker ends
+                # where they end.
+                field_left, field_right = span(dialog._provider_key_edits[provider])
                 left, right = span(combo)
-                assert left == key[0], provider
-                assert right <= key[1], provider
+                assert field_left == key[0], provider
+                assert field_right <= left, provider
+                assert right == key[1], provider
         finally:
             dialog.close()
             dialog.deleteLater()

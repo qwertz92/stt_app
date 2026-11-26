@@ -12,7 +12,13 @@ import json
 import logging
 
 import pytest
-from _rest_fakes import fake_response, http_error, json_response, wav_seconds
+from _rest_fakes import (
+    fake_response,
+    http_error,
+    json_response,
+    soniox_job_reply,
+    wav_seconds,
+)
 from test_rest_reply_guard import _ENGINES
 
 from stt_app.transcriber.base import TranscriptionError
@@ -26,13 +32,16 @@ def _json_form(key: str) -> str:
 
 
 def _fake(reply):
-    """Every request answers `reply()`; Speechmatics' job is created and done
-    first, so that its transcript fetch carries a 200 reply."""
+    """Every request answers `reply()`; the job of Speechmatics and of Soniox is
+    created and done first, so that its transcript fetch carries a 200 reply."""
 
     def answer(request, timeout=None, **_kwargs):
         url = request.full_url
         if not isinstance(reply, str):
             raise reply(url)
+        soniox = soniox_job_reply(request, reply)
+        if soniox is not None:
+            return soniox
         if "speechmatics" in url and request.get_method() == "POST":
             return json_response({"id": "job-1"}, status=201)
         if "speechmatics" in url and not url.endswith("/transcript?format=txt"):
