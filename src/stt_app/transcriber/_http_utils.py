@@ -135,7 +135,7 @@ def key_redactor(*secrets: str) -> Redactor:
 
     A gateway may echo the credential it refused ("quota exceeded for <key>")
     in a 200 reply's `error` object or in a 4xx body; the text reaches the
-    overlay and the log. A key holding `"` or `\` appears escaped in JSON,
+    overlay and the log. A key holding `"` or a backslash appears escaped in JSON,
     so both forms go. Every function below that quotes server-supplied text
     requires one (`redact`), so an engine cannot forget its key.
     """
