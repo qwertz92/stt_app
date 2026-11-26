@@ -508,6 +508,31 @@ def test_an_abnormal_server_close_during_the_final_wait_without_text_raises():
         t.stop_stream()
 
 
+def _say_then_close_without_error(sock):
+    sock.say(message_type="committed_transcript", text="hi")
+    sock.on_close(sock, 1011, "boom")
+
+
+def test_an_abnormal_close_without_a_preceding_error_warns_when_text_is_returned(
+    caplog,
+):
+    caplog.set_level(logging.WARNING)
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(_say_then_close_without_error)
+    assert t.stop_stream() == "hi"
+    assert "last words may be missing" in caplog.text
+
+
+def test_a_close_without_a_reason_prints_no_empty_detail():
+    t = _transcriber()
+    t.start_stream()
+    _FakeSocket.on_commit = staticmethod(lambda sock: sock.on_close(sock, 1011, None))
+    with pytest.raises(TranscriptionError) as raised:
+        t.stop_stream()
+    assert "(code 1011)" in str(raised.value)
+
+
 def test_a_close_frame_error_keeps_the_servers_reason_in_the_sentence():
     t = _transcriber()
     errors: list[str] = []

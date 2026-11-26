@@ -300,14 +300,22 @@ class ElevenLabsRealtimeSession:
             return
         if self._close_code(error) in (1000, 1001):
             return  # a normal close; `on_close` ends the final wait
-        # A real failure during the drain, the final commit or the final wait:
-        # recorded for `finish`, which raises it or returns the text with a
-        # warning; `on_error` is gone, the stop reports it.
-        message = self._describe_socket_error(error)
-        logger.warning(
-            "ElevenLabs streaming: %s The last words may be missing from the text.",
-            message,
-        )
+        self._fail_during_stop(self._describe_socket_error(error))
+
+    def _fail_during_stop(self, message: str) -> None:
+        """A real failure during the drain, the final commit or the final wait.
+
+        Recorded for `finish`, which raises it or returns the text so far.
+        `on_error` is gone by then, so the log line is what says that the last
+        words may be missing; it is written for the first failure only.
+        """
+        with self._lock:
+            first = self._error is None
+        if first:
+            logger.warning(
+                "ElevenLabs streaming: %s The last words may be missing from the text.",
+                message,
+            )
         self._fail(message)
 
     def _on_close(self, _ws, status, reason) -> None:
@@ -317,18 +325,21 @@ class ElevenLabsRealtimeSession:
             return
         with self._lock:
             stopping = self._state == "retiring"
+        sentence = self._closed_by_service(status, reason)
         if stopping:
             if status not in (None, 1000, 1001):
-                self._fail(
-                    f"{_PROVIDER} failed: the connection was closed by the service "
-                    f"(code {status}: {self._clip(reason or '', 100)})."
-                )
+                self._fail_during_stop(sentence)
             return
-        detail = f" (code {status}: {self._clip(reason, 100)})" if status else ""
-        self._fail(
-            f"{_PROVIDER} failed: the connection was closed by the service{detail}."
-        )
+        self._fail(sentence)
         self._ready.set()
+
+    def _closed_by_service(self, status, reason) -> str:
+        """The sentence for a close of the server, with its code and reason if any."""
+        detail = ""
+        if status:
+            text = self._clip(reason, 100) if reason else ""
+            detail = f" (code {status}: {text})" if text else f" (code {status})"
+        return f"{_PROVIDER} failed: the connection was closed by the service{detail}."
 
     def _describe_socket_error(self, error) -> str:
         if is_ssl_error(error):
@@ -337,12 +348,7 @@ class ElevenLabsRealtimeSession:
         if isinstance(status, int) and 1000 <= status <= 4999:
             # websocket-client reports a server's close frame as an exception
             # whose `status_code` is the close code, not an HTTP status.
-            reason = getattr(error, "reason", None)
-            detail = f": {self._clip(reason, 100)}" if reason else ""
-            return (
-                f"{_PROVIDER} failed: the connection was closed by the service "
-                f"(code {status}{detail})."
-            )
+            return self._closed_by_service(status, getattr(error, "reason", None))
         if status in (401, 403):
             return f"{_PROVIDER} failed: authentication failed (HTTP {status}). The API key is invalid or expired."
         if status == 429:
