@@ -25,6 +25,7 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
+    key_redactor,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -176,6 +177,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                 "ElevenLabs API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model if model in ELEVENLABS_MODELS else DEFAULT_ELEVENLABS_MODEL
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
@@ -254,7 +256,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                 payload = resp.read()
 
             return transcript_from_json(
-                payload, prefix="ElevenLabs transcription failed"
+                payload, prefix="ElevenLabs transcription failed", redact=self._scrub
             )
         except FileNotFoundError as exc:
             raise TranscriptionError(
@@ -276,7 +278,11 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
             # The body, not `exc.reason`: that is only the status
             # phrase, and ElevenLabs puts the quota and format
             # reasons in the body.
-            detail = read_http_error_detail(exc) or exc.reason or ("unknown error")
+            detail = (
+                read_http_error_detail(exc, self._scrub)
+                or exc.reason
+                or ("unknown error")
+            )
             raise TranscriptionError(
                 f"ElevenLabs transcription failed (HTTP {exc.code}): {detail}"
             ) from exc
@@ -303,7 +309,9 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}"
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from ElevenLabs API."

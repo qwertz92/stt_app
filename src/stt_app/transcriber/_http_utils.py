@@ -124,6 +124,40 @@ def _unredacted(text: str) -> str:
     return text
 
 
+KEY_SCRUBBED = "[hidden]"
+# A shorter "secret" is a test value or a placeholder, and replacing it would
+# garble ordinary words in the message.
+_MIN_SECRET_CHARS = 8
+
+
+def key_redactor(*secrets: str) -> Redactor:
+    """A redactor that replaces each secret, also as a JSON body writes it.
+
+    A gateway may echo the credential it refused ("quota exceeded for <key>")
+    in a 200 reply's `error` object or in a 4xx body; the text reaches the
+    overlay and the log. A key holding `"` or `\` appears escaped in JSON,
+    so both forms go. Every function below that quotes server-supplied text
+    requires one (`redact`), so an engine cannot forget its key.
+    """
+    forms = sorted(
+        {
+            form
+            for secret in secrets
+            if len(secret) >= _MIN_SECRET_CHARS
+            for form in (secret, json.dumps(secret)[1:-1])
+        },
+        key=len,
+        reverse=True,
+    )
+
+    def redact(text: str) -> str:
+        for form in forms:
+            text = text.replace(form, KEY_SCRUBBED)
+        return text
+
+    return redact
+
+
 def is_markup_page(payload: bytes) -> bool:
     """Whether a response body is an HTML or XML page rather than JSON.
 
@@ -188,9 +222,7 @@ def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> s
     return f"an HTML page {_MARKUP_ERROR_HINT}"
 
 
-def json_from_reply(
-    payload: bytes, *, prefix: str, redact: Redactor = _unredacted
-) -> object:
+def json_from_reply(payload: bytes, *, prefix: str, redact: Redactor) -> object:
     """The parsed JSON of an answer that must be JSON, or an error naming what came.
 
     An HTML page (a proxy's sign-in or block page, status 200) and a body that
@@ -213,7 +245,7 @@ def json_from_reply(
 
 
 def missing_field_error(
-    parsed: object, *, prefix: str, field: str, redact: Redactor = _unredacted
+    parsed: object, *, prefix: str, field: str, redact: Redactor
 ) -> TranscriptionError:
     """The error for a JSON answer that holds no transcript.
 
@@ -240,7 +272,7 @@ def transcript_from_json(
     *,
     prefix: str,
     accept_bare_string: bool = False,
-    redact: Redactor = _unredacted,
+    redact: Redactor,
     field: str = "text",
 ) -> str:
     """The ``text`` of a transcription answer, or an error naming what came.
@@ -335,7 +367,7 @@ def nested_error_text(value: object) -> str:
     return ""
 
 
-def reply_error_text(parsed: object, redact: Redactor = _unredacted) -> str:
+def reply_error_text(parsed: object, redact: Redactor) -> str:
     """The text of an `error` member of a reply that answered HTTP 200, or "".
 
     Some gateways report a failed backend call inside a 200 reply
@@ -351,9 +383,7 @@ def reply_error_text(parsed: object, redact: Redactor = _unredacted) -> str:
     return redact(text)[:300]
 
 
-def read_http_error_detail(
-    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
-) -> str:
+def read_http_error_detail(exc: urllib.error.HTTPError, redact: Redactor) -> str:
     """Return what the provider actually said, or "" when it said nothing.
 
     `HTTPError.reason` is only the status phrase -- "Bad Request" -- so a
@@ -421,9 +451,7 @@ def read_http_error_detail(
     return raw.strip()[:300]
 
 
-def http_error_suffix(
-    exc: urllib.error.HTTPError, redact: Redactor = _unredacted
-) -> str:
+def http_error_suffix(exc: urllib.error.HTTPError, redact: Redactor) -> str:
     """`": <what the provider said>"`, falling back to the status phrase."""
     detail = read_http_error_detail(exc, redact)
     return f": {detail}" if detail else f": {exc.reason}"

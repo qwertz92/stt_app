@@ -38,6 +38,7 @@ from ._audio_parts import transcribe_in_parts
 from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
+    key_redactor,
     multipart_form_data,
     open_request,
     transcript_from_json,
@@ -63,7 +64,6 @@ _KEY_CHECK_TIMEOUT_S = 15
 # "Sample rate: 16 kHz or 24 kHz", mono, 16-bit integer PCM.
 _ACCEPTED_SAMPLE_RATES = (16_000, 24_000)
 _TARGET_SAMPLE_RATE = 16_000
-_SCRUBBED = "[hidden]"
 # The connection test's request: one second of digital silence. Meta documents
 # no endpoint that only checks a key, and a request that fails before it
 # produces a transcript, a 401 included, "is not billed"; a one-second answer
@@ -126,6 +126,7 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
                 "Meta API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model if model in META_MODELS else DEFAULT_META_MODEL
         self.set_language_mode(language_mode)
         self._keywords = parse_custom_vocabulary(custom_vocabulary)
@@ -139,12 +140,6 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
         if normalized not in language_modes_for_selection("meta", self._model):
             normalized = DEFAULT_LANGUAGE_MODE
         return normalized
-
-    def _scrub(self, text: str) -> str:
-        """`text` without the key, also as JSON writes it."""
-        for form in {json.dumps(self._api_key)[1:-1], self._api_key}:
-            text = text.replace(form, _SCRUBBED)
-        return text
 
     def _format_error(self, exc: Exception) -> str:
         if _is_ssl_error(exc):

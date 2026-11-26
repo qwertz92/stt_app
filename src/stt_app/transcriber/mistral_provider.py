@@ -28,6 +28,7 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
+    key_redactor,
     multipart_form_data,
     open_request,
     transcript_from_json,
@@ -64,6 +65,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
                 "Mistral API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model if model in MISTRAL_MODELS else DEFAULT_MISTRAL_MODEL
         self.set_language_mode(language_mode)
         # "up to 100 words or phrases"; `parse_custom_vocabulary` caps at 100.
@@ -145,7 +147,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
                     "Wait a moment and try again."
                 ) from exc
             raise TranscriptionError(
-                f"Mistral transcription failed (HTTP {exc.code}){http_error_suffix(exc)}"
+                f"Mistral transcription failed (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}"
             ) from exc
         except TranscriptionError:
             raise
@@ -155,8 +157,7 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
             ) from exc
         return self._text_of(payload)
 
-    @staticmethod
-    def _text_of(payload: bytes) -> str:
+    def _text_of(self, payload: bytes) -> str:
         """The transcript in an answer, or an error naming what came instead.
 
         `"text": ""` is a valid answer (nothing said). An HTML page, JSON
@@ -164,7 +165,9 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
         read as silence, a part of a split recording would be dropped from
         the transcript without a word.
         """
-        return transcript_from_json(payload, prefix="Mistral transcription failed")
+        return transcript_from_json(
+            payload, prefix="Mistral transcription failed", redact=self._scrub
+        )
 
     def test_connection(self) -> tuple[bool, str]:
         request = urllib.request.Request(f"{MISTRAL_API_BASE}/models", method="GET")
@@ -179,7 +182,10 @@ class MistralTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            return (
+                False,
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}",
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from the Mistral API."

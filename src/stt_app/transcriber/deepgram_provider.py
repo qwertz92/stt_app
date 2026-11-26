@@ -41,6 +41,7 @@ from ._http_utils import (
     audio_content_type,
     http_error_suffix,
     json_from_reply,
+    key_redactor,
     missing_field_error,
     open_request,
 )
@@ -228,6 +229,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 "Deepgram API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._host = DEEPGRAM_API_HOSTS[normalize_deepgram_region(region)]
         self._model = model or DEFAULT_DEEPGRAM_MODEL
         # Needs self._model, so this must run after it is assigned above
@@ -369,11 +371,13 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 payload = resp.read()
 
             prefix = "Deepgram transcription failed"
-            body = json_from_reply(payload, prefix=prefix)
+            body = json_from_reply(payload, prefix=prefix, redact=self._scrub)
             if not isinstance(body, dict) or not isinstance(body.get("results"), dict):
                 # An answer without `results` is not "nothing said": a
                 # proxy's or gateway's JSON was read as silence.
-                raise missing_field_error(body, prefix=prefix, field="results")
+                raise missing_field_error(
+                    body, prefix=prefix, field="results", redact=self._scrub
+                )
 
             # Extract transcript from response.
             # Response structure: results.channels[0].alternatives[0].transcript
@@ -402,7 +406,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 f"Deepgram transcription failed (HTTP {exc.code})"
                 # The body, not `exc.reason`: Deepgram names the
                 # rejected parameter there.
-                f"{http_error_suffix(exc)}"
+                f"{http_error_suffix(exc, self._scrub)}"
             ) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
@@ -451,7 +455,9 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}"
+            )
         except Exception as exc:
             if _is_ssl_error(exc):
                 return False, (

@@ -207,6 +207,19 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `channels` or `alternatives`; an answer without Deepgram's `results`, or
   without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
   names the job in these errors too, since the job already runs.
+- **No REST engine's error text or log shows its own key** (2026-11-26,
+  review). A gateway may echo the credential it refused (`{"error": {"message":
+  "quota exceeded for <key>"}}` in a 200 reply, or the same in a 4xx body);
+  OpenAI, ElevenLabs, Deepgram, Azure, Speechmatics' fetch and Mistral printed
+  it, while Meta, the custom endpoint and OpenRouter were clean. The shared
+  readers (`read_http_error_detail`, `http_error_suffix`, `reply_error_text`,
+  `json_from_reply`, `missing_field_error`, `transcript_from_json`) now take a
+  **required** `redact`, so an engine cannot forget it, and every engine builds
+  it with `_http_utils.key_redactor(api_key)` (replaces the key and its
+  JSON-escaped form by `[hidden]`, ignores values under 8 characters; Meta's
+  and the custom endpoint's copies were replaced by it). Tests:
+  `tests/test_rest_key_scrub.py`, every REST engine x a plain and an escaped
+  key x a 200 error object, a 4xx body, and the key check, with the log.
 - **Azure: a transcription result without text is silence** (2026-11-26,
   review; deliberate and **unverified live**, no key exists to try it).
   Microsoft's reference marks no member of the result as required and does not

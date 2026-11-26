@@ -43,45 +43,50 @@ _JSON_WITHOUT_TRANSCRIPT = json.dumps({"unexpected": "shape", "status": "ok"})
 # (engine, module whose `open_request` is faked, name the error must carry,
 # builder of the transcriber)
 _ENGINES = [
-    ("openai", openai_module, "OpenAI", lambda: OpenAITranscriber("k")),
-    ("mistral", mistral_module, "Mistral", lambda: MistralTranscriber("k")),
-    ("elevenlabs", elevenlabs_module, "ElevenLabs", lambda: ElevenLabsTranscriber("k")),
-    ("deepgram", deepgram_module, "Deepgram", lambda: DeepgramTranscriber("k")),
+    ("openai", openai_module, "OpenAI", lambda key: OpenAITranscriber(key)),
+    ("mistral", mistral_module, "Mistral", lambda key: MistralTranscriber(key)),
+    (
+        "elevenlabs",
+        elevenlabs_module,
+        "ElevenLabs",
+        lambda key: ElevenLabsTranscriber(key),
+    ),
+    ("deepgram", deepgram_module, "Deepgram", lambda key: DeepgramTranscriber(key)),
     (
         "azure",
         azure_module,
         "Azure",
-        lambda: AzureLlmSpeechTranscriber(
-            "k", endpoint="https://res.cognitiveservices.azure.com"
+        lambda key: AzureLlmSpeechTranscriber(
+            key, endpoint="https://res.cognitiveservices.azure.com"
         ),
     ),
     (
         "speechmatics",
         speechmatics_module,
         "Speechmatics",
-        lambda: SpeechmaticsTranscriber("k", poll_interval_s=0.0),
+        lambda key: SpeechmaticsTranscriber(key, poll_interval_s=0.0),
     ),
-    ("meta", meta_module, "Meta", lambda: MetaTranscriber("k")),
+    ("meta", meta_module, "Meta", lambda key: MetaTranscriber(key)),
     (
         "custom-transcriptions",
         custom_module,
         "Custom endpoint",
-        lambda: CustomEndpointTranscriber(
-            api_key="k", endpoint="https://stt.example.com/v1", model="m"
+        lambda key: CustomEndpointTranscriber(
+            api_key=key, endpoint="https://stt.example.com/v1", model="m"
         ),
     ),
     (
         "custom-chat",
         custom_module,
         "Custom endpoint",
-        lambda: CustomEndpointTranscriber(
-            api_key="k",
+        lambda key: CustomEndpointTranscriber(
+            api_key=key,
             endpoint="https://stt.example.com/v1",
             model="m",
             api_mode="chat",
         ),
     ),
-    ("openrouter", custom_module, "OpenRouter", lambda: OpenRouterTranscriber("k")),
+    ("openrouter", custom_module, "OpenRouter", lambda key: OpenRouterTranscriber(key)),
 ]
 
 
@@ -114,7 +119,7 @@ def test_a_200_answer_that_is_not_a_transcript_is_an_error(
     monkeypatch.setattr(module, "open_request", _service(body))
 
     with pytest.raises(TranscriptionError) as raised:
-        build().transcribe_batch(wav_seconds(1.0))
+        build("k").transcribe_batch(wav_seconds(1.0))
 
     message = str(raised.value)
     assert name in message

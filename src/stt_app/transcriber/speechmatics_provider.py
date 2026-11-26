@@ -38,6 +38,7 @@ from ._http_utils import (
     format_ssl_error_message,
     http_error_suffix,
     is_html_page,
+    key_redactor,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -92,6 +93,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = (
             model if model in SPEECHMATICS_MODELS else DEFAULT_SPEECHMATICS_MODEL
         )
@@ -233,8 +235,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         )
         return normalize_transcript_text(text)
 
-    @staticmethod
-    def _submit_error(exc: urllib.error.HTTPError) -> str:
+    def _submit_error(self, exc: urllib.error.HTTPError) -> str:
         if exc.code in (401, 403):
             return (
                 f"Speechmatics: Authentication failed (HTTP {exc.code}). "
@@ -245,7 +246,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                 "Speechmatics: Rate limit exceeded (HTTP 429). "
                 "Wait a moment and try again."
             )
-        return f"Speechmatics transcription failed (HTTP {exc.code}){http_error_suffix(exc)}"
+        return f"Speechmatics transcription failed (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}"
 
     def _fetch_job(self, job_id: str) -> dict[str, Any]:
         """One status request. A `TranscriptionError` ends the poll at once;
@@ -257,7 +258,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
                     f"Speechmatics could not report the job's status (HTTP "
-                    f"{exc.code}){http_error_suffix(exc)}. Job id {job_id}."
+                    f"{exc.code}){http_error_suffix(exc, self._scrub)}. Job id {job_id}."
                 ) from exc
             raise
         job = answer.get("job") if isinstance(answer, dict) else None
@@ -276,7 +277,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
                     f"Speechmatics finished the job, but its transcript could not "
-                    f"be fetched (HTTP {exc.code}){http_error_suffix(exc)}. Job id "
+                    f"be fetched (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}. Job id "
                     f"{job_id}."
                 ) from exc
             raise
@@ -298,7 +299,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             except ValueError:
                 return text
             if isinstance(parsed, dict):
-                gateway_error = reply_error_text(parsed)
+                gateway_error = reply_error_text(parsed, self._scrub)
                 raise TranscriptionError(
                     "Speechmatics: the transcript request answered with a data "
                     "object instead of the transcript text"
@@ -331,7 +332,10 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                     f"Authentication failed (HTTP {exc.code}). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            return (
+                False,
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}",
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from the Speechmatics API."

@@ -1,17 +1,24 @@
 from __future__ import annotations
 
 import io
+import json
 import urllib.error
+from functools import partial
 
 import pytest
 
+from stt_app.transcriber import _http_utils
 from stt_app.transcriber._http_utils import (
     audio_content_type,
-    http_error_suffix,
+    key_redactor,
     multipart_form_data,
-    read_http_error_detail,
 )
 from stt_app.transcriber.base import TranscriptionError
+
+# The readers require a redactor so that no engine can forget its key; these
+# tests are about the shapes they read, so they pass the one that changes nothing.
+http_error_suffix = partial(_http_utils.http_error_suffix, redact=str)
+read_http_error_detail = partial(_http_utils.read_http_error_detail, redact=str)
 
 
 @pytest.mark.parametrize(
@@ -309,12 +316,14 @@ def test_an_error_object_in_a_successful_reply_is_named():
 
     with pytest.raises(TranscriptionError, match="model not found") as raised:
         transcript_from_json(
-            b'{"error": {"message": "model not found"}}', prefix="Custom endpoint"
+            b'{"error": {"message": "model not found"}}',
+            prefix="Custom endpoint",
+            redact=str,
         )
     assert "HTTP 200" in str(raised.value)
     # Without an error member the old message stays.
     with pytest.raises(TranscriptionError, match="has no 'text' field"):
-        transcript_from_json(b'{"result": "x"}', prefix="Custom endpoint")
+        transcript_from_json(b'{"result": "x"}', prefix="Custom endpoint", redact=str)
 
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():
@@ -353,3 +362,13 @@ def test_the_recovered_text_suffix_lives_here_once_for_every_caller():
     assert not hasattr(funasr_provider.FunAsrTranscriber, "_recovered_suffix")
     assert not hasattr(funasr_provider, "_RECOVERED_TEXT_MAX_CHARS")
     assert _http_utils.RECOVERED_TEXT_MAX_CHARS == 2000
+
+
+def test_key_redactor_hides_the_key_also_as_json_writes_it_and_ignores_short_values():
+    key = 'ab"cd\\ef-0123456789'
+    redact = key_redactor(key, "short")
+    escaped = json.dumps(key)[1:-1]
+    assert escaped != key
+    assert redact(f"echo {key} and {escaped}") == "echo [hidden] and [hidden]"
+    # A short placeholder would garble ordinary words.
+    assert redact("a short word") == "a short word"

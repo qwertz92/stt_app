@@ -25,6 +25,7 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
+    key_redactor,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -63,6 +64,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
                 "OpenAI API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
@@ -190,7 +192,9 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
 
             # `response_format=json` is sent, so anything else is not a
             # transcript: a proxy's page answering 200 was pasted as one.
-            return transcript_from_json(payload, prefix="OpenAI transcription failed")
+            return transcript_from_json(
+                payload, prefix="OpenAI transcription failed", redact=self._scrub
+            )
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 raise TranscriptionError(
@@ -206,7 +210,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             # phrase ("Bad Request"), which drops the one part that
             # says what to change.
             raise TranscriptionError(
-                f"OpenAI transcription failed (HTTP {exc.code}){http_error_suffix(exc)}"
+                f"OpenAI transcription failed (HTTP {exc.code}){http_error_suffix(exc, self._scrub)}"
             ) from exc
         except TranscriptionError:
             raise
@@ -232,7 +236,9 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}"
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from OpenAI API."

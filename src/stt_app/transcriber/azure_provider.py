@@ -41,6 +41,7 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     json_from_reply,
+    key_redactor,
     missing_field_error,
     multipart_form_data,
     normalize_transcript_text,
@@ -186,6 +187,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
         # Validate eagerly so a misconfigured endpoint fails fast and clearly.
         self._transcribe_url = build_transcribe_url(endpoint)
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._model = (
             model if model in AZURE_SPEECH_MODELS else DEFAULT_AZURE_SPEECH_MODEL
         )
@@ -276,7 +278,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
                 payload = resp.read()
 
             prefix = "Azure transcription failed"
-            body = json_from_reply(payload, prefix=prefix)
+            body = json_from_reply(payload, prefix=prefix, redact=self._scrub)
             if not isinstance(body, dict) or not any(
                 (
                     isinstance(body.get("combinedPhrases"), list),
@@ -289,7 +291,12 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
                     "phrases" in body,
                 )
             ):
-                raise missing_field_error(body, prefix=prefix, field="combinedPhrases")
+                raise missing_field_error(
+                    body,
+                    prefix=prefix,
+                    field="combinedPhrases",
+                    redact=self._scrub,
+                )
             return self._extract_transcript(body)
         except FileNotFoundError as exc:
             raise TranscriptionError(
@@ -351,7 +358,8 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             f"Azure transcription failed (HTTP {exc.code}){suffix}"
         )
 
-    _read_error_detail = staticmethod(read_http_error_detail)
+    def _read_error_detail(self, exc: urllib.error.HTTPError) -> str:
+        return read_http_error_detail(exc, self._scrub)
 
     # -- Connection test --------------------------------------------------------
 

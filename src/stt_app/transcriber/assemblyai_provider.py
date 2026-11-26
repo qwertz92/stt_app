@@ -35,7 +35,12 @@ from ..config import (
 )
 from ..dependency_check import installed_version, version_at_least
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import format_ssl_error_message, http_error_suffix, open_request
+from ._http_utils import (
+    format_ssl_error_message,
+    http_error_suffix,
+    key_redactor,
+    open_request,
+)
 from ._job_poll import MAX_CONSECUTIVE_FETCH_FAILURES, SHUTDOWN_POLL_S, poll_job
 from .base import (
     AudioInput,
@@ -179,6 +184,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "AssemblyAI API key is missing. Enter your key in Settings -> Providers."
             )
         self._api_key = api_key
+        self._scrub = key_redactor(api_key)
         self._region = normalize_assemblyai_region(region)
         # No class-specific validation: the base ``_normalize_language_mode``
         # (strip/lower with an "auto" fallback) already matches what this
@@ -477,7 +483,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, (f"API returned HTTP {exc.code}{http_error_suffix(exc)}")
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc, self._scrub)}"
+            )
         except Exception as exc:
             if _is_ssl_error(exc):
                 # The shared message, which names SSL_CERT_FILE too:
