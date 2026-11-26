@@ -1748,6 +1748,25 @@ def test_the_data_residency_regions_round_trip_and_default_to_the_vendor_host(
     assert (damaged.assemblyai_region, damaged.deepgram_region) == ("auto", "global")
 
 
+def test_the_meta_fields_round_trip(tmp_path):
+    """Model and key flag of Meta's engine: an older file carries neither (no
+    schema bump), and a model this build does not offer falls back to the
+    default."""
+    store = SettingsStore(tmp_path / "settings.json")
+    saved = AppSettings(
+        engine="meta", meta_model="muse-voice-transcribe-1.0", has_meta_key=True
+    )
+    store.save(saved)
+    assert store.load() == saved
+
+    older = AppSettings.from_dict({"schema_version": 25})
+    assert older.meta_model == "muse-voice-transcribe-1.0"
+    assert not older.has_meta_key
+    assert AppSettings.from_dict({"meta_model": "muse-2"}).meta_model == (
+        "muse-voice-transcribe-1.0"
+    )
+
+
 def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     """Model, region and key flag of the two engines added on 2026-10-01: an
     older file carries none of them (no schema bump), and a value this build
@@ -1792,6 +1811,7 @@ def test_the_speechmatics_and_mistral_fields_round_trip(tmp_path):
     [
         ("speechmatics", "speechmatics_model", "enhanced"),
         ("mistral", "mistral_model", "voxtral-small-transcribe-3"),
+        ("meta", "meta_model", "muse-voice-transcribe-1.0"),
     ],
 )
 def test_the_new_engines_take_a_model_selection(engine, field, model):
@@ -1804,11 +1824,17 @@ def test_the_new_engines_take_a_model_selection(engine, field, model):
 def test_a_plaintext_key_of_the_new_engines_is_never_written(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.save(
-        AppSettings(), extra={"speechmatics_api_key": "s", "mistral_api_key": "m"}
+        AppSettings(),
+        extra={
+            "speechmatics_api_key": "s",
+            "mistral_api_key": "m",
+            "meta_api_key": "x",
+        },
     )
     raw = (tmp_path / "settings.json").read_text(encoding="utf-8")
     assert "speechmatics_api_key" not in raw
     assert "mistral_api_key" not in raw
+    assert "meta_api_key" not in raw
 
 
 _RETIRED = {"openai": {"gpt-4o-transcribe": "gpt-transcribe"}}

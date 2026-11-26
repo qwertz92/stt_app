@@ -2814,6 +2814,9 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("mistral", {"mistral_model": "voxtral-mini-2602-x"}, True),
         ("mistral", {"custom_vocabulary": "Kubernetes"}, True),
         ("mistral", {"silence_gate_threshold": 0.02}, True),
+        ("meta", {"custom_vocabulary": "Kubernetes"}, True),
+        ("meta", {"silence_gate_threshold": 0.02}, True),
+        ("meta", {"mistral_model": "voxtral-small-transcribe-3"}, False),
         # Melia 1 has no custom dictionary; Enhanced has one.
         ("speechmatics", {"custom_vocabulary": "Kubernetes"}, False),
     ],

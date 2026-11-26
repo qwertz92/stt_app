@@ -131,6 +131,12 @@ def _mistral_transcriber_factory(**kwargs: object) -> object:
     return MistralTranscriber(**kwargs)
 
 
+def _meta_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.meta_provider import MetaTranscriber
+
+    return MetaTranscriber(**kwargs)
+
+
 # Maps provider name to (lazy transcriber factory, extra snapshot fields the
 # factory needs besides api_key and model).
 _CONNECTION_TESTER_FACTORIES: dict[
@@ -153,6 +159,7 @@ _CONNECTION_TESTER_FACTORIES: dict[
         ("language_mode", "region"),
     ),
     "mistral": (_mistral_transcriber_factory, ("language_mode",)),
+    "meta": (_meta_transcriber_factory, ("language_mode",)),
     "custom": (_custom_transcriber_factory, ("custom",)),
 }
 
@@ -287,6 +294,7 @@ class _RemoteProvidersMixin:
         self.funasr_key_edit = self._provider_key_edits["funasr"]
         self.speechmatics_key_edit = self._provider_key_edits["speechmatics"]
         self.mistral_key_edit = self._provider_key_edits["mistral"]
+        self.meta_key_edit = self._provider_key_edits["meta"]
 
         layout.addWidget(self._build_custom_endpoint_group(label_width, badge_width))
 

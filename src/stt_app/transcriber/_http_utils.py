@@ -12,7 +12,7 @@ import json
 import re
 import secrets
 import urllib.error
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
@@ -47,24 +47,33 @@ def _quoted_header_parameter(value: str, *, label: str) -> str:
 
 def multipart_form_data(
     *,
-    fields: list[tuple[str, str]],
+    fields: Sequence[tuple[str, str] | tuple[str, str, str]],
     file_field: tuple[str, str, bytes, str],
 ) -> tuple[bytes, str]:
     """Encode a multipart/form-data request body.
 
+    A field is ``(name, value)`` or, for a part that carries its own
+    ``Content-Type`` (a JSON settings part), ``(name, value, content_type)``.
     ``file_field`` is ``(form_field_name, filename, file_bytes, content_type)``.
     Returns ``(body_bytes, content_type_header_value)``.
     """
     boundary = f"stt-app-{secrets.token_hex(24)}"
     lines: list[bytes] = []
 
-    for name, value in fields:
+    for name, value, *part_type in fields:
         quoted_name = _quoted_header_parameter(name, label="field name")
+        type_line = ""
+        if part_type:
+            field_type = str(part_type[0]).strip()
+            if not field_type or "\r" in field_type or "\n" in field_type:
+                raise ValueError("Multipart content type must be a single line.")
+            type_line = f"Content-Type: {field_type}\r\n"
         lines.extend(
             [
                 f"--{boundary}\r\n".encode(),
                 (
-                    f'Content-Disposition: form-data; name="{quoted_name}"\r\n\r\n'
+                    f'Content-Disposition: form-data; name="{quoted_name}"\r\n'
+                    f"{type_line}\r\n"
                 ).encode(),
                 f"{value}\r\n".encode(),
             ]
@@ -182,8 +191,12 @@ def transcript_from_json(
     prefix: str,
     accept_bare_string: bool = False,
     redact: Redactor = _unredacted,
+    field: str = "text",
 ) -> str:
     """The ``text`` of a transcription answer, or an error naming what came.
+
+    ``field`` names the member that holds the transcript (``transcript`` for
+    Meta; every other provider's is ``text``).
 
     For providers asked for JSON. ``"text": ""`` is a valid answer (nothing
     said). An HTML page, a body that is not JSON (a plain "Internal Server
@@ -208,7 +221,7 @@ def transcript_from_json(
         ) from exc
     if accept_bare_string and isinstance(parsed, str):
         return normalize_transcript_text(parsed)
-    value = parsed.get("text") if isinstance(parsed, dict) else None
+    value = parsed.get(field) if isinstance(parsed, dict) else None
     if not isinstance(value, str):
         error_text = reply_error_text(parsed, redact)
         if error_text:
@@ -221,7 +234,8 @@ def transcript_from_json(
             else type(parsed).__name__
         )
         raise TranscriptionError(
-            f"{prefix}: the answer has no 'text' field (it holds: {keys or 'nothing'})."
+            f"{prefix}: the answer has no '{field}' field "
+            f"(it holds: {keys or 'nothing'})."
         )
     return normalize_transcript_text(value)
 

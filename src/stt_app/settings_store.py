@@ -45,6 +45,7 @@ from .config import (
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_LOCAL_ONNX_DEVICE,
+    DEFAULT_META_MODEL,
     DEFAULT_MISTRAL_MODEL,
     DEFAULT_MODE,
     DEFAULT_MODEL_DIR,
@@ -78,6 +79,7 @@ from .config import (
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LOCAL_WEBGPU_DEVICE_POLICIES,
+    META_MODELS,
     MISTRAL_MODELS,
     ONNX_MEASURABLE_DEVICES,
     OPENAI_MODELS,
@@ -186,6 +188,7 @@ DEFAULTS = {
     "has_custom_key": False,
     "has_speechmatics_key": False,
     "has_mistral_key": False,
+    "has_meta_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -205,6 +208,7 @@ DEFAULTS = {
     "speechmatics_model": DEFAULT_SPEECHMATICS_MODEL,
     "speechmatics_region": DEFAULT_SPEECHMATICS_REGION,
     "mistral_model": DEFAULT_MISTRAL_MODEL,
+    "meta_model": DEFAULT_META_MODEL,
 }
 
 
@@ -368,6 +372,7 @@ class AppSettings:
     has_custom_key: bool = False
     has_speechmatics_key: bool = False
     has_mistral_key: bool = False
+    has_meta_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -406,6 +411,7 @@ class AppSettings:
     speechmatics_model: str = DEFAULT_SPEECHMATICS_MODEL
     speechmatics_region: str = DEFAULT_SPEECHMATICS_REGION
     mistral_model: str = DEFAULT_MISTRAL_MODEL
+    meta_model: str = DEFAULT_META_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> AppSettings:
@@ -559,6 +565,12 @@ class AppSettings:
             _text_setting(merged.get("mistral_model")),
             MISTRAL_MODELS,
             DEFAULT_MISTRAL_MODEL,
+        )
+        meta_model = _current_remote_model(
+            "meta",
+            _text_setting(merged.get("meta_model")),
+            META_MODELS,
+            DEFAULT_META_MODEL,
         )
         custom_api_mode = (
             str(merged.get("custom_api_mode", DEFAULT_CUSTOM_API_MODE)).strip().lower()
@@ -805,6 +817,7 @@ class AppSettings:
             has_custom_key=parse_json_bool(merged.get("has_custom_key")),
             has_speechmatics_key=parse_json_bool(merged.get("has_speechmatics_key")),
             has_mistral_key=parse_json_bool(merged.get("has_mistral_key")),
+            has_meta_key=parse_json_bool(merged.get("has_meta_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -828,6 +841,7 @@ class AppSettings:
                 merged.get("speechmatics_region")
             ),
             mistral_model=mistral_model,
+            meta_model=meta_model,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -879,6 +893,7 @@ _REMOTE_MODEL_FIELDS: dict[str, str] = {
     "custom": "custom_model",
     "speechmatics": "speechmatics_model",
     "mistral": "mistral_model",
+    "meta": "meta_model",
 }
 
 # Which field carries each remote engine's data-residency region; an engine
@@ -1026,6 +1041,7 @@ class SettingsStore:
             "custom_api_key",
             "speechmatics_api_key",
             "mistral_api_key",
+            "meta_api_key",
         ):
             payload.pop(secret_key, None)
         return payload

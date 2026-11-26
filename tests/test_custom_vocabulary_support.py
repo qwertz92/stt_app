@@ -43,6 +43,7 @@ _TRANSCRIBER_NAMES = (
     "CustomEndpointTranscriber",
     "SpeechmaticsTranscriber",
     "MistralTranscriber",
+    "MetaTranscriber",
 )
 
 
@@ -176,6 +177,7 @@ def test_the_sentence_that_names_the_supported_set_names_every_engine() -> None:
         "custom": "custom endpoint",
         "speechmatics": "Speechmatics",
         "mistral": "Mistral",
+        "meta": "Meta",
     }
 
     assert set(labels) == set(CUSTOM_VOCABULARY_ENGINES)

@@ -387,6 +387,7 @@ def test_dynamic_notes_fit_their_reserved_area(
             "funasr",
             "speechmatics",
             "mistral",
+            "meta",
             "custom",
         ):
             dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData(engine))

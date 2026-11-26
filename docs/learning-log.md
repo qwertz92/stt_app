@@ -3,6 +3,23 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: Meta Muse Voice Transcribe as the `meta` engine
+
+Structurally: a new batch-only remote engine, `meta`, built to Meta's own docs page
+(https://dev.meta.ai/docs/speech-to-text, read that day) rather than to the research of 2026-11-24.
+
+- **Where the page and the research differed**: the page gives `languageBias` as a list of English
+  language names (the research had no format) and lists a `keywords` field (the research did not), so
+  the custom vocabulary is wired. It names no ISO codes, no region and no retention rule.
+- **Live, no key**: one unauthenticated POST of a one-second WAV to `https://api.meta.ai/v1/asr/
+  transcribe` answered 401 with `{"sessionId", "error": {"code": "invalid_api_key", "message":
+  "Unauthorized"}}`: the host and path exist. A real transcript has never been seen (no key).
+- **Consequences built in**: WAV imports in other formats are converted to 16 kHz mono (Meta takes
+  nothing else); the connection test sends one second of silence because no key-check endpoint is
+  documented; parts are 590 s, not 600, because the page does not say whether its 10 minutes is
+  inclusive. `multipart_form_data` gained fields that carry their own `Content-Type` (the JSON part).
+- Streaming is on the roadmap with the protocol the page documents.
+
 ## 2026-11-25: review corrections to the retention and no-signal work
 
 Structurally: kept copies left the "Keep Recordings" count again, a secured

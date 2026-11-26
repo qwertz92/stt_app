@@ -1387,6 +1387,7 @@ _TRANSCRIBER_PACKAGE_EXPORTS = {
     "GroqTranscriber",
     "ITranscriber",
     "LocalFasterWhisperTranscriber",
+    "MetaTranscriber",
     "MistralTranscriber",
     "OpenAITranscriber",
     "SpeechmaticsTranscriber",

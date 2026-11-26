@@ -39,6 +39,19 @@ taking it out of this list; deleting one needs no ceremony.
   Mistral engine live text like AssemblyAI and Deepgram. Why it waits: the batch
   engine comes first, and a streaming provider is a second WebSocket client with its
   own session and teardown rules.
+- **Meta Muse Voice streaming** (2026-11-26). `wss://api.meta.ai/v1/asr/realtime` would give the
+  Meta engine live text. Protocol, from https://dev.meta.ai/docs/speech-to-text: the first text
+  frame, within 10 s of connecting, is a JSON handshake (`audioEncoding` `PCM_16KHZ` or
+  `PCM_24KHZ`, `model`, `mode`, `partialMode`, `languageBias`, `keywords`, and the key as
+  `authorization.accessToken` with the `Bearer` prefix; the HTTP `Authorization` header is
+  ignored); the server acknowledges with `{"sessionId": ...}` (no `type` field); then raw signed
+  16-bit little-endian mono PCM in binary frames, paced near real time and never more than 5 s
+  ahead; events `speechStart`, `transcript`, `speechEnd`, `speechComplete`, `audioProgress`,
+  `error`; the client ends with `{"type": "endStream"}` and reads until the server closes with
+  code 1000. Sessions last up to 60 minutes. Price is the batch price, $0.18 per hour. Effort:
+  medium (about the size of the Deepgram streaming client: a WebSocket thread, the handshake,
+  partial/final merging into the app's append-only insertion, teardown). Why it waits: none of it
+  can be checked without a key, and the batch engine comes first.
 - **A GPU path for Granite Speech 5.0** (2026-09-27, measured 2026-09-19). DirectML
   runs the FP32 graph in 0.107 s against 0.28 s for the INT8 graph on the CPU, for a
   29.4 s clip. Gain: about 0.2 s per half-minute dictation. Why it waits: it needs a

@@ -305,6 +305,74 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   - **Parts**: 1800 s and 500,000,000 bytes ("60 minutes", "500 MB"), with a
     300 s socket timeout for the synchronous request.
   - **Not verified live**: no Mistral key exists here.
+- **Meta Muse Voice Transcribe is one synchronous multipart request
+  (`meta_provider.py`, 2026-11-26; page read that day:
+  https://dev.meta.ai/docs/speech-to-text).** `POST
+  https://api.meta.ai/v1/asr/transcribe`, `Authorization: Bearer <key>`,
+  `Accept: application/json`; multipart parts `request` (JSON, sent with
+  `Content-Type: application/json`) and `audio` (the WAV). The page gives the
+  `audio` part no content type; the app sends `audio/wav`. Engine `meta`, label
+  "Meta (Muse Voice)", one model `muse-voice-transcribe-1.0` (the page's
+  example value; the launch was 2026-09-01 per the research of 2026-11-24),
+  key under `meta`, no region. Rules:
+  - **The `request` part carries `model`, `mode`, `audioEncoding`, and
+    optionally `languageBias` and `keywords`.** `mode` is sent as
+    `PUSH_TO_TALK` (the page's default; `ENDPOINTING` and `DIARIZATION` are
+    not used) and `audioEncoding` as `WAV`, so no vendor default decides. The
+    answer is JSON: `transcript` (string), `sessionId`, `audioDurationMs`,
+    `turns` (empty in PUSH_TO_TALK); `"transcript": ""` is a valid empty
+    answer, any other shape is an error (`transcript_from_json(field=
+    "transcript")`).
+  - **Language is `languageBias`, a list of English language names** ("a list
+    of language names, such as `["English", "French"]` ... steers recognition
+    but does not force a language"). The page lists no ISO codes, so
+    `config.META_LANGUAGE_NAMES` maps the app's code to the name; the page's
+    25 languages are offered (`META_LANGUAGE_MODES`), Auto sends no field, a
+    code outside the table is sent as Auto. The model is "trained on 70+
+    languages" but only these 25 are validated, so no more are offered.
+    Differs from the research: the research said "a `languageBias` hint"
+    without the value format.
+  - **The custom vocabulary is `keywords`** (the page: a list of terms that
+    "biases recognition but does not guarantee exact spelling"), up to the
+    app's 100 terms. The page states no limit on the list; **unverified**
+    whether a long list is refused. `meta` is in
+    `config.CUSTOM_VOCABULARY_ENGINES` and its summary sentence.
+  - **WAV only, mono 16-bit, 16 or 24 kHz, 10 minutes, 32 MB.** The app's own
+    16 kHz recording goes out byte for byte. An imported WAV in another rate,
+    in stereo or 24-bit is mixed down and resampled to 16 kHz mono
+    (`_wav_for_meta`, the resampler the local models use) instead of coming
+    back as a 400; a file that is not a WAV (MP3, M4A) is refused before
+    sending, naming the file, because Meta takes nothing else and the app
+    ships no decoder.
+  - **Parts**: `META_MAX_PART_SECONDS` 590 and `META_MAX_REQUEST_BYTES`
+    32,000,000 through `remote_batch_part_limit("meta", ...)` and
+    `transcribe_in_parts`. 590, not 600: the page does not say whether "10
+    minutes" is inclusive. Socket timeout 300 s (the page gives no processing
+    time; it says only that a request that "exceeded the server budget" is a
+    500 to retry once).
+  - **Errors** go through the shared readers: 401 and 429 have fixed
+    sentences; any other status shows the vendor's message capped at 300
+    characters (`read_http_error_detail`), an HTML page (a proxy's) by its
+    title, never pasted. The page defines no JSON error body; the live 401 of
+    2026-11-26 (below) is `{"sessionId": ..., "error": {"code":
+    "invalid_api_key", "type": "authentication_error", "message":
+    "Unauthorized"}}`, which the reader unwraps. The key is scrubbed from every
+    message and every echoed body (`_scrub`, before the cut).
+  - **Test** sends one second of digital silence through the request code:
+    the page documents no endpoint that only checks a key, and "requests that
+    fail before producing a transcript, and 429 requests, are not billed", so
+    a wrong key costs nothing and a right one one second ($0.00005).
+  - **Live, without a key (2026-11-26)**: an unauthenticated `POST` of a
+    one-second WAV to the batch URL answered HTTP 401 with the body above, so
+    the host and path exist. Nothing else is verified: **unverified live, no
+    key**: that a real transcript has the documented shape, that `keywords`
+    and `languageBias` are accepted as written, the `audio` content type, and
+    German quality.
+  - **Streaming is not built**: `wss://api.meta.ai/v1/asr/realtime` cannot be
+    checked without a key; the protocol and the effort are in
+    `docs/ROADMAP.md`.
+  - **Revert**: remove `meta` from `VALID_ENGINES` and the entries beside the
+    `META_*` constants; a saved `engine: "meta"` then falls to local.
 - **A remote batch recording past its engine's limit goes out in parts, cut
   at quiet points (2026-09-27).** OpenAI/Groq refuse >25 MB (~13 min of
   16 kHz WAV). `config.remote_batch_part_limit(engine, model, api_mode)`

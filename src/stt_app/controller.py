@@ -620,6 +620,7 @@ _ENGINE_KEY_FLAGS: dict[str, str] = {
     "custom": "has_custom_key",
     "speechmatics": "has_speechmatics_key",
     "mistral": "has_mistral_key",
+    "meta": "has_meta_key",
 }
 
 # `_ENGINE_MODEL_FIELDS` and `_ENGINE_REGION_FIELDS` (imported from the

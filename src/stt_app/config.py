@@ -1292,6 +1292,40 @@ MISTRAL_LANGUAGE_MODES = (
     "uk",
     "vi",
 )
+# The 25 languages Muse Voice Transcribe lists, with the English names its
+# `languageBias` field takes ("a list of language names, such as
+# ["English", "French"]"; https://dev.meta.ai/docs/speech-to-text, read
+# 2026-11-26). The page lists no ISO codes, so the app's code -> Meta's name is
+# this table; the model is "trained on 70+ languages" but only these are
+# validated, and a code outside the table is sent as Auto.
+META_LANGUAGE_NAMES: dict[str, str] = {
+    "ar": "Arabic",
+    "bn": "Bengali",
+    "nl": "Dutch",
+    "en": "English",
+    "fr": "French",
+    "de": "German",
+    "he": "Hebrew",
+    "hi": "Hindi",
+    "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "kn": "Kannada",
+    "ko": "Korean",
+    "ms": "Malay",
+    "zh": "Mandarin Chinese",
+    "mr": "Marathi",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "es": "Spanish",
+    "tl": "Tagalog",
+    "ta": "Tamil",
+    "te": "Telugu",
+    "th": "Thai",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+}
+META_LANGUAGE_MODES = ("auto", *META_LANGUAGE_NAMES)
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
     "local",
@@ -1305,6 +1339,7 @@ VALID_ENGINES = (
     "custom",
     "speechmatics",
     "mistral",
+    "meta",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -1321,6 +1356,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     # The default model's list; Enhanced has its own.
     "speechmatics": SPEECHMATICS_MELIA_LANGUAGE_MODES,
     "mistral": MISTRAL_LANGUAGE_MODES,
+    "meta": META_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5", GRANITE_CTC_MODEL_SIZE)
 LOCAL_BATCH_ONLY_MODELS = (
@@ -1405,7 +1441,7 @@ def language_modes_for_selection(
 # query parameter, a custom endpoint as `prompt` (transcription API) or as a
 # sentence of its chat instruction, Speechmatics as `additional_vocab`
 # entries (Enhanced), Mistral as repeated `context_bias`
-# fields. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
+# fields, Meta as the `keywords` list of its request part. ElevenLabs, Azure LLM Speech and Fun-ASR expose no biasing input
 # at all.
 CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "assemblyai",
@@ -1415,6 +1451,7 @@ CUSTOM_VOCABULARY_ENGINES: tuple[str, ...] = (
     "custom",
     "speechmatics",
     "mistral",
+    "meta",
 )
 # A model of one of those engines that has no biasing input. Melia 1:
 # "Custom Dictionary: ... Not yet."
@@ -1433,7 +1470,7 @@ CUSTOM_VOCABULARY_LOCAL_RUNTIMES: tuple[str, ...] = ("faster-whisper",)
 # A test pins that every engine above appears in it.
 CUSTOM_VOCABULARY_SUPPORTED_SUMMARY = (
     "Whisper models, OpenAI, Groq, AssemblyAI, Deepgram, Speechmatics "
-    "Enhanced, Mistral, and a custom endpoint"
+    "Enhanced, Mistral, Meta, and a custom endpoint"
 )
 
 
@@ -1541,6 +1578,7 @@ ENGINE_LABELS: dict[str, str] = {
     "funasr": "Fun-ASR / Alibaba",
     "speechmatics": "Speechmatics",
     "mistral": "Mistral (Voxtral)",
+    "meta": "Meta (Muse Voice)",
     "custom": "Custom endpoint",
 }
 
@@ -1788,6 +1826,12 @@ def normalize_speechmatics_region(value: object) -> str:
 MISTRAL_MODELS = ("voxtral-mini-transcribe-3-0", "voxtral-small-transcribe-3")
 DEFAULT_MISTRAL_MODEL = "voxtral-mini-transcribe-3-0"
 
+# Meta Muse Voice Transcribe (launched 2026-09-01), the one model of Meta's
+# speech API: `model` is "muse-voice-transcribe-1.0" in the batch request's
+# example (https://dev.meta.ai/docs/speech-to-text, read 2026-11-26).
+META_MODELS = ("muse-voice-transcribe-1.0",)
+DEFAULT_META_MODEL = "muse-voice-transcribe-1.0"
+
 # A bring-your-own OpenAI-compatible endpoint: a LiteLLM or vLLM gateway, a
 # local speech server, or any host that speaks the OpenAI REST shapes. The
 # base URL, the model and the API style are the user's; nothing is validated
@@ -1881,6 +1925,14 @@ SPEECHMATICS_MAX_REQUEST_BYTES = 999_000_000
 # one request well inside its socket timeout.
 MISTRAL_MAX_PART_SECONDS = 1800.0
 MISTRAL_MAX_REQUEST_BYTES = 500_000_000
+# Meta: "Maximum duration: 10 minutes" and "Maximum request body: 32 MB"
+# (https://dev.meta.ai/docs/speech-to-text, read 2026-11-26); a longer
+# recording is a 400, a larger body a 413. The bound sits 10 s under the
+# documented one, since the page does not say whether the limit is read
+# inclusively, and the bytes are read as decimal megabytes, the smaller of the
+# two readings. 590 s of the app's 16 kHz WAV is 18.9 MB, of a 24 kHz one 28.3.
+META_MAX_PART_SECONDS = 590.0
+META_MAX_REQUEST_BYTES = 32_000_000
 REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "openai": OPENAI_MAX_PART_SECONDS,
     "groq": GROQ_MAX_PART_SECONDS,
@@ -1888,6 +1940,7 @@ REMOTE_BATCH_MAX_PART_SECONDS: dict[str, float] = {
     "custom": CUSTOM_MAX_PART_SECONDS,
     "speechmatics": SPEECHMATICS_MAX_PART_SECONDS,
     "mistral": MISTRAL_MAX_PART_SECONDS,
+    "meta": META_MAX_PART_SECONDS,
 }
 REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "openai": OPENAI_MAX_REQUEST_BYTES,
@@ -1896,6 +1949,7 @@ REMOTE_BATCH_MAX_REQUEST_BYTES: dict[str, int] = {
     "custom": CUSTOM_MAX_REQUEST_BYTES,
     "speechmatics": SPEECHMATICS_MAX_REQUEST_BYTES,
     "mistral": MISTRAL_MAX_REQUEST_BYTES,
+    "meta": META_MAX_REQUEST_BYTES,
 }
 # An API style whose limit differs from its engine's: (engine, api_mode) ->
 # (seconds, bytes). Only the custom endpoint has more than one style.

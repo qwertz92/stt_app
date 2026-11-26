@@ -26,6 +26,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | $0.000047/second, Beijing region rate — the only region this model's own pricing page lists ([fun-asr-realtime pricing](https://www.alibabacloud.com/help/en/model-studio/fun-asr-realtime), checked 2026-09-21) | ~$0.169/hour |
 | Speechmatics | Batch | `melia-1` (default), `enhanced` (`standard` removed 2026-11-24) | List rates per hour, pre-recorded, read 2026-11-24 on [speechmatics.com/pricing.md](https://www.speechmatics.com/pricing.md): Melia 1 $0.24, Enhanced $0.75, Standard $0.45 (the headline "from $0.12" is Melia with a 33 % training opt-in and a 25 % annual commitment) | $0.24/hour (Melia 1) |
 | Mistral | Batch | `voxtral-mini-transcribe-3-0` (default) or `voxtral-small-transcribe-3` (was `voxtral-mini-2602`) | Mini $0.0035/min, Small $0.0040/min ([announcement](https://mistral.ai/news/voxtral-3/), read 2026-11-24); was $0.003/min ([model card](https://docs.mistral.ai/models/voxtral-mini-transcribe-26-02), read 2026-09-27) | $0.18/hour |
+| Meta | Batch | `muse-voice-transcribe-1.0` | "$0.18 per hour" of audio, billed per whole second; failed requests and 429s are not billed; batch and streaming cost the same ([speech-to-text docs](https://dev.meta.ai/docs/speech-to-text), read 2026-11-26) | $0.18/hour |
 | Custom endpoint | Batch | Whatever the endpoint offers | Set by the endpoint's operator (a company gateway, a hosted OpenAI-compatible API, or free for a local server) | n/a |
 
 Notes:
@@ -75,6 +76,7 @@ All figures below were re-read from the vendor's own pricing page on
 | Azure LLM Speech | **No** | **Corrected 2026-09-21**: Microsoft's own quotas page lists "Not applicable" in the Free (F0) column for every LLM-speech and fast-transcription row — the F0 tier does not cover the API this app uses at all. A Standard (S0) resource is required from the start; see [Azure LLM Speech Setup](azure-llm-speech.md#cost-and-free-tier) |
 | Speechmatics | Yes | $100 in free credit to start, no credit card required ([pricing](https://www.speechmatics.com/pricing), read 2026-09-21) |
 | Mistral | **Not verified** | Not read this session |
+| Meta | **Not verified** | The docs page read 2026-11-26 names no free tier |
 | Fun-ASR (Alibaba) | Likely yes, amount **not verified** | Alibaba grants new users a free quota per model, valid 90 days, and only for models in the Singapore region with the International deployment scope, which is the endpoint this app uses ([free-quota page](https://www.alibabacloud.com/help/en/model-studio/new-free-quota), read 2026-09-21); that page does not state the amount for Fun-ASR specifically. The "36,000 audio seconds (10 hours)" this document stated before could not be re-confirmed this session; check the Model Studio console for the current figure before relying on it |
 
 OpenAI caveat:

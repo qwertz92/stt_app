@@ -9,7 +9,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
 - **GPU-accelerated models** — optional Cohere and IBM Granite Speech models run on your GPU (WebGPU); Granite Speech 4.1 2B led the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) at launch (2026-04-29) and remains the most accurate local model in this app — see [docs/models.md](docs/models.md#which-model-should-i-use) for whether it still leads the live leaderboard
-- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
+- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), Meta (Muse Voice), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
 - **Streaming** (experimental) — see partial results while you speak
@@ -80,7 +80,7 @@ Right-click the **system tray icon** → **Settings**.
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
-| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Custom endpoint (OpenAI-compatible) | Local |
+| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Meta (Muse Voice), Custom endpoint (OpenAI-compatible) | Local |
 | Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |
@@ -197,6 +197,7 @@ uv run python -m pytest
 | Fun-ASR / Alibaba (batch) | Stable |
 | Speechmatics (batch; EU, US or Australian region) | New, not yet verified against the live service |
 | Mistral Voxtral Mini / Small Transcribe 3 (batch) | New, not yet verified against the live service |
+| Meta Muse Voice Transcribe (batch) | New, not yet verified against the live service |
 | Custom OpenAI-compatible endpoint (batch) | Stable (not verified against every server) |
 
 ## License

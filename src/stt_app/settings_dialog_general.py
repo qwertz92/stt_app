@@ -103,6 +103,7 @@ _VOCABULARY_SUPPORTED_NOTES: dict[str, str] = {
         "{name} uses the custom vocabulary as context bias, tuned for "
         "English (batch only)."
     ),
+    "meta": "{name} uses the custom vocabulary as its keywords (batch only).",
 }
 
 # Where the two things the Model row does not do are done. The tabs are named

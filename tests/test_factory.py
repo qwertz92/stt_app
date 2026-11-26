@@ -351,7 +351,7 @@ def test_a_missing_key_points_at_the_providers_tab(engine):
 
 
 @pytest.mark.parametrize(
-    "engine", ["openai", "groq", "azure", "custom", "speechmatics", "mistral"]
+    "engine", ["openai", "groq", "azure", "custom", "speechmatics", "mistral", "meta"]
 )
 def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
     monkeypatch, engine
@@ -369,6 +369,7 @@ def test_a_splitting_engine_judges_empty_parts_by_the_configured_threshold(
             "custom": "stt_app.transcriber.custom_endpoint_provider",
             "speechmatics": "stt_app.transcriber.speechmatics_provider",
             "mistral": "stt_app.transcriber.mistral_provider",
+            "meta": "stt_app.transcriber.meta_provider",
         }[engine]
     )
     seen: list[float] = []
@@ -450,6 +451,18 @@ def test_the_speechmatics_region_and_model_reach_the_provider(region):
     assert built._base_url == f"https://{region}.asr.api.speechmatics.com/v2"
     assert built._model == "enhanced"
     assert built._language_mode == "fr"
+
+
+def test_the_meta_model_language_and_vocabulary_reach_the_provider():
+    built = create_transcriber(
+        AppSettings(
+            engine="meta", language_mode="de", custom_vocabulary="Kubernetes, Grafana"
+        ),
+        secret_store=_AnyKeyStore(),
+    )
+    assert built._model == "muse-voice-transcribe-1.0"
+    assert built._language_mode == "de"
+    assert built._keywords == ["Kubernetes", "Grafana"]
 
 
 def test_the_mistral_model_reaches_the_provider():
