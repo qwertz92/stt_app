@@ -32,8 +32,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   hidden; the group (`ContentCappedGroupBox`) is no taller than its content (its
   maximum is its preferred height with the list at all its rows, recomputed on
   every layout request); and **the list is the flexible part**
-  (`MinimumHeightHintListWidget`): minimum six rows (fewer if the roster is
-  shorter), maximum all rows, preferred height = the minimum, stretch 1 in the
+  (`MinimumHeightHintListWidget`): minimum five rows (six until 2026-11-26; fewer if the
+  roster is shorter), maximum all rows, preferred height = the minimum, stretch 1 in the
   page. The preferred height has to be the minimum because a settings page is
   a `QScrollArea` whose content never gets less than its layout's preferred
   height (wrapped labels make the layout height-for-width): a list preferring
@@ -42,8 +42,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   download's status line, bar and queue line (+47 px) and a four-line error path
   (+63 px) shrink the list instead (860 x 900: 306 -> 260 -> 244 px, the list
   scrolls inside itself) and create no page scroll bar, so the page keeps its
-  834 px width; only below six rows does the page scroll (860 x 700: 822 px
-  wide). Nothing depends on 15 rows. **The button row (Refresh, Download
+  834 px width; only below five rows does the page scroll (860 x 700: 822 px
+  wide). Nothing depends on 15 rows. With nine offered models (Canary retired
+  2026-11-26) six minimum rows left room for only three rows to give up, which
+  the four-line error path exceeded: a page scroll bar appeared (test
+  `test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar`),
+  so the minimum is five. **The button row (Refresh, Download
   Selected, Download All Missing, Cancel Downloads, Delete Selected) sits above
   the list** (2026-11-25): the status line, bar and queue line below the list take
   their height from the list, so only the list's lower edge moves and nothing

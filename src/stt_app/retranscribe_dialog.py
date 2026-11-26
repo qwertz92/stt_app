@@ -19,7 +19,6 @@ from PySide6 import QtCore, QtWidgets
 from .app_icon import load_app_icon
 from .clipboard_copy import copy_text
 from .config import (
-    CANARY_MODEL_SIZE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     LANGUAGE_MODE_LABELS,
@@ -58,10 +57,6 @@ TranscribeCallable = Callable[
 
 _PREVIEW_MIN_LINES = 4
 _RESULT_MIN_LINES = 6
-_CANARY_LANGUAGE_WARNING = (
-    "Canary cannot detect the language. Pick the one actually spoken - with "
-    "the wrong one it translates instead of transcribing."
-)
 # Every name the substitution sentence can carry. Not "the longest" -- there
 # is no such thing here, see `_reserve_note_height`.
 # One literal for the note and for the worst case the reservation measures,
@@ -156,7 +151,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # would clip the warning instead of growing.
         #
         # Three lines, not two: the note can carry a retired-model
-        # substitution *and* the Canary language warning at once, which
+        # substitution *and* a language substitution at once, which
         # measures 60 px at the dialog's 560 px minimum against the 38 px that
         # two lines of the dialog font reserve -- so the buttons below moved
         # when the model changed. (The multiplier is in the dialog's font
@@ -181,8 +176,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # resizable down to `_MINIMUM_SIZE`, and at 560 px the worst-case note
         # needs 60 px against the 54 px reserved above, so without it the last
         # sentence is cut off with no scrollbar and no ellipsis -- and the last
-        # sentence is the Canary warning, whose absence costs a translated
-        # transcript. A word-wrapping QLabel happens to restore this flag
+        # sentence is the language substitution. A word-wrapping QLabel happens to restore this flag
         # inside `setText`, which is why it works today; passing a policy
         # object with the flag already set stops that from being load-bearing
         # Qt-internal behaviour.
@@ -269,12 +263,9 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # with the dialog width, and an id carrying no break opportunity never
         # wraps at all.
         #
-        # Deliberately a superset. Sentence 3 is emitted only when the
-        # *selected* model is Canary, so of these candidates only the Canary
-        # one is a note the dialog can actually display; the rest pair three
-        # sentences with a name that cannot appear beside them, and the entry
-        # model appears in the chosen set although the substitution sentence
-        # is guarded on the entry model *not* being offered. Sentence 2 uses
+        # Deliberately a superset. The entry model appears in the chosen set
+        # although the substitution sentence is guarded on the entry model
+        # *not* being offered. Sentence 2 uses
         # `auto` in both slots: language codes are at most four characters
         # and `auto` is one of them, so no real pair is wider. Restricting the
         # set to the reachable pairs would save 6 px of note height at most
@@ -296,7 +287,6 @@ class RetranscribeDialog(QtWidgets.QDialog):
                     _LANGUAGE_SUBSTITUTION_NOTE.format(
                         requested="auto", selected="auto"
                     ),
-                    _CANARY_LANGUAGE_WARNING,
                 )
             )
             for chosen in dict.fromkeys((*_SUBSTITUTABLE_MODEL_NAMES, entry_label))
@@ -570,11 +560,10 @@ class RetranscribeDialog(QtWidgets.QDialog):
         * The **language** selected before the model changed -- on open, the
           configured one; history entries store no language -- is not offered
           by the chosen model, so the picker lands on another. This used to
-          be said for Canary alone, and Canary is only the extreme case: it
-          has no auto-detect, so `auto` (the app default) lands on the first
-          offered language, and running an English recording that way stores
-          a German *translation* as a new entry. Cohere and Granite refuse
-          `auto` too, and a remote provider can lack the configured language
+          be said for Canary alone (retired 2026-11-26): it had no
+          auto-detect, so `auto` landed on the first offered language and
+          stored a German *translation* as a new entry. Cohere refuses `auto`
+          too, and a remote provider can lack the configured language
           outright (a model's list may omit it), and each of those substituted
           silently.
         """
@@ -602,8 +591,6 @@ class RetranscribeDialog(QtWidgets.QDialog):
                     requested=requested, selected=selected
                 )
             )
-        if self.selected_model() == CANARY_MODEL_SIZE:
-            parts.append(_CANARY_LANGUAGE_WARNING)
         self._language_note.setText(" ".join(parts))
 
     def _on_engine_changed(self) -> None:

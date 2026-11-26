@@ -72,7 +72,7 @@ def test_the_benchmark_tab_fits_a_dialog_on_a_small_screen():
 
 
 _LONG_MODEL_IDS = (
-    "granite-speech-5.0-470m-turboctc",
+    "granite-5.0-470m-turboctc-multi",
     "cohere-transcribe-03-2026",
     "parakeet-tdt-0.6b-v3",
 )
@@ -87,7 +87,7 @@ def _model_column_need(table: QtWidgets.QTableWidget, text: str) -> int:
 def test_the_results_table_shows_long_model_names_whole_at_the_default_width():
     """Every column was 100 px wide except the last, Status, which took all
     the room left: "OK" sat in a 190 px cell while
-    "granite-speech-5.0-470m-turboctc" (183 px of text) was cut to 100 px in
+    "granite-5.0-470m-turboctc-multi" (183 px of text) was cut to 100 px in
     the Model column. At the default 860 px the Model column now holds it
     whole (191 px); at the 801 px minimum it gets 185 px and the cell's
     tooltip carries the name."""
@@ -323,10 +323,10 @@ _TWELVE_MODELS = [
     "granite-speech-5.0-2b",
     "nemotron-3.5-asr-streaming-0.6b-int4",
     "parakeet-tdt-0.6b-v3",
-    "canary-1b-v2",
     "cohere-transcribe-03-2026",
-    "granite-speech-5.0-470m-turboctc",
+    "granite-5.0-470m-turboctc-multi",
     "nemotron-3.5-asr-0.6b",
+    "medium",
 ]
 
 

@@ -15,7 +15,7 @@ dependencies = [
     # (measured 2026-10-03). Stay on the last 18.x until faster-whisper moves.
     "av==18.1.0",
     "onnxruntime-genai==0.17.1; platform_system == 'Windows'",
-    # Pure-Python NeMo runtime (Parakeet/Canary). Resolves the same
+    # Pure-Python NeMo runtime (Parakeet, Fluid Speech Pro). Resolves the same
     # onnxruntime distribution onnxruntime-genai already requires; do NOT
     # add onnxruntime-directml, which overwrites it and breaks genai.
     "onnx-asr[cpu,hub]==0.12.0",

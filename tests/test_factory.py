@@ -21,14 +21,14 @@ from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+from stt_app.transcriber.local_granite_ctc import LocalGraniteCtcTranscriber
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
-from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():
-    # Explicit: the default local model is Parakeet (onnx-asr), so
+    # Explicit: the default local model is not a faster-whisper size, so
     # `AppSettings(engine="local")` alone no longer describes faster-whisper.
     settings = AppSettings(engine="local", model_size="small")
     t = create_transcriber(settings)
@@ -121,7 +121,7 @@ def test_factory_unknown_engine_falls_back_to_the_default_local_model():
     settings = AppSettings(engine="unknown_provider_xyz")
 
     assert settings.model_size == DEFAULT_MODEL_SIZE
-    assert isinstance(create_transcriber(settings), LocalOnnxAsrTranscriber)
+    assert isinstance(create_transcriber(settings), LocalGraniteCtcTranscriber)
 
 
 def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():
@@ -146,7 +146,7 @@ def test_factory_unknown_engine_with_nemotron_preserves_nemotron_runtime():
 
 def test_factory_local_passes_stream_final_full_pass():
     # A faster-whisper size explicitly: this flag only exists on that runtime,
-    # and the default local model is now the batch-only Parakeet.
+    # and the default local model is batch-only.
     settings = AppSettings(
         engine="local", model_size="small", streaming_full_final_transcript=True
     )
@@ -312,7 +312,7 @@ def test_a_measured_device_never_reaches_a_runtime_that_has_no_device():
     for model_size in (
         "small",
         "parakeet-tdt-0.6b-v3",
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
     ):
         settings = AppSettings(
             engine="local",

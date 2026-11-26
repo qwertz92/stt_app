@@ -22,9 +22,10 @@ After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
 faster-whisper models use CTranslate2. Cohere and Granite Speech 5.0 2B use
 q4 ONNX/WebGPU snapshots and require the JavaScript runtime from
-package.json. Parakeet (v3 and Fluid Speech Pro) and Canary use INT8 ONNX through the
+package.json. Parakeet (v3 and Fluid Speech Pro) use INT8 ONNX through the
 pure-Python onnx-asr runtime. Granite Speech 5.0 470M TurboCTC is one INT8 ONNX graph the
-app runs itself on ONNX Runtime's CPU provider (English only). Nemotron 3.5
+app runs itself on ONNX Runtime's CPU provider (seven languages, detected by
+the model). Nemotron 3.5
 uses the INT4 ONNX Runtime GenAI streaming export.
 
 If Hugging Face is unreachable (e.g. a corporate proxy such as Zscaler that
@@ -34,9 +35,10 @@ the same weights from its own CDN. Set the environment variable
 STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
 
 Some models are not mirrored there and have Hugging Face as their only
-source: the default parakeet-tdt-0.6b-v3, fluid-speech-pro,
-canary-1b-v2, distil-large-v3.5 and granite-speech-5.0-470m-turboctc (see
-MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks Hugging Face, clone from a machine that
+source: the default granite-5.0-470m-turboctc-multi, parakeet-tdt-0.6b-v3,
+fluid-speech-pro and distil-large-v3.5 (see
+MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks Hugging
+Face, clone from a machine that
 can reach it (`git lfs install` first, or the clone yields 130-byte pointer
 files; the repository list is in docs/models.md), copy the folder over, and
 set "Model Dir" in the app to the folder that contains it. --output-dir is an

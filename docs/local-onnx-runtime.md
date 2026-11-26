@@ -174,7 +174,7 @@ the ones that run through the high-level Transformers.js pipeline (verified on
 WebGPU, see below). `auto`/`gpu` mode attempts WebGPU, then DirectML, then CPU;
 confirm the active device in the runtime status. The other two local ONNX
 paths are separate runtimes: Nemotron uses ONNX Runtime GenAI (next paragraph),
-and Parakeet/Canary use the pure-Python `onnx-asr` runtime, which is CPU-only
+and Parakeet and Fluid Speech Pro use the pure-Python `onnx-asr` runtime, which is CPU-only
 here and therefore not offered in the device picker at all.
 
 Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency

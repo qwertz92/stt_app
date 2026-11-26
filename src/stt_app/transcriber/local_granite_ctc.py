@@ -10,10 +10,12 @@ feature extractor in numpy, and the greedy CTC decode plus a byte-level BPE
 `tokenizers` decode -- which adds no dependency: `onnxruntime`, `numpy` and
 `tokenizers` are all already installed.
 
-The model is English-only, batch-only and CPU-only, and it writes lower-case
-text without punctuation; its BPE vocabulary holds no multi-letter upper-case
-token, so that is what it was trained to produce and not something to
-post-process away.
+The model is batch-only and CPU-only. It detects English, French, German,
+Spanish, Portuguese, Italian or Japanese itself (the graph has no language
+input) and writes punctuated, capitalised text. `<|nospeech|>` (token id 1) is
+a special token the `tokenizers` decode skips, so silence decodes to an empty
+string. The earlier English-only revision of the model wrote lower-case text
+without punctuation; it is no longer the one the app downloads.
 
 Download, cache detection, size estimation and deletion go through the shared
 layouts in `local_webgpu_asr`, and the resolve-or-download step through
@@ -196,6 +198,29 @@ def ctc_greedy_token_ids(logits: np.ndarray) -> list[int]:
     return [int(token) for token in best[keep] if token != BLANK_ID]
 
 
+def _is_cjk(character: str) -> bool:
+    """Han, Hiragana or Katakana: scripts written without spaces."""
+    code = ord(character)
+    return (
+        0x3040 <= code <= 0x30FF  # Hiragana and Katakana
+        or 0x3400 <= code <= 0x4DBF  # CJK extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK unified ideographs
+        or 0xF900 <= code <= 0xFAFF  # CJK compatibility ideographs
+    )
+
+
+def _join_passes(pieces: list[str]) -> str:
+    """Join the texts of consecutive passes: with a space, except where both
+    sides of the seam are Japanese, which has none (a stray space would sit in
+    the middle of a sentence)."""
+    joined = ""
+    for piece in pieces:
+        if joined and not (_is_cjk(joined[-1]) and _is_cjk(piece[0])):
+            joined += " "
+        joined += piece
+    return joined
+
+
 class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
     """Batch transcription for Granite Speech 5.0 TurboCTC on ONNX Runtime."""
 
@@ -229,8 +254,8 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
         self.runtime_details_text = ""
         self.runtime_warning = (
             "This model runs on CPU through the ONNX Runtime the app already "
-            "ships. It is English-only and writes lower-case text without "
-            "punctuation."
+            "ships. It detects the language itself, so no language can be "
+            "selected."
         )
 
     def runtime_status_text(self) -> str:
@@ -241,10 +266,9 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
     def _normalize_language_mode(self, mode: str) -> str:
         """Restrict to what this model can answer with.
 
-        The graph takes no language input at all: it decodes English, and a
-        German selection would otherwise look like it had been applied. Auto
-        and English are the same request here, and both are accepted so the
-        app-wide default needs no exception.
+        The graph takes no language input at all: it detects the language
+        itself, and a selection would otherwise look like it had been applied.
+        Only Auto is offered, which is also the app-wide default.
         """
         requested = str(mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         supported = language_modes_for_selection("local", self.model_size)
@@ -253,7 +277,7 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
         fallback = supported[0]
         logger.warning(
             "Language '%s' is not supported by '%s'; using '%s' instead. This "
-            "model transcribes English and takes no language input.",
+            "model detects the language itself and takes no language input.",
             requested,
             self.model_size,
             fallback,
@@ -427,7 +451,7 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
                     text = self._transcribe_window(window, session, tokenizer, handle)
                     if text:
                         pieces.append(text)
-                transcript = " ".join(pieces)
+                transcript = _join_passes(pieces)
             except TranscriptionCanceled:
                 raise
             except Exception as exc:

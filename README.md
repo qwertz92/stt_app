@@ -48,9 +48,9 @@ on Windows 11 on ARM and run the whole app, Whisper models included, under
 Windows' x64 emulation. To run from source in a native ARM64 Python instead,
 use `uv` (the pip route cannot skip CTranslate2): CTranslate2 has no ARM64
 build, so the faster-whisper models (`small` to `distil-large-v3.5`) show as
-`[unavailable]` and are never downloaded. Parakeet (the default), Canary,
-Granite, Nemotron and every cloud engine need nothing that lacks an ARM64
-build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
+`[unavailable]` and are never downloaded. The default model (Granite
+TurboCTC), Parakeet, Fluid Speech Pro, Nemotron and every cloud engine need
+nothing that lacks an ARM64 build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
 22 or newer; an ARM64 `.msi` exists, and an x64 Node runs under emulation too.
 
 ## End-user Windows download
@@ -79,7 +79,7 @@ Right-click the **system tray icon** → **Settings**.
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
+| Model size | Which local model transcribes. `granite-5.0-470m-turboctc-multi` is fast and accurate in its seven languages and needs no GPU; Parakeet covers 25 European languages; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Granite, Parakeet, Cohere are batch-only | `granite-5.0-470m-turboctc-multi` |
 | Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Meta (Muse Voice), OpenRouter, Custom endpoint (OpenAI-compatible) | Local |
 | Mode | Batch (after stop) or Streaming (live; experimental except local Nemotron) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
@@ -90,16 +90,17 @@ Right-click the **system tray icon** → **Settings**.
 
 There are five local families. **GPU-accelerated ONNX models** (Cohere, IBM
 Granite) run on the GPU via WebGPU, need Node.js, and are batch-only.
-**onnx-asr models** (Parakeet, Fluid Speech Pro, Canary) are pure Python, CPU
+**onnx-asr models** (Parakeet, Fluid Speech Pro) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
 model here that transcribed the benchmark recording correctly, and Fluid
 Speech Pro measured German 3.3 % and English 3.6 % against its 6.5 % and
 4.9 % at about three times the processing time (2026-11-25 test,
 `docs/models.md`).
 **Granite Speech 5.0 470M TurboCTC** runs on ONNX Runtime on the CPU with no
-Node.js either; it is the fastest local model on English (RTF 0.014 on a
-Ryzen 5 7600X) and the smallest non-Whisper download, but it is English only
-and writes lower case without punctuation or apostrophes.
+Node.js either; it is the fastest local model (RTF 0.023 on a Ryzen 5 7600X)
+and the smallest non-Whisper download, and it writes punctuated text in seven
+languages (English, French, German, Spanish, Portuguese, Italian, Japanese),
+detecting the language itself.
 **Nemotron 3.5** is the only local true-streaming
 model. **Whisper models** (CTranslate2) need no extra setup, run on the CPU, and
 also support streaming.
@@ -109,21 +110,24 @@ also support streaming.
 | Best accuracy without a GPU, German + English | `fluid-speech-pro` | onnx-asr int8 | ~801 MB |
 | High accuracy, punctuated text, on a GPU | `granite-speech-5.0-2b` | ONNX/WebGPU q4 | ~1.73 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
-| Zero-setup default: fastest accurate local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
-| German accuracy above Parakeet, 25 explicit languages, CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
+| 25 European languages, no GPU or Node.js | `parakeet-tdt-0.6b-v3` | onnx-asr int8 | ~670 MB |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
-| English only, fastest, plain lower-case text is acceptable | `granite-speech-5.0-470m-turboctc` | ONNX Runtime int8 CTC | ~552 MB |
+| Zero-setup default: accurate, fast, seven languages, punctuated, no GPU or Node.js | `granite-5.0-470m-turboctc-multi` (default) | ONNX Runtime int8 CTC | ~552 MB |
 
-The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
-measured a mean real-time factor of 0.043 on a Ryzen 5 7600X, against 0.154 for
-`small` on the same recording and the same CPU. It transcribes 25 European
-languages (the list is in the model card) and
-detects the language itself. The one thing it cannot do is live streaming
+The default is `granite-5.0-470m-turboctc-multi`: it needs no GPU and no
+Node.js, and on 25 German and 25 English FLEURS clips (2026-11-25, about 500
+words per language, so differences under 1 point are noise) it measured 4.27 %
+and 4.14 % word error rate at a real-time factor of 0.023, against 6.50 % and
+4.89 % at 0.085 for `parakeet-tdt-0.6b-v3`, from a 552 MB download against
+670 MB. The price is language coverage: it detects English, French, German,
+Spanish, Portuguese, Italian and Japanese by itself, while Parakeet v3
+transcribes 25 European languages (the list is in the model card), so pick
+Parakeet in Settings for any other language. Neither can do live streaming
 (batch only), so switch to `small` or `nemotron-3.5-asr-streaming-0.6b-int4`
-for that. For maximum accuracy with a GPU and Node.js, prefer
+for that. An existing install keeps the model it has selected. For maximum accuracy with a GPU and Node.js, prefer
 `granite-speech-5.0-2b` or `cohere-transcribe-03-2026`, and for the CPU
 `fluid-speech-pro`. Then run the
 [benchmark](docs/advanced-setup.md#benchmarking) to find the best model for

@@ -711,7 +711,7 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
@@ -800,7 +800,7 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
@@ -861,7 +861,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
@@ -2423,16 +2423,16 @@ _LOCAL_RUNTIME_FIELDS = [
     ("parakeet-tdt-0.6b-v3", {"silence_gate_enabled": False}, False),
     # The Granite CTC graph takes the same four constructor arguments as
     # onnx-asr and reads nothing else.
-    ("granite-speech-5.0-470m-turboctc", {"offline_mode": True}, True),
-    ("granite-speech-5.0-470m-turboctc", {"model_dir": "D:/models"}, True),
-    ("granite-speech-5.0-470m-turboctc", {"custom_vocabulary": "Kubernetes"}, False),
-    ("granite-speech-5.0-470m-turboctc", {"vad_enabled": True}, False),
-    ("granite-speech-5.0-470m-turboctc", {"silence_gate_threshold": 0.02}, False),
-    ("granite-speech-5.0-470m-turboctc", {"silence_gate_enabled": False}, False),
-    ("granite-speech-5.0-470m-turboctc", {"local_onnx_device": "cpu"}, False),
-    ("granite-speech-5.0-470m-turboctc", {"keep_onnx_model_loaded": False}, False),
+    ("granite-5.0-470m-turboctc-multi", {"offline_mode": True}, True),
+    ("granite-5.0-470m-turboctc-multi", {"model_dir": "D:/models"}, True),
+    ("granite-5.0-470m-turboctc-multi", {"custom_vocabulary": "Kubernetes"}, False),
+    ("granite-5.0-470m-turboctc-multi", {"vad_enabled": True}, False),
+    ("granite-5.0-470m-turboctc-multi", {"silence_gate_threshold": 0.02}, False),
+    ("granite-5.0-470m-turboctc-multi", {"silence_gate_enabled": False}, False),
+    ("granite-5.0-470m-turboctc-multi", {"local_onnx_device": "cpu"}, False),
+    ("granite-5.0-470m-turboctc-multi", {"keep_onnx_model_loaded": False}, False),
     (
-        "granite-speech-5.0-470m-turboctc",
+        "granite-5.0-470m-turboctc-multi",
         {"streaming_full_final_transcript": True},
         False,
     ),
@@ -2486,8 +2486,8 @@ _LOCAL_RUNTIME_FIELDS = [
         False,
     ),
     (
-        "granite-speech-5.0-470m-turboctc",
-        {"onnx_auto_preferred_devices": {"granite-speech-5.0-470m-turboctc": "cpu"}},
+        "granite-5.0-470m-turboctc-multi",
+        {"onnx_auto_preferred_devices": {"granite-5.0-470m-turboctc-multi": "cpu"}},
         False,
     ),
 ]

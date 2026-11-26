@@ -35,6 +35,7 @@ from .config import (
     ELEVENLABS_MODELS,
     ENGINE_LABELS,
     FUNASR_MODELS,
+    GRANITE_CTC_MODEL_SIZE,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
     META_MODELS,
@@ -621,17 +622,17 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
     # in docs/agents/benchmark.md -- the fastest local model that transcribed
     # the recording. A picker has no room for that qualifier, so it states
     # what is unambiguous instead.
-    "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
+    "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, 25 languages"),
     "fluid-speech-pro": ("FluidVoice Fluid Speech Pro", "CPU, multilingual, CC-BY-4.0"),
-    "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
-    "granite-speech-5.0-470m-turboctc": (
+    "granite-5.0-470m-turboctc-multi": (
         "IBM Granite Speech 5.0 470M",
-        "CPU, English, no punctuation",
+        "CPU, 7 languages, punctuated",
     ),
 }
 
 # Retired models (Granite 4.1 Plus/NAR on 2026-08-26, see
-# docs/granite-speech-4.1-onnx-variants.md; the others on 2026-11-25). They are
+# docs/granite-speech-4.1-onnx-variants.md; the English-only TurboCTC and
+# Canary on 2026-11-26; the others on 2026-11-25). They are
 # not in VALID_MODEL_SIZES, so they appear in no picker; these entries exist
 # only so a history row recorded with one, and the notice that its saved
 # selection moved on, read as a model name instead of a raw identifier.
@@ -641,6 +642,10 @@ _RETIRED_MODEL_LABELS: dict[str, str] = {
     "granite-4.0-1b-speech": "IBM Granite 4.0 1B Speech (removed)",
     "granite-speech-4.1-2b": "IBM Granite Speech 4.1 2B (removed)",
     "parakeet-tdt-0.6b-v3-ultra": "NVIDIA Parakeet TDT 0.6B v3 Ultra (removed)",
+    "canary-1b-v2": "NVIDIA Canary 1B v2 (removed)",
+    "granite-speech-5.0-470m-turboctc": (
+        "IBM Granite Speech 5.0 470M English-only (removed)"
+    ),
     "tiny": "tiny (removed)",
     "base": "base (removed)",
     "medium": "medium (removed)",
@@ -694,6 +699,12 @@ def local_model_short_label(model_name: str) -> str:
     return label.split(" (", 1)[0].strip() or label
 
 
+# What a move's target gains over the model it replaces, said in the notice
+# only (the picker label stays short): the English-only TurboCTC and its
+# multilingual successor carry the same display name.
+_MOVE_TARGET_DETAIL: dict[str, str] = {GRANITE_CTC_MODEL_SIZE: "seven languages"}
+
+
 def model_move_notices(
     moves: list[dict[str, str]],
     *,
@@ -723,6 +734,8 @@ def model_move_notices(
             continue
         old = local_model_short_label(move["from"])
         new = local_model_short_label(move["to"])
+        if move["to"] in _MOVE_TARGET_DETAIL:
+            new = f"{new} ({_MOVE_TARGET_DETAIL[move['to']]})"
         line = (
             f"{ENGINE_LABELS[DEFAULT_ENGINE]}: {old} is no longer offered, "
             f"your choice is now {new}."

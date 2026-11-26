@@ -412,7 +412,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/text-insertion.md`
   is not loaded yet (`is_model_loaded`; the load is lazy and may start at
   any moment) -- and for Nemotron while the lease lives at all -- a paste
   is the plain write with no receipt (`paste_receipt_skipped
-  reason=interpreter_busy`). A loaded Parakeet, Canary or Granite CTC
+  reason=interpreter_busy`). A loaded Parakeet, Fluid Speech Pro or Granite CTC
   model decoding the next queued recording does not cost the paste of
   the previous result its receipt. faster-whisper, the Node runner
   (another process)

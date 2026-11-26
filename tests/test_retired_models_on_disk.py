@@ -41,6 +41,8 @@ def test_every_retired_model_folder_is_found_by_its_exact_name(cache):
         "granite-4.0-1b-speech-ONNX",
         "granite-speech-4.1-2b-ONNX",
         "parakeet-tdt-0.6b-v3-ultra-onnx",
+        "granite-speech-5.0-470m-turboctc-onnx",
+        "canary-1b-v2-onnx",
         "models--Systran--faster-whisper-tiny",
         "models--Systran--faster-whisper-base",
         "models--Systran--faster-whisper-medium",
@@ -57,6 +59,7 @@ def test_neighbouring_folders_are_not_retired_models(cache):
         "models--Systran--faster-whisper-medium.en",
         "models--Systran--faster-whisper-tiny.en",
         "fluid-speech-pro-onnx",
+        "granite-speech-5.0-470m-turboctc-multilingual-onnx",
     )
 
     assert find_retired_models_on_disk(str(cache)) == []
@@ -68,6 +71,9 @@ def test_neighbouring_folders_are_not_retired_models(cache):
         ("granite-speech-4.1-2b", "granite-speech-4.1-2b-ONNX"),
         ("medium", "models--Systran--faster-whisper-medium"),
         ("parakeet-tdt-0.6b-v3-ultra", "parakeet-tdt-0.6b-v3-ultra-onnx"),
+        # The English-only TurboCTC export sits next to the multilingual one.
+        ("granite-speech-5.0-470m-turboctc", "granite-speech-5.0-470m-turboctc-onnx"),
+        ("canary-1b-v2", "canary-1b-v2-onnx"),
     ],
 )
 def test_deleting_a_retired_model_removes_exactly_its_folder(cache, retired, folder):
@@ -76,6 +82,7 @@ def test_deleting_a_retired_model_removes_exactly_its_folder(cache, retired, fol
         "models--Systran--faster-whisper-medium.en",
         "models--Systran--faster-whisper-small",
         "fluid-speech-pro-onnx",
+        "granite-speech-5.0-470m-turboctc-multilingual-onnx",
     )
     _folders(cache, folder, *neighbours)
 

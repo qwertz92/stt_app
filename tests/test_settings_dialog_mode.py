@@ -13,14 +13,12 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app import clipboard_copy
 from stt_app.app_paths import debug_audio_path
-from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
     BenchmarkHistoryEntry,
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
 from stt_app.config import (
-    CANARY_MODEL_SIZE,
     LOCAL_BATCH_ONLY_MODELS,
     NEMOTRON_MODEL_SIZE,
     OPENAI_MODELS,
@@ -556,15 +554,15 @@ def test_local_distil_model_limits_language_to_auto_and_english():
 
 
 def test_the_english_only_note_names_the_selected_model():
-    """There are two English-only local models now, and the note hard-coded
-    the name of the first one -- so selecting the other was answered with a
-    sentence about a model the user had not chosen."""
+    """The note names the model that is selected, not a hard-coded one: it
+    was written when two local models were English-only and answered the
+    second with a sentence about the first."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(
             engine="local",
             mode="batch",
-            model_size="granite-speech-5.0-470m-turboctc",
+            model_size="distil-large-v3.5",
             language_mode="de",
         )
     )
@@ -577,12 +575,11 @@ def test_the_english_only_note_names_the_selected_model():
     note = dialog.language_note_label.text()
     assert _combo_data(dialog.language_combo) == ["auto", "en"]
     assert "English-only model" in note
-    assert "IBM Granite Speech 5.0 470M" in note
-    assert "distil" not in note.lower()
-    # The name as the combo shows it, not the settings id and not the whole
-    # entry with its size and runtime parenthetical.
-    assert "granite-speech-5.0-470m-turboctc" not in note
-    assert "552" not in note
+    assert "distil-large-v3.5" in note
+    assert "Granite" not in note
+    # Not the whole combo entry with its size and runtime parenthetical.
+    assert "1,516" not in note
+    assert "1.52 GB" not in note
     _ = app
 
 
@@ -1560,10 +1557,10 @@ def test_language_options_follow_the_selected_local_model():
 
     assert _combo_data(dialog.language_combo) == ["auto"]
 
-    # Canary is the mirror image: every language except Auto.
-    canary_index = dialog.model_combo.findData("canary-1b-v2")
-    assert canary_index >= 0
-    dialog.model_combo.setCurrentIndex(canary_index)
+    # Cohere is the mirror image: every language except Auto.
+    cohere_index = dialog.model_combo.findData("cohere-transcribe-03-2026")
+    assert cohere_index >= 0
+    dialog.model_combo.setCurrentIndex(cohere_index)
 
     assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "de") is True
@@ -2692,8 +2689,8 @@ def test_saving_api_keys_keeps_a_language_the_overlay_picked_meanwhile():
 
 def test_a_language_the_user_really_changed_still_wins():
     """Deferring must apply only while the combo is untouched."""
-    # A model that offers more than "auto"; the shipped default (Parakeet)
-    # deliberately offers nothing else.
+    # A model that offers more than "auto"; the shipped default (the
+    # TurboCTC) deliberately offers nothing else.
     dialog, store, app = _dialog_with_store(
         AppSettings(model_size="small", language_mode="auto")
     )
@@ -3735,7 +3732,7 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    dialog._refresh_local_models_list(["granite-speech-5.0-470m-turboctc"])
+    dialog._refresh_local_models_list(["granite-5.0-470m-turboctc-multi"])
 
     rows = {
         str(
@@ -3744,16 +3741,16 @@ def test_the_local_row_says_what_each_onnx_runtime_row_can_do():
         for index in range(dialog.local_models_list.count())
     }
 
-    assert rows["granite-speech-5.0-470m-turboctc"].endswith(
-        " - Downloaded, English only, ONNX Runtime INT8 CTC, CPU, batch only"
+    assert rows["granite-5.0-470m-turboctc-multi"].endswith(
+        " - Downloaded, ONNX Runtime INT8 CTC, CPU, batch only"
     )
     # One rule for every ONNX runtime: the two onnx-asr rows used to end at
     # "Not downloaded", as if they could stream like the Whisper sizes.
     assert rows["parakeet-tdt-0.6b-v3"].endswith(
         " - Not downloaded, onnx-asr INT8 TDT, CPU, batch only"
     )
-    assert rows["canary-1b-v2"].endswith(
-        " - Not downloaded, onnx-asr INT8 AED, CPU, batch only"
+    assert rows["fluid-speech-pro"].endswith(
+        " - Not downloaded, onnx-asr INT8 TDT, CPU, batch only"
     )
     assert rows["cohere-transcribe-03-2026"].endswith(
         " - Not downloaded, ONNX/WebGPU q4, batch only"
@@ -4362,7 +4359,7 @@ def test_local_models_list_follows_the_row_count(monkeypatch):
         _settle(app)
 
         assert listing.count() == 40
-        assert listing.minimumHeight() == rows(listing, 6)
+        assert listing.minimumHeight() == rows(listing, 5)
         assert listing.maximumHeight() == rows(listing, 40)
     finally:
         dialog.close()
@@ -4424,7 +4421,7 @@ def test_a_download_gives_the_list_the_height_it_needs_not_the_page_a_scroll_bar
 
         assert not page.verticalScrollBar().isVisible()
         assert page.viewport().width() == width
-        assert rows(listing, 6) <= listing.height() < listing.maximumHeight()
+        assert rows(listing, 5) <= listing.height() < listing.maximumHeight()
     finally:
         dialog.close()
         settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -5263,57 +5260,6 @@ def test_a_single_waiting_download_shows_no_place_number():
     row = _local_model_row_text(dialog, "small")
     assert "Queued" in row
     assert "of 1" not in row
-
-    dialog.deleteLater()
-    _ = app
-
-
-def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(
-    monkeypatch, tmp_path
-):
-    """Canary would translate instead of transcribing, so Auto must be refused.
-
-    The runner already rejects this per model, but only once that model's turn
-    comes: with several models selected the whole benchmark ran to the end
-    before the user saw why exactly one of them had failed.
-    """
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    dialog = SettingsDialog(
-        settings_store=_FakeSettingsStore(AppSettings()),
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-    audio = tmp_path / "sample.wav"
-    audio.write_bytes(b"RIFF0000WAVE")
-    dialog.benchmark_audio_edit.setText(str(audio))
-    dialog._selected_benchmark_model_names = lambda: ["small", CANARY_MODEL_SIZE]
-    started: list[bool] = []
-    dialog._benchmark_options_from_widgets = lambda **_kw: started.append(True)
-    # The run the second call starts must stay inside this test: on a real
-    # thread it outlived the test and, after the environment query, called
-    # whatever `run_benchmark_cases` a later test had installed.
-    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
-    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", lambda **_kw: [])
-    monkeypatch.setattr(
-        "stt_app.settings_dialog_benchmark.collect_benchmark_environment",
-        lambda: BenchmarkEnvironment.from_dict(None),
-    )
-    dialog.benchmark_language_combo.setCurrentIndex(
-        dialog.benchmark_language_combo.findData("auto")
-    )
-
-    dialog._run_local_benchmark()
-
-    assert started == [], "the benchmark started despite the unusable language"
-    assert "Canary cannot detect the language" in dialog.benchmark_status_label.text()
-
-    # With an explicit language the same selection is allowed through.
-    dialog.benchmark_language_combo.setCurrentIndex(
-        dialog.benchmark_language_combo.findData("de")
-    )
-    dialog._run_local_benchmark()
-
-    assert started == [True]
 
     dialog.deleteLater()
     _ = app

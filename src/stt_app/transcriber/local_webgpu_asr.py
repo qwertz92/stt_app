@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any
 
 from ..config import (
-    CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     FLUID_SPEECH_PRO_MODEL_SIZE,
@@ -286,19 +285,6 @@ _FLUID_SPEECH_PRO_INT8_LAYOUT = _OnnxModelLayout(
     revision="fa588e9f87f1b9ad0ca2e2d8f7eaf84dc3803581",
 )
 
-_CANARY_INT8_LAYOUT = _OnnxModelLayout(
-    name="canary_aed_int8",
-    precision="int8",
-    allow_patterns=_ONNX_ASR_INT8_BASE_ALLOW_PATTERNS,
-    required_files=(
-        "config.json",
-        "vocab.txt",
-        "encoder-model.int8.onnx",
-        # AED, so a plain decoder — Parakeet's TDT ships a fused decoder_joint.
-        "decoder-model.int8.onnx",
-    ),
-)
-
 _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     name="nemotron_int4",
     precision="int4",
@@ -306,10 +292,11 @@ _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     required_files=_NEMOTRON_INT4_REQUIRED_FILES,
 )
 
-# Granite Speech 5.0 TurboCTC. Its repository ships all three precisions of one
-# single-file graph -- `onnx/model.onnx` (1.76 GiB), `onnx/model_fp16.onnx` and
-# `onnx/model_int8.onnx` -- so the file is named exactly rather than matched
-# with `onnx/*.onnx`, which would fetch 3.2 GiB for a 552 MB model.
+# Granite Speech 5.0 TurboCTC (multilingual). The graph is one file,
+# `onnx/model_int8.onnx` (551 MB). The earlier English-only export repository
+# also held `onnx/model.onnx` (1.76 GiB) and `onnx/model_fp16.onnx`, so the file
+# is still named exactly rather than matched with `onnx/*.onnx`, which would
+# fetch 3.2 GiB for a 552 MB model if a repository ever carried all three.
 _GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
     name="granite_ctc_int8",
     precision="int8",
@@ -333,6 +320,10 @@ _GRANITE_CTC_INT8_LAYOUT = _OnnxModelLayout(
         "tokenizer.json",
         "onnx/model_int8.onnx",
     ),
+    # The owner's export repository, public since 2026-11-26. The commit is
+    # pinned like Fluid Speech Pro's: the files cannot be replaced under the
+    # name, and the download never falls back to a mirror.
+    revision="208430c2b4f47a7211e6984fbee9f790fac92e60",
 )
 
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
@@ -341,7 +332,6 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
     FLUID_SPEECH_PRO_MODEL_SIZE: _FLUID_SPEECH_PRO_INT8_LAYOUT,
-    CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
     GRANITE_CTC_MODEL_SIZE: _GRANITE_CTC_INT8_LAYOUT,
 }
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {

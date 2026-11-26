@@ -262,4 +262,4 @@ def test_the_model_list_reads_the_english_only_set(capsys, monkeypatch):
     for name, line in lines.items():
         english_only = "(English only" in line or ", English only" in line
         assert english_only is (name in LOCAL_ENGLISH_ONLY_MODELS), line
-    assert "int8 ONNX, batch only" in lines["granite-speech-5.0-470m-turboctc"]
+    assert "int8 ONNX, batch only" in lines["granite-5.0-470m-turboctc-multi"]

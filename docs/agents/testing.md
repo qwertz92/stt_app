@@ -41,7 +41,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
   Azure/custom endpoints are read from the real `settings.json` read-only;
   selection and skip logic in `scripts/_release_check_provider_plan.py`,
   tested by `tests/test_release_check_provider_plan.py`), `release_check_frozen_bundle.py` (scan
-  worker, one model per runtime, GUI 40 s); plumbing in
+  worker, one model per runtime, GUI 40 s; a `SKIP ... is not on this PC` check
+  per preferred model the scan did not list, so a missing default model is
+  visible; `--model-dir PATH` scans and loads a Model Dir, read-only, instead
+  of only the Hugging Face cache; `tests/test_release_check_frozen_bundle.py`); plumbing in
   `scripts/_release_check_common.py`. Contract: one `OK`/`FAIL`/`SKIP` line
   per check; exit 0/1/2, 2 = nothing measured, never a code failure; an
   uncaught exception or Ctrl+C becomes a failed check via `run_main`, so the

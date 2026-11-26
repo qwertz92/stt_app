@@ -105,7 +105,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/persistence-and-hi
   and model and the *configured* language (entries store none), all
   changeable; the language note (`_LANGUAGE_SUBSTITUTION_NOTE`, also the
   height reservation's worst case) says when any model lacks the previous
-  language, plus Canary's translation warning. Pickers follow
+  language. Pickers follow
   `config.language_modes_for_selection`; shared helpers
   `settings_dialog_helpers.model_choices_for_engine`, `local_model_label`,
   `settings_store.apply_engine_model_selection`. Settings > History >

@@ -22,7 +22,6 @@ from .benchmark_history import (
     export_benchmark_entry,
 )
 from .config import (
-    CANARY_MODEL_SIZE,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
 )
@@ -1507,9 +1506,9 @@ class _BenchmarkMixin:
         webgpu_device_note = QtWidgets.QLabel(
             "Applies to Cohere, Granite 5.0 2B and Nemotron. Whisper models pick "
             "their device themselves (CUDA if present, otherwise CPU); Parakeet, "
-            "Canary and Granite Speech 5.0 always run on the CPU. A run that "
-            "measures a model on more than one device also decides which one "
-            "Auto starts with in Settings > Models."
+            "Fluid Speech Pro and Granite Speech 5.0 TurboCTC always run on the "
+            "CPU. A run that measures a model on more than one device also "
+            "decides which one Auto starts with in Settings > Models."
         )
         webgpu_device_note.setWordWrap(True)
         self._style_note_label(webgpu_device_note)
@@ -2374,8 +2373,8 @@ class _BenchmarkMixin:
             if model_name in LOCAL_ENGLISH_ONLY_MODELS
         ]
         if language_value == "de" and english_only:
-            # Named from the selection: with more than one English-only model
-            # a fixed name sent the user after a model they had not selected.
+            # Named from the selection: a fixed name would send the user after a
+            # model they had not selected.
             # And by the name the list above shows, not by the settings id,
             # which appears nowhere on screen.
             blocking = ", ".join(
@@ -2385,17 +2384,6 @@ class _BenchmarkMixin:
             self._set_benchmark_status(
                 f"German cannot be benchmarked with the selected English-only "
                 f"model{plural}. Use Auto or English, or deselect {blocking}.",
-                "#b71c1c",
-            )
-            return
-        if language_value == "auto" and CANARY_MODEL_SIZE in model_names:
-            # The runner refuses this case per model, but only once that model's
-            # turn comes: with several models selected the whole run finished
-            # before the user saw why exactly one of them had failed.
-            self._set_benchmark_status(
-                "Canary cannot detect the language and would translate instead "
-                "of transcribing. Choose German or English, or deselect "
-                f"{CANARY_MODEL_SIZE}.",
                 "#b71c1c",
             )
             return

@@ -126,7 +126,7 @@ def test_an_unknown_engine_is_answered_by_its_model_like_the_fallback(
 ) -> None:
     """An unknown engine falls back to `_create_local_transcriber`, so its
     answer is the *model's*, not a flat True or False -- with the stored model
-    being Parakeet by default, a flat True would promise biasing to a runtime
+    being a batch-only ONNX model by default, a flat True would promise biasing to a runtime
     that has no input for it."""
 
     def kwargs_for(model: str) -> dict[str, object]:

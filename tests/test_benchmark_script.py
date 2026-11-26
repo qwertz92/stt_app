@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import math
+import os
 import queue
 import subprocess
 import sys
@@ -372,8 +373,8 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
 ):
     """One case, on the CPU, whatever device the run asked for.
 
-    The model is English-only and CPU-only, so the benchmark must neither ask
-    it for a language it cannot honour nor measure the identical
+    The model has no language input and is CPU-only, so the benchmark must
+    neither ask it for a language it cannot honour nor measure the identical
     configuration once per device target.
     """
     audio_path = tmp_path / "sample.wav"
@@ -403,7 +404,7 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
     monkeypatch.setattr(local_benchmark, "_audio_duration_seconds", lambda _path: 1.0)
 
     planned = local_benchmark.planned_benchmark_cases(
-        ["granite-speech-5.0-470m-turboctc"], "all", "auto", "int8"
+        ["granite-5.0-470m-turboctc-multi"], "all", "auto", "int8"
     )
     assert [(case.device_target, case.display_compute_type) for case in planned] == [
         ("auto", "onnx-int8")
@@ -411,7 +412,7 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
 
     cases = local_benchmark.run_benchmark_cases(
         audio_path=audio_path,
-        model_names=["granite-speech-5.0-470m-turboctc"],
+        model_names=["granite-5.0-470m-turboctc-multi"],
         runs=1,
         warmup=False,
         webgpu_devices="all",
@@ -685,7 +686,7 @@ def test_every_local_model_is_dispatchable_by_the_benchmark(monkeypatch, tmp_pat
     table written twice.
     """
     from stt_app import local_benchmark
-    from stt_app.config import CANARY_MODEL_SIZE, VALID_MODEL_SIZES
+    from stt_app.config import VALID_MODEL_SIZES
 
     def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
         return local_benchmark.BenchmarkCase(
@@ -709,40 +710,19 @@ def test_every_local_model_is_dispatchable_by_the_benchmark(monkeypatch, tmp_pat
     audio.write_bytes(b"RIFF")
 
     for model_name in VALID_MODEL_SIZES:
-        # Canary deliberately refuses to guess a language; give it one.
-        language = "en" if model_name == CANARY_MODEL_SIZE else None
         cases = local_benchmark.run_benchmark_cases(
             audio_path=audio,
             model_names=[model_name],
             runs=1,
             warmup=False,
             device="cpu",
-            language=language,
+            language=None,
         )
         assert cases, model_name
         for case in cases:
             assert "is unknown" not in str(case.error or ""), (
                 f"{model_name}: {case.error}"
             )
-
-
-def test_canary_refuses_to_benchmark_without_a_language(tmp_path):
-    """Defaulting a language cannot be right: the sample's language is not
-    knowable, and a wrong one makes Canary translate, so the benchmark would
-    store the translation as the transcript."""
-    import pytest as _pytest
-
-    from stt_app.config import CANARY_MODEL_SIZE
-    from stt_app.local_benchmark import _run_onnx_case
-
-    with _pytest.raises(ValueError, match="cannot detect the language"):
-        _run_onnx_case(
-            audio_path=tmp_path / "clip.wav",
-            model_name=CANARY_MODEL_SIZE,
-            runs=1,
-            language=None,
-            warmup=False,
-        )
 
 
 def _runners_that_record_their_calls(monkeypatch) -> list[str]:
@@ -808,10 +788,8 @@ def test_an_english_only_model_is_not_run_in_another_language(tmp_path, monkeypa
 )
 def test_a_blank_language_is_no_language(tmp_path, monkeypatch, given, received):
     """`--language " "` is a truthy string, so `language or default` kept it:
-    the English-only guard refused the model for "the language '  '", and
-    Canary's `not language` check let it through to a runtime that maps an
-    unknown code onto a trained one -- the translation that check exists to
-    prevent. The runner reads the language once, and blank is none."""
+    the English-only guard refused the model for "the language '  '". The
+    runner reads the language once, and blank is none."""
     seen: list[object] = []
 
     def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
@@ -859,7 +837,7 @@ def test_an_english_only_model_runs_with_auto_and_english(
     )
 
     assert called == list(LOCAL_ENGLISH_ONLY_MODELS)
-    assert [case.error for case in cases] == [None, None]
+    assert [case.error for case in cases] == [None]
 
 
 def test_a_case_runs_off_the_main_thread_so_ctrl_c_can_reach_the_model():
@@ -929,7 +907,7 @@ def test_ctrl_c_during_a_case_sets_the_flag_the_model_polls():
     threading.Thread.join = _join_that_interrupts
     try:
         with pytest.raises(KeyboardInterrupt):
-            module._run_case_threaded({"model_name": "canary-1b-v2"})
+            module._run_case_threaded({"model_name": "parakeet-tdt-0.6b-v3"})
     finally:
         threading.Thread.join = real_join
         module._cancel_requested.clear()
@@ -1121,6 +1099,9 @@ def test_the_download_script_default_follows_the_app_default():
         timeout=120,
         check=True,
         cwd=root,
+        # argparse wraps its help at the terminal width, and a wide model id
+        # would be split across two lines at 80 columns.
+        env={**os.environ, "COLUMNS": "300"},
     )
 
     assert f"default: {DEFAULT_MODEL_SIZE}" in result.stdout, result.stdout

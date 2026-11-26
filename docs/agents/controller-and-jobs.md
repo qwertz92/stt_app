@@ -432,10 +432,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     (`language_modes_for_selection(engine, model, "batch")`, logged as
     `retry_recorded_language_not_offered`). The second is not passed on to the
     provider because each provider's own `_normalize_language_mode` then picks a
-    stand-in -- Canary falls back to the first language of its list (German),
-    which makes it translate into it instead of transcribing, Cohere forces
-    German for `auto`, Granite CTC (English only) decodes German speech as
-    English -- while the selection is one the user picked for the engine in use.
+    stand-in -- Cohere forces German for `auto` (Canary, retired 2026-11-26,
+    fell back to the first language of its list and translated) -- while the selection is one the user picked for the engine in use.
     A saved selection the engine does not offer either (it stays saved when the
     engine is switched, and the overlay's menu shows the engine's first language
     instead) is clamped to that first language, the overlay's own rule
@@ -451,8 +449,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     once); `_retry_settings` words the overlay text from it and
     `transcribe_unfinished_recording` uses it too. The restart road had its own
     unchecked pin until the review of 2026-10-17: a recording made in Auto and
-    retried after a restart under Canary was sent as `auto` and came out
-    translated, and with recordings retention off the WAV was deleted after the
+    retried after a restart under a model without Auto (then Canary, now
+    Cohere) was sent as `auto` and came out translated, and with recordings retention off the WAV was deleted after the
     wrong transcript was saved.
     **A fallback retry keeps its audio in the recordings folder, links it from
     its History entry and tells the tray** (review rounds 2 and 3,
@@ -568,7 +566,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/controller-and-job
     `tests/test_controller_queue.py` (`test_retry_uses_the_language_the_recording_was_made_in`,
     the streaming, dying-stream, failed-retry and unknown-language cases, and
     `test_retry_names_the_language_that_runs_when_the_selection_is_not_offered_either`),
-    `tests/test_controller_quit.py` (the restart road for Canary, Cohere and
+    `tests/test_controller_quit.py` (the restart road for Cohere and
     Granite CTC, the note, a quit during a fallback retry, a stale selection
     named as what ran),
     `tests/test_unfinished_recordings_notice.py` (the row text, that the

@@ -43,6 +43,82 @@ methods to it. The protocol and the vendor pages are in `docs/agents/remote-prov
   `commit: true`, wait at most 3 s for the last committed segment, close) follows its example script;
   whether an empty commit is answered when nothing is pending is a guess.
 
+## 2026-11-26: review cleanup of the model roster branch
+
+Structurally: stale Canary, English-only and "default is Parakeet" statements were rewritten or marked as
+history; the frozen-bundle check now names every preferred model it could not cover.
+
+- A second data point for the default decision (lead's cross-check, 2026-11-26): 5 German clips of
+  Multilingual LibriSpeech and 5 English clips of LibriSpeech (148 and 196 reference words, read
+  books, same normaliser, CPU). TurboCTC multilingual 7.43 % German / 0.51 % English WER, RTF 0.014 /
+  0.016; Parakeet v3 14.19 % / 2.55 %, RTF 0.054 / 0.063; Fluid Speech Pro 9.46 % / 2.04 %, RTF 0.16 /
+  0.18. One point of WER is one to two words and the books may be in the models' training data, so only
+  the direction counts: it agrees with FLEURS.
+- The move notice for the English TurboCTC now says "(seven languages)" after the new model's name,
+  because both display names read the same.
+- `scripts/release_check_frozen_bundle.py` printed nothing for a preferred model that was not cached
+  unless none was. The owner's Hugging Face cache lacks the new default, so the check would have stopped
+  covering it silently; every missing preferred model now gets a `SKIP ... is not on this PC` check.
+  `--model-dir PATH` (already there) points the scan and the benchmark at a folder instead.
+- "551 MB" is the weight file `onnx/model_int8.onnx` (551,294,349 bytes); "~552 MB" is the whole download
+  (552,442,697 bytes with config and tokenizer files).
+- The English-user test's fake folder now holds every required file, so it fails when the new id
+  resolves to the English repository (checked by pointing `MODEL_REPO_MAP` at it).
+
+## 2026-11-26: Canary 1B v2 retired, successor Fluid Speech Pro
+
+Structurally: `canary-1b-v2` moved from the roster into `RETIRED_LOCAL_MODEL_SUCCESSORS` /
+`RETIRED_LOCAL_MODEL_REPOS`; the Canary-only code went with it (language list, no-Auto guards, layout,
+warnings), so every onnx-asr model is now Auto-only.
+
+- Why (owner's decision): Fluid Speech Pro is better in both languages (3.25 / 3.57 against 3.66 /
+  5.45), the TurboCTC is about six times faster at 4.27 / 4.14, and Parakeet v3 covers the same 25
+  languages faster. No capability was lost: Canary's "translation" was the failure mode of onnx-asr's
+  hardcoded `<|en|>` token, which the app only guarded against.
+- Side effect found by the layout test: with nine offered models the Models tab's list kept only three
+  rows to give up when a download's status area appeared, and a four-line error path made the page
+  scroll. The list's minimum is five rows now.
+- Tests that used Canary as "the model without Auto" (retry language rule, retranscribe note) use
+  Cohere, which is the same in the respect they test.
+
+## 2026-11-26: the multilingual TurboCTC is the default model of new installs
+
+Structurally: `config.DEFAULT_MODEL_SIZE` is `GRANITE_CTC_MODEL_SIZE` (declared next to it now); every
+other place reads that constant, so no second copy had to change.
+
+- Why (owner's wish, lead's decision): German 4.27 % and English 4.14 % WER against Parakeet v3's 6.50
+  and 4.89, real-time factor 0.023 against 0.085, 552 MB against 670 MB (25 + 25 FLEURS clips,
+  2026-11-25, about 500 words per language, so differences under 1 point are noise).
+- The cost is shown where the model is picked: the Transcription tab's model note for the TurboCTC says
+  "seven languages" and names Parakeet v3 (25 European languages) as the way out, the Parakeet note and
+  both picker labels carry the counts.
+- A saved choice is never changed (test: Parakeet and `small` survive a reload). A fresh install
+  downloads exactly the default through the one slot at start, offline it is refused with the readable
+  text, nothing is substituted.
+
+## 2026-11-26: one Granite TurboCTC model, the multilingual one, under a new id
+
+Structurally: `GRANITE_CTC_MODEL_SIZE` is now `granite-5.0-470m-turboctc-multi`, and the
+old id `granite-speech-5.0-470m-turboctc` is a retired model like Ultra (successor, repository, label).
+
+- Owner's decision with the reason: on 25 English FLEURS clips the multilingual INT8 graph had 4.14 %
+  WER against 5.83 % for the English-only export, so the English export has no advantage.
+- The repository `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` went public on
+  2026-11-26 and is pinned to commit `208430c` (the layout's `revision`, so no ModelScope fallback;
+  the model stays in `MODELS_WITHOUT_MODELSCOPE_MIRROR`).
+- Why a new id instead of keeping the id (as the branch `turboctc-multilingual` did): the move, its one
+  notice, the download at start and the "No longer offered" row all key on a retired id. With the id
+  kept, a user who selected the model and had only the English files got no notice and a download only
+  inside the first dictation. With the new id the existing flow serves them unchanged
+  (`test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure`).
+- Real download through the app's own code into a scratch model dir: 9 files in 44 s, `model_int8.onnx`
+  551,294,349 bytes, SHA-256 `373123d8...1110f` as expected; German and English clips transcribed.
+- The id is short on purpose: the long form (`...-turboctc-multilingual`, 258 px) no longer fit the
+  benchmark results table's Model column at the default dialog width (the layout test caught it); the
+  retired English id was 183 px, this one fits.
+- The frozen-bundle check had a pass for English-only models in `PREFERRED`; with this model gone from
+  the English-only set nothing could reach it, so it was removed.
+
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 
 The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,
@@ -349,6 +425,18 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
   difference inside the noise), Whisper `small` (German 6.10, English
   5.64; the one Whisper that streams on a CPU-only laptop) and the three large
   Whisper models.
+- **Multilingual TurboCTC (code ready, hosted file pending).** IBM's 2026-10-21
+  revision (`91dcb06`) covers en, fr, de, es, pt, it and ja with punctuation;
+  IBM publishes no ONNX of it, so the owner's export scripts were rerun on it
+  (INT8 551,294,349 bytes). On the same 25 + 25 clips: INT8 de 4.27 / en 4.14,
+  fp32 3.46 / 4.70, the shipped English-only INT8 en 5.83, RTF 0.023. The
+  app's extractor, greedy CTC and `tokenizers` decode needed no change (the
+  `<|nospeech|>` token, id 1, is special and decodes to nothing); what changed
+  is metadata: Auto only, no longer in `LOCAL_ENGLISH_ONLY_MODELS`, labels, and
+  `MODEL_REPO_MAP` pointing at the new repository
+  `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx`. Until that
+  repository exists the model cannot be downloaded; after the upload its
+  commit goes into `_GRANITE_CTC_INT8_LAYOUT.revision`.
 - **Lesson: a model's own prompt belongs to its generation.** The 4.x
   instruction ("transcribe the speech into a written format") made Granite 5.0 2B
   answer German clips in English (German WER 15.0). IBM's punctuation

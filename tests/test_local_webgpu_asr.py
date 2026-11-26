@@ -544,12 +544,32 @@ def test_granite_5_0_2b_is_fetched_at_its_pinned_revision(monkeypatch, tmp_path)
     assert kwargs["revision"] == _GRANITE_5_0_REVISION
 
 
+def test_the_multilingual_turboctc_is_fetched_at_its_pinned_revision(
+    monkeypatch, tmp_path
+):
+    """The owner's export is pinned like Fluid's: a later push to the
+    repository cannot change what the app runs, and no mirror is asked."""
+    calls: list = []
+    _record_hub_downloads(monkeypatch, calls)
+
+    download_webgpu_model_snapshot(GRANITE_CTC_MODEL_SIZE, str(tmp_path))
+
+    repo_id, kwargs = calls[0]
+    assert repo_id == "qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx"
+    assert kwargs["revision"] == "208430c2b4f47a7211e6984fbee9f790fac92e60"
+
+
 @pytest.mark.parametrize(
     "model_name",
     [
         name
         for name in LOCAL_ONNX_MODEL_SIZES
-        if name not in (FLUID_SPEECH_PRO_MODEL_SIZE, "granite-speech-5.0-2b")
+        if name
+        not in (
+            FLUID_SPEECH_PRO_MODEL_SIZE,
+            "granite-speech-5.0-2b",
+            GRANITE_CTC_MODEL_SIZE,
+        )
     ],
 )
 def test_a_model_without_a_pin_sends_no_revision(monkeypatch, tmp_path, model_name):

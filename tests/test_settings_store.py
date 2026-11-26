@@ -1160,24 +1160,25 @@ def test_local_onnx_device_round_trips_and_rejects_unknown_values(tmp_path):
 def test_the_out_of_the_box_defaults_describe_a_runnable_combination():
     """A fresh install must work without opening Settings once.
 
-    The default model is Parakeet: fastest local model by a wide margin, no
-    GPU and no Node.js, and it detects its own language. It is also batch-only
-    and offers no explicit language, so the other three defaults have to agree
-    with that or the first run starts in a state the app itself rejects.
+    The default model is the multilingual TurboCTC (since v0.15.0; Parakeet v3
+    before): a CPU-only model with no Node.js that detects its own language. It
+    is also batch-only and offers no explicit language, so the other three
+    defaults have to agree with that or the first run starts in a state the app
+    itself rejects.
     """
     from stt_app.config import (
         DEFAULT_ENGINE,
         DEFAULT_LANGUAGE_MODE,
         DEFAULT_MODE,
         DEFAULT_MODEL_SIZE,
-        PARAKEET_MODEL_SIZE,
+        GRANITE_CTC_MODEL_SIZE,
         language_modes_for_selection,
         supports_streaming,
     )
 
-    assert DEFAULT_MODEL_SIZE == PARAKEET_MODEL_SIZE
+    assert DEFAULT_MODEL_SIZE == GRANITE_CTC_MODEL_SIZE
     assert DEFAULT_MODEL_SIZE in VALID_MODEL_SIZES
-    # Parakeet cannot stream, so the default mode must not be streaming.
+    # The default model cannot stream, so the default mode must not be streaming.
     assert DEFAULT_MODE == "batch"
     assert not supports_streaming(DEFAULT_ENGINE, DEFAULT_MODEL_SIZE)
     # ... and the default language must be one the model actually offers.
@@ -1191,16 +1192,34 @@ def test_a_stored_model_is_never_replaced_by_the_new_default(tmp_path):
 
     The default is only a fallback for an absent key, so someone who chose
     faster-whisper `small` keeps it across the version that moved the default
-    to Parakeet.
+    to the multilingual TurboCTC, and so does someone who chose Parakeet v3,
+    the earlier default.
     """
     from stt_app.config import DEFAULT_MODEL_SIZE
 
-    assert DEFAULT_MODEL_SIZE != "small", "pick a different stand-in below"
-    settings_path = tmp_path / "settings.json"
-    store = SettingsStore(settings_path)
-    store.save(dataclasses.replace(store.load(), model_size="small"))
+    for model in ("small", "parakeet-tdt-0.6b-v3"):
+        assert model != DEFAULT_MODEL_SIZE, "pick a different stand-in below"
+        settings_path = tmp_path / f"{model}.json"
+        store = SettingsStore(settings_path)
+        store.save(dataclasses.replace(store.load(), model_size=model))
 
-    assert SettingsStore(settings_path).load().model_size == "small"
+        reloaded = SettingsStore(settings_path).load()
+        assert reloaded.model_size == model
+        assert reloaded.pending_model_moves == []
+
+
+def test_a_fresh_install_selects_the_default_model_without_any_notice(tmp_path):
+    """No settings file: the defaults apply, the model is the default one and
+    nothing is announced (nothing moved)."""
+    from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE
+
+    settings = SettingsStore(tmp_path / "settings.json").load()
+
+    assert (settings.engine, settings.model_size) == (
+        DEFAULT_ENGINE,
+        DEFAULT_MODEL_SIZE,
+    )
+    assert settings.pending_model_moves == []
 
 
 def test_faster_whisper_still_defaults_to_a_faster_whisper_model():
@@ -2335,6 +2354,8 @@ def test_a_retirement_never_moves_a_streaming_choice_to_a_batch_only_model():
         "granite-4.0-1b-speech",
         "granite-speech-4.1-2b",
         "parakeet-tdt-0.6b-v3-ultra",
+        "granite-speech-5.0-470m-turboctc",
+        "canary-1b-v2",
     }
     for old, new in RETIRED_LOCAL_MODEL_SUCCESSORS.items():
         assert supports_streaming("local", new) is (old not in was_batch_only)

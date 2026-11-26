@@ -257,10 +257,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Quote RTF as the mean of a case's runs.
   - `keep_onnx_model_loaded` defaults on (else every dictation pays the Node +
     ONNX load); off means no preload and close after each batch.
-  - `DEFAULT_MODEL_SIZE` is `parakeet-tdt-0.6b-v3` (2026-08-27): RTF 0.043 vs
+  - `DEFAULT_MODEL_SIZE` was `parakeet-tdt-0.6b-v3` (2026-08-27): RTF 0.043 vs
     `small` 0.154 on a 24.3 s German clip (Ryzen 5 7600X CPU), 25 languages,
-    pure Python. Batch-only, matching `DEFAULT_MODE` `batch`. First-run only
-    (`SettingsStore.load` defaults absent keys).
+    pure Python. Since 2026-11-26 it is the multilingual TurboCTC ("Default
+    model of 2026-11-26" below). Batch-only, matching `DEFAULT_MODE` `batch`.
+    First-run only (`SettingsStore.load` defaults absent keys).
     `DEFAULT_FASTER_WHISPER_MODEL_SIZE` (`small`) stays the in-runtime default
     (`LocalFasterWhisperTranscriber`, benchmark CLI).
   - The roster of 2026-11-25 is the next top-level entry below.
@@ -302,13 +303,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     (`_transcription_error_text`) and logs the raw wording.
   - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
     Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
-    `medium` -> `large-v3-turbo`.
+    `medium` -> `large-v3-turbo`; the English-only TurboCTC export ->
+    the multilingual one (2026-11-26, below in the TurboCTC entry).
   - Added: Granite 5.0 2B (de 3.46 against 10.57 for 4.1 2B as shipped) and
     Fluid Speech Pro (de 3.25 / en 3.57 against Parakeet v3's 6.50 / 4.89,
     about three times slower at RTF 0.2).
-  - Kept: Canary (de 3.66 against v3's 6.50, so the rule keeps it, though
-    Fluid measured 3.25 / 3.57 against Canary's 3.66 / 5.45, a German
-    difference inside the test's noise), Whisper `small` (the one Whisper that
+  - Kept: Whisper `small` (the one Whisper that
     keeps the rolling-window streaming usable on a CPU-only laptop, RTF about
     0.19 against 0.55 to 0.6 for the large ones), `large-v3`,
     `large-v3-turbo`, `distil-large-v3.5`.
@@ -521,23 +521,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
     Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
     streaming, at equal or better speed (2026-10-03, CPU).
-- **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro, Canary 1B v2)** in
+- **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro; Canary 1B v2 until 2026-11-26)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
   `_OnnxModelLayout` in `local_webgpu_asr` (int8 allow-patterns only).
-  - Canary has no benchmark RTF; quote none. Parakeet is "the fastest local
-    model that transcribed the recording", never "fastest" (`tiny` 0.033) or
-    "most accurate"; 1.9x faster than the best GPU case
-    (`cohere-transcribe-03-2026`, 0.083).
+  - History of the 2026-08 benchmark recording: Parakeet was "the fastest
+    local model that transcribed the recording" (RTF 0.043, 1.9x faster than
+    the best GPU case `cohere-transcribe-03-2026`, 0.083), never "fastest"
+    flat (`tiny` 0.033) or "most accurate". On the FLEURS clips of 2026-11-25
+    Parakeet v3 measured 0.085, a different recording on a shared PC; the
+    TurboCTC (0.023) is the fastest local model of that test.
   - Never add `onnxruntime-directml`: it overwrites the `onnxruntime/`
     package (620 of 625 files, `pip check` silent) and breaks
     `onnxruntime-genai` ("The requested API version [26] is not available"),
     losing Nemotron. `onnxruntime-webgpu==1.27.0` coexists but was slower
     than CPU. A GPU path needs an isolated subprocess environment.
-  - Canary never exposes `auto` (onnx-asr hardcodes `<|en|>` and translates):
-    it is in `LOCAL_EXPLICIT_LANGUAGE_MODELS`, and `_normalize_language_mode`
-    maps unsupported codes to trained ones (else `KeyError`). Parakeet ignores
-    `language=`, so it offers only `auto` and sends none.
+  - Parakeet and Fluid Speech Pro ignore `language=`, so they offer only
+    `auto` and send none (`_normalize_language_mode` maps any stored language
+    to `auto`). Canary, retired 2026-11-26, was the one model here that could
+    not take `auto` (onnx-asr hardcodes `<|en|>` and translates); that rule
+    went with it.
   - Both batch-only, excluded from the ONNX Device picker (CPU-only).
   - PyInstaller needs `collect_all('onnx_asr')` (mel/resampler graphs are
     package data via `importlib.resources`).
@@ -577,10 +580,34 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   (`LOCAL_MODEL_RUNTIME` `granite-ctc`), owning its `InferenceSession`:
   `input_features` float32 `[1, frames, 320]` -> `logits`
   `[1, frames // 4, 16384]`, numpy log-mel, greedy CTC (blank 0),
-  `tokenizers` BPE decode; no new dependency. Weights
-  `qwertz92/granite-speech-5.0-470m-turboctc-onnx` rev `e6e3b4d`, nine files,
-  552,442,697 bytes (`snapshot_download(dry_run=True)`); `onnx/model_int8.onnx`
-  only (`onnx/*.onnx` would add fp32 and fp16).
+  `tokenizers` decode; no new dependency. Since 2026-11-25 the multilingual
+  revision (IBM `91dcb06`, 2026-10-21; en, fr, de, es, pt, it, ja; punctuated,
+  capitalised, language detected by the model): weights
+  `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx`
+  (our own INT8 export, public since 2026-11-26, Apache-2.0, pinned to commit
+  `208430c2b4f47a7211e6984fbee9f790fac92e60`: `onnx/model_int8.onnx`
+  551,294,349 bytes, sha256 `373123d8...1110f`; IBM publishes no ONNX of it).
+  The pin means no ModelScope fallback, and the model is in
+  `MODELS_WITHOUT_MODELSCOPE_MIRROR`: with Hugging Face unreachable the user
+  reads `format_model_download_error`'s "no ModelScope mirror ... point 'Model
+  Dir' at it" text. `onnx/model_int8.onnx` only (`onnx/*.onnx` would add fp32
+  and fp16 if a repository held them).
+  - **The English-only export is retired (2026-11-26, owner decision)**:
+    `qwertz92/granite-speech-5.0-470m-turboctc-onnx` (rev `e6e3b4d`, nine files,
+    552,442,697 bytes) is no longer offered. On 25 English FLEURS clips the
+    multilingual INT8 graph had 4.14 % WER against 5.83 % for the English-only
+    export, so the English one has no advantage. The model id changed with the
+    repository: `granite-speech-5.0-470m-turboctc` (English) moves once to
+    `granite-5.0-470m-turboctc-multi` through
+    `RETIRED_LOCAL_MODEL_SUCCESSORS`, and the English folder is the "No longer
+    offered, still on disk" row (`RETIRED_LOCAL_MODEL_REPOS`). A new id, not a
+    new repository under the old id, because the move, its one notice, the
+    download at start (`_start_retirement_download`) and the Models row all key
+    on a retired id; with the id kept, a user who selected the model and has
+    only the English files would have got no notice and a download only inside
+    the first dictation. `tests/test_pending_model_notice.py`
+    (`test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure`)
+    runs the sequence online and offline.
   - No GPU path: DirectML saves 0.10-0.18 s per 29.4 s clip over INT8 CPU
     for a 1-2 GB download and a raw-graph Node runtime. Not built.
   - The extractor is a numpy port of `GraniteSpeech5FeatureExtractor` (which
@@ -592,10 +619,16 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     garbage.
   - Passes of at most `_MAX_PASS_SECONDS` (180 s), cut at the quietest 20 ms
     frame of each window's last 15 s (one pass of 563 s peaked at 2.39 GB).
-  - Lower case without punctuation is the model; do not post-process.
-  - English only, no language input: `LOCAL_ENGLISH_ONLY_MODELS` gives
-    `("auto", "en")`; code that assumed `distil-large-v3.5` was the only one
-    reads the set.
+  - Punctuated and capitalised output is the model; do not post-process.
+  - No language input: Auto only (`MODEL_LANGUAGE_MODES`), so a saved
+    language of an earlier build is not offered and falls back to Auto.
+    `<|nospeech|>` (id 1) is a special token the decode skips: silence is an
+    empty string. Blank is id 0 (`<unk>`).
+  - Measured 2026-11-25 (25 + 25 FLEURS clips): INT8 de 4.27 / en 4.14, fp32
+    de 3.46 / en 4.70, RTF 0.023 against 0.068; the English-only INT8 export
+    en 5.83.
+  - The Settings language note for it says it detects the language itself
+    (`_language_constraint_note`); the picker offers Auto only.
   - Cancel reuses `_RunAbortHandle` / `_CancelWatchdog` from `local_onnx_asr`
     with its own `RunOptions`, checked before load, between passes and
     mid-run (0.46 s). The load itself (tokenizer, `InferenceSession`, ~1.4 s)
@@ -631,10 +664,49 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `supports_streaming`); every row has its full text as tooltip (rows elide
     past the 788 px viewport).
   - Sentences name models as the screen does (`local_model_short_label`).
-  - Fastest local model on English (RTF 0.0135 vs `tiny` 0.0245); the
-    default stays Parakeet for languages and pasteable text.
+  - Measured on the English-only revision: RTF 0.0135 vs `tiny` 0.0245.
   `scripts/release_check_frozen_bundle.py --model-dir` prefers this model;
   the real 552 MB transfer and non-English audio are unverified.
+- **Default model of 2026-11-26 (owner's wish, lead's decision): the
+  multilingual TurboCTC, for NEW installs only.** `config.DEFAULT_MODEL_SIZE`
+  was Parakeet v3. 25 + 25 FLEURS clips (2026-11-25, about 500 words per
+  language, so differences under 1 point are noise): de 4.27 / en 4.14 against
+  Parakeet's 6.50 / 4.89, RTF 0.023 against 0.085, 552 MB against 670 MB.
+  The cost, said where the model is picked (the Transcription tab's model
+  note and the two picker labels): seven languages against Parakeet's 25.
+  - Every place that encodes the default reads `DEFAULT_MODEL_SIZE`:
+    `AppSettings.model_size`, `DEFAULT_SETTINGS`, the damage fallback in
+    `AppSettings.from_dict`, `scripts/download_model.py --model`,
+    `scripts/smoke_test.py`, the settings dialog's fallback. A saved choice is
+    never changed: the default applies only to an absent key (a fresh install
+    or a file without `model_size`: every save writes it, so that means a
+    hand-edited file); the damage fallback is unchanged.
+  - First start with the default not on the PC: the start's preload
+    (`_start_local_model_preload`, Keep ONNX loaded on, as it is by default)
+    downloads exactly that model through the one slot
+    (`_download_model_for_preload`) and then loads it, with the overlay's
+    "Loading selected model..." line; offline mode downloads nothing and a
+    dictation is refused with the "not on this PC" text, naming the model and
+    its size. No other model is substituted
+    (`test_a_fresh_install_downloads_the_default_model_and_never_substitutes`).
+    A recording made during the download follows the usual path (kept for
+    Retry).
+- **Canary 1B v2 retired (2026-11-26, owner decision), successor Fluid
+  Speech Pro.** Reasons: Fluid Speech Pro is better in both languages (de
+  3.25 / en 3.57 against Canary's 3.66 / 5.45), the TurboCTC is about six times
+  faster at 4.27 / 4.14, and Parakeet v3 covers the same 25 languages faster.
+  Canary had no capability the roster lacks: its translation was an accident
+  of onnx-asr hardcoding `<|en|>` (the app only guarded against it), and
+  explicit language choice remains with Cohere. Through the existing pattern
+  (`RETIRED_LOCAL_MODEL_SUCCESSORS` / `RETIRED_LOCAL_MODEL_REPOS`, one move
+  with the shared notice, files stay as a "No longer offered" row for
+  `canary-1b-v2-onnx`). Gone with it: its layout, `CANARY_LANGUAGE_MODES`, the
+  no-Auto guards in the onnx-asr transcriber, the benchmark, the Retranscribe
+  dialog's warning and the Settings notes; every onnx-asr model now offers
+  Auto only and is never sent a language. A history entry made with Canary
+  re-runs through the retired-model substitution of the Retranscribe dialog.
+  The Models tab's minimum list height went from six to five rows
+  (`settings-dialog.md`).
 - **Local ONNX device (`local_onnx_device`, default `auto`, schema 23)**: the
   "ONNX Device" row (Models tab, "Local runtime" group) feeds
   `LOCAL_WEBGPU_DEVICE_POLICIES` into `LocalOnnxWebGpuTranscriber` with the

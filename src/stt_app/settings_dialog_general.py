@@ -10,7 +10,6 @@ from PySide6 import QtCore, QtWidgets
 from . import local_runtime_support
 from .config import (
     ASSEMBLYAI_STREAMING_MODEL_LABEL,
-    CANARY_MODEL_SIZE,
     CUSTOM_VOCABULARY_SUPPORTED_SUMMARY,
     DEFAULT_CUSTOM_API_MODE,
     DEFAULT_ENGINE,
@@ -824,9 +823,8 @@ class _GeneralTabMixin:
             return ""
 
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
-            # Named from the selection: there is more than one English-only
-            # model, and the hard-coded name answered a Granite CTC selection
-            # with a sentence about distil-large-v3.5.
+            # Named from the selection, not hard-coded, so a roster that gains
+            # another English-only model needs no change here.
             return (
                 f"{local_model_short_label(model)} is an English-only model "
                 "(only Auto and English are available)."
@@ -838,22 +836,21 @@ class _GeneralTabMixin:
                 "automatic language detection."
             )
 
-        if engine == "local" and model == CANARY_MODEL_SIZE:
-            return (
-                "Canary has no automatic detection: pick the language actually "
-                "spoken. With the wrong one it translates instead of "
-                "transcribing."
-            )
-
         if engine == "local" and model in PARAKEET_MODEL_SIZES:
             return (
                 "Parakeet is multilingual and detects the language itself; "
                 "there is nothing to choose."
             )
 
+        if engine == "local" and model in LOCAL_GRANITE_CTC_MODEL_SIZES:
+            return (
+                "TurboCTC detects the language itself (English, French, German, "
+                "Spanish, Portuguese, Italian or Japanese); there is nothing to "
+                "choose."
+            )
+
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
-            # Only the Granite models reach here: Cohere and Canary have their
-            # own branches above, and both of those really do lack Auto.
+            # Only Granite 5.0 2B reaches here: Cohere has its own branch above.
             return "This model supports Auto plus the languages documented for it."
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
@@ -1007,8 +1004,7 @@ class _GeneralTabMixin:
         name = local_model_short_label(model_name) if model_name else "This model"
         if not applies:
             if model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
-                # Not "the fastest local option": `tiny` is quicker, and the
-                # claim was never true for Canary at all.
+                # Not "the fastest local option": `tiny` is quicker.
                 self._set_local_onnx_device_note(
                     f"{name} always runs on the CPU through onnx-asr and "
                     "ignores this setting."
@@ -1128,12 +1124,6 @@ class _GeneralTabMixin:
                 "Batch mode only. Runs on the ONNX Device set on the Models "
                 "tab (the overlay shows the active one)."
             )
-        elif engine == "local" and model_name == CANARY_MODEL_SIZE:
-            style = note_style
-            text = (
-                "Batch mode only, CPU. Pick a language: this model has no "
-                "auto-detect and would otherwise translate into English."
-            )
         elif engine == "local" and model_name == FLUID_SPEECH_PRO_MODEL_SIZE:
             style = note_style
             # Measured 2026-11-25: German 3.25 against Parakeet v3's 6.50 and
@@ -1146,19 +1136,24 @@ class _GeneralTabMixin:
         elif engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
             style = note_style
             # Not "the fastest local model here": a Whisper size once measured
-            # 0.033 against Parakeet's 0.043 in the same run.
+            # 0.033 against Parakeet's 0.043 in the same run. Only Parakeet
+            # reaches this branch (Fluid Speech Pro has its own).
             text = (
-                "Batch mode only, CPU. Multilingual, no language selection "
-                "needed; the recommended default."
+                "Batch mode only, CPU. 25 European languages, detected "
+                "automatically; pick it when the default model's seven do not "
+                "include yours."
             )
         elif engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
             style = note_style
-            # The casing and the missing punctuation are what the CTC head
-            # writes, not a setting -- say so here rather than let it look
-            # like a defect after the first dictation.
+            # The default of a fresh install (`config.DEFAULT_MODEL_SIZE`): the
+            # trade-off is said here, where the model is picked. Measured
+            # 2026-11-25: German 4.27 against Parakeet v3's 6.50, English 4.14
+            # against 4.89, about four times faster.
+            # The sentence has two lines in the dialog (a test measures it).
             text = (
-                "Batch mode only, CPU. English only; writes lowercase text "
-                "without punctuation."
+                "Batch mode only, CPU. The default for new installs: seven "
+                "languages (en, fr, de, es, pt, it, ja); Parakeet v3 covers "
+                "25 European ones."
             )
         elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             style = note_style

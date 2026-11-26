@@ -167,7 +167,7 @@ def test_a_device_a_models_runtime_cannot_reach_is_not_a_measurement():
     assert measured_fastest_devices(cases) == {}
 
 
-@pytest.mark.parametrize("model", ["small", "parakeet-tdt-0.6b-v3", "canary-1b-v2"])
+@pytest.mark.parametrize("model", ["small", "parakeet-tdt-0.6b-v3", "fluid-speech-pro"])
 def test_a_model_whose_runtime_takes_no_device_is_skipped(model):
     """faster-whisper picks its own device and onnx-asr is CPU-only, so there
     is no `auto` chain for a preference to reorder."""

@@ -107,7 +107,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   native ARM64 Python; the picker marks them `[unavailable]`, the Models tab
   skips them in every download, and a transcription refuses with the reason
   before fetching anything (`local_runtime_support.py`). Everything else has an
-  ARM64 build: Parakeet, Canary, Granite CTC, Nemotron, Cohere/Granite via
+  ARM64 build: Parakeet, Fluid Speech Pro, Granite CTC, Nemotron, Cohere/Granite via
   Node, the Silero speech check and every cloud engine. The earlier wording
   "CTranslate2 requires x86 AVX/SSE" was wrong: its x86-64 wheels need SSE4.1
   and pick AVX/AVX2/AVX512 at run time. The x64 installer already installs on

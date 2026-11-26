@@ -649,9 +649,11 @@ BPE units. IBM reports over 20x the throughput of the previous Granite Speech
 models. There is a second checkpoint, `-nc`, trained on ~75,000 hours under
 CC-BY-NC-SA-4.0; only the Apache-2.0 one would be shippable here.
 
-It is **English only**. `stt_app`'s default, Parakeet TDT 0.6B v3, covers 25
-European languages including German at mean RTF 0.043 on CPU, so even once
-this is integrable it is an English-only addition rather than a replacement.
+It is **English only** (the 2026-08 revision this section assessed; IBM's
+multilingual revision of 2026-10-21 shipped in the app on 2026-11-25).
+At the time `stt_app`'s default, Parakeet TDT 0.6B v3, covered 25 European
+languages including German at mean RTF 0.043 on CPU, so it looked like an
+English-only addition rather than a replacement.
 
 ### Why it cannot be integrated
 
@@ -773,7 +775,7 @@ of Parakeet TDT 0.6B v3 with the same architecture, and it fits the existing
 commit: on the development machine it measured about 30% faster than v3 on
 the CPU and wrote clearly better German on the owner's dictation. The default
 stays v3 until the owner decides otherwise. Figures and attribution:
-[Models & Offline Setup](models.md#onnx-asr-models-parakeet-canary).
+[Models & Offline Setup](models.md#onnx-asr-models-parakeet-fluid-speech-pro).
 
 ### An open idea: a punctuation/true-casing companion for Granite Speech 5.0
 

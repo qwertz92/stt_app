@@ -191,7 +191,7 @@ def test_the_vocabulary_note_moves_nothing_below_it(dialog: SettingsDialog) -> N
         ("local", "cohere-transcribe-03-2026"),  # Transformers.js
         ("local", "nemotron-3.5-asr-streaming-0.6b-int4"),  # ORT GenAI
         ("local", "parakeet-tdt-0.6b-v3"),  # onnx-asr
-        ("local", "granite-speech-5.0-470m-turboctc"),  # Granite CTC
+        ("local", "granite-5.0-470m-turboctc-multi"),  # Granite CTC
     ]
     selections.extend((engine, "") for engine in VALID_ENGINES)
     selections.append(("local", "small"))
@@ -1247,9 +1247,9 @@ def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
 
 
 def test_language_note_names_the_selected_model_family(dialog):
-    """Canary joined LOCAL_EXPLICIT_LANGUAGE_MODELS and inherited Granite's
-    hint, which told the user Auto was available — the exact behaviour the
-    model must never have."""
+    """Cohere is in LOCAL_EXPLICIT_LANGUAGE_MODELS beside Granite 5.0 2B and
+    must not inherit Granite's hint, which tells the user Auto is available —
+    the exact behaviour the model must never have."""
     dialog.show()
     index = dialog.engine_combo.findData("local")
     dialog.engine_combo.setCurrentIndex(index)
@@ -1261,15 +1261,22 @@ def test_language_note_names_the_selected_model_family(dialog):
         QtWidgets.QApplication.processEvents()
         return dialog.language_note_label.text()
 
-    canary_note = note_for("canary-1b-v2")
-    assert "Granite" not in canary_note
-    assert "translat" in canary_note.lower()
+    cohere_note = note_for("cohere-transcribe-03-2026")
+    assert "Granite" not in cohere_note
+    assert (
+        "no automatic" in cohere_note.lower()
+        or "not provide automatic" in cohere_note.lower()
+    )
 
     granite_note = note_for("granite-speech-5.0-2b")
     assert "Granite" not in granite_note
 
     assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")
     assert "detects the language itself" in note_for("fluid-speech-pro")
+    ctc_note = note_for("granite-5.0-470m-turboctc-multi")
+    assert "detects the language itself" in ctc_note
+    assert "English-only" not in ctc_note
+    assert "Japanese" in ctc_note
 
 
 def test_the_language_hint_never_contradicts_the_language_picker(dialog):
@@ -1429,7 +1436,7 @@ def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
     _ = app
 
 
-@pytest.mark.parametrize("downloaded", [1, 8, 10])
+@pytest.mark.parametrize("downloaded", [1, 8, 9])
 def test_the_model_popup_paints_no_empty_strip_under_the_last_model(
     dialog: SettingsDialog,
     downloaded: int,

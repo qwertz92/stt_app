@@ -385,14 +385,14 @@ def test_start_recording_rejects_streaming_for_remote_engine():
 
 @pytest.mark.parametrize(
     "model_size",
-    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "canary-1b-v2"],
+    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "fluid-speech-pro"],
 )
 def test_start_recording_rejects_streaming_for_batch_only_local_model(
     monkeypatch, model_size
 ):
     """The refusal must name the *model*, and must not contradict itself.
 
-    Only the ONNX/WebGPU models took the local branch, so Parakeet and Canary
+    Only the ONNX/WebGPU models took the local branch, so Parakeet and Fluid Speech Pro
     -- batch-only through a different runtime -- fell into the remote branch
     and were told to "use local" while the local engine was already selected.
     """
@@ -4447,6 +4447,53 @@ def test_download_model_for_preload_uses_cancellable_worker(monkeypatch):
     controller._download_model_for_preload(settings)
 
     assert calls == [("small", "")]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_fresh_install_downloads_the_default_model_and_never_substitutes(
+    monkeypatch, tmp_path
+):
+    """First start, default settings, the default model not on this PC: the
+    preload fetches exactly that model; offline, it is refused with the
+    readable text and no other model is used."""
+    from stt_app.config import DEFAULT_MODEL_SIZE
+    from stt_app.controller import _preload_failure_text
+
+    controller, app = _make_controller()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_dir=str(tmp_path))
+    assert settings.model_size == DEFAULT_MODEL_SIZE
+    calls: list[tuple[str, str]] = []
+
+    class _Process:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self):
+            return "", ""
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": [],
+    )
+    monkeypatch.setattr(
+        "stt_app.controller.start_model_download_process",
+        lambda model_name, model_dir="": (
+            calls.append((model_name, model_dir)) or _Process()
+        ),
+    )
+
+    controller._download_model_for_preload(settings)
+
+    assert calls == [(DEFAULT_MODEL_SIZE, str(tmp_path))]
+    offline = replace(settings, offline_mode=True)
+    controller._download_model_for_preload(offline)
+    assert len(calls) == 1
+    text = _preload_failure_text(offline, OSError("no snapshot"), None)
+    assert "IBM Granite Speech 5.0 470M (~552 MB) is not on this PC" in text
+    assert "No fallback model was used." in text
     controller.shutdown()
     _ = app
 

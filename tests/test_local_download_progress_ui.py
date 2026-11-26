@@ -85,7 +85,7 @@ def _mixin_dialog(
 ):
     dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
     dialog._local_model_download_lock = threading.RLock()
-    dialog._local_model_download_active = ("granite-speech-5.0-470m-turboctc", "")
+    dialog._local_model_download_active = ("granite-5.0-470m-turboctc-multi", "")
     dialog._local_model_download_claimed = None
     dialog._local_model_download_queue = list(queued)
     dialog._local_model_download_worker_running = True
@@ -165,7 +165,7 @@ def test_a_controller_download_uses_the_controllers_own_sample(monkeypatch):
     )
     dialog._local_model_download_active = None
     dialog._local_model_download_worker_running = False
-    dialog._preload_downloading_model = lambda: "granite-speech-5.0-470m-turboctc"
+    dialog._preload_downloading_model = lambda: "granite-5.0-470m-turboctc-multi"
 
     _LocalModelsMixin._refresh_local_model_download_progress(dialog)
 
@@ -180,7 +180,7 @@ def test_the_queue_line_names_what_starts_next(monkeypatch):
     dialog = _mixin_dialog(
         directory_bytes=0,
         process=SimpleNamespace(),
-        queued=(("parakeet-tdt-0.6b-v3", ""), ("canary-1b-v2", "")),
+        queued=(("parakeet-tdt-0.6b-v3", ""), ("fluid-speech-pro", "")),
         monkeypatch=monkeypatch,
     )
 

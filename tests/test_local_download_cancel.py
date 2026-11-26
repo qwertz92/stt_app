@@ -15,7 +15,6 @@ from pathlib import Path
 import pytest
 
 from stt_app.config import (
-    CANARY_MODEL_SIZE,
     LOCAL_WEBGPU_MODEL_SIZES,
     NEMOTRON_MODEL_SIZE,
     PARAKEET_MODEL_SIZE,
@@ -65,7 +64,7 @@ def _onnx_asr(monkeypatch, download):
         "stt_app.transcriber.local_webgpu_asr.resolve_cached_webgpu_model_path",
         lambda *_a, **_k: None,
     )
-    transcriber = LocalOnnxAsrTranscriber(model_size=CANARY_MODEL_SIZE)
+    transcriber = LocalOnnxAsrTranscriber(model_size=PARAKEET_MODEL_SIZE)
     return transcriber, transcriber._resolve_model_path
 
 

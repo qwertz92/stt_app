@@ -20,7 +20,7 @@ hiddenimports = [
     'onnxruntime_genai',
     'comtypes',
     # onnx-asr's loader imports every model class statically, so one entry
-    # covers Parakeet and Canary. huggingface_hub is imported lazily inside
+    # covers Parakeet and Fluid Speech Pro. huggingface_hub is imported lazily inside
     # its resolver and would otherwise be missed.
     'onnx_asr',
     'huggingface_hub',

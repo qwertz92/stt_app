@@ -21,7 +21,7 @@ from conftest import (
     make_controller,
 )
 
-from stt_app.config import CANARY_MODEL_SIZE, FALLBACK_HOTKEY, GRANITE_CTC_MODEL_SIZE
+from stt_app.config import FALLBACK_HOTKEY
 from stt_app.controller import PendingQuitWork
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -239,7 +239,7 @@ def test_a_quit_during_a_fallback_retry_keeps_the_recorded_language(
     token = _record(controller, b"RIFF-auto")
     controller._on_transcription_failed("boom", request_token=token)
     controller._settings = replace(
-        controller._settings, model_size=CANARY_MODEL_SIZE, language_mode="de"
+        controller._settings, model_size=COHERE_MODEL_SIZE, language_mode="de"
     )
     assert controller.retry_last_transcription() is True
     retry = controller._jobs[controller._active_request_token]
@@ -370,14 +370,8 @@ def test_an_unfinished_recording_is_transcribed_in_the_language_it_was_made_in(
 @pytest.mark.parametrize(
     ("model_size", "recorded", "label"),
     [
-        # Canary and Cohere never offer Auto: Canary would translate into its
-        # first language instead of transcribing, Cohere would be forced to
-        # German. Granite CTC decodes English only, whatever was spoken.
-        pytest.param(CANARY_MODEL_SIZE, "auto", "Auto", id="canary has no auto"),
+        # Cohere never offers Auto and would be forced to German.
         pytest.param(COHERE_MODEL_SIZE, "auto", "Auto", id="cohere has no auto"),
-        pytest.param(
-            GRANITE_CTC_MODEL_SIZE, "de", "German", id="granite ctc is english only"
-        ),
     ],
 )
 def test_an_unfinished_recordings_language_is_kept_only_where_the_engine_offers_it(
@@ -488,7 +482,7 @@ def test_a_fallback_language_keeps_the_recording_like_a_gap_does(monkeypatch, tm
     controller, app, _overlay, unfinished, history = _controller(
         monkeypatch, tmp_path, language_mode="de"
     )
-    controller._settings = replace(controller._settings, model_size=CANARY_MODEL_SIZE)
+    controller._settings = replace(controller._settings, model_size=COHERE_MODEL_SIZE)
     controller._executor = _DoneExecutor()
     monkeypatch.setattr(controller, "_transcribe_import_worker", lambda *_a: "hallo")
     for recording_id, language in (("fell1", "auto"), ("plain1", "en")):

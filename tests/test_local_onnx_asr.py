@@ -1,4 +1,4 @@
-"""Tests for the pure-Python onnx-asr local engine (Parakeet TDT, Canary)."""
+"""Tests for the pure-Python onnx-asr local engine (Parakeet TDT, Fluid Speech Pro)."""
 
 from __future__ import annotations
 
@@ -16,10 +16,8 @@ import numpy as np
 import pytest
 
 from stt_app.config import (
-    CANARY_MODEL_SIZE,
     FLUID_SPEECH_PRO_MODEL_SIZE,
     LOCAL_BATCH_ONLY_MODELS,
-    LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
@@ -79,32 +77,6 @@ def test_factory_routes_both_models_to_the_onnx_asr_runtime():
             AppSettings(engine="local", model_size=model_name, language_mode="de")
         )
         assert isinstance(transcriber, LocalOnnxAsrTranscriber)
-
-
-def test_canary_can_never_select_auto():
-    """onnx-asr hardcodes the <|en|> source/target token, so without an explicit
-    language Canary *translates* German into English instead of transcribing."""
-    assert CANARY_MODEL_SIZE in LOCAL_EXPLICIT_LANGUAGE_MODELS
-    assert "auto" not in language_modes_for_selection("local", CANARY_MODEL_SIZE)
-
-    transcriber = LocalOnnxAsrTranscriber(CANARY_MODEL_SIZE, language_mode="auto")
-    assert transcriber._language_mode != "auto"
-
-    transcriber.set_language_mode("auto")
-    assert transcriber._language_mode != "auto"
-
-
-def test_canary_sends_its_language_and_rejects_an_untrained_one():
-    """An untrained ISO code raises KeyError deep inside onnx-asr, so it must be
-    normalized away before the request."""
-    transcriber, fake = _transcriber_with_fake_model(CANARY_MODEL_SIZE, "de")
-    transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
-    assert fake.calls[0]["language"] == "de"
-
-    transcriber.set_language_mode("zz")
-    assert transcriber._language_mode in language_modes_for_selection(
-        "local", CANARY_MODEL_SIZE
-    )
 
 
 def test_parakeet_sends_no_language_because_the_model_ignores_it():
@@ -338,31 +310,15 @@ def test_a_wav_header_declaring_no_sample_rate_is_refused(tmp_path):
 
 
 def test_dropping_an_unsupported_language_is_logged(caplog):
-    """A wrong language makes Canary translate, so the substitution must be
-    diagnosable rather than silent."""
-    import logging
-
-    with caplog.at_level(logging.WARNING):
-        transcriber = LocalOnnxAsrTranscriber(CANARY_MODEL_SIZE, language_mode="auto")
-
-    assert transcriber._language_mode != "auto"
-    assert any("translate" in record.message for record in caplog.records)
-
-
-def test_parakeet_is_not_told_its_transcript_may_have_been_translated(caplog):
-    """Only Canary translates. Parakeet offers `auto` alone, so any stored
-    language substitutes -- and it is never sent one at all, so the sentence
-    about translation described something that cannot happen. The
-    substitution itself is still reported."""
+    """Every onnx-asr model offers `auto` alone, so any stored language
+    substitutes; the substitution is reported rather than silent."""
     import logging
 
     with caplog.at_level(logging.WARNING):
         transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE, language_mode="de")
 
     assert transcriber._language_mode == "auto"
-    messages = [record.message for record in caplog.records]
-    assert any("is not supported by" in text for text in messages)
-    assert not any("translate" in text for text in messages)
+    assert any("is not supported by" in record.message for record in caplog.records)
 
 
 # --------------------------------------------------------------------------
@@ -721,7 +677,7 @@ def test_the_watchdog_without_a_cancel_check_starts_no_thread():
 def test_a_batch_run_without_a_cancel_check_starts_no_watchdog_thread():
     """`self._is_cancel_requested` is never None, so passing it unconditionally
     made `_CancelWatchdog.start()`'s skip unreachable and spawned a polling
-    thread for every Parakeet and Canary transcription -- including the ones
+    thread for every onnx-asr transcription -- including the ones
     nothing can ever cancel, because the controller installed no check.
     """
     import threading

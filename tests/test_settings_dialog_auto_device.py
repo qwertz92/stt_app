@@ -574,7 +574,7 @@ def test_the_notes_for_models_without_a_device_say_what_decides_instead(tmp_path
     # A different CPU-only runtime, so it must not be named after onnx-asr --
     # and it must not fall through to the Whisper note either, which points
     # at CUDA and at three models this one is not.
-    granite_ctc = _note_for(dialog, "granite-speech-5.0-470m-turboctc", {}, "auto")
+    granite_ctc = _note_for(dialog, "granite-5.0-470m-turboctc-multi", {}, "auto")
     assert "always runs on the CPU through ONNX Runtime" in granite_ctc
     assert "onnx-asr" not in granite_ctc
     assert "CUDA" not in granite_ctc
@@ -614,10 +614,17 @@ def test_the_runtime_note_no_longer_restates_a_device_order_that_can_move(
     # docs/agents/benchmark.md: never "fastest" flat -- a Whisper size was quicker.
     parakeet = runtime_note("parakeet-tdt-0.6b-v3")
     assert "fastest" not in parakeet
-    assert "recommended default" in parakeet
+    assert "25 European languages" in parakeet
+
+    # The default model says what it costs where the model is picked: seven
+    # languages, with the 25 of Parakeet named as the way out.
+    ctc = runtime_note("granite-5.0-470m-turboctc-multi")
+    assert "default for new installs" in ctc
+    assert "seven languages" in ctc
+    assert "Parakeet v3 covers 25 European ones" in ctc
 
     fluid = runtime_note("fluid-speech-pro")
-    assert "recommended default" not in fluid
+    assert "default" not in fluid
     assert "more accurate than Parakeet" in fluid
     assert "FluidVoice Labs, CC-BY-4.0" in fluid
     dialog.deleteLater()
