@@ -118,31 +118,50 @@ def create_ssl_context() -> ssl.SSLContext | None:
     return ssl.create_default_context(cafile=ca_bundle)
 
 
-def is_ssl_error(exc: Exception) -> bool:
+_SSL_MARKERS = (
+    "certificate_verify_failed",
+    "ssl: certificate_verify_failed",
+    "certificate verify failed",
+    "unable to get local issuer certificate",
+    "self-signed certificate",
+    "sslcertverificationerror",
+)
+
+
+def is_ssl_error(exc: BaseException) -> bool:
     """Check if an exception is caused by SSL certificate verification failure.
 
-    Walks the exception chain (``__cause__`` and ``__context__``) to detect
-    chained SSL errors (e.g. ``requests`` wrapping an ``urllib3`` wrapping an
-    ``ssl`` error, or a library that re-raises inside a bare ``except`` and
-    therefore only sets ``__context__`` instead of ``__cause__``).
+    Walks the exception chain (``__cause__``, ``__context__`` and a
+    ``URLError``'s ``reason``) to detect chained SSL errors (e.g. ``requests``
+    wrapping an ``urllib3`` wrapping an ``ssl`` error, or a library that
+    re-raises inside a bare ``except`` and therefore only sets ``__context__``
+    instead of ``__cause__``).
+
+    A link is recognised by its type first: ``ssl.SSLError`` and its subclass
+    ``ssl.SSLCertVerificationError``. With ``truststore`` active (the running
+    app) Windows verifies the chain and its own text reaches the user ("A
+    certificate chain processed, but terminated in a root certificate which is
+    not trusted by the trust provider."), which holds none of OpenSSL's words.
+    The message markers stay for libraries that wrap the failure in a plain
+    exception.
     """
     seen: set[int] = set()
-    current: Exception | None = exc
-    while current is not None and id(current) not in seen:
+    pending: list[BaseException | object] = [exc]
+    while pending:
+        current = pending.pop()
+        if not isinstance(current, BaseException) or id(current) in seen:
+            continue
         seen.add(id(current))
+        if isinstance(current, ssl.SSLError):
+            return True
         msg = str(current).lower()
-        ssl_markers = (
-            "certificate_verify_failed",
-            "ssl: certificate_verify_failed",
-            "certificate verify failed",
-            "unable to get local issuer certificate",
-            "self-signed certificate",
-            "sslcertverificationerror",
+        if any(marker in msg for marker in _SSL_MARKERS):
+            return True
+        pending.extend(
+            (
+                current.__cause__,
+                current.__context__,
+                getattr(current, "reason", None),
+            )
         )
-        for marker in ssl_markers:
-            if marker in msg:
-                return True
-        # Prefer ``__cause__`` (explicit ``raise ... from ...``); fall back to
-        # ``__context__`` (implicit chaining from a bare ``except``).
-        current = current.__cause__ or current.__context__
     return False

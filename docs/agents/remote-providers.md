@@ -207,6 +207,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `channels` or `alternatives`; an answer without Deepgram's `results`, or
   without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
   names the job in these errors too, since the job already runs.
+- **A certificate failure is recognised by type, then by text** (2026-11-26):
+  `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
+  `reason` and answers True for any `ssl.SSLError` (which includes
+  `ssl.SSLCertVerificationError`) before it looks at words. With `truststore`
+  active, as in the running app, Windows verifies the chain and its own text
+  reaches urllib: "A certificate chain processed, but terminated in a root
+  certificate which is not trusted by the trust provider." (reproduced on
+  Windows 11 with a local HTTPS server and a throwaway CA; the exception is an
+  `SSLCertVerificationError` whose message holds none of OpenSSL's words). The
+  word list alone did not match it, so every engine showed that raw text
+  instead of `format_ssl_error_message`. The markers stay for libraries that
+  wrap the failure in a plain exception. Trade-off: any `ssl.SSLError` (a
+  handshake the server aborted, a protocol mismatch) now gets the proxy
+  guidance too, which is the right first suggestion behind a TLS-intercepting
+  proxy and a harmless one otherwise.
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing
