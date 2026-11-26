@@ -237,10 +237,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   Microsoft's reference marks no member of the result as required and does not
   say what a silent recording returns; the first version of the guard raised
   when `combinedPhrases` was missing or null, which would have turned silence
-  (and the connection test's one second of silence) into an error. A reply
-  that has `combinedPhrases` as a list, a string `text`, `durationMilliseconds`
-  or `phrases` is accepted as a result and yields "" when it holds no text;
-  only a reply with none of those is an error. **Deepgram stays strict**: its
+  (and the connection test's one second of silence) into an error. The rule
+  now: a reply is a transcription result when it has `combinedPhrases` **as a
+  list** or `text` **as a string** (a null or wrong-typed member counts as
+  absent), or it has a `durationMilliseconds` or a `phrases` member at all. A
+  result without usable text, such as `{"durationMilliseconds": 1000,
+  "phrases": []}`, is silence (""). Everything else is an error naming the
+  answer's keys: `{"combinedPhrases": null}`, `{"text": null}`, `{"text": 5}`,
+  `{}`, `[]`, `{"status": "ok"}` and `{"error": {...}}` (the last quotes the
+  gateway's message). Before the guard all of those returned "". **Deepgram stays strict**: its
   response schema documents `results` as required (and silence still arrives
   as `results.channels[0].alternatives[0].transcript == ""`), so an answer
   without `results` is not a Deepgram transcription answer.

@@ -544,6 +544,25 @@ class TestAzureSilentRecording:
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
         assert t.transcribe_batch(_wav_seconds(1.0)) == ""
 
+    @pytest.mark.parametrize(
+        "reply",
+        [
+            {"combinedPhrases": None},
+            {"text": None},
+            {"text": 5},
+            {},
+            [],
+            {"status": "ok"},
+            {"error": {"message": "gateway down"}},
+        ],
+    )
+    @patch("stt_app.transcriber.azure_provider.open_request")
+    def test_a_null_or_wrong_typed_member_counts_as_absent(self, mock_urlopen, reply):
+        mock_urlopen.return_value = _fake_response(json.dumps(reply))
+        t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
+        with pytest.raises(TranscriptionError, match="Azure"):
+            t.transcribe_batch(_wav_seconds(1.0))
+
     @patch("stt_app.transcriber.azure_provider.open_request")
     def test_a_reply_with_none_of_the_documented_members_is_an_error(
         self, mock_urlopen

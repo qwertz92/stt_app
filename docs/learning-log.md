@@ -20,6 +20,12 @@ answer, and `_refresh_import_start_button` the one setter of the Import tab's St
   that timed out said "transcription failed: <urlopen error ...>". Import tab: a finished import or a
   credential failure re-enabled Start for Meta plus an mp3. Speechmatics: a refused redirect while
   polling lacked the job id.
+- Azure (follow-up review): a transcription result without text is silence, because Microsoft
+  marks no member as required and does not say what a silent recording returns; the reply counts
+  as a result when `combinedPhrases` is a list, `text` is a string (a null or wrong-typed member
+  counts as absent), or `durationMilliseconds` or `phrases` is present at all. `{}`, `[]`,
+  `{"status": "ok"}`, `{"error": {...}}`, `{"combinedPhrases": null}` and `{"text": 5}` are
+  errors (deliberate, unverified live; before the guard they all returned an empty transcript).
 - Details and the decisions: `docs/agents/remote-providers.md`.
 
 ## 2026-11-26: no REST engine follows a redirect with its API key
