@@ -2194,6 +2194,46 @@ def test_the_import_service_combo_stays_put_when_its_note_comes_and_goes(
     assert combo_y() == local_y
 
 
+def test_meta_import_of_a_file_that_is_not_wav_is_refused_before_start(
+    dialog: SettingsDialog, tmp_path
+) -> None:
+    """Meta takes WAV only, but the picker offers mp3, m4a, flac and more; the
+    refusal used to come after the job had started."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    mp3 = tmp_path / "talk.mp3"
+    mp3.write_bytes(b"ID3")
+    wav = tmp_path / "talk.wav"
+    wav.write_bytes(b"RIFF")
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("groq")
+    )
+    dialog._set_selected_import_file(str(mp3))
+    assert dialog.import_start_button.isEnabled()
+
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("meta")
+    )
+    app.processEvents()
+    assert not dialog.import_start_button.isEnabled()
+    assert dialog.import_engine_note.text() == (
+        "Meta (Muse Voice) takes WAV files only; convert this file or pick "
+        "another engine."
+    )
+
+    dialog._set_selected_import_file(str(wav))
+    assert dialog.import_start_button.isEnabled()
+    assert "takes WAV files only" not in dialog.import_engine_note.text()
+
+    dialog._set_selected_import_file(str(mp3))
+    assert not dialog.import_start_button.isEnabled()
+    dialog.import_engine_combo.setCurrentIndex(
+        dialog.import_engine_combo.findData("local")
+    )
+    app.processEvents()
+    assert dialog.import_start_button.isEnabled()
+
+
 def test_the_openrouter_note_says_where_the_audio_goes(
     dialog: SettingsDialog,
 ) -> None:

@@ -274,17 +274,17 @@ class _ImportTabMixin:
         if selected and Path(selected).is_file():
             self.import_selected_file_label.setText(f"Selected: {selected}")
             self.import_selected_file_label.setStyleSheet("color: #1b5e20;")
-            self.import_start_button.setEnabled(True)
         elif selected:
             self.import_selected_file_label.setText(
                 f"Selected file does not exist: {selected}"
             )
             self.import_selected_file_label.setStyleSheet("color: #b71c1c;")
-            self.import_start_button.setEnabled(False)
         else:
             self.import_selected_file_label.setText("No file selected.")
             self.import_selected_file_label.setStyleSheet("color: #555;")
-            self.import_start_button.setEnabled(False)
+        # The status line and Start follow the file and the engine together
+        # (Meta takes WAV only).
+        self._update_import_engine_note()
 
     def _choose_import_file(self) -> None:
         if (

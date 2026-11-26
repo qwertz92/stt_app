@@ -401,6 +401,15 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     else. (Until 2026-11-26 this paragraph said 24-bit was converted; it was
     refused with the local models' wording, "Only 16-bit PCM WAV audio is
     supported by this local model", and a float WAV was called "not a WAV".)
+  - **The Import Audio tab says it before Start** (2026-11-26, review): with
+    Meta chosen as the Import Service and a file whose extension is not
+    `.wav` selected, the status line under the service reads "Meta (Muse
+    Voice) takes WAV files only; convert this file or pick another engine."
+    (before any key hint) and Start stays off, until the file or the engine
+    changes (`_import_file_issue`, `_import_start_allowed`,
+    `_WAV_ONLY_IMPORT_ENGINES`). The check is the extension only: a `.wav`
+    that is not 16-bit PCM is still refused at the start, with the sentence
+    above.
   - **The connection test has the 15 s bound** of the other key checks
     (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
     keeps the transcription timeout (up to 300 s).
