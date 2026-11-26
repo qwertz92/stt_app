@@ -283,6 +283,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   it now (size); dictation works when it is done"; offline mode, where to
   download it; successor already on disk, nothing more. A notice never names
   a docs path: an installer user cannot open it.
+  - "Downloading it now" is true even with Keep ONNX model loaded off:
+    `controller._start_retirement_download` fetches the successor (download
+    only, no load) through the one slot. It is queued on the single preload
+    worker, so it carries the generation it was queued under and gives up,
+    queued or running, once that generation is cancelled or the current
+    settings no longer select that engine and model (or offline mode is on).
+    Any other preload restart (even an unrelated settings save) cancels the
+    generation too, so the download then stops and is not repeated at this
+    start. A dictation without a preload in offline mode gets the same
+    readable "not on this PC" text as the preload path: the transcribers raise
+    `ModelNotCachedError`, the controller maps it
+    (`_transcription_error_text`) and logs the raw wording.
   - Removed: Granite 4.0 1B and 4.1 2B (owner decision) -> Granite 5.0 2B;
     Parakeet Ultra -> Fluid Speech Pro; Whisper `tiny` and `base` -> `small`,
     `medium` -> `large-v3-turbo`.
