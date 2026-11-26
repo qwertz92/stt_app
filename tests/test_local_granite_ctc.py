@@ -477,15 +477,27 @@ def test_a_recording_past_the_bound_runs_several_passes_and_joins_them(
     assert all(features.shape[1] <= 180 * 50 for features in fake.features)
 
 
+# Japanese sample text, written as escapes: the repository holds no text of
+# another writing system (tests/test_script_output_is_ascii.py). Han with
+# Hiragana, Hiragana, Katakana, Hiragana, Han, and Han with an ideographic
+# full stop.
+_JA_HEAD = "\u4eca\u65e5\u306f\u5929\u6c17\u304c"
+_JA_TAIL = "\u3044\u3044\u3067\u3059"
+_JA_KATAKANA = "\u30ab\u30bf\u30ab\u30ca"
+_JA_HIRAGANA = "\u3072\u3089\u304c\u306a"
+_JA_HAN = "\u65e5\u672c\u8a9e"
+_JA_SENTENCE = _JA_HAN + "\u3002"
+
+
 @pytest.mark.parametrize(
     ("pieces", "expected"),
     [
         (["hello", "world"], "hello world"),
-        (["今日は天気が", "いいです"], "今日は天気がいいです"),
-        (["カタカナ", "ひらがな"], "カタカナひらがな"),
-        (["日本語。", "Hello"], "日本語。 Hello"),
-        (["Hello", "日本語"], "Hello 日本語"),
-        (["日本語", "world"], "日本語 world"),
+        ([_JA_HEAD, _JA_TAIL], _JA_HEAD + _JA_TAIL),
+        ([_JA_KATAKANA, _JA_HIRAGANA], _JA_KATAKANA + _JA_HIRAGANA),
+        ([_JA_SENTENCE, "Hello"], _JA_SENTENCE + " Hello"),
+        (["Hello", _JA_HAN], "Hello " + _JA_HAN),
+        ([_JA_HAN, "world"], _JA_HAN + " world"),
         ([], ""),
     ],
 )
