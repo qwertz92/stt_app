@@ -14,6 +14,7 @@ import urllib.error
 from unittest.mock import patch
 
 import pytest
+from websocket import WebSocketConnectionClosedException
 
 from stt_app.config import AUDIO_BLOCK_DURATION_MS, AUDIO_INPUT_BUFFER_S
 from stt_app.transcriber import deepgram_provider
@@ -523,7 +524,7 @@ class _FakeWebSocketApp:
             if _FakeWebSocketApp.release_binary_send is not None:
                 assert _FakeWebSocketApp.release_binary_send.wait(timeout=2.0)
         if payload == json.dumps({"type": "CloseStream"}):
-            self.close()
+            self.server_close()
             return
         if (
             payload == json.dumps({"type": "Finalize"})
@@ -535,7 +536,7 @@ class _FakeWebSocketApp:
                     return
                 self.on_message(self, _FakeWebSocketApp.finalize_message)
                 if _FakeWebSocketApp.close_after_finalize and not self.closed:
-                    self.close()
+                    self.server_close()
 
             if _FakeWebSocketApp.finalize_delay_s > 0:
                 timer = threading.Timer(_FakeWebSocketApp.finalize_delay_s, deliver)
@@ -545,8 +546,27 @@ class _FakeWebSocketApp:
                 deliver()
 
     def close(self):
+        """The app's own close of the socket (`on_close` only)."""
         self.closed = True
         self.on_close(self, 1000, "closed")
+
+    def server_close(self, code: int = 1000, reason: str = ""):
+        """A close frame of the server, as websocket-client 1.9.2 delivers it.
+
+        `on_error` first, with an exception whose `status_code` is the close
+        code (also for a normal close), then `on_close`.
+        """
+        self.closed = True
+        message = (
+            "Connection closed normally (code 1000)"
+            if code == 1000
+            else f"Connection closed (code {code})"
+        )
+        error = WebSocketConnectionClosedException(message)
+        error.status_code = code
+        error.reason = reason
+        self.on_error(self, error)
+        self.on_close(self, code, reason)
 
 
 class _FakeWebSocketModule:
@@ -682,6 +702,145 @@ class TestDeepgramStreaming:
         ws.on_error(ws, RuntimeError("socket lost"))
 
         assert errors == ["Deepgram streaming failed: socket lost"]
+        t.abort_stream()
+
+    @staticmethod
+    def _open_stream(monkeypatch, finalize_text: str | None, api_key: str = "key"):
+        """A started session on the fake socket; `finalize_text` None = no answer."""
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = (
+            None
+            if finalize_text is None
+            else json.dumps(
+                {
+                    "type": "Results",
+                    "from_finalize": True,
+                    "channel": {"alternatives": [{"transcript": finalize_text}]},
+                    "is_final": True,
+                }
+            )
+        )
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
+        t = DeepgramTranscriber(api_key=api_key)
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        errors: list[str] = []
+        t.start_stream(on_error=errors.append)
+        return t, _FakeWebSocketApp.instances[-1], errors
+
+    @staticmethod
+    def _fail_on_close_stream(ws, failure) -> None:
+        """Replace the server's normal close after CloseStream with `failure(ws)`."""
+        send = ws.send
+
+        def send_then_fail(payload, opcode=None):
+            if payload == json.dumps({"type": "CloseStream"}):
+                ws.closed = True
+                failure(ws)
+                return
+            send(payload, opcode)
+
+        ws.send = send_then_fail
+
+    @staticmethod
+    def _reset(ws) -> None:
+        ws.on_error(ws, ConnectionResetError("connection reset by peer"))
+        ws.on_close(ws, None, None)
+
+    def test_a_silent_stop_with_the_real_event_order_returns_empty_text(
+        self, monkeypatch
+    ):
+        t, _ws, errors = self._open_stream(monkeypatch, finalize_text="")
+
+        assert t.stop_stream() == ""
+        assert errors == []
+
+    def test_a_stop_with_text_and_the_real_event_order_returns_the_text(
+        self, monkeypatch
+    ):
+        t, _ws, errors = self._open_stream(monkeypatch, finalize_text="hello world")
+
+        assert t.stop_stream() == "hello world"
+        assert errors == []
+        assert t._stream_error is None
+
+    def test_a_going_away_close_during_the_stop_is_not_an_error(self, monkeypatch):
+        t, ws, errors = self._open_stream(monkeypatch, finalize_text="")
+        self._fail_on_close_stream(ws, lambda w: w.server_close(1001))
+
+        assert t.stop_stream() == ""
+        assert errors == []
+
+    def test_a_connection_reset_during_the_stop_without_text_raises(self, monkeypatch):
+        t, ws, _errors = self._open_stream(monkeypatch, finalize_text="")
+        self._fail_on_close_stream(ws, self._reset)
+
+        with pytest.raises(TranscriptionError, match="connection reset by peer"):
+            t.stop_stream()
+
+    def test_a_connection_reset_during_the_stop_with_text_returns_the_text(
+        self, monkeypatch
+    ):
+        t, ws, _errors = self._open_stream(monkeypatch, finalize_text="hello world")
+        self._fail_on_close_stream(ws, self._reset)
+
+        assert t.stop_stream() == "hello world"
+
+    def test_an_abnormal_close_during_the_stop_without_text_raises(self, monkeypatch):
+        t, ws, _errors = self._open_stream(monkeypatch, finalize_text="")
+        self._fail_on_close_stream(ws, lambda w: w.server_close(1011, "internal error"))
+
+        with pytest.raises(
+            TranscriptionError,
+            match=r"closed by the service \(code 1011: internal error\)",
+        ):
+            t.stop_stream()
+
+    def test_an_abnormal_close_during_the_stop_with_text_returns_the_text(
+        self, monkeypatch
+    ):
+        t, ws, _errors = self._open_stream(monkeypatch, finalize_text="hello world")
+        self._fail_on_close_stream(ws, lambda w: w.server_close(1011, "internal error"))
+
+        assert t.stop_stream() == "hello world"
+
+    def test_a_normal_close_mid_dictation_is_reported_once_as_a_service_close(
+        self, monkeypatch
+    ):
+        t, ws, errors = self._open_stream(monkeypatch, finalize_text=None)
+
+        ws.server_close(1000)
+
+        assert errors == [
+            "Deepgram streaming failed: the connection was closed by the service (code 1000)"
+        ]
+        t.abort_stream()
+
+    def test_an_abnormal_close_mid_dictation_is_reported_once_with_its_reason(
+        self, monkeypatch
+    ):
+        t, ws, errors = self._open_stream(monkeypatch, finalize_text=None)
+
+        ws.server_close(1011, "internal error")
+
+        expected = (
+            "Deepgram streaming failed: the connection was closed by the service "
+            "(code 1011: internal error)"
+        )
+        assert errors == [expected]
+        t.abort_stream()
+
+    def test_the_reason_of_a_service_close_is_scrubbed_before_it_is_cut(
+        self, monkeypatch
+    ):
+        key = "dg-secret-key-0123456789"
+        t, ws, errors = self._open_stream(monkeypatch, finalize_text=None, api_key=key)
+
+        ws.server_close(1008, "x" * 90 + key)
+
+        assert len(errors) == 1
+        assert key not in errors[0]
+        assert key[:12] not in errors[0]
         t.abort_stream()
 
     def test_stop_stream_waits_briefly_for_finalize_message(self, monkeypatch):
@@ -1361,7 +1520,7 @@ class TestDeepgramKeepAlive:
                 _KEEPALIVE_FRAME,
             ]
 
-            ws.close()  # the server's close arrives after the sender gave up
+            ws.server_close()  # the server's close arrives after the sender gave up
 
             assert errors == [_SHORT_GAP_CAP_ERROR]
         finally:

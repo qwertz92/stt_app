@@ -232,6 +232,21 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   covered: tracebacks that `logger.exception` writes for a failed callback
   (AssemblyAI streaming) -- they hold the exception, not a server text, and no
   case where an SDK put the key into one was found.
+- **A WebSocket engine reads a server's close frame as `on_error` first, then `on_close`**
+  (2026-11-26, Deepgram reproduced 3 of 3 on v0.14.0 against a local server with the real
+  websocket-client 1.9.2): the library calls `on_error` with
+  `WebSocketConnectionClosedException("Connection closed normally (code 1000)")` for every
+  close frame, a normal one too, and its `status_code` is the close code, not an HTTP status;
+  `on_close` follows. A handler that stores `on_error`'s exception turned the server's normal
+  close after Finalize/CloseStream into the stream's error, so a dictation in which nothing was
+  said ended in an Error instead of "no speech". Rule for every WebSocket engine: a close code
+  1000 or 1001 while the session itself is stopping (or has asked to close) is no error; any
+  other close code or a non-close error during a stop is recorded and raised when there is no
+  text; a close on a running session is reported once as "the connection was closed by the
+  service (code N)" with the server's reason scrubbed before the cut. A fake socket must deliver
+  `on_error` and then `on_close` for a server close (`server_close` in
+  `tests/test_deepgram_provider.py`), or the test passes only because the fake never calls
+  `on_error`. Deepgram: `deepgram_provider._on_error`; ElevenLabs has its own (`_closing`).
 - **Azure: a transcription result without text is silence** (2026-11-26,
   review; deliberate and **unverified live**, no key exists to try it).
   Microsoft's reference marks no member of the result as required and does not

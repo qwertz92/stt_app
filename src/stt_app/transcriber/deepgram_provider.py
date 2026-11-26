@@ -182,6 +182,20 @@ _STREAM_FINALIZE_MAX_WAIT_S = 1.25
 _STREAM_CONTROL_SEND_TIMEOUT_S = 1.0
 _STREAM_SERVER_CLOSE_TIMEOUT_S = 2.0
 _STREAM_SOCKET_CLOSE_TIMEOUT_S = 1.0
+_NORMAL_CLOSE_CODES = (1000, 1001)
+_CLOSE_REASON_MAX_CHARS = 100
+
+
+def _close_code(error: Exception) -> int | None:
+    """The close code of a server's close frame as websocket-client reports it.
+
+    The library delivers the frame to `on_error` as an exception whose
+    `status_code` is the WebSocket close code (not an HTTP status).
+    """
+    status = getattr(error, "status_code", None)
+    if isinstance(status, int) and 1000 <= status <= 4999:
+        return status
+    return None
 
 
 def _control_message(message_type: str) -> str:
@@ -293,6 +307,17 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 f"proxy). See {DOC_SSL_PROXY_PATH} for details."
             )
         return f"Deepgram streaming failed: {detail}"
+
+    def _closed_by_service(self, error: Exception, code: int) -> RuntimeError:
+        """The error for a close frame of the server, with its reason if any."""
+        reason = getattr(error, "reason", None)
+        detail = ""
+        if isinstance(reason, str) and reason:
+            # Scrubbed before the cut, so a key never survives half-cut.
+            detail = f": {self._scrub(reason)[:_CLOSE_REASON_MAX_CHARS]}"
+        return RuntimeError(
+            f"the connection was closed by the service (code {code}{detail})"
+        )
 
     def _stream_session_matches_locked(self, generation: int, ws) -> bool:
         return (
@@ -586,11 +611,24 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         def _on_error(callback_ws, error):
             if not isinstance(error, Exception):
                 error = RuntimeError(str(error))
+            close_code = _close_code(error)
+            if close_code is not None:
+                # websocket-client reports every close frame of the server here,
+                # a normal one included, before `on_close`.
+                error = self._closed_by_service(error, close_code)
             with self._stream_lock:
                 if not self._stream_session_matches_locked(
                     generation,
                     callback_ws,
                 ):
+                    return
+                if (
+                    close_code in _NORMAL_CLOSE_CODES
+                    and self._stream_state == "retiring"
+                ):
+                    # The server's normal close after Finalize/CloseStream (or
+                    # after an abort): the session asked for it, so it is
+                    # neither stored nor reported.
                     return
                 if self._stream_error is None:
                     self._stream_error = error

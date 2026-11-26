@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: Deepgram streaming reported the server's normal close as an error
+
+Structurally: `_on_error` now reads the close code of a server's close frame, ignores a normal
+close (1000/1001) once the session is retiring, and words any other close as "the connection was
+closed by the service (code N)".
+
+- websocket-client 1.9.2 calls `on_error` before `on_close` for every close frame of the server,
+  a normal one included (`status_code` is the close code). The gate lets "retiring" through, so
+  the server's normal close after CloseStream was stored as the stream's error and `stop_stream`
+  raised "Connection closed normally (code 1000)" for a dictation without text (3 of 3 against a
+  local server). A close by the server in the middle of a dictation read the same way.
+- A real failure during the stop (connection reset, a close code other than 1000/1001) is still
+  stored: without text it raises, with text the text is returned.
+- The fake socket's server close now delivers the library's order; two tests that called the
+  app's own `close()` as the server's close use `server_close()`.
+- `streaming.md` said Deepgram can return "" after a socket error; it raises without text, and
+  returns "" only for a silent stop. Corrected there.
+
 ## 2026-11-26: review round on the ElevenLabs realtime stop
 
 Structurally: the final wait of a stop is now "answered, no partial pending, 0.3 s of quiet", not
