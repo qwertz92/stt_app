@@ -2276,3 +2276,21 @@ def test_the_new_models_are_classified_for_the_streaming_filter():
         assert supports_streaming("local", model) is False
     for model in ("small", "large-v3", "large-v3-turbo", "distil-large-v3.5"):
         assert supports_streaming("local", model) is True
+
+
+@pytest.mark.parametrize("primary", ["missing", "damaged"])
+def test_a_save_keeps_pending_moves_that_only_the_backup_holds(tmp_path, primary):
+    path = tmp_path / "settings.json"
+    good = AppSettings().to_dict()
+    good["pending_model_moves"] = [
+        {"engine": "local", "from": "tiny", "to": "small", "extra": ""}
+    ]
+    backup_path(path).write_text(json.dumps(good), encoding="utf-8")
+    if primary == "damaged":
+        path.write_text("{nope", encoding="utf-8")
+
+    SettingsStore(path).save(AppSettings())
+
+    assert [
+        move["from"] for move in SettingsStore(path).load().pending_model_moves
+    ] == ["tiny"]

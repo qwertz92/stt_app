@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import math
 from dataclasses import asdict, dataclass, field, replace
@@ -1156,11 +1155,11 @@ class SettingsStore:
         either brought a shown notice back or dropped one not yet shown.
         """
         with self._lock:
-            try:
-                with self._path.open(encoding="utf-8") as handle:
-                    stored = _valid_moves(_stored_moves(json.load(handle)))
-            except (OSError, ValueError, AttributeError):
-                stored = []
+            # The same recovering read `load` uses: with the primary missing or
+            # damaged, the backup still holds the moves, and a save that wrote
+            # `[]` here wrote it into the backup too.
+            payload, _source = load_json_with_backup(self._path, expected_type=dict)
+            stored = _valid_moves(_stored_moves(payload)) if payload else []
             self._write(replace(settings, pending_model_moves=stored), extra)
 
     def _write(
