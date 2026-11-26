@@ -112,22 +112,28 @@ FLUID_SPEECH_PRO_MODEL_SIZE = "fluid-speech-pro"
 PARAKEET_MODEL_SIZES = (PARAKEET_MODEL_SIZE, FLUID_SPEECH_PRO_MODEL_SIZE)
 CANARY_MODEL_SIZE = "canary-1b-v2"
 
-# What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
-# it is 3.6x faster (measured on a Ryzen 5 7600X, CPU only: mean RTF 0.043
-# against 0.154 for `small` on the same 24.3 s recording and the same device,
-# from this machine's own benchmark history; the means of two runs each), needs
-# neither a GPU nor Node.js, detects its language itself across the 25
-# European locales its model card lists, and is a 670 MB download
-# against `small`'s 486 MB. Someone trying the app without opening Settings
-# gets fast, accurate dictation out of the box instead of the slowest sensible
-# Whisper size.
+# IBM Granite Speech 5.0 470M TurboCTC, multilingual revision. Declared here
+# because the default names it; the rest of its wiring is further down.
+GRANITE_CTC_MODEL_SIZE = "granite-5.0-470m-turboctc-multi"
+
+# What a fresh install transcribes with: the multilingual TurboCTC, not
+# Parakeet v3 (the default from 2026-08-27 to 2026-11-26) and not faster-whisper
+# `small`. Measured on 25 German and 25 English FLEURS clips (2026-11-25, about
+# 500 words per language, so differences under 1 point are noise): German 4.27 %
+# and English 4.14 % WER against Parakeet v3's 6.50 % and 4.89 %, real-time
+# factor 0.023 against 0.085, and a 551 MB download against 670 MB. It needs
+# neither a GPU nor Node.js and detects its language itself.
 #
-# The one thing it costs is streaming: Parakeet is batch-only, and `DEFAULT_MODE`
-# is `batch`, so the out-of-the-box combination is consistent -- picking
-# streaming in Settings names the model in the disabled entry's tooltip.
+# What it costs: seven languages (English, French, German, Spanish, Portuguese,
+# Italian, Japanese) where Parakeet v3 covers 25 European ones, so the model
+# note on the Transcription tab and the picker label say so, and a user whose
+# language is not among the seven picks Parakeet there. It is batch-only like
+# Parakeet, and `DEFAULT_MODE` is `batch`, so the out-of-the-box combination is
+# consistent -- picking streaming in Settings names the model in the disabled
+# entry's tooltip.
 # Changing this does not touch an existing install: `SettingsStore.load` only
 # falls back to the default when the key is absent.
-DEFAULT_MODEL_SIZE = PARAKEET_MODEL_SIZE
+DEFAULT_MODEL_SIZE = GRANITE_CTC_MODEL_SIZE
 # What `LocalFasterWhisperTranscriber` loads when its caller names no model.
 # Separate from `DEFAULT_MODEL_SIZE` since that one is no longer a
 # faster-whisper size, and passing it would build a model that cannot load.
@@ -303,11 +309,11 @@ LOCAL_ONNX_ASR_MODEL_SIZES = (
 # English, French, German, Spanish, Portuguese, Italian and Japanese itself
 # (no language input) and writes punctuated, capitalised text.
 #
-# The id is not the English-only model's id (`granite-speech-5.0-470m-turboctc`,
-# now in `RETIRED_LOCAL_MODEL_SUCCESSORS`): a new id is what lets the one-time
-# move, its notice and its download at start serve a user who selected the
-# English model, whose files sit under another repository.
-GRANITE_CTC_MODEL_SIZE = "granite-5.0-470m-turboctc-multi"
+# The id (declared further up, next to `DEFAULT_MODEL_SIZE`) is not the
+# English-only model's, `granite-speech-5.0-470m-turboctc`, now in
+# `RETIRED_LOCAL_MODEL_SUCCESSORS`: a new id is what lets the one-time move, its
+# notice and its download at start serve a user who selected the English model,
+# whose files sit under another repository.
 LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
 
 # The local runtimes that run inside the app's own process on ONNX Runtime.

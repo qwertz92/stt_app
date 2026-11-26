@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import math
+import os
 import queue
 import subprocess
 import sys
@@ -1121,6 +1122,9 @@ def test_the_download_script_default_follows_the_app_default():
         timeout=120,
         check=True,
         cwd=root,
+        # argparse wraps its help at the terminal width, and a wide model id
+        # would be split across two lines at 80 columns.
+        env={**os.environ, "COLUMNS": "300"},
     )
 
     assert f"default: {DEFAULT_MODEL_SIZE}" in result.stdout, result.stdout

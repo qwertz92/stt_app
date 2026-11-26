@@ -57,7 +57,7 @@ That's it! The overlay shows the current state:
 
 ## 4. First-time model download
 
-On the first dictation, the app downloads the default model, `parakeet-tdt-0.6b-v3` (~670 MB). This happens once and may take a couple of minutes depending on your connection. The overlay shows "Loading model..." during download.
+When the app starts for the first time it downloads the default model, `granite-5.0-470m-turboctc-multi` (~552 MB), in the background. This happens once and may take a minute or two depending on your connection. The overlay shows "Loading selected model..." during the download; a recording made before it is done is kept so you can retry it. The default model knows seven languages (English, French, German, Spanish, Portuguese, Italian, Japanese); for others pick `parakeet-tdt-0.6b-v3` (25 European languages) under Settings > Transcription.
 
 After the first download, the model is cached locally and loads in seconds.
 
@@ -71,7 +71,7 @@ Common settings to adjust:
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| **Model size** | Which local model transcribes. `parakeet-tdt-0.6b-v3` is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
+| **Model size** | Which local model transcribes. `granite-5.0-470m-turboctc-multi` is fast and accurate in its seven languages and needs no GPU; `parakeet-tdt-0.6b-v3` covers 25 European languages; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Granite, Parakeet, Canary and Cohere are batch-only | `granite-5.0-470m-turboctc-multi` |
 | **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR`, `Speechmatics`, `Mistral (Voxtral)`, `Meta (Muse Voice)`, `OpenRouter`, `Custom endpoint` | `Local` |
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live; experimental except with local Nemotron) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |

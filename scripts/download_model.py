@@ -35,10 +35,10 @@ the same weights from its own CDN. Set the environment variable
 STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
 
 Some models are not mirrored there and have Hugging Face as their only
-source: the default parakeet-tdt-0.6b-v3, fluid-speech-pro,
-canary-1b-v2, distil-large-v3.5 and
-granite-5.0-470m-turboctc-multi (see
-MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks Hugging Face, clone from a machine that
+source: the default granite-5.0-470m-turboctc-multi, parakeet-tdt-0.6b-v3,
+fluid-speech-pro, canary-1b-v2 and distil-large-v3.5 (see
+MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks Hugging
+Face, clone from a machine that
 can reach it (`git lfs install` first, or the clone yields 130-byte pointer
 files; the repository list is in docs/models.md), copy the folder over, and
 set "Model Dir" in the app to the folder that contains it. --output-dir is an

@@ -3,6 +3,21 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: the multilingual TurboCTC is the default model of new installs
+
+Structurally: `config.DEFAULT_MODEL_SIZE` is `GRANITE_CTC_MODEL_SIZE` (declared next to it now); every
+other place reads that constant, so no second copy had to change.
+
+- Why (owner's wish, lead's decision): German 4.27 % and English 4.14 % WER against Parakeet v3's 6.50
+  and 4.89, real-time factor 0.023 against 0.085, 551 MB against 670 MB (25 + 25 FLEURS clips,
+  2026-11-25, about 500 words per language, so differences under 1 point are noise).
+- The cost is shown where the model is picked: the Transcription tab's model note for the TurboCTC says
+  "seven languages" and names Parakeet v3 (25 European languages) as the way out, the Parakeet note and
+  both picker labels carry the counts.
+- A saved choice is never changed (test: Parakeet and `small` survive a reload). A fresh install
+  downloads exactly the default through the one slot at start, offline it is refused with the readable
+  text, nothing is substituted.
+
 ## 2026-11-26: one Granite TurboCTC model, the multilingual one, under a new id
 
 Structurally: `GRANITE_CTC_MODEL_SIZE` is now `granite-5.0-470m-turboctc-multi`, and the

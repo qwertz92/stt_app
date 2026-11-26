@@ -21,8 +21,8 @@ from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+from stt_app.transcriber.local_granite_ctc import LocalGraniteCtcTranscriber
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
-from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
 
@@ -121,7 +121,7 @@ def test_factory_unknown_engine_falls_back_to_the_default_local_model():
     settings = AppSettings(engine="unknown_provider_xyz")
 
     assert settings.model_size == DEFAULT_MODEL_SIZE
-    assert isinstance(create_transcriber(settings), LocalOnnxAsrTranscriber)
+    assert isinstance(create_transcriber(settings), LocalGraniteCtcTranscriber)
 
 
 def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():

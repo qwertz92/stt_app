@@ -71,18 +71,21 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
 | `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): on the 2026-11-25 test German 3.25 % against v3's 6.50 % and English 3.57 % against 4.89 %, about 3x slower; pinned to one commit, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | German 3.7 % against Parakeet's 6.5 % on the 2026-11-25 test, RTF about 0.15; Fluid Speech Pro measured 3.25 % German (within the test's noise of Canary) and 3.57 % English against Canary's 5.45 %; batch mode only |
-| `granite-5.0-470m-turboctc-multi` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | Fastest local model (RTF 0.023 on CPU) and the smallest that is not a Whisper size; punctuated text, German 4.3 % and English 4.1 % on the 2026-11-25 test, batch mode only |
+| `granite-5.0-470m-turboctc-multi` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | **The default for new installs** (since v0.15.0): RTF 0.023 on CPU against Parakeet v3's 0.085, 551 MB against 670 MB; punctuated text, German 4.27 % and English 4.14 % WER against v3's 6.50 % and 4.89 % on the 2026-11-25 test (25 + 25 FLEURS clips, about 500 words per language, so differences under 1 point are noise). Only seven languages where v3 covers 25. Batch mode only |
 
 ### Which model should I use?
 
 Accuracy and speed no longer point at the same model. For **accuracy** with a GPU
-and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
-needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
-GPU model in the same run on its GPU. The English-only
-`granite-5.0-470m-turboctc-multi` is quicker still (see above) with seven
-languages and punctuation, which is why it is the pick for a CPU-only laptop
-where speed matters, while the default stays Parakeet. Where German or English accuracy matters more than speed,
-`fluid-speech-pro` halves Parakeet's word error rate on the 2026-11-25 test. Between
+and Node.js, start with the GPU/ONNX models. For a CPU-only PC the default,
+`granite-5.0-470m-turboctc-multi`, measured German 4.27 % and English 4.14 % word
+error rate at RTF 0.023 on 25 + 25 FLEURS clips (2026-11-25), against
+`parakeet-tdt-0.6b-v3`'s 6.50 % and 4.89 % at 0.085, with punctuated text; both
+need neither a GPU nor Node.js, and both beat every GPU model of the same run on
+speed. The default's one limit is language coverage: seven languages (English,
+French, German, Spanish, Portuguese, Italian, Japanese) against Parakeet v3's 25
+European ones, so pick Parakeet when your language is not among the seven. Where
+German or English accuracy matters more than speed,
+`fluid-speech-pro` measured 3.25 % and 3.57 % on the same test. Between
 models that both worked, that benchmark cannot tell you which is more
 accurate -- see the
 [report](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md) -- so pick on
@@ -97,11 +100,11 @@ hardware.
 | High accuracy, punctuated text, GPU | `granite-speech-5.0-2b` (GPU) |
 | High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
-| Zero setup: fastest accurate local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
+| 25 European languages, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (CPU) |
 | Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, punctuated text at Whisper quality | `distil-large-v3.5` |
-| Fastest, seven languages, punctuated, no GPU and no Node.js | `granite-5.0-470m-turboctc-multi` (CPU) |
+| Zero setup: accurate, fast, seven languages, punctuated, no GPU and no Node.js | `granite-5.0-470m-turboctc-multi` (default, CPU) |
 | Very limited resources | `small` |
 
 > **Real-time factor (RTF)** measures speed: processing time ÷ audio length.
@@ -345,7 +348,7 @@ runtime wheel.
 
 ## First-time model download
 
-On first use, the app downloads the selected model automatically from HuggingFace Hub. The default `parakeet-tdt-0.6b-v3` (~670 MB) takes a couple of minutes; `small` (~486 MB) takes about a minute. After that, it loads from cache in seconds.
+On first use, the app downloads the selected model automatically from HuggingFace Hub. The default `granite-5.0-470m-turboctc-multi` (~552 MB) takes a minute or two (44 s measured on one connection, 2026-11-26); `small` (~486 MB) takes about a minute. After that, it loads from cache in seconds.
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
@@ -430,7 +433,7 @@ If the app cannot reach HuggingFace Hub (corporate firewall, air-gapped network,
 ### Method 1: Download script (recommended)
 
 ```powershell
-# Download the default model (parakeet-tdt-0.6b-v3):
+# Download the default model (granite-5.0-470m-turboctc-multi):
 uv run python scripts/download_model.py
 
 # Download a specific model:

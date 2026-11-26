@@ -257,10 +257,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - Quote RTF as the mean of a case's runs.
   - `keep_onnx_model_loaded` defaults on (else every dictation pays the Node +
     ONNX load); off means no preload and close after each batch.
-  - `DEFAULT_MODEL_SIZE` is `parakeet-tdt-0.6b-v3` (2026-08-27): RTF 0.043 vs
+  - `DEFAULT_MODEL_SIZE` was `parakeet-tdt-0.6b-v3` (2026-08-27): RTF 0.043 vs
     `small` 0.154 on a 24.3 s German clip (Ryzen 5 7600X CPU), 25 languages,
-    pure Python. Batch-only, matching `DEFAULT_MODE` `batch`. First-run only
-    (`SettingsStore.load` defaults absent keys).
+    pure Python. Since 2026-11-26 it is the multilingual TurboCTC ("Default
+    model of 2026-11-26" below). Batch-only, matching `DEFAULT_MODE` `batch`.
+    First-run only (`SettingsStore.load` defaults absent keys).
     `DEFAULT_FASTER_WHISPER_MODEL_SIZE` (`small`) stays the in-runtime default
     (`LocalFasterWhisperTranscriber`, benchmark CLI).
   - The roster of 2026-11-25 is the next top-level entry below.
@@ -662,10 +663,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     `supports_streaming`); every row has its full text as tooltip (rows elide
     past the 788 px viewport).
   - Sentences name models as the screen does (`local_model_short_label`).
-  - Fastest local model on English (RTF 0.0135 vs `tiny` 0.0245); the
-    default stays Parakeet for languages and pasteable text.
+  - Measured on the English-only revision: RTF 0.0135 vs `tiny` 0.0245.
   `scripts/release_check_frozen_bundle.py --model-dir` prefers this model;
   the real 552 MB transfer and non-English audio are unverified.
+- **Default model of 2026-11-26 (owner's wish, lead's decision): the
+  multilingual TurboCTC, for NEW installs only.** `config.DEFAULT_MODEL_SIZE`
+  was Parakeet v3. 25 + 25 FLEURS clips (2026-11-25, about 500 words per
+  language, so differences under 1 point are noise): de 4.27 / en 4.14 against
+  Parakeet's 6.50 / 4.89, RTF 0.023 against 0.085, 551 MB against 670 MB.
+  The cost, said where the model is picked (the Transcription tab's model
+  note and the two picker labels): seven languages against Parakeet's 25.
+  - Every place that encodes the default reads `DEFAULT_MODEL_SIZE`:
+    `AppSettings.model_size`, `DEFAULT_SETTINGS`, the damage fallback in
+    `AppSettings.from_dict`, `scripts/download_model.py --model`,
+    `scripts/smoke_test.py`, the settings dialog's fallback. A saved choice is
+    never changed: the default applies only to an absent key (a fresh install
+    or a file without `model_size`: every save writes it, so that means a
+    hand-edited file); the damage fallback is unchanged.
+  - First start with the default not on the PC: the start's preload
+    (`_start_local_model_preload`, Keep ONNX loaded on, as it is by default)
+    downloads exactly that model through the one slot
+    (`_download_model_for_preload`) and then loads it, with the overlay's
+    "Loading selected model..." line; offline mode downloads nothing and a
+    dictation is refused with the "not on this PC" text, naming the model and
+    its size. No other model is substituted
+    (`test_a_fresh_install_downloads_the_default_model_and_never_substitutes`).
+    A recording made during the download follows the usual path (kept for
+    Retry).
 - **Local ONNX device (`local_onnx_device`, default `auto`, schema 23)**: the
   "ONNX Device" row (Models tab, "Local runtime" group) feeds
   `LOCAL_WEBGPU_DEVICE_POLICIES` into `LocalOnnxWebGpuTranscriber` with the

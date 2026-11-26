@@ -1133,17 +1133,24 @@ class _GeneralTabMixin:
         elif engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
             style = note_style
             # Not "the fastest local model here": a Whisper size once measured
-            # 0.033 against Parakeet's 0.043 in the same run.
+            # 0.033 against Parakeet's 0.043 in the same run. Only Parakeet
+            # reaches this branch (Canary and Fluid Speech Pro have their own).
             text = (
-                "Batch mode only, CPU. Multilingual, no language selection "
-                "needed; the recommended default."
+                "Batch mode only, CPU. 25 European languages, detected "
+                "automatically; pick it when the default model's seven do not "
+                "include yours."
             )
         elif engine == "local" and model_name in LOCAL_GRANITE_CTC_MODEL_SIZES:
             style = note_style
+            # The default of a fresh install (`config.DEFAULT_MODEL_SIZE`): the
+            # trade-off is said here, where the model is picked. Measured
+            # 2026-11-25: German 4.27 against Parakeet v3's 6.50, English 4.14
+            # against 4.89, about four times faster.
+            # The sentence has two lines in the dialog (a test measures it).
             text = (
-                "Batch mode only, CPU. Detects English, French, German, "
-                "Spanish, Portuguese, Italian or Japanese itself; no "
-                "language selection needed."
+                "Batch mode only, CPU. The default for new installs: seven "
+                "languages (en, fr, de, es, pt, it, ja); Parakeet v3 covers "
+                "25 European ones."
             )
         elif engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             style = note_style
