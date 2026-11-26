@@ -268,8 +268,10 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
         try:
             answer = json_from_reply(payload, prefix="Speechmatics", redact=self._scrub)
         except TranscriptionError as exc:
-            # A proxy's page ends the wait at once: it will not turn into JSON.
-            raise TranscriptionError(f"{exc} Job id {job_id}.") from exc
+            # A failed fetch, not a failure of the job: one proxy page between
+            # good polls must not cost the user a second upload, and three in a
+            # row end the wait with the poll's own sentence, naming this cause.
+            raise ValueError(str(exc).removeprefix("Speechmatics: ")) from exc
         job = answer.get("job") if isinstance(answer, dict) else None
         if not isinstance(job, dict) or not isinstance(job.get("status"), str):
             # Retried by the poll: an answer without a status says nothing.

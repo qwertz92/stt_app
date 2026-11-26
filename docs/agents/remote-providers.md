@@ -246,8 +246,11 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
 - **Speechmatics reads the job-upload and status replies through
   `json_from_reply`** (2026-11-26): a proxy's HTML page there read "Expecting
   value: line 1 column 1 (char 0)". At the upload it names the page; at a
-  status poll it ends the wait at once (a page will not turn into JSON) with
-  the job id.
+  status poll it is a failed fetch that the poll retries (as before the
+  guard: one proxy page between good polls must not cost a second upload and a
+  second charge); three in a row end the wait with the poll's own sentence,
+  which names the cause ("could not fetch the job status (the answer is an HTML
+  page instead of JSON ...). The job may still complete; job id ...").
 - **A certificate failure is recognised by type, then by text** (2026-11-26):
   `ssl_utils.is_ssl_error` walks `__cause__`, `__context__` and a `URLError`'s
   `reason` and answers True for any `ssl.SSLCertVerificationError` before it looks at

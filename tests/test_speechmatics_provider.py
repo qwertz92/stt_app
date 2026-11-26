@@ -345,19 +345,58 @@ class TestSpeechmaticsErrors:
         assert "Expecting value" not in str(caught.value)
         assert str(caught.value).startswith("Speechmatics transcription failed")
 
-    def test_an_html_page_for_a_status_poll_names_the_job(self, service, monkeypatch):
-        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+    @staticmethod
+    def _polls(monkeypatch, polls):
+        """Status polls answer from `polls` (the last one repeats); returns the
+        list of poll requests made."""
+        seen: list = []
+        queue = list(polls)
 
         def answer(request, timeout=None, **_kwargs):
             if request.get_method() == "POST":
                 return json_response({"id": _JOB_ID}, status=201)
-            return fake_response(page)
+            if request.full_url.endswith("/transcript?format=txt"):
+                return fake_response("Hallo Welt.")
+            seen.append(request)
+            body = queue.pop(0) if len(queue) > 1 else queue[0]
+            return fake_response(body)
 
         monkeypatch.setattr(provider_module, "open_request", answer)
-        with pytest.raises(TranscriptionError, match="HTML page") as caught:
+        return seen
+
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            "<!DOCTYPE html><html><head><title>Sign in</title></head></html>",
+            '{"job": {"sta',
+            "",
+        ],
+        ids=["html-page", "truncated-json", "empty-body"],
+    )
+    def test_one_unreadable_status_poll_does_not_cost_the_job(
+        self, service, monkeypatch, bad
+    ):
+        """A company proxy slipping in one sign-in page must not end the wait
+        for a job that finishes anyway (a second upload, a second charge)."""
+        running = json.dumps({"job": {"id": _JOB_ID, "status": "running"}})
+        done = json.dumps({"job": {"id": _JOB_ID, "status": "done"}})
+        self._polls(monkeypatch, [running, bad, running, done])
+        assert _transcriber().transcribe_batch(wav_seconds(1.0)) == "Hallo Welt."
+
+    def test_a_status_page_that_stays_ends_after_three_polls_naming_the_cause(
+        self, service, monkeypatch
+    ):
+        page = "<!DOCTYPE html><html><head><title>Sign in</title></head></html>"
+        seen = self._polls(monkeypatch, [page])
+        with pytest.raises(TranscriptionError) as caught:
             _transcriber().transcribe_batch(wav_seconds(1.0))
-        assert str(caught.value).endswith(f"Job id {_JOB_ID}.")
-        assert "Expecting value" not in str(caught.value)
+        message = str(caught.value)
+        assert len(seen) == 3
+        assert "HTML page" in message
+        assert "may still complete" in message
+        assert f"job id {_JOB_ID}" in message
+        assert "Expecting value" not in message
+        assert "Speechmatics: " not in message.split("(", 1)[1]
 
     def test_a_job_that_never_finishes_is_bounded(self, service):
         service.statuses = ["running"]
