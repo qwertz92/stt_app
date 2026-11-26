@@ -655,10 +655,12 @@ This is why you cannot just drop files into a folder — the download script and
 
 ### Reclaiming disk from retired models
 
-The Models tab lists and deletes only models the app currently offers, so when a
-model is retired its downloaded files stay on disk, untouched, and are no longer
-listed. If you had one selected, the app moved the selection to its successor
-once and said so in a tray message. The retired models and the files they leave:
+When a model is retired its downloaded files stay on disk, untouched. If you had
+one selected, the app moved the selection to its successor once and said so in a
+tray message. **Settings > Models lists every retired model whose files are still
+there** as a grey row marked "No longer offered, still on disk"; select it and
+press Delete Selected to free the space (the row offers nothing else, and Download
+never touches it). The retired models and the files they leave:
 
 | Retired | Moved to | Folder or cache entry | Size |
 | --- | --- | --- | --- |
@@ -673,9 +675,8 @@ once and said so in a tray message. The retired models and the files they leave:
 The sizes of the 2026-11-25 rows are the app's own download estimates, not a
 measurement of any disk. They sit in the **Model Dir** you set, or under
 `%USERPROFILE%\.cache\huggingface\hub` (the ONNX models as a plain folder
-named like the repository, the Whisper models as `models--...` entries). Delete
-a folder by hand only if you are not keeping it for your own experiments; the
-app never uses it again.
+named like the repository, the Whisper models as `models--...` entries). Keep a
+folder only for your own experiments; the app never uses it again.
 
 Granite 4.1 **Plus** and **NAR** were retired on 2026-08-26. Measured on the
 development machine:

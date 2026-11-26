@@ -23,6 +23,7 @@ from stt_app.config import (
     LOCAL_BATCH_ONLY_MODELS,
     NEMOTRON_MODEL_SIZE,
     OPENAI_MODELS,
+    VALID_MODEL_SIZES,
     supports_streaming,
 )
 from stt_app.last_recording_store import LastRecordingStore
@@ -1804,6 +1805,100 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
 
     assert calls["delete"] == 1
     assert "Deleted small" in dialog.local_models_action_label.text()
+    _ = app
+
+
+def _models_tab_with_a_retired_model_on_disk(monkeypatch, deleted=None):
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": ["small", "granite-speech-4.1-2b"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.delete_cached_model",
+        lambda name, _model_dir="": (
+            (deleted.append(name) if deleted is not None else 0) or 1
+        ),
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    _wait_for_local_models(dialog, "small", "granite-speech-4.1-2b", cached=True)
+    return dialog
+
+
+def test_a_retired_model_on_disk_is_a_row_marked_no_longer_offered(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _models_tab_with_a_retired_model_on_disk(monkeypatch)
+
+    rows = {
+        str(dialog.local_models_list.item(i).data(QtCore.Qt.UserRole)): (
+            dialog.local_models_list.item(i).text()
+        )
+        for i in range(dialog.local_models_list.count())
+    }
+    assert "No longer offered" in rows["granite-speech-4.1-2b"]
+    assert "IBM Granite Speech 4.1 2B" in rows["granite-speech-4.1-2b"]
+    assert "removed" not in rows["granite-speech-4.1-2b"]
+    # Listed after the offered models, which keep their own state.
+    assert list(rows)[-1] == "granite-speech-4.1-2b"
+    assert "Downloaded" in rows["small"]
+    # It is not counted as one of the offered models, and no picker offers it.
+    assert "Downloaded (1 of" in dialog.local_models_label.text()
+    assert dialog.model_combo.findData("granite-speech-4.1-2b") == -1
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_retired_model_row_can_only_be_deleted(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    deleted: list[str] = []
+    dialog = _models_tab_with_a_retired_model_on_disk(monkeypatch, deleted)
+
+    _select_local_model_names(dialog, "granite-speech-4.1-2b")
+    dialog._update_local_model_actions()
+
+    assert dialog.delete_selected_model_button.isEnabled()
+    assert not dialog.download_selected_models_button.isEnabled()
+    # Never downloaded, whatever is asked for.
+    assert dialog._missing_downloadable_models(["granite-speech-4.1-2b"]) == []
+    assert "granite-speech-4.1-2b" not in dialog._missing_downloadable_models()
+
+    dialog._delete_selected_cached_model()
+
+    assert deleted == ["granite-speech-4.1-2b"]
+    dialog.deleteLater()
+    _ = app
+
+
+def test_download_all_missing_never_counts_a_retired_model(monkeypatch):
+    """With every offered model on disk the button has nothing to do, although a
+    retired model sits in the list."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": [*VALID_MODEL_SIZES, "tiny"],
+    )
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    _wait_for_local_models(dialog, "tiny", cached=True)
+
+    assert not dialog.download_all_missing_models_button.isEnabled()
+    assert dialog._missing_downloadable_models() == []
+    dialog.deleteLater()
     _ = app
 
 

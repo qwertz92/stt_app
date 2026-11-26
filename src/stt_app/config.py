@@ -480,7 +480,8 @@ VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_ONNX_MODEL_SIZES
 # selection of it moves to (once, with a tray notice: `SettingsStore.load`).
 # The successor is in the same family and runtime where one exists, so a
 # streaming selection stays a streaming one. Their files on disk are never
-# touched; the Models tab no longer lists them (docs/agents/local-models-and-downloads.md).
+# touched; the Models tab lists the ones still on disk as "no longer offered"
+# with Delete as their only action (docs/agents/local-models-and-downloads.md).
 RETIRED_LOCAL_MODEL_SUCCESSORS: dict[str, str] = {
     "granite-4.0-1b-speech": "granite-speech-5.0-2b",
     "granite-speech-4.1-2b": "granite-speech-5.0-2b",
@@ -488,6 +489,18 @@ RETIRED_LOCAL_MODEL_SUCCESSORS: dict[str, str] = {
     "tiny": "small",
     "base": "small",
     "medium": "large-v3-turbo",
+}
+
+# The repository each retired model's files came from. Only what lets the
+# Models tab find and delete the folder (`_model_cache_dirs` names it exactly,
+# so a neighbouring folder is never touched); nothing downloads from these.
+RETIRED_LOCAL_MODEL_REPOS: dict[str, str] = {
+    "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+    "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
+    "parakeet-tdt-0.6b-v3-ultra": "Olicorne/parakeet-tdt-0.6b-v3-ultra-onnx",
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "medium": "Systran/faster-whisper-medium",
 }
 
 # Short model name → HuggingFace repo ID.

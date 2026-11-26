@@ -41,9 +41,12 @@ Rules and per-model decisions: `docs/agents/local-models-and-downloads.md`
 - **Lesson: Parakeet v3 in Auto mode drifts to English.** About 3 of 25 German
   clips came back partly or wholly English, which is most of its 6.5 % German
   WER; the other models did not.
-- **Lesson: a retired model's files become invisible.** The Models tab lists
-  offered models only, so the files of the six removed models stay on disk and
-  cannot be deleted from the app; `docs/models.md` lists folders and sizes.
+- **Lesson: a retired model's files become invisible.** The Models tab listed
+  offered models only, so the files of the six removed models stayed on disk
+  and could not be deleted from the app. Fixed the same day: the tab now lists
+  each retired model whose folder still exists as a grey "No longer offered"
+  row with Delete as its only action (`config.RETIRED_LOCAL_MODEL_REPOS`,
+  `find_retired_models_on_disk`).
 
 ## 2026-11-25: review corrections to the retention and no-signal work
 

@@ -294,9 +294,18 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     keeps the rolling-window streaming usable on a CPU-only laptop, RTF about
     0.19 against 0.55 to 0.6 for the large ones), `large-v3`,
     `large-v3-turbo`, `distil-large-v3.5`.
-  - Files of a removed model stay on disk, untouched; the Models tab lists
-    only offered models, so they no longer appear and cannot be deleted from
-    the app (`docs/models.md` names the folders and sizes).
+  - Files of a removed model are never touched by the app. The Models tab
+    lists each removed model whose folder still exists as a grey row "No
+    longer offered, still on disk", after the offered models, with Delete as
+    its only action: the scan (`local_model_scan_worker.scan_cached_models`)
+    appends `find_retired_models_on_disk` to the runnable models, the dialog
+    splits the two (`_apply_local_model_scan_result`) so a retired model is
+    never "downloaded" for the label's count, a picker or a benchmark list,
+    and the row reads as downloaded to the action logic, so Download and
+    Download All Missing never queue it. The folders are named exactly by
+    `config.RETIRED_LOCAL_MODEL_REPOS` (`_model_cache_dirs`), so a delete
+    takes that model's folder and not a neighbour (`granite-speech-5.0-2b-ONNX`,
+    `faster-whisper-medium.en`). Add a model to that map when it is retired.
 - **Nemotron 3.5 true streaming**: `nemotron-3.5-asr-streaming-0.6b-int4`
   (793 MB ORT GenAI export, `transcriber/local_nemotron.py`) reuses the
   encoder cache and emits RNNT tokens per fixed 560 ms chunk. The CPU ORT

@@ -298,8 +298,9 @@ Short forms of rules that recur across areas; the area files hold the detail.
   `config.RETIRED_LOCAL_MODEL_SUCCESSORS`, a saved choice moves once to its
   successor (`AppSettings.from_dict`) with the shared "Speech model updated"
   notice (`retired_model_moves`, cleared once shown), and the retired
-  model's files stay on disk, unlisted (`docs/models.md`, "Reclaiming disk
-  from retired models").
+  model's files are never deleted by the app; the Models tab lists them as
+  "No longer offered" rows with Delete only (`config.RETIRED_LOCAL_MODEL_REPOS`,
+  `docs/models.md`, "Reclaiming disk from retired models").
 - **Custom endpoint** (`custom`): base URL, free-text model, API style
   (`transcriptions` or `chat`) and an optional key command that prints a
   short-lived Bearer token; the `custom` key is the static fallback.

@@ -17,6 +17,7 @@ from .config import (
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_WEBGPU_DEVICE_POLICIES,
     MODEL_ESTIMATED_SIZE_MB,
+    RETIRED_LOCAL_MODEL_REPOS,
     VALID_MODEL_SIZES,
     supports_streaming,
 )
@@ -774,6 +775,27 @@ class _LocalModelsMixin:
                     item.setSelected(True)
                 if model_name == current_model:
                     restored_current_item = item
+            # Retired models still on disk come last: never downloaded, never
+            # picked anywhere else, Delete is their only action. They read as
+            # "downloaded" to the action logic (so Download never queues
+            # them), which is exactly what a folder on disk is.
+            for model_name in self._retired_models_on_disk:
+                row_text = (
+                    f"{local_model_short_label(model_name)} - No longer offered, "
+                    "still on disk (Delete frees the space)"
+                )
+                item = QtWidgets.QListWidgetItem(row_text)
+                item.setToolTip(row_text)
+                item.setData(QtCore.Qt.UserRole, model_name)
+                item.setData(QtCore.Qt.UserRole + 1, True)
+                self._apply_compact_list_item_size(self.local_models_list, item)
+                item.setBackground(QtGui.QColor("#eeeeee"))
+                item.setForeground(QtGui.QColor("#616161"))
+                self.local_models_list.addItem(item)
+                if model_name in selected:
+                    item.setSelected(True)
+                if model_name == current_model:
+                    restored_current_item = item
         finally:
             self.local_models_list.blockSignals(False)
             self.local_models_list.setUpdatesEnabled(True)
@@ -819,7 +841,11 @@ class _LocalModelsMixin:
             self._cached_local_models_available
             and current_dir == self._cached_local_models_dir
         ):
-            return list(self._cached_local_models)
+            return [
+                name
+                for name in self._cached_local_models
+                if name not in RETIRED_LOCAL_MODEL_REPOS
+            ]
         return []
 
     def _set_local_model_scan_status(self, text: str, color: str = "#555") -> None:
@@ -869,8 +895,16 @@ class _LocalModelsMixin:
                     "Checking local model availability in the background."
                 )
 
-    def _apply_local_model_scan_result(self, cached: list[str]) -> None:
+    def _apply_local_model_scan_result(self, scanned: list[str]) -> None:
         started_at = time.perf_counter()
+        # The scan lists the models that can run and, after them, the retired
+        # ones whose folder is still on disk. Only the first kind is
+        # "downloaded" anywhere (the label's count, the pickers, a missing
+        # model); the second only gets rows that can be deleted.
+        cached = [name for name in scanned if name not in RETIRED_LOCAL_MODEL_REPOS]
+        self._retired_models_on_disk = [
+            name for name in scanned if name in RETIRED_LOCAL_MODEL_REPOS
+        ]
         with self._local_model_download_lock:
             self._local_model_download_completed_names.difference_update(cached)
         self._refresh_local_models_label(cached)
