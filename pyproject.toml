@@ -14,7 +14,7 @@ dependencies = [
     # TypeError: every local faster-whisper transcription of a file failed
     # (measured 2026-10-03). Stay on the last 18.x until faster-whisper moves.
     "av==18.1.1",
-    "onnxruntime-genai==0.17.1; platform_system == 'Windows'",
+    "onnxruntime-genai==0.20.0; platform_system == 'Windows'",
     # Pure-Python NeMo runtime (Parakeet, Fluid Speech Pro). Resolves the same
     # onnxruntime distribution onnxruntime-genai already requires; do NOT
     # add onnxruntime-directml, which overwrites it and breaks genai.

@@ -495,9 +495,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     with an empty cache (151 MB downloaded) 17.8 s; failure with an
     unreachable registry 72.7 s, old tree kept and importing; a live node
     child without a presence deferred it in 0.83 s with no npm run.
-- **Python dependencies are exact pins, updated 2026-10-03 and measured
-  through their code** (locked: onnxruntime 1.30.0, onnxruntime-genai 0.17.1,
-  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.8.2, av 18.1.1; direct
+- **Python dependencies are exact pins, updated 2026-11-26 and measured
+  through their code** (locked: onnxruntime 1.32.0, onnxruntime-genai 0.20.0,
+  huggingface-hub 1.33.0, hf-xet 1.6.0, ctranslate2 4.9.1, av 18.1.1; direct
   pins are in `pyproject.toml`).
   `uv lock --upgrade` moves only transitive packages; `uv tree --outdated
   --depth 1` shows stale direct pins; `requirements-win.txt` /
@@ -525,9 +525,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
     1.32.0 download claims below (no partial resume, process-unique temp
     files) were re-checked on 1.33.0: its diff touches no resume or temp-file
     path, and the download/progress suites pass.
-  - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
-    Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
-    streaming, at equal or better speed (2026-10-03, CPU).
+  - **The three native runtimes moved together on 2026-11-26** (onnxruntime
+    1.30.0 to 1.32.0, onnxruntime-genai 0.17.1 to 0.20.0, ctranslate2 4.8.2
+    to 4.9.1; released v0.15.0 still ships the old three). Measured through
+    the app's transcribers on the CPU, old and new environment interleaved
+    (new, old, old, new), 5 German and 5 English FLEURS clips, 146.0 audio
+    seconds: every transcript byte-identical, so the word error rates are
+    unchanged. Real-time factor old against new (processing seconds per
+    audio second): Parakeet v3 0.0513 against 0.0377 (26 % faster, both new
+    runs below both old ones), Granite TurboCTC 0.0140 against 0.0147 and
+    Fluid Speech Pro 0.1480 against 0.1532 (5 and 3.5 % slower on a PC in
+    use, inside the run spread), Whisper small 0.1433 against 0.1440 and
+    large-v3-turbo 0.4087 against 0.4096 (quiet PC, +0.5 and +0.2 %),
+    Nemotron batch 0.2516 against 0.2606 (+3.6 %, the old pair alone spread
+    9.3 %). Nemotron streaming at real-time pace on 11 clips: final text,
+    simulated document and every partial identical in 11 of 11. Nemotron
+    ran on the CPU in both: the PyPI wheel has no DirectML build ("the
+    installed GenAI has not been built with DML support"), old and new
+    alike. Not measured: the GPU path of genai (another distribution).
 - **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro; Canary 1B v2 until 2026-11-26)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
