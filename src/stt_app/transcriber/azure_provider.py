@@ -40,6 +40,8 @@ from ._audio_parts import transcribe_in_parts, wav_seconds
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
+    json_from_reply,
+    missing_field_error,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -273,7 +275,15 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             ) as resp:
                 payload = resp.read()
 
-            body = json.loads(payload.decode("utf-8", errors="replace"))
+            prefix = "Azure transcription failed"
+            body = json_from_reply(payload, prefix=prefix)
+            if not isinstance(body, dict) or not (
+                isinstance(body.get("combinedPhrases"), list)
+                or isinstance(body.get("text"), str)
+            ):
+                # `{"combinedPhrases": []}` is silence; an answer with neither
+                # member is not an answer to this request.
+                raise missing_field_error(body, prefix=prefix, field="combinedPhrases")
             return self._extract_transcript(body)
         except FileNotFoundError as exc:
             raise TranscriptionError(

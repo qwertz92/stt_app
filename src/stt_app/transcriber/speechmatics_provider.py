@@ -37,6 +37,8 @@ from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
     http_error_suffix,
+    is_markup_page,
+    missing_field_error,
     multipart_form_data,
     normalize_transcript_text,
     open_request,
@@ -257,7 +259,7 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
             with self._request(
                 f"{self._base_url}/jobs/{job_id}/transcript?format=txt"
             ) as resp:
-                return resp.read().decode("utf-8", errors="replace")
+                payload = resp.read()
         except urllib.error.HTTPError as exc:
             if exc.code in _FINAL_HTTP_CODES:
                 raise TranscriptionError(
@@ -266,6 +268,25 @@ class SpeechmaticsTranscriber(ProgressReporter, ITranscriber):
                     f"{job_id}."
                 ) from exc
             raise
+        # `format=txt` answers plain text. A proxy's page or a gateway's JSON
+        # at status 200 was returned as the transcript and pasted.
+        text = payload.decode("utf-8", errors="replace")
+        if is_markup_page(payload):
+            raise TranscriptionError(
+                "Speechmatics: the transcript answer is an HTML page instead of "
+                "text -- typically a proxy's sign-in or block page. "
+                f"Job id {job_id}."
+            )
+        if text.lstrip().startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except ValueError:
+                return text
+            error = missing_field_error(
+                parsed, prefix="Speechmatics", field="transcript"
+            )
+            raise TranscriptionError(f"{error} Job id {job_id}.")
+        return text
 
     @staticmethod
     def _job_failure(job: dict[str, Any], job_id: str) -> str:

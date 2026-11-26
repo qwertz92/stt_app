@@ -189,6 +189,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   `_job_poll` (opens nothing itself; its callers use `open_request`).
   Tests: `tests/test_provider_redirects.py` (every REST engine x the five
   codes, upload and key check, and the unsafe keys).
+- **A 200 answer that is not a transcript is an error in every REST engine**
+  (2026-11-26; review of the last-round providers). The reader is shared:
+  `_http_utils.json_from_reply` (an HTML page or a non-JSON body gets a
+  sentence starting with the engine's prefix, never the parser's "Expecting
+  value") and `missing_field_error` (quotes a gateway's `error` member, else
+  names the answer's keys); `transcript_from_json` is both. Measured with one
+  parametrized test (`tests/test_rest_reply_guard.py`, a proxy's HTML page and
+  JSON without a transcript through each engine's real batch path): **open**
+  were OpenAI and ElevenLabs (the page's markup was *returned as the
+  transcript*, so it would have been pasted), Deepgram and Azure (HTML ended
+  as "Expecting value: line 1 column 1", JSON without the transcript member
+  as silence, `""`), and Speechmatics (`format=txt` is plain text, so the page
+  or a JSON object at 200 was the transcript). **Already safe**: Mistral, Meta,
+  the custom endpoint in both API styles, OpenRouter. What counts as silence
+  stays: `"text": ""`, Azure's `{"combinedPhrases": []}` and Deepgram's empty
+  `channels` or `alternatives`; an answer without Deepgram's `results`, or
+  without Azure's `combinedPhrases` and `text`, is not silence. Speechmatics
+  names the job in these errors too, since the job already runs.
 - **ElevenLabs**: `scribe_v3` only (2026-11-24: released 2026-11-10, $0.20/h
   like v2, 27% fewer word errors on FLEURS by ElevenLabs' own figure; the
   models page says "Change model_id from scribe_v2 to scribe_v3. Existing

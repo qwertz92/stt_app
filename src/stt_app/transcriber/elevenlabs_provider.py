@@ -9,7 +9,6 @@ Supported batch model: scribe_v3.
 
 from __future__ import annotations
 
-import json
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,6 +29,7 @@ from ._http_utils import (
     normalize_transcript_text,
     open_request,
     read_http_error_detail,
+    transcript_from_json,
 )
 from .base import (
     AudioInput,
@@ -253,15 +253,9 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
             ) as resp:
                 payload = resp.read()
 
-            try:
-                parsed = json.loads(payload.decode("utf-8", errors="replace"))
-            except Exception:
-                return self._normalize_text(payload.decode("utf-8", errors="replace"))
-
-            if isinstance(parsed, dict):
-                text = parsed.get("text", "")
-                return self._normalize_text(str(text))
-            return self._normalize_text(str(parsed))
+            return transcript_from_json(
+                payload, prefix="ElevenLabs transcription failed"
+            )
         except FileNotFoundError as exc:
             raise TranscriptionError(
                 "ElevenLabs transcription failed: missing file path. "

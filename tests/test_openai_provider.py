@@ -99,19 +99,19 @@ class TestOpenAIBatchTranscription:
 
     @patch("stt_app.transcriber.openai_provider.open_request")
     def test_transcribe_json_response(self, mock_urlopen):
-        mock_urlopen.return_value = _fake_response({"text": "hello world"}.__str__())
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "hello world"}))
         t = OpenAITranscriber(api_key="key")
 
-        # __str__ on dict isn't JSON; provider should still return something non-empty
-        result = t.transcribe_batch(b"RIFF fake")
-        assert isinstance(result, str)
+        assert t.transcribe_batch(b"RIFF fake") == "hello world"
 
     @patch("stt_app.transcriber.openai_provider.open_request")
-    def test_transcribe_plain_text_fallback(self, mock_urlopen):
-        mock_urlopen.return_value = _fake_response("plain transcript")
+    def test_a_plain_text_body_is_not_a_transcript(self, mock_urlopen):
+        # `response_format=json` is sent: a body that is not JSON is a
+        # proxy's or gateway's, not the vendor's answer.
+        mock_urlopen.return_value = _fake_response("Internal Server Error")
         t = OpenAITranscriber(api_key="key")
-        result = t.transcribe_batch(b"RIFF fake")
-        assert result == "plain transcript"
+        with pytest.raises(TranscriptionError, match=r"OpenAI.*not JSON"):
+            t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.openai_provider.open_request")
     def test_transcribe_json_payload(self, mock_urlopen):

@@ -188,6 +188,53 @@ def markup_page_description(payload: bytes, redact: Redactor = _unredacted) -> s
     return f"an HTML page {_MARKUP_ERROR_HINT}"
 
 
+def json_from_reply(
+    payload: bytes, *, prefix: str, redact: Redactor = _unredacted
+) -> object:
+    """The parsed JSON of an answer that must be JSON, or an error naming what came.
+
+    An HTML page (a proxy's sign-in or block page, status 200) and a body that
+    is not JSON (a plain "Internal Server Error") each get a sentence that
+    starts with ``prefix``, never the parser's "Expecting value: line 1".
+    """
+    if is_markup_page(payload):
+        raise TranscriptionError(
+            f"{prefix}: the answer is an HTML page instead of JSON -- "
+            "typically a proxy's sign-in or block page."
+        )
+    try:
+        return json.loads(payload.decode("utf-8-sig", errors="replace"))
+    except ValueError as exc:
+        excerpt = body_excerpt(payload, redact)
+        raise TranscriptionError(
+            f"{prefix}: the answer is not JSON"
+            + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
+        ) from exc
+
+
+def missing_field_error(
+    parsed: object, *, prefix: str, field: str, redact: Redactor = _unredacted
+) -> TranscriptionError:
+    """The error for a JSON answer that holds no transcript.
+
+    An ``error`` member the gateway put into its 200 answer is quoted (it is
+    what the user can act on); otherwise the answer's own keys are named.
+    """
+    error_text = reply_error_text(parsed, redact)
+    if error_text:
+        return TranscriptionError(
+            f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
+        )
+    keys = (
+        ", ".join(sorted(str(key) for key in parsed)[:8])
+        if isinstance(parsed, dict)
+        else type(parsed).__name__
+    )
+    return TranscriptionError(
+        f"{prefix}: the answer has no '{field}' field (it holds: {keys or 'nothing'})."
+    )
+
+
 def transcript_from_json(
     payload: bytes,
     *,
@@ -209,37 +256,12 @@ def transcript_from_json(
     transcription failed"); ``accept_bare_string`` takes a top-level JSON
     string as the transcript.
     """
-    if is_markup_page(payload):
-        raise TranscriptionError(
-            f"{prefix}: the answer is an HTML page instead of JSON -- "
-            "typically a proxy's sign-in or block page."
-        )
-    try:
-        parsed = json.loads(payload.decode("utf-8-sig", errors="replace"))
-    except ValueError as exc:
-        excerpt = body_excerpt(payload, redact)
-        raise TranscriptionError(
-            f"{prefix}: the answer is not JSON"
-            + (f" (it begins: {excerpt})." if excerpt else " (it is empty).")
-        ) from exc
+    parsed = json_from_reply(payload, prefix=prefix, redact=redact)
     if accept_bare_string and isinstance(parsed, str):
         return normalize_transcript_text(parsed)
     value = parsed.get(field) if isinstance(parsed, dict) else None
     if not isinstance(value, str):
-        error_text = reply_error_text(parsed, redact)
-        if error_text:
-            raise TranscriptionError(
-                f"{prefix}: the server answered HTTP 200 with an error: {error_text}"
-            )
-        keys = (
-            ", ".join(sorted(str(key) for key in parsed)[:8])
-            if isinstance(parsed, dict)
-            else type(parsed).__name__
-        )
-        raise TranscriptionError(
-            f"{prefix}: the answer has no '{field}' field "
-            f"(it holds: {keys or 'nothing'})."
-        )
+        raise missing_field_error(parsed, prefix=prefix, field=field, redact=redact)
     return normalize_transcript_text(value)
 
 

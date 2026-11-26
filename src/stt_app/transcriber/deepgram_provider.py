@@ -37,7 +37,13 @@ from ..config import (
     parse_custom_vocabulary,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import audio_content_type, http_error_suffix, open_request
+from ._http_utils import (
+    audio_content_type,
+    http_error_suffix,
+    json_from_reply,
+    missing_field_error,
+    open_request,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -360,7 +366,14 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 "Uploading audio to Deepgram and waiting for transcription..."
             )
             with open_request(req, timeout=120, provider_name="Deepgram") as resp:
-                body = json.loads(resp.read().decode("utf-8"))
+                payload = resp.read()
+
+            prefix = "Deepgram transcription failed"
+            body = json_from_reply(payload, prefix=prefix)
+            if not isinstance(body, dict) or not isinstance(body.get("results"), dict):
+                # An answer without `results` is not "nothing said": a
+                # proxy's or gateway's JSON was read as silence.
+                raise missing_field_error(body, prefix=prefix, field="results")
 
             # Extract transcript from response.
             # Response structure: results.channels[0].alternatives[0].transcript

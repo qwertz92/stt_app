@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import urllib.error
 import urllib.parse
@@ -29,6 +28,7 @@ from ._http_utils import (
     multipart_form_data,
     normalize_transcript_text,
     open_request,
+    transcript_from_json,
 )
 from .base import (
     AudioInput,
@@ -188,15 +188,9 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             ) as resp:
                 payload = resp.read()
 
-            try:
-                parsed = json.loads(payload.decode("utf-8", errors="replace"))
-            except Exception:
-                return self._normalize_text(payload.decode("utf-8", errors="replace"))
-
-            if isinstance(parsed, dict):
-                text = parsed.get("text", "")
-                return self._normalize_text(str(text))
-            return self._normalize_text(str(parsed))
+            # `response_format=json` is sent, so anything else is not a
+            # transcript: a proxy's page answering 200 was pasted as one.
+            return transcript_from_json(payload, prefix="OpenAI transcription failed")
         except urllib.error.HTTPError as exc:
             if exc.code == 401:
                 raise TranscriptionError(
