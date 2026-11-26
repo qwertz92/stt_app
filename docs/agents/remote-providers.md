@@ -505,7 +505,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     that is not 16-bit PCM is still refused at the start, with the sentence
     above. Every place that gives Start back goes through
     `_refresh_import_start_button` (a finished import and a credential
-    failure used `bool(path)` and re-enabled it for Meta plus an mp3).
+    failure used `bool(path)` and re-enabled it for Meta plus an mp3). A
+    finished import redraws the selected-file line too, so a file that
+    vanished meanwhile shows "Selected file does not exist" beside the
+    disabled Start.
   - **The connection test has the 15 s bound** of the other key checks
     (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
     keeps the transcription timeout (up to 300 s).

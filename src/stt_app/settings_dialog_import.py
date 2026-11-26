@@ -554,7 +554,10 @@ class _ImportTabMixin:
         self._import_progress_started_at = None
         self.import_file_button.setEnabled(True)
         self.import_last_recording_button.setEnabled(True)
-        self._refresh_import_start_button()
+        # Redraws the selected-file line, the engine note and Start together: a
+        # file that vanished during the import turns Start off, and the line
+        # beside it then says why ("Selected file does not exist").
+        self._set_selected_import_file(self._selected_import_file_path)
         self.import_engine_combo.setEnabled(True)
         self.import_model_combo.setEnabled(True)
         self.import_language_combo.setEnabled(self.import_language_combo.count() > 1)

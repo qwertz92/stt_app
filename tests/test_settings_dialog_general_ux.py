@@ -2269,6 +2269,23 @@ def test_meta_start_stays_off_for_a_non_wav_file_after_an_import_ends(
     assert dialog.import_start_button.isEnabled()
 
 
+def test_a_file_that_vanished_during_an_import_says_why_start_is_off(
+    dialog: SettingsDialog, tmp_path
+) -> None:
+    wav = tmp_path / "talk.wav"
+    wav.write_bytes(b"RIFF")
+    dialog._set_selected_import_file(str(wav))
+    assert dialog.import_start_button.isEnabled()
+
+    wav.unlink()
+    dialog._finish_import_transcription(True, "text")
+
+    assert not dialog.import_start_button.isEnabled()
+    assert dialog.import_selected_file_label.text() == (
+        f"Selected file does not exist: {wav}"
+    )
+
+
 def test_the_openrouter_note_says_where_the_audio_goes(
     dialog: SettingsDialog,
 ) -> None:
