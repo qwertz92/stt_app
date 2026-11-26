@@ -222,6 +222,14 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   handshake the server aborted, a protocol mismatch) now gets the proxy
   guidance too, which is the right first suggestion behind a TLS-intercepting
   proxy and a harmless one otherwise.
+- **A Meta key check that cannot reach Meta says that, not "transcription
+  failed"** (2026-11-26): the check is a one-second upload, and a timeout or a
+  refused connection surfaced as "Meta (Muse Voice) transcription failed:
+  <urlopen error timed out>" although nothing was transcribed. A cause that is
+  an `OSError` other than an HTTP error or a certificate failure now gives
+  "The connection test could not reach Meta (Muse Voice) within 15 seconds.";
+  the raw text goes to the log (`meta_connection_test_unreachable`, key
+  scrubbed). A certificate failure keeps the SSL guidance.
 - **Meta refuses a WAVE_FORMAT_EXTENSIBLE float file with the same sentence as
   plain float** (2026-11-26): Python's `wave` reports it as "unknown extended
   format: <GUID>" (3.12), which `_wav_for_meta` did not match, so the user read

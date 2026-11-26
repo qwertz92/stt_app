@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import urllib.error
 import urllib.request
 import wave
@@ -50,6 +51,8 @@ from .base import (
     TranscriptionError,
 )
 from .local_onnx_asr import _read_wav_float32
+
+logger = logging.getLogger(__name__)
 
 META_API_BASE = "https://api.meta.ai/v1"
 _TRANSCRIBE_URL = f"{META_API_BASE}/asr/transcribe"
@@ -242,6 +245,23 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
                 silence, _UPLOAD_PROGRESS, timeout_s=_KEY_CHECK_TIMEOUT_S
             )
         except TranscriptionError as exc:
+            cause = exc.__cause__
+            if (
+                isinstance(cause, OSError)
+                and not isinstance(cause, urllib.error.HTTPError)
+                and not _is_ssl_error(cause)
+            ):
+                # A timeout or a refused connection: nothing was transcribed,
+                # and urllib's text ("<urlopen error timed out>") says
+                # nothing the user can act on. It goes to the log.
+                logger.info(
+                    "meta_connection_test_unreachable error=%s",
+                    self._scrub(f"{type(cause).__name__}: {cause}"),
+                )
+                return False, (
+                    f"The connection test could not reach {_PROVIDER_NAME} "
+                    f"within {_KEY_CHECK_TIMEOUT_S} seconds."
+                )
             return False, str(exc)
         return True, "Connection OK — API key is valid."
 

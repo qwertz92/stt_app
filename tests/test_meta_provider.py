@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import struct
+import urllib.error
 import wave
 
 import numpy as np
@@ -389,6 +390,28 @@ def test_the_connection_test_has_the_short_bound_of_a_key_check(recorder, monkey
     ok, message = MetaTranscriber("k", request_timeout_s=300).test_connection()
     assert ok, message
     assert seen["timeout"] == 15
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        urllib.error.URLError(TimeoutError("timed out")),
+        TimeoutError("timed out"),
+        urllib.error.URLError(ConnectionRefusedError(10061, "refused")),
+    ],
+    ids=["urlopen-timeout", "read-timeout", "refused"],
+)
+def test_a_connection_test_that_cannot_reach_meta_says_so(recorder, failure):
+    """Nothing was transcribed, so not "transcription failed: <urlopen error
+    ...>"; urllib's text goes to the log, not into the message."""
+    recorder.answer = failure
+    ok, message = MetaTranscriber("k").test_connection()
+    assert not ok
+    assert message == (
+        "The connection test could not reach Meta (Muse Voice) within 15 seconds."
+    )
+    assert "urlopen" not in message
+    assert "transcription failed" not in message
 
 
 def test_the_connection_test_reports_an_invalid_key(recorder):
