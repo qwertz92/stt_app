@@ -345,9 +345,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   **Soniox (2026-11-26) forced the move of the region pickers into the
   provider rows.** With a twelfth row and its picker as a sub-row the page
   would have been about 29 px taller. Measured on the real platform plugin,
-  9 pt, 860 x 1010 dialog, viewport 879 px (`measure.py`, kept in the
-  session scratchpad): Soniox row with its picker inline and the other three
-  pickers still sub-rows, content 907 px, scroll range 28 px, scroll bar
+  9 pt, 860 x 1010 dialog, viewport 879 px (a script after the session's
+  `measure.py` of the lead, not kept): before Soniox, content 879 px, minimum
+  hint 877 px, no scroll (cloud group 513 px); Soniox row with its picker
+  inline and the other three pickers still sub-rows, content 907 px, scroll range 28 px, scroll bar
   visible (cloud group 543 px); **every picker inline: content 879 px, no
   scroll bar, minimum hint 817 px, 62 px spare** (cloud group 453 px, 90 px
   less). The default stays 1010 px: the 62 px spare would allow about 950
