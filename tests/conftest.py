@@ -875,6 +875,46 @@ def raw_mouse_input_calls(monkeypatch):
     return fake
 
 
+def retire_leftover_overlays() -> None:
+    """Hide every overlay still on screen and stop its reveal timer.
+
+    A test rarely destroys its `OverlayUI`, so the widget lives on until the
+    garbage collector takes it. Hidden and idle it does nothing; shown, or with
+    `reveal_temporarily`'s timer still running, it acts in a later test: the
+    timer ends the reveal through `_apply_window_flags`, which calls
+    `SetWindowPos` on whatever `_overlay_user32` that test installed and
+    registers the leftover's own window for mouse raw input.
+    """
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    from stt_app.overlay_ui import OverlayUI
+
+    for widget in app.topLevelWidgets():
+        if isinstance(widget, OverlayUI):
+            widget._temporary_foreground_timer.stop()
+            if widget.isVisible():
+                widget.hide()
+
+
+@pytest.fixture(autouse=True)
+def _no_overlay_outlives_its_test(raw_mouse_input_calls):
+    """An overlay a test left shown does not act in the tests after it.
+
+    The release dry run of 2026-11-26 failed on exactly that: an overlay of an
+    earlier test, floating, shown and revealed, had 0.8 s left on its reveal
+    timer when `test_a_click_into_the_active_window_puts_the_floating_overlay
+    _behind_it` started (39 overlays were still alive, three of them shown).
+    Locally the test is over after 30 ms; on the slower runner the timer fired
+    inside it and the recorder held two registrations instead of one.
+
+    Takes `raw_mouse_input_calls` so that it is torn down first: the hide
+    removes the mouse watch, and that call has to reach the fake.
+    """
+    yield
+    retire_leftover_overlays()
+
+
 @pytest.fixture(autouse=True)
 def copied_texts(monkeypatch):
     """No test writes the real clipboard through a Copy action.

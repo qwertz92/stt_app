@@ -97,6 +97,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/testing.md` (origi
     clipboard (the production writer is installed only in `main.run`). A
     test reads the list, or patches `clipboard_copy._writer` with its own
     fake's `setText`.
+  - `_no_overlay_outlives_its_test`: after every test hides each `OverlayUI`
+    still shown and stops its reveal timer (`retire_leftover_overlays`). A
+    test rarely destroys its overlay, so it lives until the garbage collector
+    takes it (39 were alive at one test of `test_overlay_ui.py`, three of them
+    shown). One left floating, shown and revealed ends its reveal up to 1.8 s
+    later inside another test, calls that test's `SetWindowPos` fake and
+    registers its own window in that test's raw-input recorder. That failed
+    the release dry run of 2026-11-26 on the slower runner only (run
+    45867172072: two registrations instead of one); locally the timer fired
+    later, in a test without an exact assertion. An overlay test that needs
+    its overlay beyond its own end does not exist and must not be written.
   The alphabetical full suite hid the last three leaks; only another file
   order showed them.
 - **`tests/conftest.py` blocks the real `create_transcriber`**: the isolated

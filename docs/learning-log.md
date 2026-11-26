@@ -3,6 +3,26 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: an overlay left by an earlier test failed the release dry run
+
+The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,
+`test_a_click_into_the_active_window_puts_the_floating_overlay_behind_it`: the raw-input recorder
+held two registrations, the first for a window that was not the test's overlay. The dry run of the
+same afternoon on a4c00c1, without the provider tests added since, had passed.
+
+- Measured locally with a probe in the test: 39 `OverlayUI` objects of earlier tests were still
+  alive, three of them shown, and one (floating, revealed) had 812 ms left on its reveal timer.
+  When that timer fires, `_clear_temporary_foreground` runs `_apply_window_flags`, which registers
+  the leftover's window for mouse raw input in whatever recorder the current test has. Locally the
+  test is over after about 30 ms, so the timer fired in a later test that asserts nothing exact.
+- Reproduced on purpose: a test that leaves a floating overlay revealed for 5 ms, placed in front,
+  makes the test fail with the runner's message; with the new autouse fixture it passes.
+- Fix in the suite, not in the product (the app has one overlay): `_no_overlay_outlives_its_test`
+  hides every overlay still shown after each test and stops its reveal timer
+  (`docs/agents/testing.md`).
+- For the release procedure: bumping the version on `main` before the dry run made the failed run
+  cost nothing but time, because no tag existed yet.
+
 ## 2026-11-26: six small fixes in the cloud-provider code (review of the last round)
 
 Structurally: `_http_utils.json_from_reply` / `missing_field_error` are the one reader of a JSON

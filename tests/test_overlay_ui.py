@@ -2,6 +2,7 @@ import logging
 from datetime import UTC, datetime
 
 import pytest
+from conftest import retire_leftover_overlays
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.overlay_ui as overlay_ui_module
@@ -1274,6 +1275,35 @@ def test_a_hidden_overlay_does_not_wait_for_a_click(monkeypatch, raw_mouse_input
     assert user32.positions == [_HWND_NOTOPMOST]
     assert raw_mouse_input_calls.registrations == []
     assert overlay.isVisible() is False
+
+
+def test_an_overlay_left_revealed_does_not_act_once_the_suite_retired_it(
+    monkeypatch, raw_mouse_input_calls
+):
+    # What `conftest._no_overlay_outlives_its_test` does after every test. The
+    # overlay of an earlier test, floating, shown and revealed, ended its
+    # reveal inside a later test on the release runner (2026-11-26): it called
+    # that test's `SetWindowPos` fake and registered its own window for mouse
+    # raw input in that test's recorder.
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    user32 = _FakeZOrderUser32(foreground=_EDITOR_HWND)
+    monkeypatch.setattr(overlay_ui_module, "_overlay_user32", lambda: user32)
+    overlay = OverlayUI()
+    overlay.set_always_on_top(False)
+    overlay.show()
+    overlay.reveal_temporarily(40)
+    app.processEvents()
+    assert overlay._temporary_foreground_timer.isActive()
+
+    retire_leftover_overlays()
+    user32.positions.clear()
+    raw_mouse_input_calls.registrations.clear()
+    QtTest.QTest.qWait(120)  # well past the reveal's 40 ms
+
+    assert overlay.isVisible() is False
+    assert user32.positions == []
+    assert raw_mouse_input_calls.registrations == []
 
 
 def test_overlay_initial_window_flags_are_not_reapplied(monkeypatch):
