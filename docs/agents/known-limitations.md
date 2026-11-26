@@ -798,3 +798,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     refusal text, because `_display_url` drops only the query. A server would
     have to write the key into its own `Location` header. Hypothetical; the
     fix is one scrub of the shown address (about 5 lines).
+
+- **A failure at the moment of the stop returns the text without a notice** (accepted
+  2026-11-26, P3, ElevenLabs realtime and Deepgram streaming): when the queued audio cannot be
+  sent in time, or the final commit or `Finalize` cannot be sent, `stop_stream()` returns the text
+  it has and the user is told nothing; one WARNING in the log names what was not sent
+  (ElevenLabs). The user notices the last words missing while the overlay shows "Done"; the
+  recording is still there for a retry. It needs a network stall exactly at the stop. The
+  transcriber interface has no way to return text plus a notice. A real fix is `stop_stream`
+  returning the text and a notice, in the controller and every streaming engine (both WebSocket
+  engines; about a day with tests).

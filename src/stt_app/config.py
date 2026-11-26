@@ -1415,6 +1415,7 @@ STREAMING_ENGINES = (
     "local",
     "assemblyai",
     "deepgram",
+    "elevenlabs",
 )  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
@@ -1777,6 +1778,17 @@ ASSEMBLYAI_BATCH_MAX_WAIT_S = 1800.0
 # and the `model_id` of `POST /v1/speech-to-text` in api.elevenlabs.io/openapi.json.
 ELEVENLABS_MODELS = ("scribe_v3",)
 DEFAULT_ELEVENLABS_MODEL = "scribe_v3"
+# Streaming runs Scribe v3 Live ($0.22/h against $0.20/h for batch Scribe v3),
+# whatever the batch model is; it is not in ELEVENLABS_MODELS, so the batch
+# picker never offers it. Protocol and pages read 2026-11-26:
+# docs/agents/remote-providers.md, "ElevenLabs realtime streaming".
+ELEVENLABS_STREAMING_MODEL = "scribe_v3_live"
+ELEVENLABS_STREAMING_MODEL_LABEL = "Scribe v3 Live"
+ELEVENLABS_REALTIME_URL = "wss://api.elevenlabs.io/v1/speech-to-text/realtime"
+# The server commits a segment after this much silence (`commit_strategy=vad`,
+# documented range 0.192 to 3.0 s). One second keeps a thinking pause inside
+# one segment; nothing was measured (docs/agents/remote-providers.md).
+ELEVENLABS_VAD_SILENCE_S = 1.0
 
 # Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
 # These are remote, cloud-only models from the Microsoft AI (MAI) team.

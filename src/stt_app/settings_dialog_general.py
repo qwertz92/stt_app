@@ -18,6 +18,8 @@ from .config import (
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
     DEVICE_AWARE_LOCAL_MODELS,
+    ELEVENLABS_STREAMING_MODEL,
+    ELEVENLABS_STREAMING_MODEL_LABEL,
     FLUID_SPEECH_PRO_MODEL_SIZE,
     LANGUAGE_MODE_LABELS,
     LOCAL_ENGLISH_ONLY_MODELS,
@@ -661,18 +663,27 @@ class _GeneralTabMixin:
             self.remote_model_combo.blockSignals(False)
             return
 
+        if self._elevenlabs_streaming_selected(provider):
+            # The one model that streams, not the stored batch choice; the
+            # signals are blocked, so the stored choice is not touched.
+            choices = ((ELEVENLABS_STREAMING_MODEL, ELEVENLABS_STREAMING_MODEL_LABEL),)
         for value, label in choices:
             self.remote_model_combo.addItem(label, value)
         self._select_combo_data(
             self.remote_model_combo,
-            self._remote_model_value_for_provider(provider),
+            ELEVENLABS_STREAMING_MODEL
+            if self._elevenlabs_streaming_selected(provider)
+            else self._remote_model_value_for_provider(provider),
         )
         if is_listed:
             self.remote_model_combo.setEditText(
                 self._remote_model_value_for_provider(provider)
             )
         self.remote_model_combo.setEnabled(
-            not self._assemblyai_streaming_selected(provider)
+            not (
+                self._assemblyai_streaming_selected(provider)
+                or self._elevenlabs_streaming_selected(provider)
+            )
         )
         self._update_remote_model_note()
         self.remote_model_combo.blockSignals(False)
@@ -680,6 +691,10 @@ class _GeneralTabMixin:
     def _assemblyai_streaming_selected(self, provider: str) -> bool:
         """AssemblyAI streams with one fixed model, so its picker is moot."""
         return provider == "assemblyai" and self.mode_combo.currentData() == "streaming"
+
+    def _elevenlabs_streaming_selected(self, provider: str) -> bool:
+        """ElevenLabs streams with Scribe v3 Live only; the picker shows just that."""
+        return provider == "elevenlabs" and self.mode_combo.currentData() == "streaming"
 
     def _update_remote_model_note(self) -> None:
         """The two reserved lines under a remote engine's model row.
@@ -735,10 +750,15 @@ class _GeneralTabMixin:
             )
         elif provider == "deepgram":
             note = "Deepgram uses the selected model for batch and streaming transcription."
+        elif self._elevenlabs_streaming_selected(provider):
+            note = (
+                f"Streaming always uses {ELEVENLABS_STREAMING_MODEL_LABEL}. The "
+                "model chosen in Batch applies to batch dictation and audio imports."
+            )
         elif provider == "elevenlabs":
             note = (
-                "The selected model applies to batch dictation and audio imports. "
-                "Scribe v3 Live exists, but is not yet wired into this app."
+                "The selected model applies to batch dictation and audio imports; "
+                f"Streaming uses {ELEVENLABS_STREAMING_MODEL_LABEL}."
             )
         elif provider == "azure":
             # Only the endpoint is named here; the key is the sentence every

@@ -1,6 +1,7 @@
 """ElevenLabs remote transcription provider.
 
-Batch transcription via the ElevenLabs Speech to Text API.
+Batch transcription via the ElevenLabs Speech to Text API; streaming through the
+realtime WebSocket (Scribe v3 Live, `elevenlabs_realtime.py`).
 Requires: an ElevenLabs API key.
 API key stored via keyring (settings_dialog / secret_store).
 
@@ -9,6 +10,7 @@ Supported batch model: scribe_v3.
 
 from __future__ import annotations
 
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -37,8 +39,10 @@ from .base import (
     ITranscriber,
     ProgressReporter,
     StreamingCallback,
+    StreamingErrorCallback,
     TranscriptionError,
 )
+from .elevenlabs_realtime import ElevenLabsRealtimeSession
 
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
 
@@ -182,6 +186,8 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
         # Needs self._model, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self._request_timeout_s = max(5, int(request_timeout_s))
+        self._stream_lock = threading.Lock()
+        self._stream_session: ElevenLabsRealtimeSession | None = None
 
     def _normalize_language_mode(self, mode: str) -> str:
         normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
@@ -316,19 +322,77 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from ElevenLabs API."
 
-    def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
-        raise NotImplementedError(
-            "ElevenLabs streaming is not implemented in this project yet. "
-            "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
-        )
+    # -- Streaming (Scribe v3 Live; the session is `elevenlabs_realtime.py`) -------
+
+    def _get_websocket_module(self):
+        try:
+            import websocket  # type: ignore
+        except ImportError as exc:
+            raise TranscriptionError(
+                "ElevenLabs streaming requires 'websocket-client'. "
+                "Install it with: pip install websocket-client"
+            ) from exc
+        return websocket
+
+    def _streaming_language_code(self) -> str | None:
+        """The chosen language as the realtime `language_code`, or None for Auto.
+
+        The realtime API takes ISO 639-1 or 639-3 codes and detects the
+        language itself when none is sent; the same code table as batch is used.
+        """
+        if self._language_mode == DEFAULT_LANGUAGE_MODE:
+            return None
+        return _ELEVENLABS_LANGUAGE_CODES.get(self._language_mode, self._language_mode)
+
+    def start_stream(
+        self,
+        on_partial: StreamingCallback | None = None,
+        on_error: StreamingErrorCallback | None = None,
+    ) -> None:
+        websocket = self._get_websocket_module()
+        with self._stream_lock:
+            if self._stream_session is not None:
+                raise TranscriptionError("Streaming session already active.")
+            session = ElevenLabsRealtimeSession(
+                api_key=self._api_key,
+                language_code=self._streaming_language_code(),
+                websocket_module=websocket,
+                on_partial=on_partial,
+                on_error=on_error,
+            )
+            self._stream_session = session
+        try:
+            session.connect()
+        except BaseException:
+            self._release_session(session)
+            raise
+
+    def _release_session(self, session: ElevenLabsRealtimeSession) -> None:
+        with self._stream_lock:
+            if self._stream_session is session:
+                self._stream_session = None
 
     def push_audio_chunk(
         self, chunk: bytes, *, block_timeout_s: float | None = None
     ) -> None:
-        raise NotImplementedError("ElevenLabs streaming is not implemented yet.")
+        session = self._stream_session
+        if session is None:
+            raise TranscriptionError("Streaming session is not active.")
+        session.push(chunk, block_timeout_s=block_timeout_s)
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("ElevenLabs streaming is not implemented yet.")
+        session = self._stream_session
+        if session is None:
+            raise TranscriptionError("Streaming session is not active.")
+        try:
+            return session.finish()
+        finally:
+            # Also after a refused stop of a session that is still connecting:
+            # `connect` sees the retired state and tears the socket down.
+            self._release_session(session)
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("ElevenLabs streaming is not implemented yet.")
+        with self._stream_lock:
+            session, self._stream_session = self._stream_session, None
+        if session is not None:
+            session.abort()

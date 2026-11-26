@@ -391,10 +391,10 @@ def test_streaming_mode_hides_engines_that_cannot_stream():
 
     dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("streaming"))
 
-    for engine in ("local", "assemblyai", "deepgram"):
+    for engine in ("local", "assemblyai", "deepgram", "elevenlabs"):
         assert _engine_row_hidden(dialog, engine) is False, engine
         assert _combo_item_enabled(dialog.engine_combo, engine) is True, engine
-    for engine in ("groq", "openai", "elevenlabs", "azure", "custom"):
+    for engine in ("groq", "openai", "azure", "custom"):
         assert _engine_row_hidden(dialog, engine) is True, engine
         # Disabled as well: a hidden row is still reached by the arrow keys
         # and the wheel on a closed combo, a disabled one is skipped.
@@ -834,7 +834,7 @@ def test_groq_language_note_explains_auto_and_hints():
     _ = app
 
 
-def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
+def test_elevenlabs_remote_model_note_names_the_streaming_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(engine="elevenlabs", mode="batch", language_mode="auto")
@@ -846,8 +846,36 @@ def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
     )
 
     assert dialog.remote_model_combo.isEnabled() is True
-    assert "not yet wired" in dialog.remote_model_note_label.text()
+    assert "Streaming uses Scribe v3 Live" in dialog.remote_model_note_label.text()
     assert "language hint" in dialog.language_note_label.text()
+    _ = app
+
+
+def test_elevenlabs_streaming_lists_the_engine_and_offers_only_the_live_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="elevenlabs", mode="streaming"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore("elevenlabs"),
+        app_logger=_FakeLogger(),
+    )
+
+    assert _engine_row_hidden(dialog, "elevenlabs") is False
+    assert _combo_data(dialog.remote_model_combo) == ["scribe_v3_live"]
+    assert dialog.remote_model_combo.currentText() == "Scribe v3 Live"
+    assert dialog.remote_model_combo.isEnabled() is False
+    assert "Streaming always uses Scribe v3 Live" in (
+        dialog.remote_model_note_label.text()
+    )
+
+    # Back to Batch: the batch model list, without the realtime model, and the
+    # stored batch choice was never touched by the Streaming view.
+    dialog.mode_combo.setCurrentIndex(dialog.mode_combo.findData("batch"))
+    assert _combo_data(dialog.remote_model_combo) == ["scribe_v3"]
+    assert dialog.remote_model_combo.isEnabled() is True
+    dialog._save()
+    assert store.saved is not None
+    assert store.saved.elevenlabs_model == "scribe_v3"
     _ = app
 
 
@@ -6043,6 +6071,7 @@ def test_a_language_the_user_picks_replaces_the_remembered_one():
         ("local", "large-v3-turbo", "Streaming (Experimental)"),
         ("assemblyai", "", "Streaming (Experimental)"),
         ("deepgram", "", "Streaming (Experimental)"),
+        ("elevenlabs", "", "Streaming (Experimental)"),
     ],
 )
 def test_the_streaming_label_says_experimental_only_where_it_is_true(

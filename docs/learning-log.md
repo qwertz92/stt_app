@@ -3,6 +3,46 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: review round on the ElevenLabs realtime stop
+
+Structurally: the final wait of a stop is now "answered, no partial pending, 0.3 s of quiet", not
+"the first committed message".
+
+- A VAD commit for earlier audio landing before the answer to the final commit ended the wait early
+  and cut off the last words (reproduced with a 0.2 s late answer; fixed, three tests).
+- websocket-client 1.9.2 reports a server close frame to `on_error` first, with the close code as
+  `status_code`; that read as "refused the connection (HTTP 1011)", and an error during a stop turned
+  silence into an error. Socket errors and closes while stopping are now ignored, a close code is
+  described as such, and `on_close` always ends the final wait. The fake socket now delivers the
+  library's order.
+- Second round: ignoring every socket error once the stop began also swallowed a real
+  connection reset during the final wait, so `finish()` returned "" and the controller dropped an
+  untranscribed dictation as "no speech". Errors are ignored only after the session itself began
+  closing the socket (`_closing`); before that a normal close (1000/1001) ends the wait and anything
+  else is recorded for the stop. The quiet gap is still not a proof of the final answer (listed as
+  unverified).
+- The key was scrubbed after the text was cut, so a key crossing the cut survived as a prefix; it is
+  scrubbed first now.
+- "Silence is billed" was not on the pricing page (per second, no minimum, nothing on silence);
+  reworded. A failure at the stop that leaves text is logged and recorded as a limitation of both
+  WebSocket engines (`docs/agents/known-limitations.md`).
+
+## 2026-11-26: ElevenLabs streams (Scribe v3 Live), built from the documentation only
+
+Structurally: `elevenlabs` joined `STREAMING_ENGINES`; the WebSocket session lives in its own module
+(`transcriber/elevenlabs_realtime.py`) and `ElevenLabsTranscriber` delegates the four streaming
+methods to it. The protocol and the vendor pages are in `docs/agents/remote-providers.md`.
+
+- No key was available, so nothing ran against the live service. The tests drive a fake socket that
+  speaks the documented messages; the paid release check covers the real call because
+  `release_check_providers.py` already runs every engine in `STREAMING_ENGINES`.
+- The first test of a stop found a real bug: the sender thread quit when the session was retired, so
+  the chunks still queued behind the stop were never written and the final commit went out first. The
+  sender now stops only when the session failed or was aborted.
+- The vendor documents no end-of-session message. The built stop (drain, an empty chunk with
+  `commit: true`, wait at most 3 s for the last committed segment, close) follows its example script;
+  whether an empty commit is answered when nothing is pending is a guess.
+
 ## 2026-11-26: an overlay left by an earlier test failed the release dry run
 
 The dry run for v0.14.0 (run 45867172072) failed on one test of 5570,
