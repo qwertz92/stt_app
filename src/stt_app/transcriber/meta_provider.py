@@ -254,8 +254,9 @@ class MetaTranscriber(ProgressReporter, ITranscriber):
                     self._scrub(f"{type(cause).__name__}: {cause}"),
                 )
                 return False, (
-                    f"The connection test could not reach {_PROVIDER_NAME} "
-                    f"within {_KEY_CHECK_TIMEOUT_S} seconds."
+                    f"The connection test could not reach {_PROVIDER_NAME}: no "
+                    f"answer within {_KEY_CHECK_TIMEOUT_S} seconds or the "
+                    "connection was refused."
                 )
             return False, str(exc)
         return True, "Connection OK — API key is valid."

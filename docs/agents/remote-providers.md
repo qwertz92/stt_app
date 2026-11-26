@@ -272,7 +272,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
   refused connection surfaced as "Meta (Muse Voice) transcription failed:
   <urlopen error timed out>" although nothing was transcribed. A cause that is
   an `OSError` other than an HTTP error or a certificate failure now gives
-  "The connection test could not reach Meta (Muse Voice) within 15 seconds.";
+  "The connection test could not reach Meta (Muse Voice): no answer within 15
+  seconds or the connection was refused." (true for a timeout and for an
+  immediate refusal alike);
   the raw text goes to the log (`meta_connection_test_unreachable`, key
   scrubbed). A certificate failure keeps the SSL guidance.
 - **Meta refuses a WAVE_FORMAT_EXTENSIBLE float file with the same sentence as

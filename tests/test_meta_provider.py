@@ -408,7 +408,8 @@ def test_a_connection_test_that_cannot_reach_meta_says_so(recorder, failure):
     ok, message = MetaTranscriber("k").test_connection()
     assert not ok
     assert message == (
-        "The connection test could not reach Meta (Muse Voice) within 15 seconds."
+        "The connection test could not reach Meta (Muse Voice): no answer within "
+        "15 seconds or the connection was refused."
     )
     assert "urlopen" not in message
     assert "transcription failed" not in message
