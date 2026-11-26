@@ -28,7 +28,7 @@ from stt_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():
-    # Explicit: the default local model is Parakeet (onnx-asr), so
+    # Explicit: the default local model is not a faster-whisper size, so
     # `AppSettings(engine="local")` alone no longer describes faster-whisper.
     settings = AppSettings(engine="local", model_size="small")
     t = create_transcriber(settings)
@@ -146,7 +146,7 @@ def test_factory_unknown_engine_with_nemotron_preserves_nemotron_runtime():
 
 def test_factory_local_passes_stream_final_full_pass():
     # A faster-whisper size explicitly: this flag only exists on that runtime,
-    # and the default local model is now the batch-only Parakeet.
+    # and the default local model is batch-only.
     settings = AppSettings(
         engine="local", model_size="small", streaming_full_final_transcript=True
     )

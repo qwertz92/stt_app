@@ -373,8 +373,8 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
 ):
     """One case, on the CPU, whatever device the run asked for.
 
-    The model is English-only and CPU-only, so the benchmark must neither ask
-    it for a language it cannot honour nor measure the identical
+    The model has no language input and is CPU-only, so the benchmark must
+    neither ask it for a language it cannot honour nor measure the identical
     configuration once per device target.
     """
     audio_path = tmp_path / "sample.wav"

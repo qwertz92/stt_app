@@ -138,7 +138,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 - **[Hugging Face Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)**
   — the leaderboard `docs/models.md` and `docs/local-asr-model-candidates-2026.md`
   cite for the app's own local GPU/ONNX models (Cohere Transcribe, Granite
-  Speech, Parakeet, Canary). Its methodology paper is
+  Speech, Parakeet). Its methodology paper is
   [arXiv:2510.06961](https://arxiv.org/abs/2510.06961). The leaderboard added a
   multilingual track in late 2025 covering a handful of languages; this
   document could not confirm this session whether German is one of them or

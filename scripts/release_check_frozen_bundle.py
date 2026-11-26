@@ -92,6 +92,23 @@ NODE_MODELS = (
 )
 NODE_DEVICES = ("webgpu", "cpu")
 
+
+def plan_models(cached: list[str]) -> tuple[list[str], list[str]]:
+    """The preferred models to run, and the preferred ones that are not cached.
+
+    Only the first cached faster-whisper size is run (see `PREFERRED`), so a
+    second cached size is neither run nor reported missing.
+    """
+    whisper = next((name for name in WHISPER_SIZES if name in cached), None)
+    models = [
+        name
+        for name in PREFERRED
+        if name in cached and (name not in WHISPER_SIZES or name == whisper)
+    ]
+    missing = [name for name in PREFERRED if name not in cached]
+    return models, missing
+
+
 SCAN_TIMEOUT_S = 180
 BENCHMARK_TIMEOUT_S = 1500
 GUI_SECONDS = 40
@@ -419,12 +436,11 @@ def main() -> int:
 
     cached = scan_pass(checks, args.exe, sandbox, model_dir)
 
-    whisper = next((name for name in WHISPER_SIZES if name in cached), None)
-    models = [
-        name
-        for name in PREFERRED
-        if name in cached and (name not in WHISPER_SIZES or name == whisper)
-    ]
+    models, missing = plan_models(cached)
+    # One line per preferred model that is not covered: without it a missing
+    # default model would silently drop out of the check.
+    for name in missing:
+        checks.skipped(f"frozen.benchmark.{name}", f"{name} is not on this PC")
     if not models:
         checks.skipped(
             "frozen.benchmark.worker_exits_cleanly",

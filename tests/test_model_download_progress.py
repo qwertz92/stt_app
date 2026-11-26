@@ -300,7 +300,7 @@ def test_format_download_queue_line_names_what_comes_next():
     assert format_download_queue_line([]) == ""
     assert format_download_queue_line(["Parakeet"]) == "Next: Parakeet"
     assert (
-        format_download_queue_line(["Parakeet", "Canary", "small"])
+        format_download_queue_line(["Parakeet", "Fluid Speech Pro", "small"])
         == "Next: Parakeet (+2 more)"
     )
 

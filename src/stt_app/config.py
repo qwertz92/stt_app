@@ -120,7 +120,7 @@ GRANITE_CTC_MODEL_SIZE = "granite-5.0-470m-turboctc-multi"
 # `small`. Measured on 25 German and 25 English FLEURS clips (2026-11-25, about
 # 500 words per language, so differences under 1 point are noise): German 4.27 %
 # and English 4.14 % WER against Parakeet v3's 6.50 % and 4.89 %, real-time
-# factor 0.023 against 0.085, and a 551 MB download against 670 MB. It needs
+# factor 0.023 against 0.085, and a 552 MB download against 670 MB. It needs
 # neither a GPU nor Node.js and detects its language itself.
 #
 # What it costs: seven languages (English, French, German, Spanish, Portuguese,
@@ -570,7 +570,7 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "cohere-transcribe-03-2026": 2_128,
     "granite-speech-5.0-2b": 1_730,
     NEMOTRON_MODEL_SIZE: 793,
-    # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
+    # Measured from the int8 download: 670.48 MB.
     PARAKEET_MODEL_SIZE: 670,
     # The files the pinned revision's layout fetches: 800,881,653 bytes (the
     # int8 encoder 746.9 MB and decoder/joint 53.8 MB with their graphs, vocab,

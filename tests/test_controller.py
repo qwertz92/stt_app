@@ -711,7 +711,7 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
@@ -800,7 +800,7 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
@@ -861,7 +861,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        # Explicit: the default local model is the batch-only Parakeet.
+        # Explicit: the default local model is batch-only; streaming needs another.
         model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,

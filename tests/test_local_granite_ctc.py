@@ -477,6 +477,24 @@ def test_a_recording_past_the_bound_runs_several_passes_and_joins_them(
     assert all(features.shape[1] <= 180 * 50 for features in fake.features)
 
 
+@pytest.mark.parametrize(
+    ("pieces", "expected"),
+    [
+        (["hello", "world"], "hello world"),
+        (["今日は天気が", "いいです"], "今日は天気がいいです"),
+        (["カタカナ", "ひらがな"], "カタカナひらがな"),
+        (["日本語。", "Hello"], "日本語。 Hello"),
+        (["Hello", "日本語"], "Hello 日本語"),
+        (["日本語", "world"], "日本語 world"),
+        ([], ""),
+    ],
+)
+def test_passes_are_joined_without_a_space_inside_japanese(pieces, expected):
+    from stt_app.transcriber.local_granite_ctc import _join_passes
+
+    assert _join_passes(pieces) == expected
+
+
 def test_an_empty_window_is_skipped_rather_than_joined_as_a_gap(tmp_path, monkeypatch):
     transcriber, fake = _transcriber(
         tmp_path, monkeypatch, session=_FakeSession([[1], [0], [3]])

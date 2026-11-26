@@ -198,6 +198,29 @@ def ctc_greedy_token_ids(logits: np.ndarray) -> list[int]:
     return [int(token) for token in best[keep] if token != BLANK_ID]
 
 
+def _is_cjk(character: str) -> bool:
+    """Han, Hiragana or Katakana: scripts written without spaces."""
+    code = ord(character)
+    return (
+        0x3040 <= code <= 0x30FF  # Hiragana and Katakana
+        or 0x3400 <= code <= 0x4DBF  # CJK extension A
+        or 0x4E00 <= code <= 0x9FFF  # CJK unified ideographs
+        or 0xF900 <= code <= 0xFAFF  # CJK compatibility ideographs
+    )
+
+
+def _join_passes(pieces: list[str]) -> str:
+    """Join the texts of consecutive passes: with a space, except where both
+    sides of the seam are Japanese, which has none (a stray space would sit in
+    the middle of a sentence)."""
+    joined = ""
+    for piece in pieces:
+        if joined and not (_is_cjk(joined[-1]) and _is_cjk(piece[0])):
+            joined += " "
+        joined += piece
+    return joined
+
+
 class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
     """Batch transcription for Granite Speech 5.0 TurboCTC on ONNX Runtime."""
 
@@ -428,7 +451,7 @@ class LocalGraniteCtcTranscriber(ITranscriber, ProgressReporter):
                     text = self._transcribe_window(window, session, tokenizer, handle)
                     if text:
                         pieces.append(text)
-                transcript = " ".join(pieces)
+                transcript = _join_passes(pieces)
             except TranscriptionCanceled:
                 raise
             except Exception as exc:

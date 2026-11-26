@@ -48,9 +48,9 @@ on Windows 11 on ARM and run the whole app, Whisper models included, under
 Windows' x64 emulation. To run from source in a native ARM64 Python instead,
 use `uv` (the pip route cannot skip CTranslate2): CTranslate2 has no ARM64
 build, so the faster-whisper models (`small` to `distil-large-v3.5`) show as
-`[unavailable]` and are never downloaded. Granite (the default is
-Granite TurboCTC), Parakeet, Nemotron and every cloud engine need nothing that lacks an ARM64
-build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
+`[unavailable]` and are never downloaded. The default model (Granite
+TurboCTC), Parakeet, Fluid Speech Pro, Nemotron and every cloud engine need
+nothing that lacks an ARM64 build. Cohere and Granite also need [Node.js](https://nodejs.org/en/download)
 22 or newer; an ARM64 `.msi` exists, and an x64 Node runs under emulation too.
 
 ## End-user Windows download
@@ -121,7 +121,7 @@ The default is `granite-5.0-470m-turboctc-multi`: it needs no GPU and no
 Node.js, and on 25 German and 25 English FLEURS clips (2026-11-25, about 500
 words per language, so differences under 1 point are noise) it measured 4.27 %
 and 4.14 % word error rate at a real-time factor of 0.023, against 6.50 % and
-4.89 % at 0.085 for `parakeet-tdt-0.6b-v3`, from a 551 MB download against
+4.89 % at 0.085 for `parakeet-tdt-0.6b-v3`, from a 552 MB download against
 670 MB. The price is language coverage: it detects English, French, German,
 Spanish, Portuguese, Italian and Japanese by itself, while Parakeet v3
 transcribes 25 European languages (the list is in the model card), so pick

@@ -3,6 +3,28 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: review cleanup of the model roster branch
+
+Structurally: stale Canary, English-only and "default is Parakeet" statements were rewritten or marked as
+history; the frozen-bundle check now names every preferred model it could not cover.
+
+- A second data point for the default decision (lead's cross-check, 2026-11-26): 5 German clips of
+  Multilingual LibriSpeech and 5 English clips of LibriSpeech (148 and 196 reference words, read
+  books, same normaliser, CPU). TurboCTC multilingual 7.43 % German / 0.51 % English WER, RTF 0.014 /
+  0.016; Parakeet v3 14.19 % / 2.55 %, RTF 0.054 / 0.063; Fluid Speech Pro 9.46 % / 2.04 %, RTF 0.16 /
+  0.18. One point of WER is one to two words and the books may be in the models' training data, so only
+  the direction counts: it agrees with FLEURS.
+- The move notice for the English TurboCTC now says "(seven languages)" after the new model's name,
+  because both display names read the same.
+- `scripts/release_check_frozen_bundle.py` printed nothing for a preferred model that was not cached
+  unless none was. The owner's Hugging Face cache lacks the new default, so the check would have stopped
+  covering it silently; every missing preferred model now gets a `SKIP ... is not on this PC` check.
+  `--model-dir PATH` (already there) points the scan and the benchmark at a folder instead.
+- "551 MB" is the weight file `onnx/model_int8.onnx` (551,294,349 bytes); "~552 MB" is the whole download
+  (552,442,697 bytes with config and tokenizer files).
+- The English-user test's fake folder now holds every required file, so it fails when the new id
+  resolves to the English repository (checked by pointing `MODEL_REPO_MAP` at it).
+
 ## 2026-11-26: Canary 1B v2 retired, successor Fluid Speech Pro
 
 Structurally: `canary-1b-v2` moved from the roster into `RETIRED_LOCAL_MODEL_SUCCESSORS` /
@@ -25,7 +47,7 @@ Structurally: `config.DEFAULT_MODEL_SIZE` is `GRANITE_CTC_MODEL_SIZE` (declared 
 other place reads that constant, so no second copy had to change.
 
 - Why (owner's wish, lead's decision): German 4.27 % and English 4.14 % WER against Parakeet v3's 6.50
-  and 4.89, real-time factor 0.023 against 0.085, 551 MB against 670 MB (25 + 25 FLEURS clips,
+  and 4.89, real-time factor 0.023 against 0.085, 552 MB against 670 MB (25 + 25 FLEURS clips,
   2026-11-25, about 500 words per language, so differences under 1 point are noise).
 - The cost is shown where the model is picked: the Transcription tab's model note for the TurboCTC says
   "seven languages" and names Parakeet v3 (25 European languages) as the way out, the Parakeet note and

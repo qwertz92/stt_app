@@ -2373,8 +2373,8 @@ class _BenchmarkMixin:
             if model_name in LOCAL_ENGLISH_ONLY_MODELS
         ]
         if language_value == "de" and english_only:
-            # Named from the selection: with more than one English-only model
-            # a fixed name sent the user after a model they had not selected.
+            # Named from the selection: a fixed name would send the user after a
+            # model they had not selected.
             # And by the name the list above shows, not by the settings id,
             # which appears nowhere on screen.
             blocking = ", ".join(

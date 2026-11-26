@@ -803,9 +803,8 @@ class _GeneralTabMixin:
             return ""
 
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
-            # Named from the selection: there is more than one English-only
-            # model, and the hard-coded name answered a Granite CTC selection
-            # with a sentence about distil-large-v3.5.
+            # Named from the selection, not hard-coded, so a roster that gains
+            # another English-only model needs no change here.
             return (
                 f"{local_model_short_label(model)} is an English-only model "
                 "(only Auto and English are available)."

@@ -90,7 +90,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   auto maps to `language=multi`. Batch keeps `detect_language=true`.
 - **Streaming availability**: `config.supports_streaming()` is the single
   source. Every local model in `LOCAL_BATCH_ONLY_MODELS` (Cohere, Granite
-  ONNX/WebGPU, Parakeet, Canary, Granite CTC) is batch-only; Nemotron and
+  ONNX/WebGPU, Parakeet, Fluid Speech Pro, Granite CTC) is batch-only; Nemotron and
   the faster-whisper sizes stream; a local model never disables
   AssemblyAI/Deepgram streaming.
 - **In Settings the mode is chosen first and filters the lists below it**

@@ -2661,8 +2661,8 @@ def test_saving_api_keys_keeps_a_language_the_overlay_picked_meanwhile():
 
 def test_a_language_the_user_really_changed_still_wins():
     """Deferring must apply only while the combo is untouched."""
-    # A model that offers more than "auto"; the shipped default (Parakeet)
-    # deliberately offers nothing else.
+    # A model that offers more than "auto"; the shipped default (the
+    # TurboCTC) deliberately offers nothing else.
     dialog, store, app = _dialog_with_store(
         AppSettings(model_size="small", language_mode="auto")
     )

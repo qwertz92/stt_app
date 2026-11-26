@@ -13,9 +13,10 @@ The app has five local runtime families:
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
 - **onnx-asr models** (Parakeet TDT v3, Fluid Speech Pro) — pure
-  Python, CPU only, no Node.js and no GPU. Parakeet is the fastest local model
-  in this app that transcribed the benchmark recording correctly: RTF 0.043 on
-  a Ryzen 5 7600X. Fluid Speech Pro is FluidVoice Labs' post-training of the
+  Python, CPU only, no Node.js and no GPU. Parakeet needs no setup beyond
+  the download and measured RTF 0.043 on one 24.3 s recording of 2026-08 and
+  0.085 on the 25 + 25 FLEURS clips of 2026-11-25 (different recordings, and the
+  second run shared the PC with other work). Fluid Speech Pro is FluidVoice Labs' post-training of the
   same model: a lower word error rate than v3 on the 2026-11-25
   German and English test (German 3.3 % against 6.5 %, English 3.6 %
   against 4.9 %), at about three times the processing time (see
@@ -68,9 +69,9 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-speech-5.0-2b` | ONNX/WebGPU | ~1.73 GB q4 | Auto + the languages IBM lists | IBM's newest speech model (Apache-2.0); German 3.5 % and English 4.9 % in Auto (5.3 % with a language chosen) on the 2026-11-25 test; batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
-| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
+| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | RTF 0.043 on one 2026-08 recording, 0.085 on the 2026-11-25 FLEURS clips (different recordings), no GPU or Node.js needed, batch mode only |
 | `fluid-speech-pro` | onnx-asr INT8 (CPU) | ~801 MB | Auto (multilingual, no selection needed) | FluidVoice Labs' post-trained Parakeet v3 (CC-BY-4.0, official ONNX export): on the 2026-11-25 test German 3.25 % against v3's 6.50 % and English 3.57 % against 4.89 %, about 3x slower; pinned to one commit, batch mode only |
-| `granite-5.0-470m-turboctc-multi` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | **The default for new installs** (since v0.15.0): RTF 0.023 on CPU against Parakeet v3's 0.085, 551 MB against 670 MB; punctuated text, German 4.27 % and English 4.14 % WER against v3's 6.50 % and 4.89 % on the 2026-11-25 test (25 + 25 FLEURS clips, about 500 words per language, so differences under 1 point are noise). Only seven languages where v3 covers 25. Batch mode only |
+| `granite-5.0-470m-turboctc-multi` | ONNX Runtime INT8 CTC (CPU) | ~552 MB | Auto (en, fr, de, es, pt, it, ja; detected by the model) | **The default for new installs** (since v0.15.0): RTF 0.023 on CPU against Parakeet v3's 0.085, a 552 MB download against 670 MB; punctuated text, German 4.27 % and English 4.14 % WER against v3's 6.50 % and 4.89 % on the 2026-11-25 test (25 + 25 FLEURS clips, about 500 words per language, so differences under 1 point are noise). Only seven languages where v3 covers 25. Batch mode only |
 
 ### Which model should I use?
 
@@ -546,7 +547,8 @@ A plain clone fetches every weight file a repository holds, which is far more
 than the app runs: the two `istupakov` repositories also ship fp32 graphs
 (2.4 GB and 3.3 GB), and
 `qwertz92/granite-speech-5.0-470m-turboctc-multilingual-onnx` ships the
-one INT8 graph, `onnx/model_int8.onnx` (551 MB), with its conversion scripts and
+one INT8 graph, `onnx/model_int8.onnx` (551 MB: the weight file alone; the ~552 MB the app lists and
+downloads is that file plus the config and tokenizer files), with its conversion scripts and
 reports (the English-only repository it replaces also held the 1.89 GB fp32 and
 947 MB fp16 graphs).
 `scripts/download_model.py` fetches the required tier and nothing else, so
@@ -719,7 +721,7 @@ ships.
 
 Both are **CPU only and batch only**. That is not a limitation in practice:
 measured on a Ryzen 5 7600X, Parakeet transcribes a 24.3-second recording in
-about 1.03 s (RTF 0.043), which is faster than any GPU model in this app.
+about 1.03 s (RTF 0.043), which was faster than any GPU model in that run (a different recording from the FLEURS clips, where it measured 0.085).
 
 **Fluid Speech Pro** is FluidVoice Labs' post-training of Parakeet TDT 0.6B v3
 (same architecture, run by onnx-asr as `nemo-conformer-tdt`), from the
@@ -743,7 +745,23 @@ PC shared with other work:
 | Fluid Speech Pro | 3.3 % | 3.6 % | 0.16 to 0.26 |
 | Canary 1B v2 (retired 2026-11-26) | 3.7 % | 5.5 % | 0.13 to 0.16 |
 
-The sample is small (a difference of one point is about five words), so read
+A second, smaller data point (2026-11-26, cross-check for the default
+decision): 5 German clips of Multilingual LibriSpeech and 5 English clips of
+LibriSpeech (148 and 196 reference words, read books, the same normaliser,
+CPU):
+
+| Model | German WER | English WER | RTF de / en |
+|-------|-----------:|------------:|------------:|
+| Granite 5.0 470M TurboCTC (multilingual) | 7.43 % | 0.51 % | 0.014 / 0.016 |
+| Parakeet v3 | 14.19 % | 2.55 % | 0.054 / 0.063 |
+| Fluid Speech Pro | 9.46 % | 2.04 % | 0.16 / 0.18 |
+
+One point of WER is one to two words here, and these books may be part of the
+models' training data, so only the direction counts: it agrees with FLEURS
+(the TurboCTC ahead of Fluid Speech Pro ahead of v3 in both languages, and
+about four times faster than v3).
+
+The FLEURS sample is small (a difference of one point is about five words), so read
 it as "clearly better than v3", not as a ranking among the two best. Part of
 Parakeet v3's German figure is its Auto mode answering in English on about 3
 of the 25 German clips. Fluid Speech Pro is about three times slower than v3

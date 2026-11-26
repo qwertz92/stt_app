@@ -24,7 +24,7 @@ from conftest import (
 from PySide6 import QtWidgets
 
 from stt_app import settings_store as settings_store_module
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import FALLBACK_HOTKEY, GRANITE_CTC_MODEL_SIZE
 from stt_app.controller import DictationController
 from stt_app.persistence import store_unavailable_error
 from stt_app.settings_store import AppSettings, SettingsStore
@@ -267,10 +267,15 @@ def test_a_successor_already_on_disk_is_not_downloaded_again(tmp_path, monkeypat
 
 
 def _english_turboctc_files(model_dir):
-    """What a user of the English-only TurboCTC export has on disk."""
+    """What a user of the English-only TurboCTC export has on disk: every file
+    the TurboCTC layout requires, so that "not cached" can only mean the new id
+    looks in another folder (it fails if `MODEL_REPO_MAP` pointed the new id at
+    the English repository)."""
+    from stt_app.transcriber.local_webgpu_asr import _MODEL_LAYOUTS
+
     folder = model_dir / "granite-speech-5.0-470m-turboctc-onnx"
-    (folder / "onnx").mkdir(parents=True)
-    for name in ("config.json", "tokenizer.json", "onnx/model_int8.onnx"):
+    for name in _MODEL_LAYOUTS[GRANITE_CTC_MODEL_SIZE].required_files:
+        (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(b"english-only export")
 
 
@@ -284,7 +289,6 @@ def test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure
     notice says where to get them (offline), a dictation before they exist
     says so, and the old files stay as a "No longer offered" row."""
     import stt_app.controller as controller_module
-    from stt_app.config import GRANITE_CTC_MODEL_SIZE
     from stt_app.controller import _preload_failure_text
     from stt_app.settings_dialog_helpers import model_move_notices
     from stt_app.transcriber.base import ModelNotCachedError
@@ -335,7 +339,7 @@ def test_a_user_of_the_english_only_turboctc_is_never_left_with_a_silent_failure
     assert len(notices) == 1
     text = notices[0][0]
     assert "English-only is no longer offered, your choice is now" in text
-    assert "IBM Granite Speech 5.0 470M." in text
+    assert "IBM Granite Speech 5.0 470M (seven languages)." in text
     if offline_mode:
         assert "Offline mode is on" in text
         assert "Settings > Models" in text

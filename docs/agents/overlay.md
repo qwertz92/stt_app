@@ -319,7 +319,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/overlay.md` (origi
     provider's `_normalize_language_mode` replaces it with its own stand-in.
     The caption then names the first offered language and the request carries
     the stand-in; they are the same language only where the stand-in is the
-    list's first entry (Canary: German, and Auto for providers whose list
+    list's first entry (Cohere: German, and Auto for providers whose list
     opens with it). Not checked for every provider. The next pick from the
     overlay saves an offered language and ends the difference.
 - **The footer is [microphone menu][opacity slider][value]** (2026-10-03,

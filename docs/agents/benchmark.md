@@ -235,9 +235,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/benchmark.md` (ori
   every `local_onnx_device` choice. For Nemotron it renames targets to the
   resolved provider (`nemotron_provider_order`) and dedupes (`webgpu`,
   `gpu`, `dml` are one configuration without a WebGPU provider).
-- **Language guards run before the model.** Canary without a language is
-  refused up front in `_run_local_benchmark` and the runner (onnx-asr
-  hardcodes `<|en|>` and would translate). The runner makes an English-only
+- **Language guards run before the model.** The runner makes an English-only
   model asked for anything but Auto/English an error case (2026-09-19;
   otherwise English was stored as `de`). Elsewhere `detected_language` is
   the requested mode. `run_benchmark_cases` strips the language and turns

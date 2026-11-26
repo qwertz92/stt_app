@@ -521,23 +521,26 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   - ORT stays 1.30.0 (newest); genai 0.17.1 needs `onnxruntime>=1.30.0`.
     Nemotron on 0.17.1 gave text identical to 0.16.0 on six clips in batch and
     streaming, at equal or better speed (2026-10-03, CPU).
-- **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro, Canary 1B v2)** in
+- **onnx-asr engine (Parakeet TDT 0.6B v3, Fluid Speech Pro; Canary 1B v2 until 2026-11-26)** in
   `transcriber/local_onnx_asr.py`: pure Python, no Node.js, no extra ORT
   (`onnx-asr[cpu,hub]`). Download, detection, sizing and deletion reuse
   `_OnnxModelLayout` in `local_webgpu_asr` (int8 allow-patterns only).
-  - Canary has no benchmark RTF; quote none. Parakeet is "the fastest local
-    model that transcribed the recording", never "fastest" (`tiny` 0.033) or
-    "most accurate"; 1.9x faster than the best GPU case
-    (`cohere-transcribe-03-2026`, 0.083).
+  - History of the 2026-08 benchmark recording: Parakeet was "the fastest
+    local model that transcribed the recording" (RTF 0.043, 1.9x faster than
+    the best GPU case `cohere-transcribe-03-2026`, 0.083), never "fastest"
+    flat (`tiny` 0.033) or "most accurate". On the FLEURS clips of 2026-11-25
+    Parakeet v3 measured 0.085, a different recording on a shared PC; the
+    TurboCTC (0.023) is the fastest local model of that test.
   - Never add `onnxruntime-directml`: it overwrites the `onnxruntime/`
     package (620 of 625 files, `pip check` silent) and breaks
     `onnxruntime-genai` ("The requested API version [26] is not available"),
     losing Nemotron. `onnxruntime-webgpu==1.27.0` coexists but was slower
     than CPU. A GPU path needs an isolated subprocess environment.
-  - Canary never exposes `auto` (onnx-asr hardcodes `<|en|>` and translates):
-    it is in `LOCAL_EXPLICIT_LANGUAGE_MODELS`, and `_normalize_language_mode`
-    maps unsupported codes to trained ones (else `KeyError`). Parakeet ignores
-    `language=`, so it offers only `auto` and sends none.
+  - Parakeet and Fluid Speech Pro ignore `language=`, so they offer only
+    `auto` and send none (`_normalize_language_mode` maps any stored language
+    to `auto`). Canary, retired 2026-11-26, was the one model here that could
+    not take `auto` (onnx-asr hardcodes `<|en|>` and translates); that rule
+    went with it.
   - Both batch-only, excluded from the ONNX Device picker (CPU-only).
   - PyInstaller needs `collect_all('onnx_asr')` (mel/resampler graphs are
     package data via `importlib.resources`).
@@ -668,7 +671,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/local-models-and-d
   multilingual TurboCTC, for NEW installs only.** `config.DEFAULT_MODEL_SIZE`
   was Parakeet v3. 25 + 25 FLEURS clips (2026-11-25, about 500 words per
   language, so differences under 1 point are noise): de 4.27 / en 4.14 against
-  Parakeet's 6.50 / 4.89, RTF 0.023 against 0.085, 551 MB against 670 MB.
+  Parakeet's 6.50 / 4.89, RTF 0.023 against 0.085, 552 MB against 670 MB.
   The cost, said where the model is picked (the Transcription tab's model
   note and the two picker labels): seven languages against Parakeet's 25.
   - Every place that encodes the default reads `DEFAULT_MODEL_SIZE`:

@@ -93,7 +93,7 @@ def _make_queue_controller(
         keep_transcript_in_clipboard=False,
         concurrent_transcription_mode=mode,
         # A faster-whisper size explicitly: several of these tests switch to
-        # streaming, and the default local model is the batch-only Parakeet.
+        # streaming, and the default local model is batch-only.
         model_size="small",
         # These tests drive the queue with synthetic silent audio, which the
         # silence gate would (correctly) refuse to transcribe.
@@ -4068,7 +4068,7 @@ def _a_retry_under_cohere_that_finished(
     before_delivery=None,
 ):
     """A dictation recorded in `recorded` failed; the engine is switched to
-    Canary (no Auto, German selected) and the Retry delivers `text`, as a
+    Cohere (no Auto, German selected) and the Retry delivers `text`, as a
     background result when `newer_dictation` took the overlay first. Returns
     the controller, the app, the tray messages, the history store, the failed
     recording's audio and the recordings folder (a setting, so that nothing

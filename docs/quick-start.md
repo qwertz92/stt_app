@@ -71,7 +71,7 @@ Common settings to adjust:
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| **Model size** | Which local model transcribes. `granite-5.0-470m-turboctc-multi` is fast and accurate in its seven languages and needs no GPU; `parakeet-tdt-0.6b-v3` covers 25 European languages; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Granite, Parakeet, Canary and Cohere are batch-only | `granite-5.0-470m-turboctc-multi` |
+| **Model size** | Which local model transcribes. `granite-5.0-470m-turboctc-multi` is fast and accurate in its seven languages and needs no GPU; `parakeet-tdt-0.6b-v3` covers 25 European languages; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Granite, Parakeet, Fluid Speech Pro and Cohere are batch-only | `granite-5.0-470m-turboctc-multi` |
 | **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR`, `Speechmatics`, `Mistral (Voxtral)`, `Meta (Muse Voice)`, `OpenRouter`, `Custom endpoint` | `Local` |
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live; experimental except with local Nemotron) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |
