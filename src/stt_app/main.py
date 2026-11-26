@@ -23,6 +23,7 @@ from .config import (
     APP_LOGGER_NAME,
     APP_USER_MODEL_ID,
     DEFAULT_CANCEL_HOTKEY_ID,
+    DEFAULT_ENGINE,
     DEFAULT_REPASTE_HOTKEY_ID,
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
     QUIT_WATCHDOG_TIMEOUT_S,
@@ -45,6 +46,7 @@ from .paste_target_check import PasteTargetCheck
 from .quit_dialog import QuitCoordinator
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
+from .settings_dialog_helpers import model_move_notices
 from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter, Win32ClipboardBackend
@@ -262,7 +264,6 @@ def run() -> int:
     unfinished_recording_store = UnfinishedRecordingStore()
     local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
-    model_notice = settings_store.take_model_notice()
     _schedule_startup_local_model_inventory_refresh(
         local_model_inventory_store,
         startup_settings.model_dir,
@@ -375,10 +376,14 @@ def run() -> int:
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
     _start_dependency_check(tray_icon)
-    if model_notice:
+    if startup_settings.pending_model_moves:
         QtCore.QTimer.singleShot(
             _MODEL_NOTICE_FIRST_DELAY_MS,
-            lambda: _show_model_notice_when_ready(tray_icon, model_notice),
+            lambda: _show_model_notices_when_ready(
+                tray_icon,
+                _pending_model_notices(settings_store),
+                settings_store.clear_model_notice,
+            ),
         )
 
     def _show_unfinished_recordings() -> None:
@@ -719,14 +724,15 @@ class _TrayUpdateChecker(QtCore.QObject):
             )
 
         if result.update_available:
-            self._tray_icon.showMessage(
+            # Through the spaced path every start notice takes: a balloon sent
+            # while another is up replaces it, and the model notice is one.
+            _show_tray_notice_when_ready(
+                self._tray_icon,
                 APP_DISPLAY_NAME,
                 (
                     f"Update {result.latest_tag or result.latest_version} is "
                     f"available. Current version: {result.current_version}."
                 ),
-                QtWidgets.QSystemTrayIcon.Information,
-                10000,
             )
             if manual:
                 show_update_available_dialog(result, parent=self._parent_widget)
@@ -775,17 +781,20 @@ _start_notice_not_before = 0.0
 
 
 def _show_tray_notice_when_ready(
-    tray_icon, title: str, notice: str, waited: int = 0
+    tray_icon, title: str, notice: str, waited: int = 0, on_shown=None
 ) -> None:
     """Show a notice once the icon exists; retry every second until then.
 
     After the last wait it is sent anyway (a dropped balloon is logged by the
     tray, which is the old behaviour rather than a lost retry loop).
+    `on_shown` runs right after the balloon was handed to the tray.
     """
     if waited < _MODEL_NOTICE_MAX_WAITS and not tray_icon.isVisible():
         QtCore.QTimer.singleShot(
             _MODEL_NOTICE_RETRY_MS,
-            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited + 1),
+            lambda: _show_tray_notice_when_ready(
+                tray_icon, title, notice, waited + 1, on_shown
+            ),
         )
         return
     global _start_notice_not_before
@@ -793,15 +802,59 @@ def _show_tray_notice_when_ready(
     if wait_s > 0:
         QtCore.QTimer.singleShot(
             int(wait_s * 1000) + 50,
-            lambda: _show_tray_notice_when_ready(tray_icon, title, notice, waited),
+            lambda: _show_tray_notice_when_ready(
+                tray_icon, title, notice, waited, on_shown
+            ),
         )
         return
     _start_notice_not_before = time.monotonic() + _START_NOTICE_SPACING_S
     _show_tray_notice(tray_icon, title, notice)
+    if on_shown is not None:
+        on_shown()
 
 
-def _show_model_notice_when_ready(tray_icon, notice: str, waited: int = 0) -> None:
-    _show_tray_notice_when_ready(tray_icon, "Speech model updated", notice, waited)
+def _show_model_notice_when_ready(
+    tray_icon, notice: str, waited: int = 0, on_shown=None
+) -> None:
+    _show_tray_notice_when_ready(
+        tray_icon, "Speech model updated", notice, waited, on_shown
+    )
+
+
+def _show_model_notices_when_ready(tray_icon, notices, clear) -> None:
+    """Show the notices one after the other; each move is cleared once its own
+    notice was handed to the tray, so a start closed between two balloons still
+    owes the second one. The wait between two start notices is the existing
+    spacing (`_START_NOTICE_SPACING_S`)."""
+    if not notices:
+        return
+    (text, moves), rest = notices[0], notices[1:]
+
+    def shown() -> None:
+        clear(moves)
+        _show_model_notices_when_ready(tray_icon, rest, clear)
+
+    _show_model_notice_when_ready(tray_icon, text, on_shown=shown)
+
+
+def _pending_model_notices(settings_store: SettingsStore):
+    """The notices of the moves still waiting, written for the disk as it is now."""
+    from .transcriber.local_faster_whisper import find_cached_models
+
+    settings = settings_store.load()
+    successors = [
+        move["to"]
+        for move in settings.pending_model_moves
+        if move["engine"] == DEFAULT_ENGINE
+    ]
+    on_disk = bool(successors) and successors[0] in find_cached_models(
+        settings.model_dir
+    )
+    return model_move_notices(
+        settings.pending_model_moves,
+        successor_on_disk=on_disk,
+        offline_mode=settings.offline_mode,
+    )
 
 
 def _start_dependency_check(tray_icon) -> None:

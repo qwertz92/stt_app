@@ -103,7 +103,7 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   comparison on resampled imports that would justify it about half a day.
 - **Windows on ARM64 runs the app, but not the faster-whisper models.**
   CTranslate2 has no `win_arm64` wheel in any release (and no sdist for 4.8.2),
-  so the seven Whisper models (`tiny` to `distil-large-v3.5`) cannot run in a
+  so the four Whisper models (`small` to `distil-large-v3.5`) cannot run in a
   native ARM64 Python; the picker marks them `[unavailable]`, the Models tab
   skips them in every download, and a transcription refuses with the reason
   before fetching anything (`local_runtime_support.py`). Everything else has an
@@ -760,3 +760,22 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
   (`_status_label` is fixed-height); showing it on demand means moving the
   widgets below it and updating the layout tests that pin them, estimated at
   about 150 lines with many tests, for a dialog that is open for seconds.
+- **Edge cases of the move from a retired local model to its successor**
+  (accepted 2026-11-26 after five review rounds, P3/P4, `controller.py`,
+  `settings_dialog_local.py`):
+  - The successor's download is started once, at the start that shows the
+    notice. A user who quits during that download and has "Keep ONNX model
+    loaded" off gets no second start: the first dictation downloads the
+    model. A half-downloaded model never counts as present.
+  - Two Settings saves within about 0.2 s, away from the successor and back
+    to it, while its download runs with "Keep ONNX model loaded" off: the
+    model picked in between (486 MB for Whisper small) is downloaded although
+    nothing selects it, and the successor is fetched by the first dictation
+    (`_retirement_download` is cleared by the ending worker, one poll late).
+  - A Nemotron stream whose connect thread finds the model missing in
+    offline mode shows the runtime's own text with the model id; every other
+    path names the model as the pickers do.
+  - A retired model's folder that is itself a junction cannot be deleted
+    from the Models tab (`shutil.rmtree` refuses it; the row stays), and when
+    the second of a model's two folders cannot be deleted the message does
+    not say that the first one is already gone.

@@ -116,7 +116,7 @@ def test_a_live_case_with_long_numbers_moves_no_results_column():
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
     panel = dialog.benchmark_results_panel
-    first = _measured_case("tiny", 0.05)
+    first = _measured_case("large-v3-turbo", 0.05)
     panel.show_cases([first])
     _settle_table(app, table)
     before = [header.sectionSize(column) for column in range(table.columnCount())]
@@ -174,8 +174,10 @@ def test_the_action_row_fits_the_minimum_width_and_its_buttons_keep_their_width(
         assert idle[-1][0] + idle[-1][1] <= page.width()
         assert [x for x, _w, _h in idle] == sorted(x for x, _w, _h in idle)
 
-        dialog.benchmark_results_panel.show_cases([_measured_case("tiny", 0.05)])
-        dialog._current_benchmark_cases = [_measured_case("tiny", 0.05)]
+        dialog.benchmark_results_panel.show_cases(
+            [_measured_case("large-v3-turbo", 0.05)]
+        )
+        dialog._current_benchmark_cases = [_measured_case("large-v3-turbo", 0.05)]
         dialog._update_benchmark_action_row()
         shown = geometry()
         dialog._active_benchmark_thread = object()
@@ -313,13 +315,13 @@ def _run_over(models: list[str], *, status: str, day: int, selected=None):
 
 
 _TWELVE_MODELS = [
-    "tiny",
-    "base",
-    "small",
-    "medium",
-    "large-v3",
     "large-v3-turbo",
     "distil-large-v3.5",
+    "small",
+    "large-v3",
+    "fluid-speech-pro",
+    "granite-speech-5.0-2b",
+    "nemotron-3.5-asr-streaming-0.6b-int4",
     "parakeet-tdt-0.6b-v3",
     "canary-1b-v2",
     "cohere-transcribe-03-2026",
@@ -334,12 +336,12 @@ def test_the_history_models_cell_counts_the_models_the_run_measured(tmp_path):
     a canceled run named the models it never reached. The cell now leads with
     the count of models that have a stored case; the tooltip lists them."""
     canceled = _run_over(
-        ["tiny", "base"],
+        ["large-v3-turbo", "distil-large-v3.5"],
         status="canceled",
         day=3,
-        selected=["tiny", "base", "small", "medium"],
+        selected=["large-v3-turbo", "distil-large-v3.5", "small", "large-v3"],
     )
-    one = _run_over(["tiny"], status="completed", day=2)
+    one = _run_over(["large-v3-turbo"], status="completed", day=2)
     twelve = _run_over(_TWELVE_MODELS, status="completed", day=1)
     dialog, app = _dialog()
     dialog._benchmark_history_store = BenchmarkHistoryStore(
@@ -350,8 +352,8 @@ def test_the_history_models_cell_counts_the_models_the_run_measured(tmp_path):
     dialog._refresh_benchmark_history_list()
     table = dialog.benchmark_history_list
 
-    assert table.item(0, 5).text() == "2 models: tiny, base"
-    assert table.item(1, 5).text() == "1 model: tiny"
+    assert table.item(0, 5).text() == "2 models: large-v3-turbo, distil-large-v3.5"
+    assert table.item(1, 5).text() == "1 model: large-v3-turbo"
     assert table.item(2, 5).text() == "12 models: " + ", ".join(_TWELVE_MODELS)
     assert table.item(2, 5).toolTip() == "12 models:\n" + "\n".join(_TWELVE_MODELS)
     assert table.textElideMode() == QtCore.Qt.ElideRight
@@ -392,7 +394,7 @@ def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp
         seen = [empty]
         for day, (status, models) in enumerate(
             (
-                ("completed", ["tiny"]),
+                ("completed", ["large-v3-turbo"]),
                 ("completed", _TWELVE_MODELS[:3]),
                 ("completed_with_errors", _TWELVE_MODELS),
                 ("canceled", _TWELVE_MODELS[:2]),
@@ -407,7 +409,7 @@ def test_no_history_column_changes_width_when_rows_arrive(point_size: float, tmp
             seen.append(widths())
         for day in range(6, 26):
             dialog._benchmark_history_store.add_entry(
-                _run_over(["tiny"], status="completed", day=day)
+                _run_over(["large-v3-turbo"], status="completed", day=day)
             )
         dialog._refresh_benchmark_history_list()
         seen.append(widths())
@@ -451,7 +453,7 @@ def test_the_pinned_history_columns_show_every_value_whole(point_size: float, tm
             ("completed", "completed_with_errors", "canceled", "failed"), start=1
         ):
             dialog._benchmark_history_store.add_entry(
-                _run_over(["tiny"], status=status, day=day)
+                _run_over(["large-v3-turbo"], status=status, day=day)
             )
         dialog._refresh_benchmark_history_list()
         _settle_table(app, table)
@@ -496,7 +498,9 @@ def _show_runs(dialog, app, count: int) -> None:
     store = dialog._benchmark_history_store
     store.clear()
     for day in range(count):
-        store.add_entry(_run_over(["tiny"], status="completed", day=1 + day % 28))
+        store.add_entry(
+            _run_over(["large-v3-turbo"], status="completed", day=1 + day % 28)
+        )
     dialog._refresh_benchmark_history_list()
     _settle_table(app, dialog.benchmark_history_list)
 

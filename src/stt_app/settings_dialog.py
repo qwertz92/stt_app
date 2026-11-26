@@ -209,6 +209,8 @@ class SettingsDialog(
         self._local_model_scan_token = 0
         self._local_model_scan_pending = False
         self._cached_local_models: list[str] = []
+        # Retired models whose folder is still on disk, from the same scan.
+        self._retired_models_on_disk: list[str] = []
         self._cached_local_models_dir = ""
         self._cached_local_models_available = False
         self._local_model_auto_refresh_requested_dirs: set[str] = set()

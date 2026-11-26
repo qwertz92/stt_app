@@ -13,14 +13,14 @@ def test_scan_cached_models_reads_subprocess_output(monkeypatch):
         calls.append(list(command))
         output_path = command[command.index("--output") + 1]
         with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump({"cached_models": ["small", 42, "base"]}, handle)
+            json.dump({"cached_models": ["small", 42, "distil-large-v3.5"]}, handle)
         return _Result()
 
     monkeypatch.setattr(local_model_scan.subprocess, "run", fake_run)
 
     assert local_model_scan.scan_cached_models_out_of_process("/tmp/models") == [
         "small",
-        "base",
+        "distil-large-v3.5",
     ]
 
     assert calls

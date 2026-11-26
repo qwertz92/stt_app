@@ -189,7 +189,7 @@ def test_successful_cases_filters_errors():
         ],
     )
     bad_case = module.BenchmarkCase(
-        model="medium",
+        model="large-v3",
         device="cpu",
         compute_type="int8",
         download_seconds=0.0,
@@ -429,7 +429,7 @@ def test_granite_ctc_is_benchmarked_on_the_cpu_with_its_own_language(
 
 def test_benchmark_summary_includes_runtime_fallback_details():
     case = local_benchmark.BenchmarkCase(
-        model="granite-speech-4.1-2b",
+        model="granite-speech-5.0-2b",
         device="cpu",
         compute_type="onnx-int8",
         download_seconds=0.0,
@@ -517,12 +517,12 @@ def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):
     with pytest.raises(local_benchmark.BenchmarkCancelled):
         local_benchmark.run_benchmark_cases(
             audio_path=audio_path,
-            model_names=["tiny", "base"],
+            model_names=["large-v3-turbo", "distil-large-v3.5"],
             case_callback=completed.append,
             cancel_check=lambda: bool(completed),
         )
 
-    assert [case.model for case in completed] == ["tiny"]
+    assert [case.model for case in completed] == ["large-v3-turbo"]
 
 
 def test_faster_whisper_case_reports_resolved_runtime_device(monkeypatch, tmp_path):
@@ -552,7 +552,7 @@ def test_faster_whisper_case_reports_resolved_runtime_device(monkeypatch, tmp_pa
 
     case = local_benchmark._run_case(
         audio_path=audio_path,
-        model_name="tiny",
+        model_name="large-v3-turbo",
         device="auto",
         compute_type="int8",
         runs=1,
@@ -613,7 +613,7 @@ class TestBenchmarkDownloadSeconds:
     def test_benchmark_case_has_download_seconds(self):
         module = _load_benchmark_module()
         case = module.BenchmarkCase(
-            model="tiny",
+            model="large-v3-turbo",
             device="cpu",
             compute_type="int8",
             download_seconds=3.14,
@@ -660,7 +660,7 @@ class TestBenchmarkDownloadSeconds:
             language_probability=0.9,
         )
         case = module.BenchmarkCase(
-            model="tiny",
+            model="large-v3-turbo",
             device="cpu",
             compute_type="int8",
             download_seconds=4.2,
@@ -1597,7 +1597,7 @@ def _planned_by_running(monkeypatch, tmp_path, **kwargs):
 @pytest.mark.parametrize(
     ("model_names", "webgpu_devices", "device"),
     [
-        (["small", "tiny"], "auto", "auto"),
+        (["small", "large-v3-turbo"], "auto", "auto"),
         (["small"], "all", "cpu"),
         (["cohere-transcribe-03-2026"], "all", "auto"),
         (["cohere-transcribe-03-2026", "small"], "gpu,cpu", "auto"),

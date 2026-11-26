@@ -156,6 +156,7 @@ from .text_inserter import (
 )
 from .transcriber import create_transcriber
 from .transcriber.base import (
+    ModelNotCachedError,
     TranscriptionCanceled,
     TranscriptionError,
     request_transcription_shutdown,
@@ -256,6 +257,62 @@ def _local_model_display_name(model_name: str) -> str:
     from .settings_dialog_helpers import local_model_short_label
 
     return local_model_short_label(model_name)
+
+
+def _local_model_name_and_size(model_size: str) -> tuple[str, str]:
+    """The model's name as the pickers show it, and " (~1.73 GB)" or ""."""
+    from .settings_dialog_helpers import approximate_model_size_text
+
+    size = approximate_model_size_text(model_size)
+    return _local_model_display_name(model_size), f" ({size})" if size else ""
+
+
+def _model_missing_offline_text(model_size: str) -> str:
+    """The text for a selected local model that is not on this PC while Offline
+    mode forbids fetching it: shared by the preload's failure and by a dictation
+    that ran without a preload."""
+    name, size = _local_model_name_and_size(model_size)
+    return (
+        f"{name}{size} is not on this PC, and Offline mode is on, so nothing "
+        "was downloaded. Turn Offline mode off under Settings > Models and "
+        "download it there, or choose a model that is already on this PC "
+        "under Settings > Transcription. No fallback model was used."
+    )
+
+
+def _preload_failure_text(
+    settings: AppSettings, exc: BaseException, download_error: RuntimeError | None
+) -> str:
+    """What the overlay shows when the selected local model could not be loaded.
+
+    A model that is not on this PC is a problem the user can act on, and the
+    library's text about it ("outgoing traffic has been disabled ...
+    local_files_only=False", `HF_HUB_OFFLINE=0`) means nothing to a user of this
+    app. Two cases, both naming the model as the pickers do and its size: the
+    preload's download failed (no network), or offline mode is on, so none was
+    tried. The raw detail is in the log. A first dictation in this state is
+    refused with this text and records nothing; audio recorded while the
+    download was still running goes to the Retry slot like any failed job.
+    """
+    from .transcriber.local_faster_whisper import find_cached_models
+
+    if download_error is not None:
+        name, size = _local_model_name_and_size(settings.model_size)
+        return (
+            f"Could not download {name}{size}; it is not on this PC yet. "
+            "Connect to the internet and open Settings > Models to download it, "
+            "or choose a model that is already on this PC under "
+            "Settings > Transcription. No fallback model was used."
+        )
+    if settings.offline_mode and settings.model_size not in find_cached_models(
+        settings.model_dir
+    ):
+        return _model_missing_offline_text(settings.model_size)
+    return (
+        f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
+        "No fallback model was used. Open Settings to retry or select "
+        f"another model. See {DOC_MODELS_PATH}"
+    )
 
 
 def _engine_display_name(engine: str) -> str:
@@ -890,6 +947,12 @@ class DictationController(QtCore.QObject):
         self._preload_target_key: tuple[object, ...] | None = None
         self._preload_result_lock = threading.Lock()
         self._preload_canceled_generations: set[int] = set()
+        # Generations whose download is kept (the successor of a retired model is
+        # still wanted) but whose load is not: `_stop_running_preload`.
+        self._preload_load_skipped_generations: set[int] = set()
+        # (model, model directory) of the successor download the start queued,
+        # while it is queued or running; `_retirement_download_wanted`.
+        self._retirement_download: tuple[str, str] | None = None
         # Generation -> the sentence about partials a canceled preload's
         # cleanup could not remove, read once by `_on_model_preload_done`.
         self._preload_cleanup_notes: dict[int, str] = {}
@@ -1236,6 +1299,7 @@ class DictationController(QtCore.QObject):
         self.reload_settings(re_register_hotkey=True)
         if self._settings.engine == DEFAULT_ENGINE:
             self._start_local_model_preload()
+            self._start_retirement_download()
         else:
             self._preload_progress_timer.stop()
             self._preload_target_model = None
@@ -2794,7 +2858,9 @@ class DictationController(QtCore.QObject):
         except TranscriptionError as exc:
             if runtime_lease is not None:
                 runtime_lease.release()
-            self._overlay.set_state("Error", str(exc))
+            self._overlay.set_state(
+                "Error", self._transcription_error_text(settings_snapshot, exc)
+            )
             return
         except Exception as exc:
             if runtime_lease is not None:
@@ -6692,6 +6758,105 @@ class DictationController(QtCore.QObject):
         if failure is not None:
             raise TranscriptionError(failure)
 
+    def _transcription_error_text(
+        self, settings: AppSettings, exc: TranscriptionError
+    ) -> str:
+        """What the overlay shows for a transcriber's refusal.
+
+        A local model that is missing while Offline mode is on has a readable
+        text (`_model_missing_offline_text`); the transcriber's own wording, with
+        its raw id and a docs path, goes to the log. Any other error is shown as
+        it was raised.
+        """
+        if not isinstance(exc, ModelNotCachedError):
+            return str(exc)
+        self._logger.warning("Selected model is not cached: %s", exc)
+        return _model_missing_offline_text(settings.model_size)
+
+    def _start_retirement_download(self) -> concurrent.futures.Future | None:
+        """Fetch the successor of a retired model the start just moved the user to.
+
+        The start-up notice says the successor "is downloading now", so it has to
+        be: a Node/ONNX model is not preloaded while "Keep ONNX model loaded" is
+        off, and without this the download would only start inside the first
+        dictation. Only the download runs, never a load, whatever that setting
+        says, and through the same single slot as every other download (a model
+        already on disk, offline mode and a runtime this PC cannot run all end it
+        at once). A failure is logged; the first dictation then reports it.
+        """
+        settings = replace(self._settings)
+        if settings.engine != DEFAULT_ENGINE or settings.offline_mode:
+            return None
+        if not any(
+            move["engine"] == DEFAULT_ENGINE and move["to"] == settings.model_size
+            for move in settings.pending_model_moves
+        ):
+            return None
+        # The work may wait behind the start's own preload on the single worker.
+        # It belongs to the choice it was queued under, not to a preload
+        # generation: while the current settings still select that engine, model
+        # and model directory with offline mode off, only the quit ends it
+        # (`_retirement_download_wanted`), so an unrelated Settings save, which
+        # restarts the preload, cannot cut it off and restart it from zero. A
+        # changed selection ends it, queued or already downloading.
+        target = (settings.model_size, str(settings.model_dir or ""))
+        self._retirement_download = target
+
+        def work() -> None:
+            try:
+                if self._retirement_download_wanted():
+                    self._download_model_for_preload(settings, retirement=True)
+            except RuntimeError as exc:
+                self._logger.warning(
+                    "Download of the moved-to model %s failed: %s",
+                    settings.model_size,
+                    exc,
+                )
+            finally:
+                if self._retirement_download == target:
+                    self._retirement_download = None
+
+        try:
+            return self._preload_executor.submit(work)
+        except RuntimeError:
+            self._retirement_download = None
+            self._logger.warning("Download of the moved-to model was not scheduled")
+            return None
+
+    def _retirement_download_wanted(self) -> bool:
+        """True while the queued successor download should still run: the app is
+        not quitting and the current settings select that same local model in
+        that same model directory with offline mode off."""
+        target = self._retirement_download
+        current = self._settings
+        return (
+            target is not None
+            and not self._shutdown_started
+            and current.engine == DEFAULT_ENGINE
+            and not current.offline_mode
+            and (current.model_size, str(getattr(current, "model_dir", "") or ""))
+            == target
+        )
+
+    def _stop_running_preload(self) -> None:
+        """End the current preload generation and its download.
+
+        Except the successor's download while it is still wanted
+        (`_retirement_download_wanted`): that one is kept, because a Settings
+        save that changed nothing about it would otherwise throw away a
+        multi-gigabyte download and start it again from zero. The generation's
+        load is skipped instead (`_preload_load_skipped_generations`); the
+        preload this save starts queues behind it on the single worker, finds the
+        model on disk and loads it.
+        """
+        generation = self._preload_generation
+        if self._retirement_download_wanted():
+            with self._preload_result_lock:
+                self._preload_load_skipped_generations.add(generation)
+        else:
+            self._cancel_preload_generation(generation)
+        self._terminate_preload_download_process()
+
     def _start_local_model_preload(self, *, after_resume: bool = False) -> None:
         """Load the selected local model in the background.
 
@@ -6708,19 +6873,17 @@ class DictationController(QtCore.QObject):
             self._preload_progress_timer.stop()
             self._preload_target_model = None
             self._preload_future = None
+            self._stop_running_preload()
             with self._preload_result_lock:
-                self._preload_canceled_generations.add(self._preload_generation)
                 self._preload_generation += 1
                 self._preload_target_key = None
             self._preload_cancel_requested = False
-            self._terminate_preload_download_process()
             self.show_idle_status()
             return
 
         previous = self._preload_future
-        self._cancel_preload_generation(self._preload_generation)
+        self._stop_running_preload()
         self._preload_cancel_requested = False
-        self._terminate_preload_download_process()
         if previous is not None and not previous.done():
             try:
                 previous.cancel()
@@ -7072,6 +7235,7 @@ class DictationController(QtCore.QObject):
         key, so the next dictation loads at first use instead of raising it.
         """
         self._set_preload_phase(generation, _PRELOAD_PHASE_DOWNLOAD)
+        download_error: RuntimeError | None = None
         try:
             self._download_model_for_preload(settings, generation)
         except RuntimeError as exc:
@@ -7079,10 +7243,15 @@ class DictationController(QtCore.QObject):
                 self._record_model_preload_result(key, generation, None)
                 self.model_preload_done.emit(generation, False, str(exc))
                 return
-            # Download failed but cached models may still be usable.
+            # Download failed but cached models may still be usable. If the
+            # load then fails too, the user is told about the download (what
+            # they can act on), not the load's own message about a missing file.
             self._logger.warning("Model download failed: %s", exc)
+            download_error = exc
 
-        if self._preload_generation_was_canceled(generation):
+        with self._preload_result_lock:
+            load_skipped = generation in self._preload_load_skipped_generations
+        if load_skipped or self._preload_generation_was_canceled(generation):
             self._record_model_preload_result(key, generation, None)
             self.model_preload_done.emit(generation, False, "Model preload canceled.")
             return
@@ -7180,11 +7349,7 @@ class DictationController(QtCore.QObject):
             self._logger.warning(
                 "Model preload failed for %s: %s", settings.model_size, exc
             )
-            failure = (
-                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
-                "No fallback model was used. Open Settings to retry or select "
-                f"another model. See {DOC_MODELS_PATH}"
-            )
+            failure = _preload_failure_text(settings, exc, download_error)
             self._record_model_preload_result(
                 key, generation, failure if record_failure else None
             )
@@ -7215,11 +7380,7 @@ class DictationController(QtCore.QObject):
                     "Model preload canceled.",
                 )
                 return
-            failure = (
-                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
-                "No fallback model was used. Open Settings to retry or select "
-                f"another model. See {DOC_MODELS_PATH}"
-            )
+            failure = _preload_failure_text(settings, exc, download_error)
             self._record_model_preload_result(
                 key, generation, failure if record_failure else None
             )
@@ -7276,6 +7437,7 @@ class DictationController(QtCore.QObject):
             return
         with self._preload_result_lock:
             self._preload_canceled_generations.discard(generation)
+            self._preload_load_skipped_generations.discard(generation)
             cleanup_note = self._preload_cleanup_notes.pop(generation, "")
             if generation != self._preload_generation:
                 self._logger.info(
@@ -7496,7 +7658,7 @@ class DictationController(QtCore.QObject):
         except TranscriptionError as exc:
             outcome = "provider_error"
             terminal_kind = "failed"
-            terminal_payload = str(exc)
+            terminal_payload = self._transcription_error_text(settings, exc)
         except FileNotFoundError as exc:
             outcome = "missing_file"
             self._logger.exception("Transcription failed due to missing file path")
@@ -12015,7 +12177,7 @@ class DictationController(QtCore.QObject):
 
         self._preload_cancel_requested = True
         self._cancel_preload_generation(self._preload_generation)
-        self._terminate_preload_download_process()
+        self._terminate_preload_download_process(force=True)
         self._paint_status_keeping_offer("Processing", "Canceling model download...")
         return True
 
@@ -12038,6 +12200,7 @@ class DictationController(QtCore.QObject):
         self,
         process: subprocess.Popen | None,
         model_dir: str = "",
+        model_name: str | None = None,
     ) -> None:
         with self._preload_download_lock:
             self._preload_download_process = process
@@ -12045,7 +12208,9 @@ class DictationController(QtCore.QObject):
                 self._preload_downloading_model = None
                 self._preload_downloading_dir = ""
             else:
-                self._preload_downloading_model = self._preload_target_model
+                self._preload_downloading_model = (
+                    model_name or self._preload_target_model
+                )
                 self._preload_downloading_dir = str(model_dir or "")
 
     def preload_downloading_model(self) -> tuple[str, str] | None:
@@ -12065,8 +12230,27 @@ class DictationController(QtCore.QObject):
                 return None
             return name, self._preload_downloading_dir
 
-    def _terminate_preload_download_process(self) -> None:
+    def _terminate_preload_download_process(self, *, force: bool = False) -> None:
+        """Kill the preload's download process.
+
+        ``force`` is for the user's cancel and for a download ending itself;
+        every other caller leaves the successor's still-wanted download alone.
+        """
         with self._preload_download_lock:
+            if (
+                not force
+                and self._preload_download_process is not None
+                and self._retirement_download_wanted()
+                and (
+                    self._preload_downloading_model,
+                    self._preload_downloading_dir,
+                )
+                == self._retirement_download
+            ):
+                # The successor's download, still wanted: a preload restart, a
+                # finished preload or a Settings save does not end it. Its own
+                # loop ends it when the selection changes or the app quits.
+                return
             process = self._preload_download_process
             self._preload_download_process = None
             self._preload_downloading_model = None
@@ -12087,14 +12271,28 @@ class DictationController(QtCore.QObject):
         self,
         settings: AppSettings,
         generation: int | None = None,
+        *,
+        retirement: bool = False,
     ) -> None:
+        """Fetch the selected local model through the one download slot.
+
+        ``retirement``: the start's download of a retired model's successor. It
+        is not tied to a preload generation (`_retirement_download_wanted` ends
+        it), so the preload restarts an unrelated save causes do not.
+        """
         from .transcriber.local_faster_whisper import find_cached_models
 
-        use_legacy_cancel_flag = generation is None
+        use_legacy_cancel_flag = generation is None and not retirement
         generation = self._preload_generation if generation is None else generation
-        if self._preload_generation_was_canceled(generation) or (
-            use_legacy_cancel_flag and self._preload_cancel_requested
-        ):
+
+        def _canceled() -> bool:
+            if retirement:
+                return not self._retirement_download_wanted()
+            return self._preload_generation_was_canceled(generation) or (
+                use_legacy_cancel_flag and self._preload_cancel_requested
+            )
+
+        if _canceled():
             raise RuntimeError("Model download canceled.")
         # Before any download: on Windows ARM64 (no CTranslate2) the preload
         # fetched a whole Whisper model only to fail loading it afterwards.
@@ -12114,11 +12312,6 @@ class DictationController(QtCore.QObject):
         # it this path and the Local tab each spawned a worker against the same
         # cache directory: the second one then measured a directory the first
         # owned and sat at 0% forever.
-        def _canceled() -> bool:
-            return self._preload_generation_was_canceled(generation) or (
-                use_legacy_cancel_flag and self._preload_cancel_requested
-            )
-
         coordinator = model_download_coordinator()
         try:
             outcome = coordinator.acquire(
@@ -12141,11 +12334,11 @@ class DictationController(QtCore.QObject):
             except Exception as exc:
                 raise RuntimeError(f"Failed to start model download: {exc}") from exc
 
-            self._set_preload_download_process(process, model_dir)
+            self._set_preload_download_process(process, model_dir, model_name)
             try:
                 while True:
                     if _canceled():
-                        self._terminate_preload_download_process()
+                        self._terminate_preload_download_process(force=True)
                         # Keep the partial bytes when the user explicitly asked
                         # for this model in the Local tab: that request is
                         # waiting to resume from them, and wiping them made a

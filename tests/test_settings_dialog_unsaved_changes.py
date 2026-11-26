@@ -425,7 +425,7 @@ def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> N
     )
     assert "typed but not saved" in dialog.import_engine_note.text()
     # A known inventory for this Model Dir, as a finished scan leaves it.
-    dialog._cached_local_models = ["tiny"]
+    dialog._cached_local_models = ["large-v3-turbo"]
     dialog._cached_local_models_dir = dialog.model_dir_edit.text().strip()
     dialog._cached_local_models_available = True
     dialog._active_connection_test_thread = object()
@@ -446,7 +446,7 @@ def test_discard_while_dialog_work_runs_still_discards(dialog, monkeypatch) -> N
     assert dialog.has_unsaved_changes() is False
     assert running_label.text() == "Testing..."
     assert "typed but not saved" not in dialog.import_engine_note.text()
-    tiny = dialog.model_combo.findData("tiny")
+    tiny = dialog.model_combo.findData("large-v3-turbo")
     assert dialog.model_combo.itemText(tiny).startswith("\u2713")
 
     dialog._active_connection_test_thread = None
@@ -467,7 +467,7 @@ def test_a_busy_discard_of_a_model_dir_repaints_the_models_tab(
     import stt_app.settings_dialog_helpers as helpers
 
     _answer_prompt(monkeypatch, QtWidgets.QMessageBox.Discard)
-    monkeypatch.setitem(helpers._LOCAL_MODEL_SCAN_SESSION_CACHE, "", ["tiny"])
+    monkeypatch.setitem(helpers._LOCAL_MODEL_SCAN_SESSION_CACHE, "", ["large-v3-turbo"])
     dialog.show()
     dialog._on_model_dir_changed()
     assert dialog.local_models_list.count() > 0

@@ -114,14 +114,14 @@ def test_local_inventory_instances_preserve_parallel_directories(tmp_path):
     first_store._load_state = paused_first_load  # type: ignore[method-assign]
     _assert_second_call_waits_for_first(
         lambda: first_store.save_cached_models("first", ["small"]),
-        lambda: second_store.save_cached_models("second", ["tiny"]),
+        lambda: second_store.save_cached_models("second", ["large-v3-turbo"]),
         first_loaded=first_loaded,
         release_first=release_first,
     )
 
     reopened = LocalModelInventoryStore(path)
     assert reopened.load_cached_models("first") == ["small"]
-    assert reopened.load_cached_models("second") == ["tiny"]
+    assert reopened.load_cached_models("second") == ["large-v3-turbo"]
 
 
 def test_provider_result_instances_preserve_parallel_providers(tmp_path):

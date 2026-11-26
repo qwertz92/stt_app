@@ -73,7 +73,7 @@ def test_dialog_queue_state_still_wins_and_still_works():
     )
     assert dialog._local_model_download_state("large-v3-turbo") == "active"
     assert dialog._local_model_download_state("small") == "queued"
-    assert dialog._local_model_download_state("medium") == ""
+    assert dialog._local_model_download_state("large-v3") == ""
 
 
 def test_missing_controller_is_tolerated():

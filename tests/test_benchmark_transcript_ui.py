@@ -184,7 +184,7 @@ def test_a_finished_case_leaves_the_transcript_the_reader_opened():
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     view = _BenchmarkDetailsView()
-    first = _case("tiny", ["one", "two", "three"])
+    first = _case("large-v3-turbo", ["one", "two", "three"])
     view.set_live_results("running", [first])
     app.processEvents()
 
@@ -212,7 +212,7 @@ def test_the_first_transcript_is_opened_when_the_selected_one_is_gone():
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     view = _BenchmarkDetailsView()
-    view.set_live_results("running", [_case("tiny", ["one", "two"])])
+    view.set_live_results("running", [_case("large-v3-turbo", ["one", "two"])])
     app.processEvents()
     view.transcripts_table.selectRow(1)
     app.processEvents()
@@ -235,8 +235,8 @@ def test_two_cases_that_fell_back_to_the_same_device_are_told_apart():
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     view = _BenchmarkDetailsView()
-    webgpu_attempt = _case("granite-4.0-1b-speech", ["from the webgpu attempt"])
-    dml_attempt = _case("granite-4.0-1b-speech", ["from the dml attempt"])
+    webgpu_attempt = _case("granite-speech-5.0-2b", ["from the webgpu attempt"])
+    dml_attempt = _case("granite-speech-5.0-2b", ["from the dml attempt"])
     view.set_live_results("running", [webgpu_attempt, dml_attempt])
     app.processEvents()
 
@@ -254,7 +254,7 @@ def test_two_cases_that_fell_back_to_the_same_device_are_told_apart():
 
     # A third case finishes; the reader stays on the second, not the first.
     view.set_live_results(
-        "running", [webgpu_attempt, dml_attempt, _case("tiny", ["later"])]
+        "running", [webgpu_attempt, dml_attempt, _case("large-v3-turbo", ["later"])]
     )
     app.processEvents()
 

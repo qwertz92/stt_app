@@ -367,11 +367,11 @@ def _one_entry_payload(extra_run_field: dict | None = None) -> list:
             "created_at": "2026-08-30T10:00:00+00:00",
             "status": "completed",
             "summary": "one case",
-            "options": {"audio_name": "sample.wav", "model_names": ["tiny"]},
+            "options": {"audio_name": "sample.wav", "model_names": ["large-v3-turbo"]},
             "environment": {},
             "cases": [
                 {
-                    "model": "tiny",
+                    "model": "large-v3-turbo",
                     "device": "cpu",
                     "compute_type": "int8",
                     "download_seconds": 0.0,
@@ -705,7 +705,7 @@ def test_a_case_error_that_is_not_text_is_read_as_text(tmp_path):
     payload = _one_entry_payload()
     failed = payload[0]["cases"][0]
     failed["error"] = 42
-    payload[0]["cases"].append({**failed, "model": "base", "error": ""})
+    payload[0]["cases"].append({**failed, "model": "distil-large-v3.5", "error": ""})
     path = tmp_path / "benchmark_history.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -784,7 +784,7 @@ def test_a_null_where_a_list_belongs_costs_that_value_not_the_file(tmp_path):
     # The entry with no cases has nothing to show; the other two are intact,
     # newest first.
     assert len(entries) == 2
-    assert entries[1].options.model_names == ["tiny"]
+    assert entries[1].options.model_names == ["large-v3-turbo"]
     assert entries[0].options.model_names == []
     assert entries[0].options.webgpu_devices == []
     assert not list(tmp_path.glob("*.corrupt.*"))

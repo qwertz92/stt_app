@@ -16,7 +16,7 @@ The Cohere and Granite models use a separate out-of-process stack:
 
 1. Python/PySide starts a controlled Node.js helper process.
 2. The helper loads the JavaScript ONNX runtime dependencies.
-3. Cohere, Granite 4.0, and Granite 4.1 2B load q4 Transformers.js ONNX packages
+3. Cohere and Granite 5.0 2B load q4 Transformers.js ONNX packages
    from the local Hugging Face cache.
 4. Inference runs on the selected ONNX target when supported, with CPU fallback
    for normal `auto` use.
@@ -32,10 +32,10 @@ Nemotron uses a separate in-process Python path through ONNX Runtime GenAI. It
 does not use the Node helper. ORT GenAI owns the cache-aware FastConformer/RNNT
 streaming state and emits tokens incrementally for each new 560 ms audio chunk.
 
-Granite Speech 4.1 is part of this runtime stack and is user-selectable. The
-base 2B model now loads as a q4 Transformers.js package
-(`onnx-community/granite-speech-4.1-2b-ONNX`) through the same pipeline as
-Granite 4.0. The Plus and NAR variants were retired on 2026-08-26 -- their raw
+Granite Speech 5.0 2B is part of this runtime stack and is user-selectable. It
+loads as a q4 Transformers.js package (IBM's own
+`ibm-granite/granite-speech-5.0-2b-ONNX`) through the pipeline Granite 4.0 and
+4.1 used before their removal on 2026-11-25. The 4.1 Plus and NAR variants were retired on 2026-08-26 -- their raw
 INT8 exports cannot run on any GPU here and were far slower and less accurate
 than the base model; see
 [granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.md) for
@@ -61,9 +61,9 @@ a 28.6 s German and a 29.4 s English clip (two orders where two are given):
 | Model, target | German, 1.29.0 | German, 1.30.0 | English, 1.29.0 | English, 1.30.0 |
 |---------------|----------------|----------------|-----------------|-----------------|
 | Cohere, WebGPU | 1.03 / 1.17 | 1.67 / 1.73 | 1.22 / 1.22 | 1.92 / 1.94 |
-| Granite 4.1 2B, WebGPU | 1.69 / 1.72 | 3.01 / 3.04 | 2.26 / 2.24 | 3.58 / 3.69 |
-| Granite 4.0 1B, WebGPU | 1.55 | 2.83 | 2.36 | 3.74 |
-| Granite 4.0 1B, CPU | 8.8 | 9.6 | 10.9 | 12.0 |
+| Granite 4.1 2B (since removed), WebGPU | 1.69 / 1.72 | 3.01 / 3.04 | 2.26 / 2.24 | 3.58 / 3.69 |
+| Granite 4.0 1B (since removed), WebGPU | 1.55 | 2.83 | 2.36 | 3.74 |
+| Granite 4.0 1B (since removed), CPU | 8.8 | 9.6 | 10.9 | 12.0 |
 
 Every transcript was byte-identical between the two versions. The CPU
 difference is within run-to-run noise, DirectML fails for Cohere on both
@@ -165,7 +165,7 @@ architecture.
 | --- | --- | --- |
 | `auto` | Try WebGPU, then DirectML on Windows, then CPU. For daily dictation the app starts with the device the most recent in-app comparison of that model measured as fastest, if there is one (see [models.md](models.md)) | Default for normal use |
 | `gpu` | Try GPU targets only, currently WebGPU then DirectML | Diagnostic benchmark target |
-| `webgpu` | Force Transformers.js WebGPU | Works for Cohere, Granite 4.0, and Granite 4.1 2B on the Intel test machine |
+| `webgpu` | Force Transformers.js WebGPU | Works for Cohere and Granite 5.0 2B on the Intel test machine |
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |
 | `cpu` | Force CPU | Most compatible, usually slowest |
 
@@ -223,7 +223,8 @@ first unsupported graph operation is executed.
 
 Observed on the target Windows/Intel Arc A750 machine:
 
-- WebGPU works for Cohere, Granite 4.0, and Granite 4.1 2B. The Granite 4.1 2B
+- WebGPU works for Cohere and Granite 5.0 2B (and worked for the removed
+  Granite 4.0 and 4.1 2B). The Granite 4.1 2B
   q4 pipeline package was verified on WebGPU on 2026-06-17 (correct German,
   English, and French transcription; ~0.13–0.19 real-time factor in that
   first check, superseded by the 2026-08-25 benchmark's mean RTF 0.099).
@@ -314,13 +315,11 @@ Approximate current downloads:
 
 | Model | Runtime | Approximate download |
 | --- | --- | ---: |
-| `tiny` | CTranslate2 | 78 MB |
 | `small` | CTranslate2 | 486 MB |
-| `medium` | CTranslate2 | 1.53 GB |
 | `large-v3-turbo` | CTranslate2 | 1622 MB |
 | `cohere-transcribe-03-2026` | q4 ONNX | 2.13 GB |
-| `granite-4.0-1b-speech` | q4 ONNX | 1.84 GB |
-| `granite-speech-4.1-2b` | q4 Transformers.js ONNX | 1.84 GB |
+| `granite-speech-5.0-2b` | q4 Transformers.js ONNX | 1.73 GB |
+| `fluid-speech-pro` | onnx-asr INT8 (CPU) | 801 MB |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | 793 MB |
 
 Runtime memory can be higher than these values. For exact values on a target
@@ -342,8 +341,8 @@ Examples from currently evaluated candidates:
 - Cohere's ONNX package is q4 and 2B parameters, so a raw 4-bit weight lower
   bound is already about 1 GB before unquantized tensors, model graph overhead,
   external data files, tokenizer assets, and runtime buffers are counted.
-- Granite Speech 4.1 2B uses a q4 Transformers.js package, the same size class as
-  Granite 4.0 q4. Its config is identical to Granite 4.0 1B Speech in every
+- Granite Speech 4.1 2B (removed 2026-11-25; 5.0 2B is 1.73 GB) used a q4
+  Transformers.js package, the same size class as Granite 4.0 q4. Its config is identical to Granite 4.0 1B Speech in every
   dimension and both name the same LLM backbone (`ibm-granite/granite-4.0-1b-base`),
   so the "1b" and "2b" in the two names count different things: 4.0 is named
   after the language-model backbone, 4.1 after the whole package (backbone plus
@@ -436,10 +435,8 @@ For the current Windows Intel GPU test machine:
   <https://www.mintlify.com/ggml-org/llama.cpp/concepts/gguf-format>
 - Cohere Transcribe model card:
   <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026>
-- Granite ONNX/WebGPU model card:
-  <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>
-- Granite Speech 4.1 2B q4 ONNX-web export (used by the app):
-  <https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX>
+- Granite Speech 5.0 2B q4 ONNX-web export (used by the app):
+  <https://huggingface.co/ibm-granite/granite-speech-5.0-2b-ONNX>
 - Nemotron 3.5 multilingual INT4 ONNX export:
   <https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4>
 - Official ORT GenAI Nemotron Python example and language-ID mapping:

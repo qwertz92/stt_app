@@ -420,12 +420,12 @@ def test_controller_history_uses_transcription_settings_snapshot(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     current_settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        model_size="tiny",
+        model_size="large-v3-turbo",
         keep_transcript_in_clipboard=False,
     )
     transcribe_settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
-        model_size="base",
+        model_size="distil-large-v3.5",
         keep_transcript_in_clipboard=False,
     )
     history_store = TranscriptHistoryStore(tmp_path / "history.json")
@@ -444,7 +444,7 @@ def test_controller_history_uses_transcription_settings_snapshot(tmp_path):
     controller._on_transcription_ready("model snapshot")
 
     entries = history_store.load()
-    assert entries[0].model == "base"
+    assert entries[0].model == "distil-large-v3.5"
 
     controller.shutdown()
     _ = app
@@ -455,13 +455,13 @@ def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
     current_settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         mode="streaming",
-        model_size="tiny",
+        model_size="large-v3-turbo",
         keep_transcript_in_clipboard=False,
     )
     stream_settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         mode="streaming",
-        model_size="base",
+        model_size="distil-large-v3.5",
         keep_transcript_in_clipboard=False,
     )
     history_store = TranscriptHistoryStore(tmp_path / "history.json")
@@ -490,8 +490,10 @@ def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
     )
 
     entries = history_store.load()
-    assert entries[0].model == "base"
-    assert last_recording_store.transcribing == [("local", "base", "streaming")]
+    assert entries[0].model == "distil-large-v3.5"
+    assert last_recording_store.transcribing == [
+        ("local", "distil-large-v3.5", "streaming")
+    ]
     assert last_recording_store.transcribing_ids == ["rec-1"]
 
     controller.shutdown()
@@ -1348,7 +1350,9 @@ def test_a_preload_worker_that_cannot_be_scheduled_is_reported(failure):
     with nothing to complete the generation they said so for good. A thread
     that cannot be allocated raises `MemoryError` as well as `RuntimeError`."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(
+        engine="local", model_size="large-v3", hotkey=FALLBACK_HOTKEY
+    )
     overlay = FakeOverlay()
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -1383,7 +1387,9 @@ def test_a_preload_that_cannot_be_scheduled_is_retried_by_the_next_save():
     made to fix the problem found nothing to retry until the old worker
     finished -- and `_preload_owns_overlay` kept the idle line away too."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(
+        engine="local", model_size="large-v3", hotkey=FALLBACK_HOTKEY
+    )
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
@@ -1416,7 +1422,9 @@ def test_a_preload_that_cannot_be_scheduled_is_retried_by_the_next_save():
 
 def test_controller_preload_failure_is_reported_without_fallback():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(
+        engine="local", model_size="large-v3", hotkey=FALLBACK_HOTKEY
+    )
     overlay = FakeOverlay()
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -1571,7 +1579,9 @@ def test_webgpu_batch_transcriber_is_cached_when_keep_loaded(monkeypatch):
 
 def test_preload_worker_failure_never_changes_selected_model(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(
+        engine="local", model_size="large-v3", hotkey=FALLBACK_HOTKEY
+    )
     store = FakeSettingsStore(settings)
     controller = DictationController(
         settings_store=store,
@@ -1598,7 +1608,7 @@ def test_preload_worker_failure_never_changes_selected_model(monkeypatch):
     )
 
     def fake_get_or_create(s: AppSettings):
-        if s.model_size == "medium":
+        if s.model_size == "large-v3":
             return mediums
         raise AssertionError("unexpected model size")
 
@@ -1614,7 +1624,7 @@ def test_preload_worker_failure_never_changes_selected_model(monkeypatch):
     assert emitted
     assert emitted[-1][1] is False
     assert "No fallback model was used" in emitted[-1][2]
-    assert controller.settings.model_size == "medium"
+    assert controller.settings.model_size == "large-v3"
     assert store.saved is None
 
     controller.shutdown()
@@ -1634,11 +1644,11 @@ def test_stale_preload_completion_does_not_override_active_progress():
     )
 
     controller._preload_generation = 2
-    controller._preload_target_model = "medium"
+    controller._preload_target_model = "large-v3"
 
     controller._on_model_preload_done(1, False, "old model failed")
 
-    assert controller._preload_target_model == "medium"
+    assert controller._preload_target_model == "large-v3"
     assert controller._overlay.states == []
     controller.shutdown()
     _ = app
@@ -1898,7 +1908,7 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         engine="local",
-        model_size="granite-4.0-1b-speech",
+        model_size="granite-speech-5.0-2b",
         hotkey=FALLBACK_HOTKEY,
         keep_onnx_model_loaded=False,
     )
@@ -2335,7 +2345,7 @@ def test_a_save_that_does_not_change_the_runtime_keeps_the_loaded_model(change):
 @pytest.mark.parametrize(
     "change",
     [
-        {"model_size": "medium"},
+        {"model_size": "large-v3"},
         {"engine": "groq"},
         {"custom_vocabulary": "Kubernetes, Nemotron"},
         {"silence_gate_enabled": False},
@@ -2448,7 +2458,7 @@ _LOCAL_RUNTIME_FIELDS = [
     # this is the common case rather than an exotic one.
     (
         "cohere-transcribe-03-2026",
-        {"onnx_auto_preferred_devices": {"granite-speech-4.1-2b": "cpu"}},
+        {"onnx_auto_preferred_devices": {"granite-speech-5.0-2b": "cpu"}},
         False,
     ),
     # Measured as fastest, and already the device this chain starts with:
@@ -2565,7 +2575,7 @@ def test_a_save_that_changes_the_model_starts_a_preload():
         settings
     )
 
-    controller._settings_store._settings = replace(settings, model_size="medium")
+    controller._settings_store._settings = replace(settings, model_size="large-v3")
     controller.on_settings_changed()
 
     assert preloads == [True]
@@ -2769,7 +2779,7 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
     [
         ("groq", {"groq_model": "whisper-large-v3"}, True),
         ("groq", {"openai_model": "gpt-4o-transcribe"}, False),
-        ("groq", {"model_size": "medium"}, False),
+        ("groq", {"model_size": "large-v3"}, False),
         ("groq", {"has_groq_key": True}, True),
         (
             "azure",
@@ -2783,7 +2793,7 @@ def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
         ("openai", {"custom_vocabulary": "Kubernetes"}, True),
         # ElevenLabs exposes no biasing input, so the term list never reaches it.
         ("elevenlabs", {"custom_vocabulary": "Kubernetes"}, False),
-        ("elevenlabs", {"model_size": "medium"}, False),
+        ("elevenlabs", {"model_size": "large-v3"}, False),
         ("custom", {"custom_endpoint": "http://localhost:8000/v1"}, True),
         ("custom", {"custom_api_mode": "chat"}, True),
         ("custom", {"custom_key_command": "token-helper --print"}, True),
@@ -4148,7 +4158,7 @@ def test_w16_a_retry_after_a_refused_save_spares_the_recording_the_store_holds(
 
 
 _COHERE = "cohere-transcribe-03-2026"
-_GRANITE = "granite-speech-4.1-2b"
+_GRANITE = "granite-speech-5.0-2b"
 _NEMOTRON_MODEL = "nemotron-3.5-asr-streaming-0.6b-int4"
 
 

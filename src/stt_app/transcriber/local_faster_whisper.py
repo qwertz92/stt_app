@@ -28,6 +28,7 @@ from ..config import (
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
+    RETIRED_LOCAL_MODEL_REPOS,
     SILERO_STREAM_MIN_PROBABILITY,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
@@ -152,7 +153,11 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
 
     Includes both HuggingFace-style cache folders and flat model folders.
     """
-    repo_id = _MODEL_REPO_MAP.get(model_name)
+    # A retired model has no download any more but still has a folder the
+    # Models tab can list and delete, found by the same exact names.
+    repo_id = _MODEL_REPO_MAP.get(model_name) or RETIRED_LOCAL_MODEL_REPOS.get(
+        model_name
+    )
     if repo_id is None:
         return []
 
@@ -746,7 +751,7 @@ def _download_faster_whisper_via_modelscope(
 _SNAPSHOT_REQUIRED_FILES = frozenset({"config.json", "model.bin", "tokenizer.json"})
 _SNAPSHOT_VOCABULARY_PREFIX = "vocabulary."
 # The repositories that ship `preprocessor_config.json` (their Hugging Face
-# file listings, read 2026-09-27); tiny to medium ship none and need none.
+# file listings, read 2026-09-27); `small` ships none and needs none.
 # `scripts/import_model.py` validates an import against the same set.
 PREPROCESSOR_CONFIG_MODELS = frozenset(
     {"large-v3", "large-v3-turbo", "distil-large-v3.5"}
@@ -835,6 +840,20 @@ def find_cached_models(model_dir: str = "") -> list[str]:
 
     # Return in the canonical order from VALID_MODEL_SIZES.
     return [m for m in VALID_MODEL_SIZES if m in found]
+
+
+def find_retired_models_on_disk(model_dir: str = "") -> list[str]:
+    """The retired models whose folder still exists, in the roster's order.
+
+    Presence of the folder is the test, not a validated snapshot: the point is
+    to offer the space back, and a half-removed copy holds space too. Never
+    part of `find_cached_models`, which answers "can this be run".
+    """
+    return [
+        name
+        for name in RETIRED_LOCAL_MODEL_REPOS
+        if cached_model_paths(name, model_dir)
+    ]
 
 
 def _default_model_factory(*args, **kwargs):

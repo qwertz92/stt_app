@@ -733,7 +733,7 @@ def _providers_tab_index(dialog: SettingsDialog) -> int:
 
 
 _LONG_BENCHMARK_FAILURE = (
-    "The benchmark stopped early: granite-speech-4.1-2b failed to load because "
+    "The benchmark stopped early: granite-speech-5.0-2b failed to load because "
     "the ONNX Runtime session could not be created on this machine. "
     "Cases already measured were saved."
 )
