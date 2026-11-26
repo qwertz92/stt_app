@@ -946,7 +946,16 @@ class _RemoteProvidersMixin:
         if not hasattr(self, "import_engine_combo"):
             return
         self._write_import_engine_note()
-        # Never while an import runs: Start is disabled for its duration.
+        self._refresh_import_start_button()
+
+    def _refresh_import_start_button(self) -> None:
+        """The one place that turns Start on: the gate, never a bare file check.
+
+        Every path that gives Start back (a finished import, a credential
+        failure, a changed file or engine) comes here; `bool(path)` in two of
+        them once re-enabled Start for Meta plus an mp3. Never while an import
+        runs: Start is disabled for its duration.
+        """
         if not self._import_progress_timer.isActive():
             self.import_start_button.setEnabled(self._import_start_allowed())
 

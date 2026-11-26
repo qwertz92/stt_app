@@ -392,7 +392,7 @@ class _ImportTabMixin:
         if not Path(path).is_file():
             self.import_result_label.setText(f"Selected file no longer exists: {path}")
             self.import_result_label.setStyleSheet("color: #b71c1c;")
-            self.import_start_button.setEnabled(False)
+            self._refresh_import_start_button()
             return
         self._start_import_transcription(path)
 
@@ -439,7 +439,7 @@ class _ImportTabMixin:
             self.import_copy_button.setEnabled(bool(detail))
             self.import_file_button.setEnabled(True)
             self.import_last_recording_button.setEnabled(True)
-            self.import_start_button.setEnabled(bool(self._selected_import_file_path))
+            self._refresh_import_start_button()
             self.import_engine_combo.setEnabled(True)
             self.import_model_combo.setEnabled(True)
             self.import_language_combo.setEnabled(
@@ -554,7 +554,7 @@ class _ImportTabMixin:
         self._import_progress_started_at = None
         self.import_file_button.setEnabled(True)
         self.import_last_recording_button.setEnabled(True)
-        self.import_start_button.setEnabled(bool(self._selected_import_file_path))
+        self._refresh_import_start_button()
         self.import_engine_combo.setEnabled(True)
         self.import_model_combo.setEnabled(True)
         self.import_language_combo.setEnabled(self.import_language_combo.count() > 1)

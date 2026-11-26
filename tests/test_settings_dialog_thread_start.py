@@ -262,13 +262,17 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(
 
 
 def test_an_import_that_cannot_start_gives_the_import_controls_back(
-    monkeypatch, refusal
+    monkeypatch, refusal, tmp_path
 ):
+    # A file that exists: Start follows `_import_start_allowed`, which is off
+    # for a path that is not a file.
+    audio = tmp_path / "dummy.wav"
+    audio.write_bytes(b"RIFF")
     dialog = _make_dialog(AppSettings(engine="local"))
-    dialog._set_selected_import_file("dummy.wav")
+    dialog._set_selected_import_file(str(audio))
     _refuse_new_threads(monkeypatch, refusal)
 
-    dialog._start_import_transcription("dummy.wav")
+    dialog._start_import_transcription(str(audio))
 
     assert dialog._import_progress_started_at is None
     assert dialog._background_work_active() is False

@@ -448,7 +448,9 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     changes (`_import_file_issue`, `_import_start_allowed`,
     `_WAV_ONLY_IMPORT_ENGINES`). The check is the extension only: a `.wav`
     that is not 16-bit PCM is still refused at the start, with the sentence
-    above.
+    above. Every place that gives Start back goes through
+    `_refresh_import_start_button` (a finished import and a credential
+    failure used `bool(path)` and re-enabled it for Meta plus an mp3).
   - **The connection test has the 15 s bound** of the other key checks
     (`_KEY_CHECK_TIMEOUT_S`); it sends one second of silence, and a real part
     keeps the transcription timeout (up to 300 s).
