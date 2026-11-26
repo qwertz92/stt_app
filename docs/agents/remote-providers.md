@@ -42,6 +42,24 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/remote-providers.m
     expected_languages` only, which the app never sent. The 32 codes of
     `ASSEMBLYAI_STT_3_7_LANGUAGE_MODES` are the streaming spec's accepted list;
     AssemblyAI's OpenAPI spec also carries `yue`, `nn`, `xh`, `zu`.
+  - **Streaming language** (2026-11-26; streaming WebSocket spec read that
+    day, https://www.assemblyai.com/docs/streaming/api-spec/streaming-websocket.md):
+    the realtime model has no `language` parameter. `language_codes` steers
+    it toward a set of languages ("per-token biasing"); unset, it
+    code-switches across its 32 languages by itself, and the spec's
+    `language_detection` only reports the detected language. So Auto sends
+    nothing, a chosen language is sent as `language_codes=[code]`
+    (`_stream_language_codes`; SDK 1.10.11 `StreamingParameters` has the
+    field), and the picker in Streaming offers `ASSEMBLYAI_STT_3_7_LANGUAGE_MODES`
+    whatever the batch model is. A saved language outside the 32 (a
+    Universal-2 batch choice) streams in Auto with a log warning; the picker
+    shows Auto with a note naming the language and keeps the saved value.
+    Until 2026-11-26 the picker was locked to Auto and the choice never
+    reached the request (a leftover of Universal-Streaming), so a language
+    an existing user had saved for batch steers streaming from then on;
+    Auto restores code-switching. **Unverified
+    live** (no key): that the service honours `language_codes` as the spec
+    says.
   - **Streaming**: `assemblyai-stt-3-7-realtime` ($0.30/h), not the `-agent`
     voice-agent model ($0.45/h) and not `universal-3-6-pro`, which AssemblyAI
     keeps supported as the previous generation. Same endpoint and message

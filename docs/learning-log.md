@@ -3,6 +3,176 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: the retranscribe dialog's empty status band is accepted
+
+Checked that the band still exists: the status label is 16 px high (24 px with
+the layout spacing) and empty until a run starts. Removal was estimated at about
+150 lines plus layout tests for a dialog open for seconds; recorded in
+`docs/agents/known-limitations.md` instead of built.
+
+## 2026-11-26: AssemblyAI streaming now receives the chosen language
+
+Structurally: in Streaming the language picker offers the 32 languages of
+STT-3.7-Realtime (it was locked to Auto) and `start_stream` sends the choice as
+`language_codes=[code]`. Found by reading the streaming WebSocket spec: the
+realtime model has no `language` parameter but takes `language_codes` as
+steering, unset it code-switches by itself. Before, a German dictation could not
+tell the model it was German. A saved language outside the 32 streams in Auto,
+logs a warning and is named in the picker's note. An existing user notices one
+change: a language that was already saved (used only by batch until now, because
+streaming was locked to Auto) steers streaming too and shows in the picker;
+choosing Auto brings the model's own code-switching back. Not verified against
+the live service (no key). Tests pin the offered list, the request field and the fallback.
+
+## 2026-11-26: "Experimental" only where streaming still is
+
+Structurally: the Mode picker reads "Streaming" for local + Nemotron and
+"Streaming (Experimental)" for faster-whisper, AssemblyAI and Deepgram, decided
+by `config.streaming_is_experimental` and following the selection. The reason
+is the 2026-11-25 measurement (11 clips, CPU): Nemotron streaming 10.5 % WER
+equal to its batch mode, faster-whisper rolling window 22.0 to 44.0 % against
+4.5 to 15.4 % in batch; the cloud engines were not measured. README (feature
+list, settings table, status table), quick-start and models.md say which
+streaming is experimental. The picker is as wide as its form column (673 px in
+both states), so the text change moves nothing.
+
+## 2026-11-26: a queued job counts from its recording's start, not from its submission
+
+Second review of the doubtful-row rule (the 2026-11-25 entry below).
+`_TranscriptionJob.recorded_after_paste` was read from `_paste_serial` in
+`_register_transcription_job`, and a job is registered at the stop.
+Reproduced in immediate-insert mode: record A and stop, start B, A is pasted
+and reported as "not in a text field" (row listed), stop B, B is pasted --
+the row was gone, although B's dictation began before the report and the
+overlay showed Listening at that moment. The serial is now taken in
+`start_recording`, next to the target window, and carried to the job; a
+Retry has no recording of its own and still counts from its submission.
+Lesson: "when was this dictated" has two candidate moments, and the one the
+code reads most conveniently (the submission) is the wrong one whenever a
+recording overlaps a delivery.
+`test_one_doubtful_paste_among_queued_results_in_every_completion_order`
+walks 180 cases: 3 and 4 queued results, every completion order, the doubt
+on the first, second or third paste, both delivery modes.
+
+## 2026-11-25: the read receipt's owner window needs the interpreter -- what the review found
+
+Structurally: every copy the app makes goes through one function
+(`clipboard_copy.copy_text`) and the Win32 backend; a transcript is announced
+only when its reader cannot be made to wait for Python (not for a window of
+this app, not while an in-process ONNX runtime is in use); a doubtful row is
+dropped by the paste of a later dictation instead of by any paste. Details in
+`docs/agents/text-insertion.md` and `docs/agents/known-limitations.md`.
+
+The receipt of the entry below answers a clipboard request from a Python
+callback on its own thread. The review of that change showed what this costs
+whenever another thread keeps the interpreter lock in one piece:
+
+- **A Copy button froze the app for five seconds.** `QClipboard.setText`
+  called from Python keeps the lock, and its `EmptyClipboard` sends the owner
+  window a message only the callback can answer. Reproduced: 5012 ms through
+  Qt, 1.1 ms through `TextInserter.copy_text`
+  (`scripts/diagnose_clipboard_copy_stall.py`). A test now parses the package
+  and fails on any Python-level use of the Qt clipboard.
+- **A paste into an own text field can freeze it too**, when the field's key
+  handling runs through a Python override: 35.2 s without the text arriving
+  in a probe field, 25 ms once such a paste is written plainly
+  (`scripts/diagnose_own_window_paste.py`). The app has no such field; the
+  rule keeps a future one from finding out.
+- **Creating an ONNX session keeps the lock for 1.0-1.9 s**, Nemotron's
+  decoding for up to 0.8 s; faster-whisper stayed at 62 ms
+  (`scripts/diagnose_interpreter_stall.py`, table in the area file). A paste
+  made while such a runtime is leased has no receipt.
+- **The lesson about the method.** `ctypes` and pywin32 calls release the
+  interpreter lock, PySide calls into Qt mostly do not, and a ctypes callback
+  takes it. A window procedure written in Python is therefore only as
+  responsive as the least cooperative native call in the process. The first
+  round measured the receipt from scripts whose main thread sat in ctypes
+  calls, which is the one situation where this cannot show. Measure such a
+  design inside a Qt event loop, with a second thread doing real work.
+- **A probe target must be another process.** The release check's new part H
+  pastes into an EDIT window of a child process: one in the checking process
+  would now get a plain write and prove nothing about the receipt.
+- **Heredocs through the agent's shell lose a backslash level.** A Python
+  patch fed through `python - <<'EOF'` had `\\n` turned into a newline and a
+  lone surrogate escape turned into the character, and `write_text` then
+  emptied a test file before it failed to encode. Patch scripts with escapes
+  are written as files.
+
+Also changed: the doubtful row rule (the owner's report of 2026-11-24 that the
+notice vanished with several results queued), `TextInserter.close` at
+interpreter exit, and the owner's text payload for a lone surrogate.
+
+## 2026-11-25: "inserted" without evidence -- two causes closed, a read receipt, and what Chrome and Edge hide
+
+Structurally: a new module `clipboard_owner.py` owns the clipboard for the
+length of a restoring paste (the transcript is announced, and the request for
+it is a read receipt); a new module `own_window_focus.py` answers for this
+app's own windows before a paste; `TextInserter` reads the modifier keys a
+second time right before the keystroke. Details in
+`docs/agents/text-insertion.md` and `docs/agents/known-limitations.md`.
+
+The owner's report (2026-11-24): the overlay says inserted, nothing arrived;
+with several results queued, the one that missed is no longer shown once the
+next one landed. His log of 2026-10-24..11-24 holds 1040 pastes, every one
+`outcome=pasted`, and about fifteen whose text was pasted again by hand within
+a minute.
+
+- **Proved and closed: a dictation aimed at our own Settings window.** One of
+  the fifteen (2026-11-24 22:48, target class `Qt6120QWindowIcon`). The focus
+  sat on a widget that takes no text. Qt is now asked before the clipboard is
+  touched; the result is the ordinary "Not inserted" report with Insert.
+- **Closed by reading the code: a modifier pressed in the 25 ms before the
+  keystroke.** The modifier wait ran before the clipboard write; a Ctrl+Alt
+  pressed afterwards turned the injected Ctrl+V into Ctrl+Alt+V. The keys are
+  now read again right before the keystroke. No incident in the log could be
+  pinned on it; the log does show hotkeys held while results arrive.
+- **New evidence: nobody fetched the transcript.** With delayed rendering the
+  app learns whether any program asked for the text. "Nobody" is a failed
+  paste whose row stays listed across later pastes. Measured with real
+  windows: one true miss in 20 EDIT pastes caught, and every one of 114
+  landed pastes had a fetch (no false alarm).
+- **Measured, and it limits the receipt in two browsers: Chrome and Edge
+  fetch the text on every Ctrl+V.** A few milliseconds after the keystroke
+  with the focus on a textarea, a button or the page body, without naming a
+  window. Two earlier assumptions fell with that: that a fetch by the target
+  means the paste landed, and that the receipt would show a late renderer
+  there. An overrule of the caret check by a "read" receipt was written and
+  removed the same night: it would have silenced true reports.
+- **The first conclusion was too wide: Electron is not Chrome.** The entry
+  first said "blind in Chromium and Electron", from two browsers. A
+  throwaway VS Code window (Electron 43.8.9) made no request at all with the
+  focus on a button or the page body, and one request per paste that landed:
+  there the receipt is evidence. The owner pastes into an Electron app (the
+  Claude desktop app), which could not be driven itself. Measure the kind of
+  window the claim is about before writing the claim.
+- **Tried and rejected: refusing the browsers' first fetch.** Edge then
+  pasted through a second request and asked nothing for a button; Chrome
+  asked again 220-267 ms later even for the page body; Electron's text field
+  stayed empty in 8 of 8, because its only request is the paste.
+- **Measured for the first time: a busy page pastes the old clipboard.** In
+  Chrome and Edge a page busy for 2.2 s received the previous clipboard text
+  after the 1.5 s restore. With an empty clipboard before the dictation (the
+  owner's was empty during the first probes) that reads as "nothing
+  arrived". In the Electron window the same page fetched the text after 2.04
+  s and received the transcript, because an unfetched transcript now waits
+  up to 3 s. In the owner's log the Claude window once answered its target
+  check only after 754 ms (about 28 ms ordinarily); a stall of 1.5 s cannot
+  be read from the log at all, so this stays a possible cause, not a proved
+  one.
+- **The second symptom**: in v0.13.0 a failed paste keeps its row (cf1a37a,
+  v0.11.0); the only row a later paste removes is the doubtful "not in a text
+  field" one (the rule of 2026-10-03, 04da05e). Which of the two the owner
+  saw cannot be told. An `unread` paste is now a failed row that stays.
+- **Three things the probes taught about probing.** (1) Edge's launcher
+  process exits and the browser lives on: `kill_process_tree(launcher)` left
+  an instance running, and the next run attached to its DevTools port and
+  measured the old window. (2) A page focused with JavaScript has no keyboard
+  focus until the window does (`document.hasFocus()`; `Page.bringToFront`
+  gave it). (3) Windows calls a window procedure from inside
+  `CreateWindowEx`: the first real owner window was never created because
+  the procedure needed a field set only after the call; the unit tests'
+  scripted Windows sent no creation message until one was added.
+
 ## 2026-11-25: local roster revised on measurements (Granite 5.0, Fluid Speech Pro)
 
 Structurally: `config.RETIRED_LOCAL_MODEL_SUCCESSORS` maps every removed local

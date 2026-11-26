@@ -1664,6 +1664,192 @@ def test_the_wm_paste_road_does_not_re_read_the_foreground():
     assert "paste:123" in backend.calls
 
 
+class ModifierAwareBackend(ForegroundAwareBackend):
+    """A backend whose modifier keys a test presses and releases.
+
+    `polls` scripts `modifiers_released`, the one reading right before the
+    keystroke: one answer per call, the last one repeating. `waits` scripts
+    `wait_for_modifier_release` the same way; `during_wait` runs inside every
+    wait after the first, which is where a user's Ctrl+C or Alt+Tab happens.
+    """
+
+    def __init__(self, polls=(True,), waits=(True,), during_wait=None):
+        super().__init__()
+        self._polls = list(polls)
+        self._waits = list(waits)
+        self._during_wait = during_wait
+        self._wait_count = 0
+
+    def modifiers_released(self):
+        answer = self._polls.pop(0) if len(self._polls) > 1 else self._polls[0]
+        self.calls.append(f"poll_modifiers:{answer}")
+        return answer
+
+    def wait_for_modifier_release(self):
+        self.calls.append("wait_modifiers")
+        self._wait_count += 1
+        if self._wait_count > 1 and self._during_wait is not None:
+            self._during_wait()
+        return self._waits.pop(0) if len(self._waits) > 1 else self._waits[0]
+
+
+def _modifier_inserter(backend):
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+    return inserter, scheduler
+
+
+def test_a_modifier_pressed_after_the_first_wait_holds_the_keystroke():
+    """Ctrl+Alt going down between the first wait and the keystroke.
+
+    The wait at the start of the transaction ends before the clipboard write
+    and the settle sleep, about 25 ms before the keystroke. The record hotkey
+    of the next dictation pressed inside that gap made the target see
+    Ctrl+Alt+V, which pastes nothing, while the transaction reported a paste.
+    """
+    backend = ModifierAwareBackend(polls=(False, True))
+    inserter, _scheduler = _modifier_inserter(backend)
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+
+    assert backend.calls == [
+        "wait_modifiers",
+        "capture",
+        "set:hello",
+        "poll_modifiers:False",
+        "wait_modifiers",
+        "poll_modifiers:True",
+        "paste:123",
+    ]
+    assert backend.foreground_reads == [4242, 4242, 4242], (
+        "the foreground is read again after the wait: an Alt+Tab fits into it"
+    )
+
+
+def test_released_modifiers_cost_one_poll_and_no_second_wait():
+    backend = ModifierAwareBackend(polls=(True,))
+    inserter, _scheduler = _modifier_inserter(backend)
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+
+    assert backend.calls == [
+        "wait_modifiers",
+        "capture",
+        "set:hello",
+        "poll_modifiers:True",
+        "paste:123",
+    ]
+
+
+def test_a_modifier_that_stays_down_before_the_keystroke_cancels_the_paste():
+    backend = ModifierAwareBackend(polls=(False,), waits=(True, False))
+    inserter, scheduler = _modifier_inserter(backend)
+
+    with pytest.raises(TextInsertionError, match="remained held") as raised:
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError)
+    assert not any(call.startswith("paste:") for call in backend.calls)
+    assert backend.calls[-1] == "restore", (
+        "nothing was pasted, so the user's clipboard is put back inside the call"
+    )
+    assert backend.state["text"] == "old"
+    assert scheduler.calls == []
+
+
+def test_a_modifier_pressed_again_after_every_wait_cancels_the_paste():
+    """Bounded: the Qt thread is never held for more than the configured
+    rounds of the wait, however the keys are drummed."""
+    backend = ModifierAwareBackend(polls=(False,), waits=(True,))
+    inserter, _scheduler = _modifier_inserter(backend)
+
+    with pytest.raises(TextInsertionError, match="kept being pressed") as raised:
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError)
+    assert not any(call.startswith("paste:") for call in backend.calls)
+    assert (
+        backend.calls.count("wait_modifiers")
+        == 1 + text_inserter.PASTE_MODIFIER_RECHECK_ROUNDS
+    )
+    assert backend.state["text"] == "old"
+
+
+def test_a_copy_made_while_the_keystroke_waits_for_the_modifier_is_not_pasted():
+    """The held key was the Ctrl of a Ctrl+C: the clipboard is the user's."""
+    backend = ModifierAwareBackend(polls=(False, True))
+    backend._during_wait = lambda: backend.simulate_user_copy("the user's copy")
+    inserter, scheduler = _modifier_inserter(backend)
+
+    with pytest.raises(ClipboardContentionError):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not any(call.startswith("paste:") for call in backend.calls)
+    assert "restore" not in backend.calls
+    assert backend.state["text"] == "the user's copy"
+    assert scheduler.calls == []
+
+
+def test_a_window_switch_while_the_keystroke_waits_for_the_modifier_aborts():
+    """The held key was the Alt of an Alt+Tab."""
+    backend = ModifierAwareBackend(polls=(False, True))
+    backend._during_wait = lambda: setattr(backend, "foreground", 9999)
+    inserter, _scheduler = _modifier_inserter(backend)
+
+    with pytest.raises(TextInsertionError, match="foreground window changed"):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not any(call.startswith("paste:") for call in backend.calls)
+    assert backend.state["text"] == "old"
+
+
+def test_the_wm_paste_road_does_not_poll_the_modifiers():
+    """WM_PASTE is a message: a held key cannot turn it into something else."""
+    backend = ModifierAwareBackend(polls=(False,))
+    backend.paste_mode = "wm_paste"
+    inserter, _scheduler = _modifier_inserter(backend)
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="wm_paste"
+    )
+
+    assert not any(call.startswith("poll_modifiers") for call in backend.calls)
+
+
+def test_the_backend_polls_the_modifier_keys_once_without_waiting(monkeypatch):
+    backend = Win32ClipboardBackend()
+    down = {text_inserter.VK_MENU}
+    asked = []
+
+    def get_async_key_state(vk):
+        asked.append(vk)
+        return 0x8000 if vk in down else 0
+
+    backend._user32 = SimpleNamespace(GetAsyncKeyState=get_async_key_state)
+    monkeypatch.setattr(
+        text_inserter.time, "sleep", lambda _s: pytest.fail("the poll slept")
+    )
+
+    assert backend.modifiers_released() is False
+    down.clear()
+    assert backend.modifiers_released() is True
+    assert text_inserter.VK_CONTROL in asked
+
+
 def test_a_deferred_restore_waits_for_a_busy_target_and_gives_up_at_the_deadline():
     """A target that has not answered yet has not read the clipboard yet.
 

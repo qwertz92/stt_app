@@ -24,9 +24,10 @@ from conftest import (
     ImmediateExecutor,
     make_controller,
 )
-from PySide6 import QtGui, QtWidgets
+from PySide6 import QtWidgets
 
 import stt_app.controller as controller_module
+from stt_app import clipboard_copy
 from stt_app.config import (
     ASSEMBLYAI_STT_3_7_LANGUAGE_MODES,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -235,7 +236,7 @@ def test_controller_does_not_paste_when_target_focus_restore_fails(monkeypatch):
     focus_helper = FakeWindowFocusHelper()
     focus_helper.restore_target_window = lambda _hwnd: False
     clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", clipboard.setText)
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
@@ -287,7 +288,7 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
         window_focus_helper=focus_helper,
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._target_window_handle = 555
     controller._on_transcription_ready("copy me")
@@ -329,7 +330,7 @@ def test_controller_preserves_clipboard_on_contention_error(monkeypatch):
     )
     fake_clipboard = FakeClipboard()
     fake_clipboard.setText("user copy")
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._target_window_handle = 555
     controller._on_transcription_ready("do not overwrite")
@@ -367,7 +368,7 @@ def test_failed_insert_shows_the_transcript_and_copies_only_it(monkeypatch):
         logger=logging.getLogger("test.controller"),
         window_focus_helper=FakeWindowFocusHelper(),
     )
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: FakeClipboard())
+    monkeypatch.setattr(clipboard_copy, "_writer", FakeClipboard().setText)
 
     controller._target_window_handle = 555
     controller._on_transcription_ready("the transcribed sentence")
@@ -401,7 +402,7 @@ def test_controller_records_history_when_insert_fails(monkeypatch, tmp_path):
         history_store=history_store,
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._last_transcribe_settings = settings
     controller._on_transcription_ready("saved despite paste failure")
@@ -515,7 +516,7 @@ def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
         window_focus_helper=FakeWindowFocusHelper(),
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._target_window_handle = 123
     controller._on_transcription_ready("persist me")
@@ -568,7 +569,7 @@ def test_controller_reveals_overlay_longer_when_insertion_fails(monkeypatch):
     )
     controller._target_window_handle = 123
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._on_transcription_ready("insertion will fail")
 
@@ -595,7 +596,7 @@ def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
         window_focus_helper=FakeWindowFocusHelper(),
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     assert controller.copy_last_transcript_to_clipboard() is False
 
@@ -1056,7 +1057,7 @@ def test_streaming_finalize_appends_without_copying_revision(monkeypatch):
         window_focus_helper=FakeWindowFocusHelper(),
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._active_session_mode = "streaming"
     controller._stream_committed_text = "hello"
@@ -1092,7 +1093,7 @@ def test_streaming_finalize_never_removes_live_tail(monkeypatch):
         window_focus_helper=FakeWindowFocusHelper(),
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._active_session_mode = "streaming"
     controller._stream_committed_text = "hello world"
@@ -1130,7 +1131,7 @@ def test_streaming_finalize_inserts_final_text_when_live_insertion_disabled(
         window_focus_helper=focus_helper,
     )
     fake_clipboard = FakeClipboard()
-    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    monkeypatch.setattr(clipboard_copy, "_writer", fake_clipboard.setText)
 
     controller._active_session_mode = "streaming"
     controller._target_window_handle = focus_helper.captured

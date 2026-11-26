@@ -304,6 +304,20 @@ LOCAL_ONNX_ASR_MODEL_SIZES = (
 GRANITE_CTC_MODEL_SIZE = "granite-speech-5.0-470m-turboctc"
 LOCAL_GRANITE_CTC_MODEL_SIZES = (GRANITE_CTC_MODEL_SIZE,)
 
+# The local runtimes that run inside the app's own process on ONNX Runtime.
+# Creating their sessions kept the interpreter lock in one piece for
+# 1.0-1.9 s, and Nemotron's decoding for up to 0.8 s (2026-11-25,
+# `scripts/diagnose_interpreter_stall.py`); faster-whisper stayed at 62 ms
+# and the Node runner is another process. While one of these loads -- the
+# second group: or decodes -- a pasted transcript is not announced for a
+# read receipt (docs/agents/text-insertion.md).
+LOCAL_INTERPRETER_HOLDING_LOAD_MODEL_SIZES = (
+    LOCAL_NEMOTRON_MODEL_SIZES
+    + LOCAL_ONNX_ASR_MODEL_SIZES
+    + LOCAL_GRANITE_CTC_MODEL_SIZES
+)
+LOCAL_INTERPRETER_HOLDING_DECODE_MODEL_SIZES = LOCAL_NEMOTRON_MODEL_SIZES
+
 LOCAL_ONNX_MODEL_SIZES = (
     LOCAL_WEBGPU_MODEL_SIZES
     + LOCAL_NEMOTRON_MODEL_SIZES
@@ -1376,6 +1390,22 @@ def supports_streaming(engine: str, model_size: str = "") -> bool:
     )
 
 
+def streaming_is_experimental(engine: str, model_size: str = "") -> bool:
+    """Whether streaming with this selection is still labelled experimental.
+
+    Only local streaming with Nemotron is not: measured on 2026-11-25 it
+    reaches its batch mode's word error rate, while faster-whisper's rolling
+    window and the two cloud streaming engines (not measured) stay
+    experimental (docs/agents/streaming.md).
+    """
+    normalized_engine = str(engine or "").strip().lower()
+    normalized_model = str(model_size or "").strip()
+    return not (
+        normalized_engine == DEFAULT_ENGINE
+        and normalized_model in LOCAL_NEMOTRON_MODEL_SIZES
+    )
+
+
 def language_modes_for_selection(
     engine: str,
     model: str = "",
@@ -1386,7 +1416,8 @@ def language_modes_for_selection(
     normalized_mode = str(mode or "").strip().lower()
 
     if normalized_engine == "assemblyai" and normalized_mode == "streaming":
-        return ("auto",)
+        # Streaming always runs STT-3.7-Realtime, whatever the batch model is.
+        return ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
     if (
         normalized_engine == DEFAULT_ENGINE
         and normalized_model in LOCAL_ENGLISH_ONLY_MODELS
@@ -2545,6 +2576,14 @@ CLIPBOARD_RESTORE_DELAY_S = 1.5
 # good: a target this slow has demonstrably not read it yet, and restoring is
 # exactly what turns its eventual paste into the user's old content.
 CLIPBOARD_RESTORE_MAX_WAIT_S = 10.0
+# A transcript no program has fetched from the clipboard when its restore is
+# due (`clipboard_owner`: the read receipt) stays there until this long after
+# the keystroke, measured like the restore delay. Only then is the clipboard
+# put back and the paste reported as not inserted. Putting it back at the
+# restore delay made a target that reads later than that paste the user's old
+# clipboard content; waiting longer delays the report of a paste that went
+# to a button, and every paste queued behind it.
+PASTE_READ_RECEIPT_WAIT_S = 3.0
 # A restore that fails -- another program held the clipboard for longer than
 # one operation's opens, or closed our open after its `EmptyClipboard` -- is
 # written again from the captured state this many times, this far apart, on
@@ -2564,6 +2603,11 @@ CLIPBOARD_RESTORE_RETRY_DELAY_S = 1.0
 # the inserter waits for all physical modifiers to be released first.
 PASTE_MODIFIER_RELEASE_TIMEOUT_S = 1.5
 PASTE_MODIFIER_POLL_INTERVAL_S = 0.01
+# That wait ends before the clipboard write and the settle sleep, so the keys
+# are read once more right before the keystroke; a key pressed since then is
+# waited for again, at most this many times (the record hotkey of the next
+# dictation is one press; keys drummed beyond that cancel the paste).
+PASTE_MODIFIER_RECHECK_ROUNDS = 2
 # Before restoring the previous clipboard after a SendInput paste, wait until
 # the target window's thread answers WM_NULL again: a busy target has not
 # processed the injected Ctrl+V yet, and restoring early would make its late

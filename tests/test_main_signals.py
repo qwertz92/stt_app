@@ -1428,6 +1428,20 @@ def test_tray_quit_asks_while_a_transcription_is_pending(monkeypatch):
     assert quits == [True]
 
 
+def _wait_for_the_event_loop(condition, timeout_s: float = 5.0) -> bool:
+    """Run the Qt event loop until ``condition()`` holds; False after the bound.
+
+    PySide6's QTest has no `qWaitFor`. A fixed `qWait` against a short timer
+    fails on a loaded machine that delays the timer.
+    """
+    deadline = time.monotonic() + timeout_s
+    while not condition():
+        if time.monotonic() >= deadline:
+            return False
+        QtTest.QTest.qWait(5)
+    return True
+
+
 def test_the_settings_prebuild_waits_while_a_dictation_runs(monkeypatch):
     """The Settings dialog is built ahead on the Qt thread 2.5 s after start,
     which took 2.4-3.3 s in the owner's log; a dictation started right after
@@ -1452,7 +1466,13 @@ def test_the_settings_prebuild_waits_while_a_dictation_runs(monkeypatch):
     monkeypatch.setattr(main_module, "_SETTINGS_PREBUILD_DELAY_MS", 10)
     controller = FakeController()
     controller.session_active = True
-    controller.has_active_session = lambda: controller.session_active
+    checks = []
+
+    def has_active_session():
+        checks.append(True)
+        return controller.session_active
+
+    controller.has_active_session = has_active_session
     tray = _create_tray_icon(
         app=app,
         controller=controller,
@@ -1464,11 +1484,13 @@ def test_the_settings_prebuild_waits_while_a_dictation_runs(monkeypatch):
         open_history_dialog=lambda: None,
     )
 
-    QtTest.QTest.qWait(100)
+    # Not a fixed wait against the 10 ms timer: wait until the build step has
+    # run and put itself off three times (a loaded machine delays timers, so a
+    # sleep of a few timer periods proved nothing), bounded generously.
+    assert _wait_for_the_event_loop(lambda: len(checks) >= 3)
     assert built == [], "built while the dictation ran"
     controller.session_active = False
-    QtTest.QTest.qWait(100)
-    assert len(built) == 1
+    assert _wait_for_the_event_loop(lambda: len(built) == 1)
     QtTest.QTest.qWait(50)
     assert len(built) == 1, "built once"
     _ = tray

@@ -1,7 +1,7 @@
 """Exercise the clipboard backend and the paste transaction on the real desktop.
 
 WHAT IT CHECKS
-Seven things, in this order:
+Eight things, in this order:
 
   A. capture -> set transcript -> restore on a real clipboard holding text,
      HTML, a DIB image, a file list and "Preferred DropEffect": every format
@@ -31,6 +31,13 @@ Seven things, in this order:
      page with a focused textarea (a text field) and a focused button (not
      one); and that WM_PASTE is refused for that Chromium window before
      anything is sent, with the clipboard put back.
+  H. the read receipt with the real owner window (`clipboard_owner`): a
+     SendInput paste into an EDIT window of ANOTHER process is announced,
+     fetched by that window and reported `read`; and a copy made through
+     the app's writer while the owner window still holds the clipboard
+     returns within 500 ms (through Qt it took five seconds). The window
+     is a child process because a paste into a window of this process is
+     written plainly, without a receipt.
 
 WHY A FAKE CANNOT REPLACE IT
 Every clipboard test in the repository drives `Win32ClipboardBackend` against
@@ -46,12 +53,14 @@ WHAT IT TOUCHES
   and put back in a `finally`, and the run ends with a check that it came
   back. Its CONTENT is never printed or written to the report -- only format
   ids, format names and sizes.
-* The foreground, for parts D to F only. Two small EDIT windows appear, take
-  the focus for a few seconds and close again; part F also starts Edge with
+* The foreground, for parts D to F and H only. Two small EDIT windows (and a
+  third one in a child process for part H) appear, take the focus for a few
+  seconds and close again; part F also starts Edge with
   a throwaway profile in the sandbox, a local page and a DevTools port on
   127.0.0.1, and ends that Edge process tree. Because that steals the
   keyboard, those parts wait until the user has been idle for 12 seconds
-  (up to 10 minutes) and are skipped entirely with `--skip-focus`. Parts A to
+  (up to 10 minutes, `--idle-wait-limit`) and are skipped entirely with
+  `--skip-focus`. Parts A to
   C and G never take the focus.
 * Windows' clipboard history (Win+V), read through Windows PowerShell's
   WinRT projection. Parts A to F plant clipboards that stand for
@@ -121,6 +130,7 @@ except ImportError as _exc:
     sys.stdout.write(f"PREREQUISITE pywin32 is not importable: {_exc}\n")
     raise SystemExit(common.EXIT_PREREQUISITE) from None
 
+from stt_app.clipboard_owner import RECEIPT_READ, ClipboardOwner  # noqa: E402
 from stt_app.config import CLIPBOARD_RESTORE_DELAY_S  # noqa: E402
 from stt_app.paste_target_check import (  # noqa: E402
     VERDICT_NOT_TEXT_FIELD,
@@ -238,7 +248,53 @@ PASTE_TARGET_EDGE_CHECKS = (
     "wm_paste.is_refused_for_a_chromium_window_and_the_clipboard_put_back",
 )
 PASTE_TARGET_CHECKS = (PASTE_TARGET_EDIT_CHECK, *PASTE_TARGET_EDGE_CHECKS)
-FOCUS_CHECKS = (*SEND_INPUT_CHECKS, *FOREGROUND_GUARD_CHECKS, *PASTE_TARGET_CHECKS)
+RECEIPT_CHECKS = (
+    "receipt.a_transcript_fetched_by_another_process_is_reported_read",
+    "receipt.a_copy_while_the_owner_window_holds_the_clipboard_is_fast",
+)
+# A copy through Qt took 5.0 s in that state; through the backend about 1 ms.
+COPY_DURING_OFFER_LIMIT_MS = 500.0
+FOCUS_CHECKS = (
+    *SEND_INPUT_CHECKS,
+    *FOREGROUND_GUARD_CHECKS,
+    *PASTE_TARGET_CHECKS,
+    *RECEIPT_CHECKS,
+)
+WM_GETTEXT = 0x000D
+WM_GETTEXTLENGTH = 0x000E
+# An EDIT window of its own process: prints its handle and pumps messages
+# until it is killed.
+REMOTE_EDIT_SOURCE = """
+import ctypes, sys
+from ctypes import wintypes
+user32 = ctypes.WinDLL("user32")
+kernel32 = ctypes.WinDLL("kernel32")
+user32.CreateWindowExW.restype = wintypes.HWND
+user32.CreateWindowExW.argtypes = [
+    wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+    ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+    wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, wintypes.LPVOID,
+]
+user32.GetMessageW.argtypes = [
+    ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT,
+]
+kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+hwnd = user32.CreateWindowExW(
+    0, "EDIT", "stt_app receipt probe (closes by itself)", 0x00CF0044,
+    120, 300, 460, 140, None, None, kernel32.GetModuleHandleW(None), None,
+)
+user32.SetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.SetWindowTextW(hwnd, "")
+user32.ShowWindow(hwnd, 4)
+sys.stdout.write(str(int(hwnd or 0)) + "\\n")
+sys.stdout.flush()
+message = wintypes.MSG()
+while user32.GetMessageW(ctypes.byref(message), None, 0, 0) > 0:
+    user32.TranslateMessage(ctypes.byref(message))
+    user32.DispatchMessageW(ctypes.byref(message))
+"""
 EDGE_DEBUG_PORT = 9347
 EDGE_PAGE_TITLE = "stt-app-paste-target-probe"
 EDGE_PAGE = (
@@ -843,6 +899,32 @@ def take_foreground(hwnd: int) -> bool:
         finally:
             user32.AttachThreadInput(target_thread, fg_thread, False)
     time.sleep(0.1)
+    if int(user32.GetForegroundWindow() or 0) == hwnd:
+        return True
+    # A window of another process, asked for by a process that never had the
+    # foreground itself (a run started from a queue, minutes after the user's
+    # last input): this thread joins the foreground thread's input queue for
+    # the call. No key is injected into the user's window.
+    own_thread = kernel32.GetCurrentThreadId()
+    for _attempt in range(4):
+        foreground = int(user32.GetForegroundWindow() or 0)
+        if foreground == hwnd:
+            return True
+        fg_thread = (
+            user32.GetWindowThreadProcessId(foreground, None) if foreground else 0
+        )
+        attached = bool(
+            fg_thread
+            and fg_thread != own_thread
+            and user32.AttachThreadInput(own_thread, fg_thread, True)
+        )
+        try:
+            user32.BringWindowToTop(hwnd)
+            user32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                user32.AttachThreadInput(own_thread, fg_thread, False)
+        time.sleep(0.2)
     return int(user32.GetForegroundWindow() or 0) == hwnd
 
 
@@ -1236,13 +1318,115 @@ def part_f_edge(checks: common.Checks) -> dict:
     return results
 
 
-def wait_until_idle(checks: common.Checks) -> bool:
+def remote_window_text(hwnd: int) -> str:
+    """The text of an EDIT window of another process (`GetWindowText` reads
+    only a caption across processes)."""
+    send = user32.SendMessageTimeoutW
+    send.argtypes = [
+        wintypes.HWND,
+        wintypes.UINT,
+        wintypes.WPARAM,
+        ctypes.c_void_p,
+        wintypes.UINT,
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_size_t),
+    ]
+    length = ctypes.c_size_t(0)
+    send(hwnd, WM_GETTEXTLENGTH, 0, None, 0, 1000, ctypes.byref(length))
+    buffer = ctypes.create_unicode_buffer(length.value + 2)
+    copied = ctypes.c_size_t(0)
+    send(
+        hwnd,
+        WM_GETTEXT,
+        length.value + 1,
+        ctypes.cast(buffer, ctypes.c_void_p),
+        0,
+        1000,
+        ctypes.byref(copied),
+    )
+    return buffer.value
+
+
+def part_h(checks: common.Checks) -> dict:
+    """The read receipt end to end: real owner window, real reader."""
+    child = subprocess.Popen(
+        [sys.executable, "-c", REMOTE_EDIT_SOURCE],
+        stdout=subprocess.PIPE,
+        text=True,
+        env=common.child_environment(SANDBOX),
+    )
+    inserter = TextInserter(backend=Win32ClipboardBackend(owner=ClipboardOwner()))
+    verdicts: list[str] = []
+    evidence: list[str] = []
+
+    def on_receipt(_transaction_id: int, verdict: str, detail: str) -> None:
+        verdicts.append(verdict)
+        evidence.append(detail)
+
+    inserter.set_paste_receipt_handler(on_receipt)
+    try:
+        hwnd = int((child.stdout.readline() if child.stdout else "").strip() or 0)
+        if not hwnd or not take_foreground(hwnd):
+            for name in RECEIPT_CHECKS:
+                checks.skipped(
+                    name,
+                    "the EDIT window of the child process did not get the foreground",
+                )
+            return {"foreground_obtained": False}
+        previous_clipboard()
+        transcript = f"read receipt {UMLAUTS} {SHARP_S} 789"
+        try:
+            returned = inserter.insert_text_with_options(
+                transcript,
+                target_hwnd=hwnd,
+                paste_mode="send_input",
+                restore_clipboard=True,
+            )
+            error = ""
+        except TextInsertionError as exc:
+            returned, error = False, f"{type(exc).__name__}: {exc}"
+        announced = inserter.pending_receipt_id() is not None
+        deadline = time.monotonic() + 3.0
+        while remote_window_text(hwnd) != transcript and time.monotonic() < deadline:
+            time.sleep(0.02)
+        landed = remote_window_text(hwnd) == transcript
+        copied_text = "copied while the owner window holds the clipboard"
+        started = time.perf_counter()
+        inserter.copy_text(copied_text)
+        copy_ms = (time.perf_counter() - started) * 1000.0
+        on_clipboard = read_clipboard([CF_UNICODETEXT])[CF_UNICODETEXT] == copied_text
+        checks.verdict(
+            RECEIPT_CHECKS[0],
+            returned and announced and landed and verdicts == [RECEIPT_READ],
+            f"returned={returned} announced={announced} landed={landed} "
+            f"verdicts={verdicts} evidence={evidence[:1]} error={error[:120]}",
+        )
+        checks.verdict(
+            RECEIPT_CHECKS[1],
+            announced and copy_ms < COPY_DURING_OFFER_LIMIT_MS and on_clipboard,
+            f"copy_ms={copy_ms:.1f} limit_ms={COPY_DURING_OFFER_LIMIT_MS:.0f} "
+            f"copied_text_on_clipboard={on_clipboard}",
+        )
+        return {
+            "foreground_obtained": True,
+            "returned": returned,
+            "announced": announced,
+            "landed": landed,
+            "verdicts": verdicts,
+            "copy_ms": round(copy_ms, 1),
+        }
+    finally:
+        inserter.close()
+        common.kill_process_tree(child.pid)
+
+
+def wait_until_idle(checks: common.Checks, limit_s: float) -> bool:
     waited = 0.0
-    while idle_seconds() < IDLE_REQUIRED_S and waited < IDLE_WAIT_LIMIT_S:
+    while idle_seconds() < IDLE_REQUIRED_S and waited < limit_s:
         if waited == 0.0:
             sys.stdout.write(
                 f"waiting for {IDLE_REQUIRED_S:.0f} s of idle before the two "
-                f"focus-taking parts (up to {IDLE_WAIT_LIMIT_S:.0f} s)\n"
+                f"focus-taking parts (up to {limit_s:.0f} s)\n"
             )
             sys.stdout.flush()
         time.sleep(1.0)
@@ -1260,7 +1444,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--skip-focus",
         action="store_true",
         help=(
-            "Leave out parts D to F, the only ones that take the keyboard "
+            "Leave out parts D to F and H, the only ones that take the keyboard "
             "focus. Everything else still runs."
         ),
     )
@@ -1271,6 +1455,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Run part G even with fewer than three of the 25 Win+V places "
             "free. Each entry it adds past 25 pushes your oldest unpinned "
             "Win+V entry out for good."
+        ),
+    )
+    parser.add_argument(
+        "--idle-wait-limit",
+        type=float,
+        default=IDLE_WAIT_LIMIT_S,
+        metavar="SECONDS",
+        help=(
+            "How long to wait for the user to pause before the focus-taking "
+            "parts are skipped (default: %(default)s)."
         ),
     )
     common.add_report_argument(parser)
@@ -1348,7 +1542,7 @@ def main() -> int:
         if args.skip_focus:
             for name in FOCUS_CHECKS:
                 checks.skipped(name, "--skip-focus was given")
-        elif not wait_until_idle(checks):
+        elif not wait_until_idle(checks, args.idle_wait_limit):
             for name in FOCUS_CHECKS:
                 checks.skipped(name, "the user never paused long enough")
         else:
@@ -1363,6 +1557,11 @@ def main() -> int:
                 except Exception as exc:
                     parts[label] = {"crash": f"{type(exc).__name__}: {exc}"}
                     checks.crashed(f"clipboard.{label}", exc)
+            try:
+                parts["H_read_receipt"] = part_h(checks)
+            except Exception as exc:
+                parts["H_read_receipt"] = {"crash": f"{type(exc).__name__}: {exc}"}
+                checks.crashed("receipt.part_crashed", exc)
             try:
                 parts["F_paste_target_edge"] = part_f_edge(checks)
             except Exception as exc:

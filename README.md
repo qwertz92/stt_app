@@ -12,7 +12,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR (Alibaba), Speechmatics, Mistral (Voxtral), or any OpenAI-compatible endpoint (a company gateway or a local speech server) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
-- **Streaming** (experimental) — see partial results while you speak
+- **Streaming** — see partial results while you speak (local Nemotron streaming is supported; faster-whisper, AssemblyAI and Deepgram streaming are experimental)
 
 ## Requirements
 
@@ -81,7 +81,7 @@ Right-click the **system tray icon** → **Settings**.
 |---------|-------------|---------|
 | Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
 | Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR, Speechmatics, Mistral (Voxtral), Custom endpoint (OpenAI-compatible) | Local |
-| Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
+| Mode | Batch (after stop) or Streaming (live; experimental except local Nemotron) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |
 | Offline mode | Prevent any network access for model loading | Off |
@@ -187,7 +187,7 @@ uv run python -m pytest
 |---------|--------|
 | Local batch transcription (faster-whisper, CPU) | Stable |
 | Local GPU transcription (Cohere / IBM Granite ONNX via WebGPU) | Stable |
-| Local cache-aware streaming (Nemotron 3.5) | Stable |
+| Local cache-aware streaming (Nemotron 3.5) | Supported, not experimental: same word error rate as its batch mode (11 clips, CPU, 2026-11-24) |
 | Local streaming mode (faster-whisper rolling window) | Experimental |
 | AssemblyAI cloud transcription (batch) | Stable |
 | AssemblyAI streaming | Experimental |

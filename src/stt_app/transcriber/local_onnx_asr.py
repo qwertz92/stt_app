@@ -526,6 +526,9 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             if self._model is None:
                 self._model = self._load_model()
 
+    def is_model_loaded(self) -> bool:
+        return self._model is not None
+
     def close(self) -> None:
         # `_inference_lock` too, in the same order `transcribe_batch` takes
         # them. Unwrapping while a `recognize()` is in flight would silently

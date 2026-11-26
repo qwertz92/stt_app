@@ -9,6 +9,20 @@ Ideas that could be worth building once the current features are finished, but n
 now. Each says what it would give the user and why it waits. Building one means
 taking it out of this list; deleting one needs no ceremony.
 
+- **A read receipt that works inside Chrome and Edge** (2026-11-25). The receipt
+  that tells a paste nobody fetched from one that arrived
+  (`docs/agents/text-insertion.md`, "A restoring paste has a read receipt") says
+  nothing in those two browsers: something fetches the clipboard text 4-8 ms after
+  every Ctrl+V, with the focus in a text field or on a button alike, so a paste that
+  missed still reads as fetched. Gain: "not inserted" would be reported for a miss
+  on a web page too, where today only the caret check can call it doubtful. Why it
+  waits: the one approach tried (refuse the first fetch, serve the second) works in
+  Edge, half the time in Chrome, and empties every text-field paste in Electron;
+  his log of 2026-10-24..11-24 has 1018 of 1040 pastes in `Chrome_WidgetWin_1`
+  windows, which Electron apps share with the browsers, so the split between the
+  two is unknown. Worth another look when a browser exposes which element took the
+  paste (UI Automation's focused element after the keystroke is the untried road).
+
 - **Remove a kept copy together with its History entry** (2026-11-25). The
   `kept_*.wav` audio of a gap or fallback transcript is never deleted
   automatically (`docs/agents/known-limitations.md`, "Kept copies are never

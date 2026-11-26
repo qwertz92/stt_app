@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import local_runtime_support
 from .benchmark_history import BenchmarkHistoryEntry
+from .clipboard_copy import copy_text
 from .config import (
     ASSEMBLYAI_MODELS,
     ASSEMBLYAI_REGION_AUTO,
@@ -40,6 +41,7 @@ from .config import (
     SPEECHMATICS_MODELS,
     TRAY_MESSAGE_MAX_CHARS,
     VALID_MODEL_SIZES,
+    streaming_is_experimental,
 )
 from .local_benchmark import _format_seconds
 from .settings_store import _REMOTE_MODEL_FIELDS, remote_move_line
@@ -182,7 +184,7 @@ class _FullTextCopyMixin:
         painted = QtWidgets.QLabel.text(self)
         text = selected if selected and selected != painted else self._full_text
         text = text.replace(ZERO_WIDTH_SPACE, "")
-        QtGui.QGuiApplication.clipboard().setText(text)
+        copy_text(text)
 
 
 class ElidingLabel(_FullTextCopyMixin, QtWidgets.QLabel):
@@ -481,8 +483,16 @@ _OVERLAY_CORNER_LABELS: dict[str, str] = {
 
 _MODE_LABELS: dict[str, str] = {
     "batch": "Batch",
-    "streaming": "Streaming (Experimental)",
+    "streaming": "Streaming",
 }
+_STREAMING_EXPERIMENTAL_LABEL = "Streaming (Experimental)"
+
+
+def mode_label(mode: str, engine: str, model: str = "") -> str:
+    """The Mode picker's text: "Experimental" only where it is still true."""
+    if mode == "streaming" and streaming_is_experimental(engine, model):
+        return _STREAMING_EXPERIMENTAL_LABEL
+    return _MODE_LABELS.get(mode, mode)
 
 
 # UI choices for the "While busy" combo. The first element is the

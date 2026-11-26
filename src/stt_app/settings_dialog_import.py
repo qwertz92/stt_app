@@ -10,6 +10,7 @@ from pathlib import Path
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import recordings_dir
+from .clipboard_copy import copy_text
 from .config import (
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
@@ -254,9 +255,8 @@ class _ImportTabMixin:
 
     def _copy_import_result(self) -> None:
         text = self.import_result_text.toPlainText()
-        if not text:
+        if not text or not copy_text(text):
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
         self.import_copy_button.setText("Copied")
         set_button_feedback_state(self.import_copy_button, "success")
         self._import_copy_feedback_timer.start()
