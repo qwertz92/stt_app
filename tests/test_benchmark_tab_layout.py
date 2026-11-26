@@ -231,16 +231,29 @@ def test_a_short_dialog_scrolls_the_benchmark_tab_instead_of_squeezing_it(
         page = dialog.tabs.widget(dialog._benchmark_tab_index)
         assert isinstance(page, QtWidgets.QScrollArea)
         assert page.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAlwaysOff
-        # With every tab a scroll area the minimum width must still be the tab
-        # bar's: the pane frame was once read as 61 px (the bar's hint minus
-        # the stack's) instead of the 6 it is, and the dialog got 55 px wider.
+        # With every tab a scroll area the minimum width must still be the
+        # wider of the tab bar and the widest page, and no more: the pane frame
+        # was once read as 61 px (the bar's hint minus the stack's) instead of
+        # the 6 it is, and the dialog got 55 px wider. At 9 and 11.25 pt the
+        # Providers page is the wider one since its region pickers share a row
+        # with the key field (2026-11-26); at 13.5 pt it is the tab bar.
         # The screen caps it: the 1024 px CI runner fits 976 px at 13.5 pt,
         # where the tab bar asks for 1026 (release v0.12.0 build, 2026-10-10).
         tabs = dialog.tabs
         frame = tabs.width() - tabs.currentWidget().parentWidget().width()
         margins = dialog.layout().contentsMargins()
+        widest_page = max(
+            area.widget().minimumSizeHint().width()
+            + area.verticalScrollBar().sizeHint().width()
+            + 2 * area.frameWidth()
+            for area in (tabs.widget(index) for index in range(tabs.count()))
+            if isinstance(area, QtWidgets.QScrollArea)
+        )
         assert dialog.minimumWidth() == min(
-            tabs.tabBar().sizeHint().width() + frame + margins.left() + margins.right(),
+            max(tabs.tabBar().sizeHint().width(), widest_page)
+            + frame
+            + margins.left()
+            + margins.right(),
             dialog._available_dialog_size().width(),
         )
         content = page.widget()

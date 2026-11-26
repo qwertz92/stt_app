@@ -194,7 +194,10 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   9 pt, now set by the Providers page** (page minimum 750 px): the four region
   pickers share their provider's row with the key field and all have the
   width of the widest entry (165 px, Deepgram's "Global region (default)"),
-  see the Providers entry. Figures at 11.25 / 13.5 pt were not re-measured.
+  see the Providers entry. At 11.25 pt the Providers page sets it too (923 px,
+  the tab bar alone needs 912); at 13.5 pt it is still the tab bar's 1026.
+  `test_a_short_dialog_scrolls_the_benchmark_tab_instead_of_squeezing_it`
+  asserted "the tab bar's" until the merge and now computes both.
   - The tab widget's pane frame is asked of the style
     (`sizeFromContents(CT_TabWidget)`: 6 px), not derived as the tab widget's
     minimum minus the page stack's. That difference was 6 only while a
