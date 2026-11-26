@@ -1393,7 +1393,8 @@ def language_modes_for_selection(
     normalized_mode = str(mode or "").strip().lower()
 
     if normalized_engine == "assemblyai" and normalized_mode == "streaming":
-        return ("auto",)
+        # Streaming always runs STT-3.7-Realtime, whatever the batch model is.
+        return ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
     if (
         normalized_engine == DEFAULT_ENGINE
         and normalized_model in LOCAL_ENGLISH_ONLY_MODELS

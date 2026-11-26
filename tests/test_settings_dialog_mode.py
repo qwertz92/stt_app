@@ -481,24 +481,43 @@ def test_switching_to_an_engine_that_cannot_stream_keeps_the_mode_and_says_why()
     _ = app
 
 
-def test_assemblyai_streaming_locks_language_to_auto():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+def _assemblyai_streaming_dialog(language_mode: str) -> SettingsDialog:
     store = _FakeSettingsStore(
-        AppSettings(engine="assemblyai", mode="streaming", language_mode="de")
+        AppSettings(engine="assemblyai", mode="streaming", language_mode=language_mode)
     )
-    dialog = SettingsDialog(
+    return SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto"]
+
+def test_assemblyai_streaming_offers_exactly_the_realtime_models_languages():
+    """Auto (the model code-switches) plus the 32 languages of
+    STT-3.7-Realtime's `language_codes` list, whatever the batch model is."""
+    from stt_app.config import ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _assemblyai_streaming_dialog("de")
+
+    assert tuple(_combo_data(dialog.language_combo)) == (
+        ASSEMBLYAI_STT_3_7_LANGUAGE_MODES
+    )
+    assert dialog.language_combo.currentData() == "de"
+    assert dialog.language_combo.isEnabled() is True
+    assert _combo_offers(dialog.language_combo, "bg") is False
+    _ = app
+
+
+def test_assemblyai_streaming_names_a_language_it_replaces_with_auto():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = _assemblyai_streaming_dialog("bg")
+
     assert dialog.language_combo.currentData() == "auto"
-    assert dialog.language_combo.isEnabled() is False
-    assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_offers(dialog.language_combo, "de") is False
-    assert _combo_offers(dialog.language_combo, "en") is False
-    assert "fixed to Auto" in dialog.language_note_label.text()
+    note = dialog.language_note_label.text()
+    assert "does not offer" in note and "streams in Auto" in note
+    # The saved language is remembered, not overwritten by the stand-in.
+    assert dialog._language_fallback == ("auto", "bg")
     _ = app
 
 
@@ -712,11 +731,9 @@ def test_switching_assemblyai_mode_updates_language_options():
 
     streaming_idx = dialog.mode_combo.findData("streaming")
     dialog.mode_combo.setCurrentIndex(streaming_idx)
-    assert _combo_data(dialog.language_combo) == ["auto"]
-    assert dialog.language_combo.isEnabled() is False
-    assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_offers(dialog.language_combo, "de") is False
-    assert _combo_offers(dialog.language_combo, "en") is False
+    assert _combo_data(dialog.language_combo)[:3] == ["auto", "de", "en"]
+    assert dialog.language_combo.currentData() == "de"
+    assert dialog.language_combo.isEnabled() is True
 
     batch_idx = dialog.mode_combo.findData("batch")
     dialog.mode_combo.setCurrentIndex(batch_idx)

@@ -49,7 +49,8 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/streaming.md` (ori
   voice-agent model and not used; the SDK must be >= 1.10, where the
   streaming `SpeechModel` enum knows it), optional `keyterms_prompt`, no
   `language_detection` / `format_turns`; the batch selector does not affect
-  it. Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
+  it; the chosen language goes as `language_codes` (`remote-providers.md`,
+  "Streaming language"). Turn text keyed by `turn_order`. SDK `disconnect` runs on a helper
   thread with bounded joins; the 8 s budget covers the text-bearing teardown
   (`disconnect(terminate=True)`, `terminate_timeout` pinned to 5 s, two 1 s
   threads) and deliberately not `websockets.sync` `close()`, which waits the

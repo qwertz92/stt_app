@@ -739,10 +739,14 @@ class _GeneralTabMixin:
             model = self._remote_model_value_for_provider(engine)
 
         if engine == "assemblyai" and mode == "streaming":
-            return (
-                "AssemblyAI streaming always uses automatic language detection "
-                "(language is fixed to Auto)."
-            )
+            fallback = self._language_fallback
+            if fallback is not None:
+                return (
+                    f"AssemblyAI streaming does not offer "
+                    f"{LANGUAGE_MODE_LABELS.get(fallback[1], fallback[1])}; it "
+                    "streams in Auto. The saved choice is kept."
+                )
+            return ""
 
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
             # Named from the selection: there is more than one English-only

@@ -3,6 +3,17 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: AssemblyAI streaming now receives the chosen language
+
+Structurally: in Streaming the language picker offers the 32 languages of
+STT-3.7-Realtime (it was locked to Auto) and `start_stream` sends the choice as
+`language_codes=[code]`. Found by reading the streaming WebSocket spec: the
+realtime model has no `language` parameter but takes `language_codes` as
+steering, unset it code-switches by itself. Before, a German dictation could not
+tell the model it was German. A saved language outside the 32 streams in Auto,
+logs a warning and is named in the picker's note. Not verified against the live
+service (no key). Tests pin the offered list, the request field and the fallback.
+
 ## 2026-11-26: "Experimental" only where streaming still is
 
 Structurally: the Mode picker reads "Streaming" for local + Nemotron and
