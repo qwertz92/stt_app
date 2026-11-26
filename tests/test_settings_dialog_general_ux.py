@@ -2194,6 +2194,39 @@ def test_the_import_service_combo_stays_put_when_its_note_comes_and_goes(
     assert combo_y() == local_y
 
 
+def test_the_openrouter_note_says_where_the_audio_goes(
+    dialog: SettingsDialog,
+) -> None:
+    """The sentence was only a tooltip on the Providers row; it is now in the
+    note under the model row where the engine is chosen, and that note stays
+    inside its two reserved lines at the dialog's minimum width."""
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.tabs.setCurrentIndex(0)
+    # With a key; without one the note is the red "No OpenRouter API key yet".
+    dialog.openrouter_key_edit.setText("sk-or-v1-test")
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("openrouter"))
+    app.processEvents()
+
+    label = dialog.remote_model_note_label
+    assert "forwards it to the vendor of the model you pick" in label.text()
+    dialog.resize(dialog.minimumWidth(), dialog.height())
+    app.processEvents()
+    assert label.heightForWidth(label.width()) <= label.height()
+
+    # The note's row is the same size as another batch-only engine's, so the
+    # sentence moves nothing below it and adds no scrollbar.
+    openrouter_height = label.height()
+    openrouter_below = dialog.engine_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y()
+    dialog.engine_combo.setCurrentIndex(dialog.engine_combo.findData("groq"))
+    app.processEvents()
+    assert label.height() == openrouter_height
+    assert (
+        dialog.engine_combo.mapTo(dialog, QtCore.QPoint(0, 0)).y() == openrouter_below
+    )
+
+
 def test_the_audio_tab_needs_no_scrollbar_when_the_dialog_can_show_it(
     dialog: SettingsDialog,
 ) -> None:

@@ -49,6 +49,7 @@ from .settings_dialog_helpers import (
     _THREAD_START_ERRORS,
     BENCHMARK_GPU_CPU_COMPARISON_LABEL,
     LOCAL_MODEL_LABELS,
+    OPENROUTER_AUDIO_NOTE,
     _emit_background_signal,
     _WheelPassthroughComboBox,
     exception_reason,
@@ -714,9 +715,13 @@ class _GeneralTabMixin:
 
     def _remote_model_description(self, provider: str) -> str:
         if provider in LISTED_MODEL_ENGINES:
-            return self._model_list_notes.get(provider, ("", False))[
-                0
-            ] or self._model_list_default_note(provider)
+            note, error = self._model_list_notes.get(provider, ("", False))
+            note = note or self._model_list_default_note(provider)
+            if provider == "openrouter" and not error:
+                # Where the audio goes is said here, where the engine is
+                # chosen, and not only in the Providers row's tooltip.
+                note = f"{OPENROUTER_AUDIO_NOTE} {note}"
+            return note
         note = (
             f"The selected {self._provider_label(provider)} model is used for "
             "batch dictation and audio imports; its stored API key is reused."
@@ -763,7 +768,7 @@ class _GeneralTabMixin:
         if engine == "openrouter":
             return (
                 "Batch-only. Type the model id, or press Refresh to list "
-                "OpenRouter's transcription models (no key needed)."
+                "the transcription models (no key needed)."
             )
         return (
             "Batch-only. Type the model id, or press Refresh to list the "

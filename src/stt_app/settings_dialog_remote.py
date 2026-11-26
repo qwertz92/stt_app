@@ -24,6 +24,7 @@ from .settings_dialog_helpers import (
     _REMOTE_PROVIDERS,
     _REMOTE_REGION_CHOICES,
     _THREAD_START_ERRORS,
+    OPENROUTER_AUDIO_NOTE,
     WrappedStatusLabel,
     _emit_background_signal,
     _remote_provider_label,
@@ -44,8 +45,7 @@ _CUSTOM_KEY_ROW_LABEL = "API Key"
 # A row whose provider needs a sentence beside its name and key field.
 _PROVIDER_ROW_TOOLTIPS: dict[str, str] = {
     "openrouter": (
-        "Audio is sent to OpenRouter, which forwards it to the vendor of the "
-        "model you pick. One OpenRouter key works for every model in its list."
+        f"{OPENROUTER_AUDIO_NOTE} One OpenRouter key works for every model in its list."
     ),
 }
 _TEST_OK_MARK = "✓"

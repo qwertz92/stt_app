@@ -663,6 +663,14 @@ def model_choices_for_engine(
     return _REMOTE_MODEL_CHOICES.get(normalized, ())
 
 
+# Said where the engine is chosen (the Transcription tab's model note) and in
+# the Providers row's tooltip: the user's audio reaches the vendor of whichever
+# model they type, through OpenRouter.
+OPENROUTER_AUDIO_NOTE = (
+    "Audio is sent to OpenRouter, which forwards it to the vendor of the model "
+    "you pick."
+)
+
 _DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 1010)
 
 

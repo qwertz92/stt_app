@@ -356,7 +356,17 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   `_run_models_fetch`) asks the selected engine's list endpoint; the result is
   kept per engine (`custom_models` / `openrouter_models`, `listed_models`) and
   the status note per engine (`_model_list_notes`). OpenRouter's list is
-  public, so its Refresh needs no key (`listing_only`).
+  public, so its Refresh needs no key (`listing_only`). **OpenRouter's model
+  note starts with where the audio goes** ("Audio is sent to OpenRouter, which
+  forwards it to the vendor of the model you pick.",
+  `OPENROUTER_AUDIO_NOTE`, also the first sentence of the Providers row's
+  tooltip), so it is read where the engine is chosen and not only on hover
+  (2026-11-26, review). It stays inside the note's two reserved lines at the
+  minimum width and the row has the height of any other engine's, so nothing
+  below it moves and the tab gets no scrollbar (pinned by
+  `test_the_openrouter_note_says_where_the_audio_goes`). A Refresh result or
+  error replaces the model text but keeps the sentence; a red setup issue
+  (no key) replaces everything, as for every engine.
 - **A remote engine that cannot dictate says so on the Transcription tab**
   (2026-10-03, UX review item 6d). `_remote_engine_setup_issue` (remote
   mixin) names the first gap: the custom endpoint's base URL, then the key
