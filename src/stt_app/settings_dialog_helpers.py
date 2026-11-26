@@ -408,7 +408,7 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
     "assemblyai": (
         (
             ASSEMBLYAI_REGION_AUTO,
-            "Automatic (default)",
+            "Auto region (default)",
             (
                 "AssemblyAI's default endpoints: batch is processed in the US; "
                 "streaming goes to the nearest location, in the US or EU."
@@ -416,19 +416,19 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
         (
             ASSEMBLYAI_REGION_US,
-            "US only",
+            "US region only",
             "Batch and streaming are processed only in the US.",
         ),
         (
             ASSEMBLYAI_REGION_EU,
-            "EU only",
+            "EU region only",
             "Batch and streaming are processed only in the EU.",
         ),
     ),
     "deepgram": (
         (
             DEEPGRAM_REGION_GLOBAL,
-            "Global (default)",
+            "Global region (default)",
             (
                 "Deepgram's default global endpoint; Deepgram states no "
                 "processing location for it."
@@ -436,7 +436,7 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
         (
             DEEPGRAM_REGION_EU,
-            "EU",
+            "EU region",
             (
                 "Deepgram's EU endpoint, which routes the traffic through the "
                 "EU. It takes the same API key."
@@ -444,11 +444,11 @@ _REMOTE_REGION_CHOICES: dict[str, tuple[tuple[str, str, str], ...]] = {
         ),
     ),
     "speechmatics": (
-        ("eu1", "EU (default)", "Jobs are created in Speechmatics' EU region."),
-        ("us1", "US", "Jobs are created in Speechmatics' US region."),
+        ("eu1", "EU region (default)", "Jobs are created in Speechmatics' EU region."),
+        ("us1", "US region", "Jobs are created in Speechmatics' US region."),
         (
             "au1",
-            "Australia",
+            "Australia region",
             (
                 "Jobs are created in Speechmatics' Australian region; Melia 1 "
                 "is not offered there."

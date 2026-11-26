@@ -178,15 +178,70 @@ def test_each_region_choice_says_what_it_guarantees(tmp_path):
 
         assemblyai = choices("assemblyai")
         assert [value for value, _label, _tip in assemblyai] == ["auto", "us", "eu"]
-        assert assemblyai[0][1].startswith("Automatic")
+        assert assemblyai[0][1].startswith("Auto")
         assert "US or EU" in assemblyai[0][2]
-        assert assemblyai[1][1] == "US only" and assemblyai[2][1] == "EU only"
+        assert assemblyai[1][1] == "US region only"
+        assert assemblyai[2][1] == "EU region only"
         deepgram = choices("deepgram")
         assert [value for value, _label, _tip in deepgram] == ["global", "eu"]
         assert deepgram[0][1].startswith("Global")
         assert all(tip for _value, _label, tip in [*assemblyai, *deepgram])
         assert all(tip for _value, _label, tip in choices("speechmatics"))
     finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_the_region_pickers_are_named_and_every_entry_says_region(tmp_path):
+    """The row has no caption: an unlabelled "Automatic (default)" beside a key
+    field did not say what is automatic."""
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        assert set(dialog._provider_region_combos) == {
+            "assemblyai",
+            "deepgram",
+            "speechmatics",
+            "soniox",
+        }
+        for provider, combo in dialog._provider_region_combos.items():
+            assert combo.accessibleName() == (
+                f"{remote_module._remote_provider_label(provider)} region"
+            )
+            for index in range(combo.count()):
+                assert "region" in combo.itemText(index), (provider, index)
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_the_region_pickers_share_one_width_and_the_key_fields_one_right_edge(
+    tmp_path,
+):
+    dialog, _store, app = _dialog(tmp_path, AppSettings())
+    try:
+        dialog.show()
+        dialog.tabs.setCurrentIndex(_providers_tab_index(dialog))
+        app.processEvents()
+        combos = dialog._provider_region_combos
+        widths = {combo.width() for combo in combos.values()}
+        assert len(widths) == 1, widths
+        metrics = dialog.fontMetrics()
+        longest = max(
+            metrics.horizontalAdvance(combo.itemText(i))
+            for combo in combos.values()
+            for i in range(combo.count())
+        )
+        assert widths.pop() > longest
+        rights = {
+            provider: dialog._provider_key_edits[provider]
+            .mapTo(dialog, QtCore.QPoint(0, 0))
+            .x()
+            + dialog._provider_key_edits[provider].width()
+            for provider in combos
+        }
+        assert len(set(rights.values())) == 1, rights
+    finally:
+        dialog.hide()
         dialog.deleteLater()
     _ = app
 

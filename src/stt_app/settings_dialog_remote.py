@@ -307,6 +307,7 @@ class _RemoteProvidersMixin:
                     label_width,
                 )
                 row += 1
+        self._equalize_region_combo_widths()
         cloud_layout.addLayout(cloud_grid)
         layout.addWidget(cloud_box)
 
@@ -546,8 +547,25 @@ class _RemoteProvidersMixin:
             + "\n".join(f"{label}: {guarantee}" for _value, label, guarantee in choices)
         )
         combo.setToolTip(tooltip)
+        # The row has no "Region" caption any more: the picker names itself to
+        # a screen reader, and every entry says "region" on screen.
+        combo.setAccessibleName(f"{_remote_provider_label(provider)} region")
         self._provider_region_combos[provider] = combo
         return combo
+
+    def _equalize_region_combo_widths(self) -> None:
+        """One width for every region picker: the widest entry of any of them.
+
+        Measured from the entries (the combo's own size hint follows its longest
+        entry at the current font), so the key fields of the region rows end at
+        one x position and the pickers form a column at any text size.
+        """
+        combos = list(self._provider_region_combos.values())
+        if not combos:
+            return
+        width = max(combo.sizeHint().width() for combo in combos)
+        for combo in combos:
+            combo.setFixedWidth(width)
 
     def _build_custom_endpoint_group(
         self, label_width: int, badge_width: int

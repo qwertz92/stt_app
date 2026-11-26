@@ -185,8 +185,12 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
     behind scroll arrows, and the tab a note sends the user to may be the
     hidden one. 2026-09-27: dialog minimum 797 px at 9 pt, 907 at 11.25, 1020
     at 13.5; 2026-10-03, with the longer "Providers" title: 801 / 912 / 1026
-    (still the tab bar; the Providers page needs 583 / 674 / 757 since the
-  fields below the key column were narrowed to it).
+    (still the tab bar; the Providers page needed 583 / 674 / 757 since the
+  fields below the key column were narrowed to it). **2026-11-26: 842 px at
+  9 pt, now set by the Providers page** (page minimum 750 px): the four region
+  pickers share their provider's row with the key field and all have the
+  width of the widest entry (165 px, Deepgram's "Global region (default)"),
+  see the Providers entry. Figures at 11.25 / 13.5 pt were not re-measured.
   - The tab widget's pane frame is asked of the style
     (`sizeFromContents(CT_TabWidget)`: 6 px), not derived as the tab widget's
     minimum minus the page stack's. That difference was 6 only while a
@@ -317,10 +321,33 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/settings-dialog.md
   is key field plus combo, so the key field is narrower than OpenAI's
   (which spans the column) by the combo's width, and the combo ends where
   the column does (`test_every_field_beside_a_provider_label_ends_at_the_key_fields_edge`).
-  The page's minimum width was measured with the picker in a sub-row (583 /
-  674 / 757 px at 9 / 11.25 / 13.5 pt, 2026-10-03); it was not re-measured
-  with the combo beside the key field, but the dialog minimum (801 / 912 /
-  1026, the tab bar) is pinned by tests that pass. "Custom
+  **One width for the four pickers, and they say what they are**
+  (2026-11-26, layout review): `_equalize_region_combo_widths` gives every
+  picker the width of the widest, taken from the combos' own size hints (they
+  follow the longest entry at the current font), so the key fields of the
+  region rows end at one x position and the pickers form a column. Measured
+  on the real platform plugin, 9 pt, 860 x 1010 (dialog 860 wide, tab
+  without a scroll bar): pickers 150 / 128 / 107 / 144 px (AssemblyAI,
+  Deepgram, Speechmatics, Soniox), key fields on those rows ending at
+  380 / 402 / 423 / 386 against 542 on rows without a picker (the review's
+  figures); after: all four 165 px, all four key fields ending at 367
+  against 544. The "Region" caption went with the sub-rows, so each picker
+  has an accessible name ("AssemblyAI region", ...) and every entry says
+  "region" in one form: Auto region (default), US region only, EU region
+  only (AssemblyAI); Global region (default), EU region (Deepgram); EU
+  region (default), US region, Australia region (Speechmatics); US region
+  (default), EU region, Japan region, India region (Soniox). The claims are
+  those of before ("only" stays where AssemblyAI guarantees it); stored
+  values did not change. "Automatic region (default)" was tried first and
+  made the picker 187 px and the dialog minimum 864 px, above the 860 px
+  default, so it is "Auto region (default)". **Dialog minimum: 801 px
+  before Soniox, 827 with the first inline pickers, 842 now** (9 pt, page
+  minimum 750 px): key field minimum 140 px plus the 165 px picker plus the
+  Test, Remove, mark and badge columns. The default 860 x 1010 shows the
+  tab without a scroll bar and without clipped text (the longest entry is
+  119 px in a 165 px picker). Pinned by
+  `test_the_region_pickers_share_one_width_and_the_key_fields_one_right_edge`
+  and `test_the_region_pickers_are_named_and_every_entry_says_region`. "Custom
   endpoint (OpenAI-compatible)" holds Base URL, API Style, Key Command and
   the endpoint's own key row; both groups use `_new_provider_grid` and the
   same captions, so their columns line up (a test pins it). Test is enabled
