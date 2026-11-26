@@ -645,3 +645,13 @@ Verbatim pre-condensation text: `git show e608f86:docs/agents/known-limitations.
     the final "is is is" type "der" and then freeze (the same input with "."
     already did before). It needs a partial that drops the dictation's
     head, which providers that send the whole session's text do not send.
+- **The retranscribe dialog reserves an empty band for its status line**
+  (accepted 2026-11-26, cosmetic, `retranscribe_dialog.py`). Under the two
+  text panes the dialog keeps one fixed-height line for "Transcribing...",
+  "Done" and errors, and that line is empty until a run starts, so the user
+  sees a blank strip above the buttons: measured 16 px for the label, 24 px
+  with the 8 px layout spacing (100 % scaling, Segoe UI). It stays because the
+  line is reserved on purpose so the buttons do not move when a run starts
+  (`_status_label` is fixed-height); showing it on demand means moving the
+  widgets below it and updating the layout tests that pin them, estimated at
+  about 150 lines with many tests, for a dialog that is open for seconds.

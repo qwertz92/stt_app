@@ -3,6 +3,13 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md` and `docs/agents/`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-11-26: the retranscribe dialog's empty status band is accepted
+
+Checked that the band still exists: the status label is 16 px high (24 px with
+the layout spacing) and empty until a run starts. Removal was estimated at about
+150 lines plus layout tests for a dialog open for seconds; recorded in
+`docs/agents/known-limitations.md` instead of built.
+
 ## 2026-11-26: AssemblyAI streaming now receives the chosen language
 
 Structurally: in Streaming the language picker offers the 32 languages of
