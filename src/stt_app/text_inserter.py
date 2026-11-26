@@ -1685,6 +1685,7 @@ class TextInserter:
         # Whether a transcript may be announced right now (`set_offer_gate`).
         self._offer_gate = None
         self._closed = False
+        self._close_lock = threading.Lock()
         # The offer our last transcript write announced; None after a plain
         # write. `_clipboard_changed_after_set` asks about that write.
         self._offer: int | None = None
@@ -2765,13 +2766,15 @@ class TextInserter:
     def close(self) -> None:
         """Shutdown: restore the clipboard now, then end the owner window.
 
-        Called on `aboutToQuit` and again at interpreter exit (`main`),
-        which also covers an exit that never reached the quit; the second
-        call does nothing.
+        `main.run` connects this to `aboutToQuit`, after the controller's
+        shutdown, and registers it with `atexit` for an exit that never
+        reached the quit. Only the first call does the work, whichever
+        thread makes it; every other one returns at once.
         """
-        if self._closed:
-            return
-        self._closed = True
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
         try:
             self.flush_pending_restore()
         finally:

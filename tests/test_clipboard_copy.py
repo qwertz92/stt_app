@@ -3,6 +3,10 @@
 `QClipboard.setText` called from Python froze the app for 5.0 s while a pasted
 transcript was announced on the clipboard (`stt_app.clipboard_copy` says
 why). The scan below is what keeps a new Copy button from bringing that back.
+
+What the scan cannot see: a widget's own `copy()`, `cut()` or `paste()`
+called from Python, which reaches the clipboard inside Qt, and an attribute
+name built at run time (`getattr(app, name)`).
 """
 
 from __future__ import annotations
